@@ -134,6 +134,7 @@ void ServersUiController::onDefaultServerChanged(const QString &defaultServerId)
 
 void ServersUiController::updateModel()
 {
+    const int oldProcessedServerIndex = getProcessedServerIndex();
     QVector<ServerDescription> descriptions =
         m_serversController->buildServerDescriptions(m_settingsController->isAmneziaDnsEnabled());
 
@@ -156,11 +157,26 @@ void ServersUiController::updateModel()
 
     m_serversModel->updateModel(m_orderedServerDescriptions, defaultServerId);
 
-    updateContainersModel();
+    if (!m_processedServerId.isEmpty()) {
+        if (isServerFromApi(m_processedServerId)) {
+            const auto &description = serverDescriptionById(m_processedServerId);
+            if (description.isApiV2 && description.isCountrySelectionAvailable
+                && !description.apiAvailableCountries.isEmpty()) {
+                emit updateApiCountryModel();
+            }
+        } else {
+            updateContainersModel();
+        }
+    }
     updateDefaultServerContainersModel();
 
     if (hadServersFromGatewayBefore != hasServersFromGatewayNow) {
         emit hasServersFromGatewayApiChanged();
+    }
+
+    const int newProcessedServerIndex = getProcessedServerIndex();
+    if (oldProcessedServerIndex != newProcessedServerIndex) {
+        emit processedServerIndexChanged(newProcessedServerIndex);
     }
 
     emit defaultServerIdChanged(defaultServerId);
@@ -341,8 +357,14 @@ QString ServersUiController::getProcessedServerId() const
     return m_processedServerId;
 }
 
+int ServersUiController::getProcessedServerIndex() const
+{
+    return getServerIndexById(m_processedServerId);
+}
+
 void ServersUiController::setProcessedServerId(const QString &serverId)
 {
+    const int oldProcessedServerIndex = getProcessedServerIndex();
     const int newIndex = serverId.isEmpty() ? -1 : serverIndexForId(serverId);
     const QString normalizedServerId = newIndex >= 0 ? serverId : QString();
 
@@ -350,23 +372,22 @@ void ServersUiController::setProcessedServerId(const QString &serverId)
         m_processedServerId = normalizedServerId;
 
         if (newIndex >= 0) {
-            updateContainersModel();
-
-            for (const auto &description : m_orderedServerDescriptions) {
-                if (description.serverId != normalizedServerId) {
-                    continue;
+            if (isServerFromApi(m_processedServerId)) {
+                const auto &description = serverDescriptionById(m_processedServerId);
+                if (description.isApiV2 && description.isCountrySelectionAvailable
+                    && !description.apiAvailableCountries.isEmpty()) {
+                    emit updateApiCountryModel();
                 }
-                if (description.isApiV2) {
-                    if (description.isCountrySelectionAvailable && !description.apiAvailableCountries.isEmpty()) {
-                        emit updateApiCountryModel();
-                    }
-                    emit updateApiServicesModel();
-                }
-                break;
+            } else {
+                updateContainersModel();
             }
         }
 
         emit processedServerIdChanged(m_processedServerId);
+        const int newProcessedServerIndex = getProcessedServerIndex();
+        if (oldProcessedServerIndex != newProcessedServerIndex) {
+            emit processedServerIndexChanged(newProcessedServerIndex);
+        }
     }
 }
 

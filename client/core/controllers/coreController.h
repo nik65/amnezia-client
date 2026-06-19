@@ -23,6 +23,7 @@
 #include "ui/controllers/qml/pageController.h"
 #include "ui/controllers/settingsUiController.h"
 #include "ui/controllers/serversUiController.h"
+#include "ui/controllers/sitesController.h"
 #include "ui/controllers/ipSplitTunnelingUiController.h"
 #include "ui/controllers/systemController.h"
 #include "ui/controllers/languageUiController.h"
@@ -35,6 +36,7 @@
 #include "core/controllers/appSplitTunnelingController.h"
 #include "core/controllers/ipSplitTunnelingController.h"
 #include "core/controllers/allowedDnsController.h"
+#include "core/controllers/selfhosted/selfHostedUpdateBootstrapper.h"
 #include "core/controllers/api/servicesCatalogController.h"
 #include "core/controllers/api/subscriptionController.h"
 #include "core/controllers/api/newsController.h"
@@ -167,6 +169,7 @@ private:
     ExportUiController* m_exportUiController;
     SettingsUiController* m_settingsUiController;
     ServersUiController* m_serversUiController;
+    SitesController* m_sitesController;
     IpSplitTunnelingUiController* m_ipSplitTunnelingUiController;
     SystemController* m_systemController;
     NetworkReachabilityController* m_networkReachabilityController;
@@ -189,6 +192,7 @@ private:
     SubscriptionController* m_subscriptionController;
     NewsController* m_newsController;
     UpdateController* m_updateController;
+    SelfHostedUpdateBootstrapper* m_selfHostedUpdateBootstrapper;
     InstallController* m_installController;
     ExportController* m_exportController;
     ConnectionController* m_connectionController;
@@ -200,6 +204,7 @@ private:
     LanguageModel* m_languageModel;
     ProtocolsModel* m_protocolsModel;
     IpSplitTunnelingModel* m_ipSplitTunnelingModel;
+    IpSplitTunnelingModel* m_managedExceptSitesModel;
     NewsModel* m_newsModel;
     AllowedDnsModel* m_allowedDnsModel;
     AppSplitTunnelingModel* m_appSplitTunnelingModel;

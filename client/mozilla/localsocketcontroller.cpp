@@ -25,6 +25,7 @@
 #include "daemon/daemonerrors.h"
 
 #include "core/utils/protocolEnum.h"
+#include "core/utils/routeModes.h"
 #include "core/protocols/protocolUtils.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/constants/protocolConstants.h"
@@ -37,6 +38,11 @@ constexpr int CONNECTION_RETRY_TIMER_MSEC = 500;
 
 namespace {
 Logger logger("LocalSocketController");
+
+bool canUseIpFamily(const QString& value, bool serverIpv6Available) {
+  const QHostAddress address(value.trimmed());
+  return serverIpv6Available || address.protocol() != QAbstractSocket::IPv6Protocol;
+}
 }
 
 LocalSocketController::LocalSocketController() {
@@ -132,6 +138,8 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
   QJsonArray allowedDns = rawConfig.value(amnezia::configKey::allowedDnsServers).toArray();
 
   QJsonObject wgConfig = rawConfig.value(protocolName + "_config_data").toObject();
+  const bool serverIpv6Available = !rawConfig.contains(amnezia::configKey::serverIpv6Available)
+      || rawConfig.value(amnezia::configKey::serverIpv6Available).toBool();
 
   QJsonObject json;
   json.insert("type", "activate");
@@ -159,70 +167,90 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
   json.insert("serverIpv4Gateway", wgConfig.value(amnezia::configKey::hostName));
   //  json.insert("serverIpv6Gateway", QJsonValue(hop.m_server.ipv6Gateway()));
 
-  json.insert("primaryDnsServer", rawConfig.value(amnezia::configKey::dns1));
+  if (canUseIpFamily(rawConfig.value(amnezia::configKey::dns1).toString(), serverIpv6Available)) {
+    json.insert("primaryDnsServer", rawConfig.value(amnezia::configKey::dns1));
+  }
 
   // We don't use secondary DNS if primary DNS is AmneziaDNS
   if (!rawConfig.value(amnezia::configKey::dns1).toString().
-    contains(amnezia::protocols::dns::amneziaDnsIp)) {
+    contains(amnezia::protocols::dns::amneziaDnsIp)
+      && canUseIpFamily(rawConfig.value(amnezia::configKey::dns2).toString(), serverIpv6Available)) {
     json.insert("secondaryDnsServer", rawConfig.value(amnezia::configKey::dns2));
   }
 
   QJsonArray jsAllowedIPAddesses;
+  auto appendAllowedIpRange = [&jsAllowedIPAddesses, serverIpv6Available](const QString& rawIpRange) {
+    QString ipRange = rawIpRange.trimmed();
+    if (ipRange.isEmpty()) {
+      return;
+    }
 
+    QStringList ipRangeParts = ipRange.split('/');
+    const QHostAddress address(ipRangeParts.at(0));
+    const bool isIpv6 = address.protocol() == QAbstractSocket::IPv6Protocol;
+    if (isIpv6 && !serverIpv6Available) {
+      logger.warning() << "Skipping IPv6 allowed IP because server IPv6 egress is unavailable" << ipRange;
+      return;
+    }
+    if (address.protocol() == QAbstractSocket::UnknownNetworkLayerProtocol) {
+      logger.warning() << "Skipping invalid allowed IP range" << ipRange;
+      return;
+    }
+
+    QJsonObject range;
+    range.insert("address", ipRangeParts.at(0));
+    if (ipRangeParts.size() > 1) {
+      range.insert("range", atoi(ipRangeParts.at(1).toLocal8Bit()));
+    } else {
+      range.insert("range", isIpv6 ? 128 : 32);
+    }
+    range.insert("isIpv6", isIpv6);
+    jsAllowedIPAddesses.append(range);
+  };
+
+  const bool allowedIpsMissing = !wgConfig.contains(amnezia::configKey::allowedIps);
   QJsonArray plainAllowedIP = wgConfig.value(amnezia::configKey::allowedIps).toArray();
-  QJsonArray defaultAllowedIP = { "0.0.0.0/0", "::/0" };
+  bool hasDefaultIpv4Route = allowedIpsMissing;
+  bool hasDefaultIpv6Route = serverIpv6Available && allowedIpsMissing;
+  for (const auto &allowedIpValue : plainAllowedIP) {
+    const QString allowedIp = allowedIpValue.toString().trimmed();
+    hasDefaultIpv4Route = hasDefaultIpv4Route || allowedIp == QStringLiteral("0.0.0.0/0");
+    hasDefaultIpv6Route = hasDefaultIpv6Route || (serverIpv6Available && allowedIp == QStringLiteral("::/0"));
+  }
+  const bool hasDefaultAllowedRoute = hasDefaultIpv4Route || hasDefaultIpv6Route;
+  const bool appSplitTunnelAllowsGlobalBlock = appSplitTunnelType == amnezia::AppsRouteMode::VpnAllApps;
+  json.insert("blockIpv6Traffic", !serverIpv6Available && appSplitTunnelAllowsGlobalBlock
+      && hasDefaultIpv4Route && (splitTunnelType == 0 || splitTunnelType == 2));
 
-  if (plainAllowedIP != defaultAllowedIP && !plainAllowedIP.isEmpty()) {
+  if (!hasDefaultAllowedRoute && !plainAllowedIP.isEmpty()) {
     // Use AllowedIP list from WG config because of higher priority
     for (auto v : plainAllowedIP) {
-      QString ipRange = v.toString();
-      if (ipRange.split('/').size() > 1){
-          QJsonObject range;
-          range.insert("address", ipRange.split('/')[0]);
-          range.insert("range", atoi(ipRange.split('/')[1].toLocal8Bit()));
-          range.insert("isIpv6", false);
-          jsAllowedIPAddesses.append(range);
-      } else {
-          QJsonObject range;
-          range.insert("address",ipRange);
-          range.insert("range", 32);
-          range.insert("isIpv6", false);
-          jsAllowedIPAddesses.append(range);
-      }
+      appendAllowedIpRange(v.toString());
     }
   } else {
 
     // Use APP split tunnel
       if (splitTunnelType == 0 || splitTunnelType == 2) {
+        if (hasDefaultIpv4Route) {
           QJsonObject range_ipv4;
           range_ipv4.insert("address", "0.0.0.0");
           range_ipv4.insert("range", 0);
           range_ipv4.insert("isIpv6", false);
           jsAllowedIPAddesses.append(range_ipv4);
+        }
 
+        if (hasDefaultIpv6Route) {
           QJsonObject range_ipv6;
           range_ipv6.insert("address", "::");
           range_ipv6.insert("range", 0);
           range_ipv6.insert("isIpv6", true);
           jsAllowedIPAddesses.append(range_ipv6);
+        }
       }
 
       if (splitTunnelType == 1) {
           for (auto v : splitTunnelSites) {
-              QString ipRange = v.toString();
-              if (ipRange.split('/').size() > 1){
-                  QJsonObject range;
-                  range.insert("address", ipRange.split('/')[0]);
-                  range.insert("range", atoi(ipRange.split('/')[1].toLocal8Bit()));
-                  range.insert("isIpv6", false);
-                  jsAllowedIPAddesses.append(range);
-              } else {
-                  QJsonObject range;
-                  range.insert("address",ipRange);
-                  range.insert("range", 32);
-                  range.insert("isIpv6", false);
-                  jsAllowedIPAddesses.append(range);
-              }
+              appendAllowedIpRange(v.toString());
           }
       }
   }
@@ -242,7 +270,13 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
 
   json.insert("vpnDisabledApps", splitTunnelApps);
 
-  json.insert("allowedDnsServers", allowedDns);
+  QJsonArray filteredAllowedDns;
+  for (const QJsonValue& dnsValue : allowedDns) {
+    if (canUseIpFamily(dnsValue.toString(), serverIpv6Available)) {
+      filteredAllowedDns.append(dnsValue);
+    }
+  }
+  json.insert("allowedDnsServers", filteredAllowedDns);
 
   json.insert(amnezia::configKey::killSwitchOption, rawConfig.value(amnezia::configKey::killSwitchOption));
 

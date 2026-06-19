@@ -20,6 +20,3 @@ index 198c98ff..7341db70 100644
          add_link_options("$<$<CONFIG:Release>:/CETCOMPAT>")
      endif()
  else ()
--- 
-2.46.0.windows.1
-

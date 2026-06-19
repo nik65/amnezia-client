@@ -6,4 +6,3 @@ sudo docker run -d \
   -v amnezia-mtproxy-data:/data \
   --name $CONTAINER_NAME \
   $CONTAINER_NAME
-

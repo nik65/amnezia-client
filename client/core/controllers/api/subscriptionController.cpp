@@ -56,6 +56,33 @@ QString getSubscriptionStatusForRenewal(const ApiConfig &apiConfig)
 
     return QStringLiteral("active");
 }
+
+void preserveServerRoutingRules(const QJsonObject &oldConfig, QJsonObject &newConfig)
+{
+    const QStringList keys {
+        QString(configKey::serverExcept),
+        QString(configKey::managedSplitTunnelExceptSites),
+        QString(configKey::managedSplitTunnelExceptSourceSites),
+        QString(configKey::managedSplitTunnelClientResolvedExceptSites),
+        QString(configKey::managedSplitTunnelClientResolvedAt),
+        QString(configKey::managedSplitTunnelForceEnabled),
+        QString(configKey::serverRoutingRulesSyncHost)
+    };
+
+    for (const QString &key : keys) {
+        if (!newConfig.contains(key) && oldConfig.contains(key)) {
+            newConfig.insert(key, oldConfig.value(key));
+        }
+    }
+}
+
+QJsonObject currentServerRoutingRulesSource(const QString &serverId,
+                                            SecureServersRepository *serversRepository)
+{
+    const int serverIndex = serversRepository->indexOfServerId(serverId);
+    QJsonObject currentConfig = serversRepository->serverJson(serverIndex);
+    return currentConfig;
+}
 }
 
 
@@ -121,7 +148,7 @@ void SubscriptionController::appendProtocolDataToApiPayload(const QString &proto
     }
 }
 
-ErrorCode SubscriptionController::extractServerConfigJsonFromResponse(const QByteArray &apiResponseBody, const QString &protocol, 
+ErrorCode SubscriptionController::extractServerConfigJsonFromResponse(const QByteArray &apiResponseBody, const QString &protocol,
                                                                         const ProtocolData &protocolData, QJsonObject &serverConfigJson)
 {
     QString data = QJsonDocument::fromJson(apiResponseBody).object().value(configKey::config).toString();
@@ -186,16 +213,16 @@ ErrorCode SubscriptionController::extractServerConfigJsonFromResponse(const QByt
     return ErrorCode::NoError;
 }
 
-void SubscriptionController::updateApiConfigInJson(QJsonObject &serverConfigJson, const QString &serviceType, 
+void SubscriptionController::updateApiConfigInJson(QJsonObject &serverConfigJson, const QString &serviceType,
                                                     const QString &serviceProtocol, const QString &userCountryCode,
                                                     const QByteArray &apiResponseBody)
 {
     QJsonObject apiConfig = serverConfigJson.value(apiDefs::key::apiConfig).toObject();
-    
+
     apiConfig[apiDefs::key::serviceType] = serviceType;
     apiConfig[apiDefs::key::serviceProtocol] = serviceProtocol;
     apiConfig[apiDefs::key::userCountryCode] = userCountryCode;
-    
+
     if (serverConfigJson.value(configKey::configVersion).toInt() == serverConfigUtils::ConfigSource::AmneziaGateway) {
         QJsonObject responseObj = QJsonDocument::fromJson(apiResponseBody).object();
         if (responseObj.contains(apiDefs::key::supportedProtocols)) {
@@ -205,14 +232,14 @@ void SubscriptionController::updateApiConfigInJson(QJsonObject &serverConfigJson
             apiConfig.insert(apiDefs::key::serviceInfo, responseObj.value(apiDefs::key::serviceInfo).toObject());
         }
     }
-    
+
     serverConfigJson[apiDefs::key::apiConfig] = apiConfig;
 }
 
 ErrorCode SubscriptionController::executeRequest(const QString &endpoint, const QJsonObject &apiPayload, QByteArray &responseBody, bool isTestPurchase)
 {
     GatewayController gatewayController(m_appSettingsRepository->getGatewayEndpoint(isTestPurchase), m_appSettingsRepository->isDevGatewayEnv(isTestPurchase), apiDefs::requestTimeoutMsecs,
-                                        m_appSettingsRepository->isStrictKillSwitchEnabled());
+                                        m_appSettingsRepository->isStrictKillSwitchEnabled(), m_appSettingsRepository);
     return gatewayController.post(endpoint, apiPayload, responseBody);
 }
 
@@ -391,7 +418,7 @@ ErrorCode SubscriptionController::importServiceFromAppStore(const QString &userC
     QJsonObject configObject = QJsonDocument::fromJson(configString).object();
 
     quint16 crc = qChecksum(QJsonDocument(configObject).toJson());
-    
+
     if (configObject.value(configKey::configVersion).toInt() != serverConfigUtils::ConfigSource::AmneziaGateway) {
         return ErrorCode::InternalError;
     }
@@ -419,7 +446,7 @@ ErrorCode SubscriptionController::updateServiceFromGateway(const QString &server
     const bool isTestPurchase = apiV2->apiConfig.isTestPurchase;
     QString serviceProtocol = apiV2->serviceProtocol();
     ProtocolData protocolData = generateProtocolData(serviceProtocol);
-    
+
     QJsonObject authDataJson = apiV2->authData.toJson();
     GatewayRequestData gatewayRequestData { QSysInfo::productType(),
                                             QString(APP_VERSION),
@@ -455,32 +482,35 @@ ErrorCode SubscriptionController::updateServiceFromGateway(const QString &server
     if (errorCode != ErrorCode::NoError) {
         return errorCode;
     }
-    
+
     updateApiConfigInJson(serverConfigJson, apiV2->apiConfig.serviceType, serviceProtocol, apiV2->apiConfig.userCountryCode, responseBody);
-    
+    preserveServerRoutingRules(currentServerRoutingRulesSource(serverId, m_serversRepository), serverConfigJson);
+
     if (serverConfigJson.value(configKey::configVersion).toInt() != serverConfigUtils::ConfigSource::AmneziaGateway) {
         return ErrorCode::InternalError;
     }
 
     ApiV2ServerConfig newApiV2Config = ApiV2ServerConfig::fromJson(serverConfigJson);
     ApiV2ServerConfig* newApiV2 = &newApiV2Config;
-    
+
     newApiV2->apiConfig.vpnKey = apiV2->apiConfig.vpnKey;
     newApiV2->apiConfig.isTestPurchase = apiV2->apiConfig.isTestPurchase;
     newApiV2->apiConfig.isInAppPurchase = apiV2->apiConfig.isInAppPurchase;
     newApiV2->apiConfig.subscriptionExpiredByServer = false;
-    
+
     newApiV2->authData = apiV2->authData;
     newApiV2->crc = apiV2->crc;
-    
+
     if (apiV2->nameOverriddenByUser) {
         newApiV2->name = apiV2->name;
         newApiV2->displayName = apiV2->displayName;
         newApiV2->nameOverriddenByUser = true;
     }
 
-    m_serversRepository->editServer(serverId, newApiV2Config.toJson(),
-                                   serverConfigUtils::configTypeFromJson(newApiV2Config.toJson()));
+    QJsonObject newApiV2Json = newApiV2Config.toJson();
+    preserveServerRoutingRules(serverConfigJson, newApiV2Json);
+    m_serversRepository->editServer(serverId, newApiV2Json,
+                                   serverConfigUtils::configTypeFromJson(newApiV2Json));
     return ErrorCode::NoError;
 }
 
@@ -490,7 +520,7 @@ ErrorCode SubscriptionController::deactivateDevice(const QString &serverId)
     if (!apiV2.has_value()) {
         return ErrorCode::NoError;
     }
-    
+
     if (!apiV2->isPremium() && !apiV2->isExternalPremium()) {
         return ErrorCode::NoError;
     }
@@ -527,7 +557,7 @@ ErrorCode SubscriptionController::deactivateExternalDevice(const QString &server
     if (!apiV2.has_value()) {
         return ErrorCode::NoError;
     }
-    
+
     if (!apiV2->isPremium() && !apiV2->isExternalPremium()) {
         return ErrorCode::NoError;
     }
@@ -641,8 +671,10 @@ ErrorCode SubscriptionController::prepareVpnKeyExport(const QString &serverId, Q
             return ErrorCode::ApiConfigEmptyError;
         }
         apiV2->apiConfig.vpnKey = vpnKey;
-        m_serversRepository->editServer(serverId, apiV2->toJson(),
-                                         serverConfigUtils::configTypeFromJson(apiV2->toJson()));
+        QJsonObject apiJson = apiV2->toJson();
+        preserveServerRoutingRules(currentServerRoutingRulesSource(serverId, m_serversRepository), apiJson);
+        m_serversRepository->editServer(serverId, apiJson,
+                                         serverConfigUtils::configTypeFromJson(apiJson));
     }
 
     return ErrorCode::NoError;
@@ -723,7 +755,7 @@ bool SubscriptionController::isApiKeyExpired(const QString &serverId) const
         return false;
     }
     const QString expiresAt = apiV2->apiConfig.publicKey.expiresAt;
-    
+
     if (expiresAt.isEmpty()) {
         return false;
     }
@@ -732,7 +764,7 @@ bool SubscriptionController::isApiKeyExpired(const QString &serverId) const
     if (expiresAtDateTime < QDateTime::currentDateTimeUtc()) {
         return true;
     }
-    
+
     return false;
 }
 
@@ -892,7 +924,7 @@ ErrorCode SubscriptionController::getAccountInfo(const QString &serverId, QJsonO
         return ErrorCode::InternalError;
     }
     bool isTestPurchase = apiV2->apiConfig.isTestPurchase;
-    
+
     QJsonObject authDataJson = apiV2->authData.toJson();
     GatewayRequestData gatewayRequestData { QSysInfo::productType(),
                                             QString(APP_VERSION),
@@ -949,7 +981,8 @@ QFuture<QPair<ErrorCode, QString>> SubscriptionController::getRenewalLink(const 
     auto gatewayController = QSharedPointer<GatewayController>::create(m_appSettingsRepository->getGatewayEndpoint(isTestPurchase),
                                                                        m_appSettingsRepository->isDevGatewayEnv(isTestPurchase),
                                                                        apiDefs::requestTimeoutMsecs,
-                                                                       m_appSettingsRepository->isStrictKillSwitchEnabled());
+                                                                       m_appSettingsRepository->isStrictKillSwitchEnabled(),
+                                                                       m_appSettingsRepository);
     auto postFuture = gatewayController->postAsync(QString("%1v1/renewal_link"), apiPayload);
     auto *watcher = new QFutureWatcher<QPair<ErrorCode, QByteArray>>();
     QObject::connect(watcher, &QFutureWatcher<QPair<ErrorCode, QByteArray>>::finished,

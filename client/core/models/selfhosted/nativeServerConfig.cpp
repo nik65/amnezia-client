@@ -29,6 +29,11 @@ ContainerConfig NativeServerConfig::containerConfig(DockerContainer container) c
     return containers.value(container);
 }
 
+void NativeServerConfig::updateContainerConfig(DockerContainer container, const ContainerConfig &config)
+{
+    containers[container] = config;
+}
+
 QPair<QString, QString> NativeServerConfig::getDnsPair(const QString &primaryDns, const QString &secondaryDns) const
 {
     QString d1 = dns1;
@@ -97,14 +102,14 @@ NativeServerConfig NativeServerConfig::fromJson(const QJsonObject& json)
     
     QString defaultContainerStr = json.value(configKey::defaultContainer).toString();
     config.defaultContainer = ContainerUtils::containerFromString(defaultContainerStr);
-    
+
     config.dns1 = json.value(configKey::dns1).toString();
     config.dns2 = json.value(configKey::dns2).toString();
-    
+
     if (config.displayName.isEmpty()) {
         config.displayName = config.description.isEmpty() ? config.hostName : config.description;
     }
-    
+
     return config;
 }
 

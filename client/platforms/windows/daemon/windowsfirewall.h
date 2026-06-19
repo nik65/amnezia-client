@@ -16,6 +16,7 @@
 #include <QByteArray>
 #include <QHostAddress>
 #include <QObject>
+#include <QSet>
 #include <QString>
 
 #include "../client/daemon/interfaceconfig.h"
@@ -41,6 +42,7 @@ class WindowsFirewall final : public QObject {
   bool enableInterface(int vpnAdapterIndex);
   bool enableLanBypass(const QList<IPAddress>& ranges);
   bool enablePeerTraffic(const InterfaceConfig& config);
+  bool blockIpv6TrafficForPeer(const QString& peer);
   bool disablePeerTraffic(const QString& pubkey);
   bool disableKillSwitch();
   bool allowAllTraffic();
@@ -53,6 +55,7 @@ class WindowsFirewall final : public QObject {
   bool m_init = false;
   QList<uint64_t> m_activeRules;
   QMultiMap<QString, uint64_t> m_peerRules;
+  QSet<QString> m_ipv6BlockPeers;
 
   bool allowTrafficForAppOnAll(const QString& exePath, int weight,
                                const QString& title);
@@ -61,6 +64,8 @@ class WindowsFirewall final : public QObject {
   bool blockTrafficTo(const IPAddress& addr, uint8_t weight,
                       const QString& title, const QString& peer = QString());
   bool blockTrafficOnPort(uint port, uint8_t weight, const QString& title);
+  bool blockTrafficOnPort(uint port, uint8_t weight, const QString& title,
+                          const GUID& subLayerKey);
   bool allowTrafficTo(const IPAddress& addr, int weight, const QString& title,
                       const QString& peer = QString());
   bool allowTrafficTo(const QHostAddress& targetIP, uint port, int weight,

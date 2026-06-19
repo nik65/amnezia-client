@@ -18,6 +18,7 @@ using namespace amnezia;
 
 namespace {
     constexpr char gatewayEndpoint[] = "http://gw.amnezia.org:80/";
+    constexpr char proxyUrlsKey[] = "Conf/proxyUrls/";
 }
 
 SecureAppSettingsRepository::SecureAppSettingsRepository(SecureQSettings* settings, QObject *parent)
@@ -280,6 +281,24 @@ void SecureAppSettingsRepository::toggleDevGatewayEnv(bool enabled)
     setValue("Conf/devGatewayEnv", enabled);
 }
 
+QByteArray SecureAppSettingsRepository::readGatewayProxyUrls(const QString &cacheKey) const
+{
+    if (cacheKey.isEmpty()) {
+        return {};
+    }
+
+    return value(QString(proxyUrlsKey) + cacheKey).toByteArray();
+}
+
+void SecureAppSettingsRepository::writeGatewayProxyUrls(const QString &cacheKey, const QByteArray &proxyUrlsEncrypted)
+{
+    if (cacheKey.isEmpty()) {
+        return;
+    }
+
+    setValue(QString(proxyUrlsKey) + cacheKey, proxyUrlsEncrypted);
+}
+
 bool SecureAppSettingsRepository::isKillSwitchEnabled() const
 {
     return value("Conf/killSwitchEnabled", true).toBool();
@@ -386,6 +405,16 @@ QStringList SecureAppSettingsRepository::getReadNewsIds() const
 void SecureAppSettingsRepository::setReadNewsIds(const QStringList &ids)
 {
     setValue("News/readIds", ids);
+}
+
+QString SecureAppSettingsRepository::selfHostedUpdateLastAutoInstallAttempt() const
+{
+    return value("Conf/selfHostedUpdateLastAutoInstallAttempt").toString();
+}
+
+void SecureAppSettingsRepository::setSelfHostedUpdateLastAutoInstallAttempt(const QString &attemptId)
+{
+    setValue("Conf/selfHostedUpdateLastAutoInstallAttempt", attemptId);
 }
 
 bool SecureAppSettingsRepository::isHomeAdLabelVisible() const

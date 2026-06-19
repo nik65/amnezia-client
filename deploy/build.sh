@@ -20,6 +20,16 @@ get_abi_folder() {
     esac
 }
 
+get_android_toolchain_dir() {
+    local abi_folder
+    abi_folder=$(get_abi_folder "$1")
+    if [[ -f "$QT_ROOT_PATH/android/lib/cmake/Qt6/qt.toolchain.cmake" ]]; then
+        echo "android"
+    else
+        echo "$abi_folder"
+    fi
+}
+
 abis=()
 installers=()
 while [[ $# -gt 0 ]]; do
@@ -29,6 +39,7 @@ while [[ $# -gt 0 ]]; do
         -t|--target)        TARGET="$2";             shift 2 ;;
         -f|--force)         : ${FORCE=true};         shift   ;;
         -g|--generator)     : ${CMAKE_GENERATOR=$2}; shift 2 ;;
+        -j|--jobs)          BUILD_JOBS="$2";         shift 2 ;;
         --installer)        installers+=("$2");      shift 2 ;;
         --abi)              abis+=("$2");            shift 2 ;;
         --sign)             : ${SIGN:=true};         shift   ;;
@@ -41,6 +52,7 @@ while [[ $# -gt 0 ]]; do
             echo "  -t|--target <name>        - specify build target"
             echo "  -f|--force                - force removal of build folder prior cmake configuration"
             echo "  -g|--generator <name>     - use specified generator for CMake"
+            echo "  -j|--jobs <count>         - parallel build job count"
             echo "  --installer <name|all>    - specify an installer(s) to build. allowed to be used multiple times"
             echo "  --abi                     - specify Android ABIs for target to build for. all by default"
             echo "  --sign                    - whether to sign the resulting files. only appicable to Android"
@@ -58,6 +70,14 @@ done
 : ${ABIS:="all"}
 : ${HOST:="$(uname -s)"}
 : ${TARGET:="$HOST"}
+: ${BUILD_JOBS:="${AMNEZIA_BUILD_JOBS:-}"}
+if [[ -z "$BUILD_JOBS" ]] && command -v nproc >/dev/null 2>&1; then
+    BUILD_JOBS=$(nproc)
+fi
+if [[ -z "$BUILD_JOBS" ]]; then
+    BUILD_JOBS=1
+fi
+export AMNEZIA_BUILD_JOBS="$BUILD_JOBS"
 
 HOST=$(echo "$HOST" | tr '[:upper:]' '[:lower:]')
 TARGET=$(echo "$TARGET" | tr '[:upper:]' '[:lower:]')
@@ -148,7 +168,7 @@ case "$TARGET" in
             QT_ANDROID_ABIS="${ABIS// /;}"
         fi
 
-        toolchain_dir=$(get_abi_folder "$toolchain_abi")
+        toolchain_dir=$(get_android_toolchain_dir "$toolchain_abi")
         : ${CMAKE_PREFIX_PATH:="$QT_ROOT_PATH/$toolchain_dir/lib/cmake/Qt6/qt.toolchain.cmake"}
         : ${CMAKE_TOOLCHAIN_FILE:="$QT_ROOT_PATH/$toolchain_dir/lib/cmake/Qt6/qt.toolchain.cmake"}
         ;;
@@ -201,15 +221,26 @@ args=()
 [[ -n "$QT_ANDROID_SIGN_AAB" ]]       && args+=("-DQT_ANDROID_SIGN_AAB=$QT_ANDROID_SIGN_AAB")
 [[ -n "$QT_ANDROID_ABIS" ]]           && args+=("-DQT_ANDROID_ABIS=$QT_ANDROID_ABIS")
 [[ -n "$QT_ANDROID_BUILD_ALL_ABIS" ]] && args+=("-DQT_ANDROID_BUILD_ALL_ABIS=$QT_ANDROID_BUILD_ALL_ABIS")
+[[ -n "$CONAN_NO_REMOTE" ]]           && args+=("-DCONAN_NO_REMOTE=$CONAN_NO_REMOTE")
+[[ -n "$CONAN_INSTALL_ARGS" ]]        && args+=("-DCONAN_INSTALL_ARGS=$CONAN_INSTALL_ARGS")
 
 if [[ -n "$FORCE" ]]; then
     run_traced rm -rf "$BUILD_PATH"
 fi
 
 run_traced cmake -S "$SOURCE_PATH" -B "$BUILD_PATH" "${args[@]}"
-run_traced cmake --build "$BUILD_PATH" --config "$CMAKE_BUILD_TYPE"
+if [[ "$TARGET" == "android" && "$QT_ANDROID_BUILD_ALL_ABIS" == "TRUE" ]]; then
+    for configure_target in \
+        qt_internal_android_armeabi-v7a_configure \
+        qt_internal_android_x86_configure \
+        qt_internal_android_x86_64_configure
+    do
+        run_traced cmake --build "$BUILD_PATH" --config "$CMAKE_BUILD_TYPE" -t "$configure_target" --parallel "$BUILD_JOBS"
+    done
+fi
+run_traced cmake --build "$BUILD_PATH" --config "$CMAKE_BUILD_TYPE" --parallel "$BUILD_JOBS"
 
-[[ -n "$BUILD_AAB" ]] && run_traced cmake --build "$BUILD_PATH" --config "$CMAKE_BUILD_TYPE" -t "aab"
+[[ -n "$BUILD_AAB" ]] && run_traced cmake --build "$BUILD_PATH" --config "$CMAKE_BUILD_TYPE" -t "aab" --parallel "$BUILD_JOBS"
 
 if [ -z "$no_installers" ]; then
     for installer in $INSTALLERS; do

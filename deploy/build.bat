@@ -10,11 +10,18 @@ if /i "%~1" == "-i"             set "ARG_BUILD_INSTALLERS=!ARG_BUILD_INSTALLERS!
 if /i "%~1" == "--installer"    set "ARG_BUILD_INSTALLERS=!ARG_BUILD_INSTALLERS! %~2" & shift
 if /i "%~1" == "-arch"          set "ARCH=%~2" & shift
 if /i "%~1" == "--architecture" set "ARCH=%~2" & shift
+if /i "%~1" == "-j"             set "BUILD_JOBS=%~2" & shift
+if /i "%~1" == "--jobs"         set "BUILD_JOBS=%~2" & shift
 shift
 goto :parse_args
 :done_args
 
 if defined ARG_BUILD_INSTALLERS set "ARG_BUILD_INSTALLERS=%ARG_BUILD_INSTALLERS:all=ifw wix%"
+if not defined BUILD_JOBS if defined AMNEZIA_BUILD_JOBS set "BUILD_JOBS=%AMNEZIA_BUILD_JOBS%"
+if not defined BUILD_JOBS set "BUILD_JOBS=%NUMBER_OF_PROCESSORS%"
+if not defined BUILD_JOBS set "BUILD_JOBS=1"
+set "AMNEZIA_BUILD_JOBS=%BUILD_JOBS%"
+set "CMAKE_BUILD_PARALLEL_LEVEL=%BUILD_JOBS%"
 
 :: understand toolchain arch (host_target) and Qt prefix path
 if not defined ARCH set "ARCH=%PROCESSOR_ARCHITECTURE%"
@@ -93,10 +100,27 @@ if exist "%VCVARS_PATH%" (
     if errorlevel 1 goto :fail
 )
 
+:: Some Conan Windows recipes call tools like mc.exe directly during configure.
+:: vcvarsall can leave Windows SDK tools out of PATH on this workstation, so add
+:: the latest matching SDK bin directory when needed.
+where mc.exe >nul 2>nul
+if errorlevel 1 (
+    set "_sdk_tools_arch=x64"
+    if /i "%ARCH%" == "arm64" set "_sdk_tools_arch=arm64"
+    for /f "delims=" %%I in ('dir /b /ad /o-n "%ProgramFiles(x86)%\Windows Kits\10\bin" 2^>nul') do (
+        if not defined _windows_sdk_bin (
+            if exist "%ProgramFiles(x86)%\Windows Kits\10\bin\%%I\!_sdk_tools_arch!\mc.exe" (
+                set "_windows_sdk_bin=%ProgramFiles(x86)%\Windows Kits\10\bin\%%I\!_sdk_tools_arch!"
+            )
+        )
+    )
+    if defined _windows_sdk_bin set "PATH=!_windows_sdk_bin!;%PATH%"
+)
+
 :: build project and installers
 @echo on
-cmake -S "%PROJECT_DIR%" -B "%BUILD_DIR%" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=%QT_ROOT_PATH%\msvc2022_%_qt_postfix_arg%" "-DCMAKE_VS_GLOBALS=UseMultiToolTask=true;EnforceProcessCountAcrossBuilds=true" || goto :fail
-cmake --build "%BUILD_DIR%" --config Release -- /m  || goto :fail
+cmake -S "%PROJECT_DIR%" -B "%BUILD_DIR%" -DCMAKE_BUILD_TYPE=Release -DCMAKE_CONFIGURATION_TYPES=Release -DCONAN_INSTALL_BUILD_CONFIGURATIONS=Release "-DCMAKE_PREFIX_PATH=%QT_ROOT_PATH%\msvc2022_%_qt_postfix_arg%" "-DCMAKE_VS_GLOBALS=UseMultiToolTask=true;EnforceProcessCountAcrossBuilds=true;CL_MPCount=%BUILD_JOBS%;MultiProcMaxCount=%BUILD_JOBS%" || goto :fail
+cmake --build "%BUILD_DIR%" --config Release -- /m:%BUILD_JOBS%  || goto :fail
 @echo off
 for %%I in (%ARG_BUILD_INSTALLERS%) do (
     if /i "%%I" == "ifw" call :do_ifw

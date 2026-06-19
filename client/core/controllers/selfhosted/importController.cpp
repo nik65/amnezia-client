@@ -511,9 +511,9 @@ QJsonObject ImportController::extractWireGuardConfig(const QString &data, Config
         if (trimmedLine.startsWith("[") && trimmedLine.endsWith("]")) {
             continue;
         } else {
-            QStringList parts = trimmedLine.split(" = ");
-            if (parts.count() == 2) {
-                configMap[parts.at(0).trimmed()] = parts.at(1).trimmed();
+            const int separatorIndex = trimmedLine.indexOf('=');
+            if (separatorIndex > 0) {
+                configMap[trimmedLine.left(separatorIndex).trimmed()] = trimmedLine.mid(separatorIndex + 1).trimmed();
             }
         }
     }
@@ -567,7 +567,7 @@ QJsonObject ImportController::extractWireGuardConfig(const QString &data, Config
     }
 
     QJsonArray allowedIpsJsonArray = QJsonArray::fromStringList(
-                configMap.value(protocols::wireguard::AllowedIPs).split(", "));
+                configMap.value(protocols::wireguard::AllowedIPs).split(QRegularExpression("\\s*,\\s*"), Qt::SkipEmptyParts));
 
     lastConfig[configKey::allowedIps] = allowedIpsJsonArray;
 

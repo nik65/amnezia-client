@@ -177,11 +177,11 @@ ApiV2ServerConfig ApiV2ServerConfig::fromJson(const QJsonObject& json)
     if (!authDataObj.isEmpty()) {
         config.authData = AuthData::fromJson(authDataObj);
     }
-    
+
     if (config.displayName.isEmpty()) {
         config.displayName = config.name.isEmpty() ? config.description : config.name;
     }
-    
+
     return config;
 }
 

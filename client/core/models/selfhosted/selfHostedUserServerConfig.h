@@ -25,12 +25,13 @@ struct SelfHostedUserServerConfig {
     DockerContainer defaultContainer;
     QString dns1;
     QString dns2;
-
     bool hasCredentials() const;
     bool isReadOnly() const;
     std::optional<ServerCredentials> credentials() const;
     bool hasContainers() const;
     ContainerConfig containerConfig(DockerContainer container) const;
+
+    void updateContainerConfig(DockerContainer container, const ContainerConfig &config);
 
     QPair<QString, QString> getDnsPair(const QString &primaryDns, const QString &secondaryDns) const;
 

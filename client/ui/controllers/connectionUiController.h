@@ -35,6 +35,8 @@ public slots:
     void openConnection();
     void closeConnection();
 
+    bool isRevokeBlockedDuringActiveConnection(const QString &serverId, int containerIndex, const QString &clientId) const;
+
     ErrorCode getLastConnectionError();
     void onConnectionStateChanged(Vpn::ConnectionState state);
 
@@ -42,22 +44,26 @@ public slots:
 
 signals:
     void connectionStateChanged();
+    void serverRoutingRulesChanged(int serverIndex);
 
     void connectionErrorOccurred(ErrorCode errorCode);
 
     void connectButtonClicked();
     void preparingConfig();
     void prepareConfig();
+    void unsupportedConnectDrawerRequested();
+    void noInstalledContainers();
 
 private:
     Vpn::ConnectionState getCurrentConnectionState();
+    void notifyConnectionBlocked(ErrorCode errorCode);
 
     ConnectionController* m_connectionController;
     ServersController* m_serversController;
 
     bool m_isConnected = false;
     bool m_isConnectionInProgress = false;
-    QString m_connectionStateText = tr("Connect");
+    QString m_connectionStateText;
 
     Vpn::ConnectionState m_state;
 };

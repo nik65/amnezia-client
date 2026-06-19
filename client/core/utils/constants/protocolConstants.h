@@ -1,6 +1,10 @@
 #ifndef PROTOCOLCONSTANTS_H
 #define PROTOCOLCONSTANTS_H
 
+#ifndef SELFHOSTED_UPDATE_SYNC_HOST
+#define SELFHOSTED_UPDATE_SYNC_HOST "172.29.172.252"
+#endif
+
 namespace amnezia
 {
 
@@ -10,6 +14,28 @@ namespace amnezia
         namespace dns
         {
             constexpr char amneziaDnsIp[] = "172.29.172.254";
+        }
+
+        namespace serverRoutingRules
+        {
+            constexpr char syncHost[] = "172.29.172.253";
+            constexpr char syncPath[] = "/rules.json";
+            constexpr char containerName[] = "amnezia-routing-rules";
+            constexpr char tunnelContainerName[] = "amnezia-routing-rules-vpn";
+            constexpr char hostDirectory[] = "/opt/amnezia/server-routing-rules";
+            constexpr char fileName[] = "rules.json";
+            constexpr int syncPort = 17864;
+        }
+
+        namespace selfHostedUpdates
+        {
+            constexpr char syncHost[] = SELFHOSTED_UPDATE_SYNC_HOST;
+            constexpr char manifestPath[] = "/manifest.json";
+            constexpr char filesPath[] = "/files";
+            constexpr char hostDirectory[] = "/opt/amnezia/client-updates";
+            constexpr char containerName[] = "amnezia-client-updates";
+            constexpr char tunnelContainerName[] = "amnezia-client-updates-vpn";
+            constexpr int syncPort = 17865;
         }
 
         namespace openvpn

@@ -65,6 +65,9 @@ void CoreController::initModels()
     m_ipSplitTunnelingModel = new IpSplitTunnelingModel(this);
     setQmlContextProperty("IpSplitTunnelingModel", m_ipSplitTunnelingModel);
 
+    m_managedExceptSitesModel = new IpSplitTunnelingModel(this);
+    setQmlContextProperty("ManagedExceptSitesModel", m_managedExceptSitesModel);
+
     m_allowedDnsModel = new AllowedDnsModel(this);
     setQmlContextProperty("AllowedDnsModel", m_allowedDnsModel);
 
@@ -154,7 +157,8 @@ void CoreController::initCoreControllers()
     m_servicesCatalogController = new ServicesCatalogController(m_appSettingsRepository);
     m_subscriptionController = new SubscriptionController(m_serversRepository, m_appSettingsRepository);
     m_newsController = new NewsController(m_appSettingsRepository, m_serversRepository);
-    m_updateController = new UpdateController(m_appSettingsRepository, this);
+    m_updateController = new UpdateController(m_appSettingsRepository, m_serversRepository, this);
+    m_selfHostedUpdateBootstrapper = new SelfHostedUpdateBootstrapper(m_serversRepository, this);
     
     m_installController = new InstallController(m_serversRepository, m_appSettingsRepository, this);
     m_exportController = new ExportController(m_serversRepository, m_appSettingsRepository, this);
@@ -191,7 +195,7 @@ void CoreController::initControllers()
     m_languageUiController = new LanguageUiController(m_settingsController, m_languageModel, this);
     setQmlContextProperty("LanguageUiController", m_languageUiController);
 
-    m_settingsUiController = new SettingsUiController(m_settingsController, m_serversController, m_languageUiController, this);
+    m_settingsUiController = new SettingsUiController(m_settingsController, m_serversController, this);
     setQmlContextProperty("SettingsController", m_settingsUiController);
 
     m_pageController = new PageController(m_serversController, m_settingsController, this);
@@ -199,6 +203,26 @@ void CoreController::initControllers()
 
     m_serversUiController = new ServersUiController(m_serversController, m_settingsController, m_serversModel, m_containersModel, m_defaultServerContainersModel, this);
     setQmlContextProperty("ServersUiController", m_serversUiController);
+
+    m_sitesController = new SitesController(m_serversRepository, m_serversUiController, m_installController, m_managedExceptSitesModel, this);
+    setQmlContextProperty("SitesController", m_sitesController);
+    connect(m_serversUiController, &ServersUiController::processedServerIndexChanged,
+            m_sitesController, [this]() { m_sitesController->reloadManagedSites(); });
+    connect(m_connectionController, &ConnectionController::serverRoutingRulesChanged,
+            m_sitesController, [this](int serverIndex) {
+                if (m_serversUiController && serverIndex == m_serversUiController->getProcessedServerIndex()) {
+                    m_sitesController->reloadManagedSites();
+                }
+            });
+    connect(m_serversRepository, &SecureServersRepository::serverEdited,
+            m_sitesController, [this](const QString &serverId) {
+                const int serverIndex = m_serversRepository->indexOfServerId(serverId);
+                if (m_serversUiController && serverIndex == m_serversUiController->getProcessedServerIndex()) {
+                    m_sitesController->reloadManagedSites();
+                }
+            });
+    connect(m_sitesController, &SitesController::managedSplitTunnelingRulesPublished,
+            m_connectionController, &ConnectionController::onManagedSplitTunnelingRulesPublished);
 
     m_ipSplitTunnelingUiController = new IpSplitTunnelingUiController(m_ipSplitTunnelingController, m_ipSplitTunnelingModel, this);
     setQmlContextProperty("IpSplitTunnelingController", m_ipSplitTunnelingUiController);

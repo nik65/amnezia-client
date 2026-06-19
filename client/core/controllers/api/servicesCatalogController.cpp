@@ -242,7 +242,6 @@ ErrorCode ServicesCatalogController::fillAvailableServices(QJsonObject &services
 ErrorCode ServicesCatalogController::executeRequest(const QString &endpoint, const QJsonObject &apiPayload, QByteArray &responseBody)
 {
     GatewayController gatewayController(m_appSettingsRepository->getGatewayEndpoint(), m_appSettingsRepository->isDevGatewayEnv(), apiDefs::requestTimeoutMsecs,
-                                        m_appSettingsRepository->isStrictKillSwitchEnabled());
+                                        m_appSettingsRepository->isStrictKillSwitchEnabled(), m_appSettingsRepository);
     return gatewayController.post(endpoint, apiPayload, responseBody);
 }
-

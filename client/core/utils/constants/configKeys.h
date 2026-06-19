@@ -48,6 +48,7 @@ namespace amnezia
         constexpr QLatin1String mtu("mtu");
         constexpr QLatin1String allowedIps("allowed_ips");
         constexpr QLatin1String persistentKeepAlive("persistent_keep_alive");
+        constexpr QLatin1String serverIpv6Available("serverIpv6Available");
 
         constexpr QLatin1String clientIp("client_ip");
 
@@ -98,6 +99,15 @@ namespace amnezia
 
         constexpr QLatin1String splitTunnelSites("splitTunnelSites");
         constexpr QLatin1String splitTunnelType("splitTunnelType");
+        constexpr QLatin1String serverForward("server.forward");
+        constexpr QLatin1String serverExcept("server.except");
+        constexpr QLatin1String managedSplitTunnelForwardSites("managedSplitTunnelForwardSites");
+        constexpr QLatin1String managedSplitTunnelExceptSites("managedSplitTunnelExceptSites");
+        constexpr QLatin1String managedSplitTunnelExceptSourceSites("managedSplitTunnelExceptSourceSites");
+        constexpr QLatin1String managedSplitTunnelClientResolvedExceptSites("managedSplitTunnelClientResolvedExceptSites");
+        constexpr QLatin1String managedSplitTunnelClientResolvedAt("managedSplitTunnelClientResolvedAt");
+        constexpr QLatin1String managedSplitTunnelForceEnabled("managedSplitTunnelForceEnabled");
+        constexpr QLatin1String serverRoutingRulesSyncHost("serverRoutingRulesSyncHost");
 
         constexpr QLatin1String splitTunnelApps("splitTunnelApps");
         constexpr QLatin1String appSplitTunnelType("appSplitTunnelType");

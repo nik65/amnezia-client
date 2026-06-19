@@ -59,12 +59,14 @@ public:
     void setDevGatewayEndpoint();
     bool isDevGatewayEnv(bool isTestPurchase = false) const;
     void toggleDevGatewayEnv(bool enabled);
-    
+    QByteArray readGatewayProxyUrls(const QString &cacheKey) const;
+    void writeGatewayProxyUrls(const QString &cacheKey, const QByteArray &proxyUrlsEncrypted);
+
     bool isKillSwitchEnabled() const;
     void setKillSwitchEnabled(bool enabled);
     bool isStrictKillSwitchEnabled() const;
     void setStrictKillSwitchEnabled(bool enabled);
-    
+
     bool isAutoConnect() const;
     void setAutoConnect(bool enabled);
     bool isStartMinimized() const;
@@ -77,10 +79,12 @@ public:
     void setSaveLogs(bool enabled);
     QDateTime getLogEnableDate() const;
     void setLogEnableDate(const QDateTime &date);
-    
+
     QString getInstallationUuid(bool createIfNotExists) const;
     QStringList getReadNewsIds() const;
     void setReadNewsIds(const QStringList &ids);
+    QString selfHostedUpdateLastAutoInstallAttempt() const;
+    void setSelfHostedUpdateLastAutoInstallAttempt(const QString &attemptId);
 
     bool isHomeAdLabelVisible() const;
     void disableHomeAdLabel();
@@ -110,7 +114,7 @@ signals:
 private:
     void setVpnSites(RouteMode mode, const QVariantMap &sites);
     void setInstallationUuid(const QString &uuid);
-    
+
     QVariant value(const QString &key, const QVariant &defaultValue = QVariant()) const;
     void setValue(const QString &key, const QVariant &value);
 
@@ -119,4 +123,3 @@ private:
 };
 
 #endif // SECUREAPPSETTINGSREPOSITORY_H
-

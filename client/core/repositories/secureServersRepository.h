@@ -14,6 +14,7 @@
 #include "core/models/api/apiV2ServerConfig.h"
 #include "core/models/api/legacyApiServerConfig.h"
 #include "core/models/containerConfig.h"
+#include "core/utils/routeModes.h"
 #include "core/utils/serverConfigUtils.h"
 #include "secureQSettings.h"
 
@@ -46,6 +47,23 @@ public:
     QString defaultServerId() const;
     void setDefaultServer(const QString &serverId);
 
+    QJsonObject serverJson(int index) const;
+    void editServerJson(int index, const QJsonObject &serverJson);
+
+    QVariantMap managedVpnSites(int serverIndex, RouteMode mode) const;
+    QVariantMap managedVpnSitesForRouting(int serverIndex, RouteMode mode) const;
+    void setManagedVpnSites(int serverIndex, RouteMode mode, const QVariantMap &sites);
+    bool addManagedVpnSite(int serverIndex, RouteMode mode, const QString &site, const QString &ip = "");
+    void addManagedVpnSites(int serverIndex, RouteMode mode, const QMap<QString, QString> &sites);
+    void removeManagedVpnSite(int serverIndex, RouteMode mode, const QString &site);
+    void removeAllManagedVpnSites(int serverIndex, RouteMode mode);
+    bool isManagedSplitTunnelingForceEnabled(int serverIndex) const;
+    void setManagedSplitTunnelingForceEnabled(int serverIndex, bool enabled);
+    RouteMode effectiveSiteRouteMode(int serverIndex, bool localSplitEnabled, RouteMode localRouteMode) const;
+
+    ServerCredentials serverCredentials(int index) const;
+    bool hasServerWithVpnKey(const QString &vpnKey) const;
+    bool hasServerWithCrc(quint16 crc) const;
     void clearServers();
 
     QString nextAvailableServerName() const;

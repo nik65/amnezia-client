@@ -29,7 +29,7 @@ PageType {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.topMargin: 20 + PageController.safeAreaTopMargin
-        
+
         onActiveFocusChanged: {
             if(backButton.enabled && backButton.activeFocus) {
                 listView.positionViewAtBeginning()
