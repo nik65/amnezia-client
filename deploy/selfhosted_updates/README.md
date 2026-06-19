@@ -134,6 +134,20 @@ $env:WSL_QIF_ROOT_PATH = "/home/<wsl-user>/Qt/Tools/QtInstallerFramework/4.7"
 powershell -ExecutionPolicy Bypass -File deploy\selfhosted_updates\local_release.ps1
 ```
 
+For the normal release-workstation path, use the one-command rebuild wrapper.
+It loads `dist\selfhosted-release-env.ps1`, runs preflight, writes stdout/stderr
+logs under `dist\build-logs`, and then calls `local_release.ps1` for the local
+release platform set:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\selfhosted_updates\rebuild_clients.ps1 -BuildJobs 24
+```
+
+Use `-BuildPlatform windows`, `-BuildPlatform linux`, or
+`-BuildPlatform android` only when intentionally rebuilding a single client.
+Use `-NoBundleUpdatesInWindowsClient` for a faster smoke rebuild that does not
+produce the self-hosted Windows installer carrying the update payload.
+
 The self-hosted fork keeps its own monotonically increasing app version. Do not
 reset `AMNEZIAVPN_VERSION` or `APP_ANDROID_VERSION_CODE` down to the upstream
 release tag after a newer fork build has been published. Upstream releases are

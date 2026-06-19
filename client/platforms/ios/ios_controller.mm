@@ -590,7 +590,10 @@ bool IosController::setupWireGuard()
     if (config.contains(configKey::allowedIps) && config[configKey::allowedIps].isArray()) {
         wgConfig.insert(configKey::allowedIps, config[configKey::allowedIps]);
     } else {
-        QJsonArray allowed_ips { "0.0.0.0/0", "::/0" };
+        QJsonArray allowed_ips { "0.0.0.0/0" };
+        if (!m_rawConfig.contains(configKey::serverIpv6Available) || m_rawConfig[configKey::serverIpv6Available].toBool()) {
+            allowed_ips.append("::/0");
+        }
         wgConfig.insert(configKey::allowedIps, allowed_ips);
     }
 
@@ -704,7 +707,10 @@ bool IosController::setupAwg()
     if (config.contains(configKey::allowedIps) && config[configKey::allowedIps].isArray()) {
         wgConfig.insert(configKey::allowedIps, config[configKey::allowedIps]);
     } else {
-        QJsonArray allowed_ips { "0.0.0.0/0", "::/0" };
+        QJsonArray allowed_ips { "0.0.0.0/0" };
+        if (!m_rawConfig.contains(configKey::serverIpv6Available) || m_rawConfig[configKey::serverIpv6Available].toBool()) {
+            allowed_ips.append("::/0");
+        }
         wgConfig.insert(configKey::allowedIps, allowed_ips);
     }
 

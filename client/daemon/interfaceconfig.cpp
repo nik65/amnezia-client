@@ -61,6 +61,7 @@ QJsonObject InterfaceConfig::toJson() const {
     disabledApps.append(QJsonValue(i));
   }
   json.insert("vpnDisabledApps", disabledApps);
+  json.insert("blockIpv6Traffic", QJsonValue(m_blockIpv6Traffic));
 
   return json;
 }

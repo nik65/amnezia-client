@@ -45,6 +45,8 @@ abstract class Protocol {
     abstract fun reconnectVpn(vpnBuilder: Builder, protect: (Int) -> Boolean)
 
     protected fun ProtocolConfig.Builder.configSplitTunneling(config: JSONObject) {
+        setAllowIpv6Routes(config.optBoolean("serverIpv6Available", true))
+
         if (!allowSplitTunneling) {
             Log.i(TAG, "Global address split tunneling is prohibited, " +
                 "only tunneling from the protocol config is used")

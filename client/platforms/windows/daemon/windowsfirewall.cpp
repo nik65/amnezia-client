@@ -398,6 +398,35 @@ bool WindowsFirewall::enablePeerTraffic(const InterfaceConfig& config) {
   return true;
 }
 
+bool WindowsFirewall::blockIpv6TrafficForPeer(const QString& peer) {
+  if (m_ipv6BlockPeers.contains(peer)) {
+    return true;
+  }
+
+  auto result = FwpmTransactionBegin(m_sessionHandle, NULL);
+  if (result != ERROR_SUCCESS) {
+    return false;
+  }
+  auto cleanup = qScopeGuard([&] {
+    FwpmTransactionAbort0(m_sessionHandle);
+  });
+
+  if (!blockTrafficTo(IPAddress("::/0"), LOW_WEIGHT,
+                      "Block unavailable IPv6", peer)) {
+    return false;
+  }
+
+  result = FwpmTransactionCommit0(m_sessionHandle);
+  if (result != ERROR_SUCCESS) {
+    logger.error() << "FwpmTransactionCommit0 failed with error:" << result;
+    return false;
+  }
+
+  cleanup.dismiss();
+  m_ipv6BlockPeers.insert(peer);
+  return true;
+}
+
 bool WindowsFirewall::disablePeerTraffic(const QString& pubkey) {
   auto result = FwpmTransactionBegin(m_sessionHandle, NULL);
   auto cleanup = qScopeGuard([&] {
@@ -416,6 +445,7 @@ bool WindowsFirewall::disablePeerTraffic(const QString& pubkey) {
     FwpmFilterDeleteById0(m_sessionHandle, filterID);
     m_peerRules.remove(pubkey, filterID);
   }
+  m_ipv6BlockPeers.remove(pubkey);
 
   // Commit!
   result = FwpmTransactionCommit0(m_sessionHandle);

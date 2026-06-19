@@ -158,6 +158,12 @@ bool WireguardUtilsWindows::updatePeer(const InterfaceConfig& config) {
     // Enable the windows firewall for this peer.
     m_firewall->enablePeerTraffic(config);
   }
+  if (config.m_blockIpv6Traffic) {
+    if (!m_firewall->blockIpv6TrafficForPeer(config.m_serverPublicKey)) {
+      logger.error() << "Failed to block unavailable IPv6 traffic";
+      return false;
+    }
+  }
   logger.debug() << "Configuring peer" << publicKey.toHex()
                  << "via" << config.m_serverIpv4AddrIn;
 

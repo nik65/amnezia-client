@@ -131,6 +131,154 @@ bool parseIpv4Host(const QString &host, quint32 &address)
     return true;
 }
 
+QStringList splitWireGuardList(const QString &value)
+{
+    return value.split(QRegularExpression("\\s*,\\s*"), Qt::SkipEmptyParts);
+}
+
+QStringList wireGuardStringListFromJsonValue(const QJsonValue &value)
+{
+    if (value.isString()) {
+        return splitWireGuardList(value.toString());
+    }
+
+    QStringList values;
+    if (value.isArray()) {
+        const QJsonArray array = value.toArray();
+        for (const QJsonValue &item : array) {
+            values.append(splitWireGuardList(item.toString()));
+        }
+    }
+    return values;
+}
+
+QString wireGuardNativeConfigValue(const QString &nativeConfig, const QString &key)
+{
+    const QRegularExpression valueLine(QStringLiteral("^\\s*%1\\s*=\\s*(.*?)\\s*$")
+        .arg(QRegularExpression::escape(key)));
+    const QStringList nativeConfigLines = nativeConfig.split('\n');
+    for (const QString &line : nativeConfigLines) {
+        const QRegularExpressionMatch match = valueLine.match(line);
+        if (match.hasMatch()) {
+            return match.captured(1).trimmed();
+        }
+    }
+    return {};
+}
+
+bool parseNetworkAddress(const QString &network, QHostAddress &address)
+{
+    const QString trimmed = network.trimmed();
+    if (trimmed.isEmpty()) {
+        return false;
+    }
+
+    const QStringList parts = trimmed.split('/');
+    if (parts.isEmpty() || parts.size() > 2) {
+        return false;
+    }
+
+    if (parts.size() == 2) {
+        bool prefixOk = false;
+        parts.at(1).toInt(&prefixOk);
+        if (!prefixOk) {
+            return false;
+        }
+    }
+
+    address = QHostAddress(parts.at(0).trimmed());
+    return address.protocol() != QAbstractSocket::UnknownNetworkLayerProtocol;
+}
+
+bool isUniqueLocalIpv6Address(const QHostAddress &address)
+{
+    if (address.protocol() != QAbstractSocket::IPv6Protocol) {
+        return false;
+    }
+
+    const Q_IPV6ADDR rawAddress = address.toIPv6Address();
+    return (rawAddress[0] & 0xfe) == 0xfc;
+}
+
+bool isIpv6Network(const QString &network)
+{
+    QHostAddress address;
+    return parseNetworkAddress(network, address)
+        && address.protocol() == QAbstractSocket::IPv6Protocol;
+}
+
+bool isUsableIpv6TunnelAddress(const QString &network)
+{
+    QHostAddress address;
+    if (!parseNetworkAddress(network, address)
+        || address.protocol() != QAbstractSocket::IPv6Protocol) {
+        return false;
+    }
+
+    return !address.isNull()
+        && !address.isLoopback()
+        && !address.isLinkLocal()
+        && !address.isMulticast()
+        && !isUniqueLocalIpv6Address(address);
+}
+
+QStringList wireGuardClientAddressesFromNativeConfig(const QString &nativeConfig)
+{
+    return splitWireGuardList(wireGuardNativeConfigValue(nativeConfig, QStringLiteral("Address")));
+}
+
+bool wireGuardServerHasUsableIpv6Egress(const QJsonObject &configData)
+{
+    if (configData.value(configKey::serverIpv6Available).isBool()) {
+        return configData.value(configKey::serverIpv6Available).toBool();
+    }
+
+    QStringList clientAddresses = wireGuardStringListFromJsonValue(configData.value(configKey::clientIp));
+    if (clientAddresses.isEmpty()) {
+        clientAddresses = wireGuardClientAddressesFromNativeConfig(configData.value(configKey::config).toString());
+    }
+
+    for (const QString &clientAddress : clientAddresses) {
+        if (isUsableIpv6TunnelAddress(clientAddress)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QJsonArray allowedIpsWithoutUnavailableIpv6Routes(const QJsonArray &allowedIps, bool serverIpv6Available)
+{
+    if (serverIpv6Available) {
+        return allowedIps;
+    }
+
+    QJsonArray filteredAllowedIps;
+    for (const QJsonValue &allowedIpValue : allowedIps) {
+        const QStringList allowedIps = splitWireGuardList(allowedIpValue.toString());
+        for (const QString &allowedIpValueString : allowedIps) {
+            const QString allowedIp = allowedIpValueString.trimmed();
+            if (allowedIp.isEmpty()) {
+                continue;
+            }
+            if (isIpv6Network(allowedIp)) {
+                qWarning() << "Skipping IPv6 allowed IP because server IPv6 egress is unavailable" << allowedIp;
+                continue;
+            }
+            filteredAllowedIps.append(allowedIp);
+        }
+    }
+    return filteredAllowedIps;
+}
+
+QJsonArray defaultWireGuardAllowedIps(bool serverIpv6Available)
+{
+    QJsonArray allowedIps { QStringLiteral("0.0.0.0/0") };
+    if (serverIpv6Available) {
+        allowedIps.append(QStringLiteral("::/0"));
+    }
+    return allowedIps;
+}
+
 quint32 ipv4Mask(int prefixLength)
 {
     return prefixLength == 0 ? 0 : (0xffffffffu << (32 - prefixLength));
@@ -744,43 +892,36 @@ void VpnConnection::appendSplitTunnelingConfig()
         allowSiteBasedSplitTunneling = false;
         auto configData = m_vpnConfiguration.value(protocolName + "_config_data").toObject();
         if (configData.value(configKey::allowedIps).isString()) {
-            QJsonArray allowedIpsJsonArray = QJsonArray::fromStringList(configData.value(configKey::allowedIps).toString().split(", "));
+            QJsonArray allowedIpsJsonArray = QJsonArray::fromStringList(splitWireGuardList(configData.value(configKey::allowedIps).toString()));
             configData.insert(configKey::allowedIps, allowedIpsJsonArray);
-            m_vpnConfiguration.insert(protocolName + "_config_data", configData);
         } else if (configData.value(configKey::allowedIps).isUndefined()) {
             auto nativeConfig = configData.value(configKey::config).toString();
-            auto nativeConfigLines = nativeConfig.split("\n");
-            for (auto &line : nativeConfigLines) {
-                if (line.contains("AllowedIPs")) {
-                    auto allowedIpsString = line.split(" = ");
-                    if (allowedIpsString.size() < 1) {
-                        break;
-                    }
-                    QJsonArray allowedIpsJsonArray = QJsonArray::fromStringList(allowedIpsString.at(1).split(", "));
-                    configData.insert(configKey::allowedIps, allowedIpsJsonArray);
-                    m_vpnConfiguration.insert(protocolName + "_config_data", configData);
-                    break;
-                }
+            const QString allowedIpsString = wireGuardNativeConfigValue(nativeConfig, QStringLiteral("AllowedIPs"));
+            if (!allowedIpsString.isEmpty()) {
+                QJsonArray allowedIpsJsonArray = QJsonArray::fromStringList(splitWireGuardList(allowedIpsString));
+                configData.insert(configKey::allowedIps, allowedIpsJsonArray);
             }
         }
 
         if (configData.value(configKey::persistentKeepAlive).isUndefined()) {
             auto nativeConfig = configData.value(configKey::config).toString();
-            auto nativeConfigLines = nativeConfig.split("\n");
-            for (auto &line : nativeConfigLines) {
-                if (line.contains("PersistentKeepalive")) {
-                    auto persistentKeepaliveString = line.split(" = ");
-                    if (persistentKeepaliveString.size() < 1) {
-                        break;
-                    }
-                    configData.insert(configKey::persistentKeepAlive, persistentKeepaliveString.at(1));
-                    m_vpnConfiguration.insert(protocolName + "_config_data", configData);
-                    break;
-                }
+            const QString persistentKeepaliveString = wireGuardNativeConfigValue(nativeConfig, QStringLiteral("PersistentKeepalive"));
+            if (!persistentKeepaliveString.isEmpty()) {
+                configData.insert(configKey::persistentKeepAlive, persistentKeepaliveString);
             }
         }
 
-        const QJsonArray allowedIpsJsonArray = configData.value(configKey::allowedIps).toArray();
+        const bool serverIpv6Available = wireGuardServerHasUsableIpv6Egress(configData);
+        m_vpnConfiguration.insert(configKey::serverIpv6Available, serverIpv6Available);
+        configData.insert(configKey::serverIpv6Available, serverIpv6Available);
+
+        const QJsonArray rawAllowedIpsJsonArray = configData.value(configKey::allowedIps).isArray()
+            ? configData.value(configKey::allowedIps).toArray()
+            : defaultWireGuardAllowedIps(serverIpv6Available);
+        const QJsonArray allowedIpsJsonArray = allowedIpsWithoutUnavailableIpv6Routes(rawAllowedIpsJsonArray, serverIpv6Available);
+        configData.insert(configKey::allowedIps, allowedIpsJsonArray);
+        m_vpnConfiguration.insert(protocolName + "_config_data", configData);
+
         for (const QJsonValue &allowedIpValue : allowedIpsJsonArray) {
             const QString allowedIp = allowedIpValue.toString().trimmed();
             if (allowedIp == QStringLiteral("0.0.0.0/0") || allowedIp == QStringLiteral("::/0")) {

@@ -3,6 +3,7 @@ package org.amnezia.vpn.protocol
 import android.net.ProxyInfo
 import android.os.Build
 import androidx.annotation.RequiresApi
+import java.net.Inet6Address
 import java.net.InetAddress
 import org.amnezia.vpn.util.net.InetNetwork
 import org.amnezia.vpn.util.net.IpRange
@@ -62,6 +63,9 @@ open class ProtocolConfig protected constructor(
         internal var allowSplitTunneling: Boolean = true
             private set
 
+        internal var allowIpv6Routes: Boolean = true
+            private set
+
         open var mtu: Int = 0
             protected set
 
@@ -111,6 +115,8 @@ open class ProtocolConfig protected constructor(
 
         fun disableSplitTunneling() = apply { this.allowSplitTunneling = false }
 
+        fun setAllowIpv6Routes(allowIpv6Routes: Boolean) = apply { this.allowIpv6Routes = allowIpv6Routes }
+
         fun setMtu(mtu: Int) = apply { this.mtu = mtu }
 
         private fun processSplitTunneling() {
@@ -129,7 +135,7 @@ open class ProtocolConfig protected constructor(
             } else if (excludedAddresses.isNotEmpty()) {
                 prependRoutes {
                     addRoute(InetNetwork("0.0.0.0", 0))
-                    addRoute(InetNetwork("2000::", 3))
+                    if (allowIpv6Routes) addRoute(InetNetwork("2000::", 3))
                     excludeRoutes(excludedAddresses)
                 }
             }
@@ -138,7 +144,9 @@ open class ProtocolConfig protected constructor(
         private fun processRoutes() {
             // replace ::/0 as it may cause LAN connection issues
             val ipv6DefaultRoute = InetNetwork("::", 0)
-            if (routes.removeIf { it.include && it.inetNetwork == ipv6DefaultRoute }) {
+            if (!allowIpv6Routes) {
+                routes.removeIf { it.inetNetwork.isIpv6 }
+            } else if (routes.removeIf { it.include && it.inetNetwork == ipv6DefaultRoute }) {
                 prependRoutes {
                     addRoute(InetNetwork("2000::", 3))
                 }
@@ -165,6 +173,12 @@ open class ProtocolConfig protected constructor(
             }
         }
 
+        private fun processAddressFamilies() {
+            if (allowIpv6Routes) return
+            addresses.removeIf { it.isIpv6 }
+            dnsServers.removeIf { it is Inet6Address }
+        }
+
         private fun validate() {
             val errorMessage = StringBuilder()
 
@@ -178,6 +192,7 @@ open class ProtocolConfig protected constructor(
         }
 
         protected fun configBuild() {
+            processAddressFamilies()
             processSplitTunneling()
             processRoutes()
             validate()

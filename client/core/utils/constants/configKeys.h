@@ -48,6 +48,7 @@ namespace amnezia
         constexpr QLatin1String mtu("mtu");
         constexpr QLatin1String allowedIps("allowed_ips");
         constexpr QLatin1String persistentKeepAlive("persistent_keep_alive");
+        constexpr QLatin1String serverIpv6Available("serverIpv6Available");
 
         constexpr QLatin1String clientIp("client_ip");
 

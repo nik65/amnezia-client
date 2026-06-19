@@ -141,6 +141,9 @@ bool Daemon::activate(const InterfaceConfig& config) {
     logger.error() << "Peer creation failed.";
     return false;
   }
+  auto peer_cleanup_guard = qScopeGuard([&] {
+    wgutils()->deletePeer(config);
+  });
 
   if (!maybeUpdateResolvers(config)) {
     return false;
@@ -159,6 +162,7 @@ bool Daemon::activate(const InterfaceConfig& config) {
   if (status) {
     m_connections[config.m_hopType] = ConnectionState(config);
     m_handshakeTimer.start(HANDSHAKE_POLL_MSEC);
+    peer_cleanup_guard.dismiss();
     emit_failure_guard.dismiss();
     return true;
   }
@@ -376,6 +380,11 @@ bool Daemon::parseConfig(const QJsonObject& obj, InterfaceConfig& config) {
               [&](const IPAddress& a, const IPAddress& b) -> bool {
                 return a.prefixLength() > b.prefixLength();
               });
+
+    if (config.m_allowedIPAddressRanges.isEmpty()) {
+      logger.error() << JSON_ALLOWEDIPADDRESSRANGES << "must not be empty";
+      return false;
+    }
   }
 
   if (!parseStringList(obj, "excludedAddresses", config.m_excludedAddresses)) {
@@ -389,6 +398,7 @@ bool Daemon::parseConfig(const QJsonObject& obj, InterfaceConfig& config) {
   }
 
   config.m_killSwitchEnabled = QVariant(obj.value("killSwitchOption").toString()).toBool();
+  config.m_blockIpv6Traffic = obj.value("blockIpv6Traffic").toBool(false);
 
   if (const auto jc = obj.value("Jc"); !jc.isUndefined()) {
     config.m_junkPacketCount = jc.toString();
@@ -503,7 +513,8 @@ bool Daemon::supportServerSwitching(const InterfaceConfig& config) const {
          current.m_deviceIpv4Address == config.m_deviceIpv4Address &&
          current.m_deviceIpv6Address == config.m_deviceIpv6Address &&
          current.m_serverIpv4Gateway == config.m_serverIpv4Gateway &&
-         current.m_serverIpv6Gateway == config.m_serverIpv6Gateway;
+         current.m_serverIpv6Gateway == config.m_serverIpv6Gateway &&
+         current.m_blockIpv6Traffic == config.m_blockIpv6Traffic;
 }
 
 bool Daemon::switchServer(const InterfaceConfig& config) {
