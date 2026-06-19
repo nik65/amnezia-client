@@ -15,7 +15,7 @@ RELEASE_TAG_RE = re.compile(r"^\d+(?:\.\d+){3}$")
 DEFAULT_STATE = {
     "schema": 1,
     "upstreamRepo": "amnezia-vpn/amnezia-client",
-    "targetBranch": "feat/server-managed-split-tunnel",
+    "targetBranch": "dev",
     "baselineTag": "",
     "frozen": False,
     "frozenTag": "",
@@ -145,7 +145,7 @@ def main() -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--state-file", type=Path, default=Path(".github/upstream-release-freeze.json"))
     common.add_argument("--upstream-repo", default="amnezia-vpn/amnezia-client")
-    common.add_argument("--target-branch", default="feat/server-managed-split-tunnel")
+    common.add_argument("--target-branch", default="dev")
     common.add_argument("--latest-tag", required=True)
     common.add_argument("--baseline-tag", default="")
 

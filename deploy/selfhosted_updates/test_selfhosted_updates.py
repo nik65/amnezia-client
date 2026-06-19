@@ -149,7 +149,7 @@ class ReleaseFreezeTests(unittest.TestCase):
             base_args = {
                 "state_file": state_path,
                 "upstream_repo": "amnezia-vpn/amnezia-client",
-                "target_branch": "feat/server-managed-split-tunnel",
+                "target_branch": "dev",
                 "baseline_tag": "4.8.16.0",
             }
 
@@ -192,7 +192,7 @@ class ReleaseFreezeTests(unittest.TestCase):
             base_args = {
                 "state_file": state_path,
                 "upstream_repo": "amnezia-vpn/amnezia-client",
-                "target_branch": "feat/server-managed-split-tunnel",
+                "target_branch": "dev",
                 "baseline_tag": "4.8.16.0",
             }
 
@@ -208,7 +208,7 @@ class ReleaseFreezeTests(unittest.TestCase):
             base_args = {
                 "state_file": state_path,
                 "upstream_repo": "amnezia-vpn/amnezia-client",
-                "target_branch": "feat/server-managed-split-tunnel",
+                "target_branch": "dev",
                 "baseline_tag": "4.8.16.0",
                 "latest_tag": "4.8.15.4",
             }
@@ -247,7 +247,7 @@ class ReleaseFreezeTests(unittest.TestCase):
             run_git(repo, "add", ".")
             run_git(repo, "commit", "-q", "-m", "post release upstream dev")
 
-            run_git(repo, "checkout", "-q", "-b", "feat/server-managed-split-tunnel")
+            run_git(repo, "checkout", "-q", "-b", "dev")
             (repo / "fork-feature.txt").write_text("self-hosted updater\n", encoding="utf-8")
             run_git(repo, "add", ".")
             run_git(repo, "commit", "-q", "-m", "fork feature")
@@ -256,7 +256,7 @@ class ReleaseFreezeTests(unittest.TestCase):
             with patch_path.open("w", encoding="utf-8") as stream:
                 run_git(repo, "diff", "--binary", "upstream/dev...HEAD", stdout=stream)
 
-            run_git(repo, "checkout", "-q", "-B", "feat/server-managed-split-tunnel", "refs/tags/4.8.17.0")
+            run_git(repo, "checkout", "-q", "-B", "dev", "refs/tags/4.8.17.0")
             run_git(repo, "apply", "--index", "--3way", str(patch_path))
             run_git(repo, "commit", "-q", "-m", "apply fork patch to release")
 

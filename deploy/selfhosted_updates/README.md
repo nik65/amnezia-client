@@ -38,7 +38,7 @@ fork branch. It watches the latest published upstream GitHub Release whose tag
 matches `x.y.z.w`; an upstream tag alone is not enough to freeze the fork.
 
 - While no published release newer than `.github/upstream-release-freeze.json`
-  `baselineTag` exists, it leaves `feat/server-managed-split-tunnel` unchanged.
+  `baselineTag` exists, it leaves `dev` unchanged.
   Ordinary `upstream/dev` commits are intentionally not merged between releases.
 - When a newer published release appears, it writes `frozen=true` into the state
   file, pushes the branch, and prints the local release command for the
