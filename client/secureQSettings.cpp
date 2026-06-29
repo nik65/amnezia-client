@@ -7,8 +7,10 @@
 #include <QDebug>
 #include <QEventLoop>
 #include <QIODevice>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QRandomGenerator>
 #include <QSharedPointer>
 #include <QTimer>
@@ -19,10 +21,66 @@ namespace {
     constexpr const char *settingsKeyTag = "settingsKeyTag";
     constexpr const char *settingsIvTag = "settingsIvTag";
     constexpr const char *keyChainName = "AmneziaVPN-Keychain";
+
+    QJsonValue withoutRemoteLogTokens(const QJsonValue &value)
+    {
+        if (value.isArray()) {
+            QJsonArray result;
+            const QJsonArray array = value.toArray();
+            for (const QJsonValue &item : array) {
+                result.append(withoutRemoteLogTokens(item));
+            }
+            return result;
+        }
+
+        if (!value.isObject()) {
+            return value;
+        }
+
+        QJsonObject result;
+        const QJsonObject object = value.toObject();
+        for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+            if (it.key() == QLatin1String("clientLogs") && it.value().isObject()) {
+                QJsonObject clientLogs = it.value().toObject();
+                clientLogs.remove(QStringLiteral("token"));
+                if (clientLogs.contains(QStringLiteral("clientId"))) {
+                    clientLogs.insert(QStringLiteral("bootstrap"), true);
+                }
+                result.insert(it.key(), withoutRemoteLogTokens(clientLogs));
+            } else {
+                result.insert(it.key(), withoutRemoteLogTokens(it.value()));
+            }
+        }
+        return result;
+    }
+
+    QVariant sanitizedBackupValue(const QString &key, const QVariant &value)
+    {
+        if (key != QLatin1String("Servers/serversList")) {
+            return value;
+        }
+
+        const QJsonDocument document = QJsonDocument::fromJson(value.toByteArray());
+        if (document.isNull()) {
+            return value;
+        }
+
+        QJsonDocument sanitized;
+        if (document.isArray()) {
+            sanitized = QJsonDocument(withoutRemoteLogTokens(document.array()).toArray());
+        } else if (document.isObject()) {
+            sanitized = QJsonDocument(withoutRemoteLogTokens(document.object()).toObject());
+        } else {
+            return value;
+        }
+        return sanitized.toJson(QJsonDocument::Compact);
+    }
 }
 
 SecureQSettings::SecureQSettings(const QString &organization, const QString &application, QObject *parent, bool enableEncryption)
-    : QObject { parent }, m_settings(organization, application, parent), encryptedKeys({ "Servers/serversList" }), m_encryptionEnabled(enableEncryption)
+    : QObject { parent }, m_settings(organization, application, parent),
+      encryptedKeys({ "Servers/serversList", "Conf/remoteLogTokens" }),
+      m_encryptionEnabled(enableEncryption)
 {
     bool encrypted = m_settings.value("Conf/encrypted").toBool();
 
@@ -125,7 +183,7 @@ QByteArray SecureQSettings::backupAppConfig() const
     const auto needToBackup = [this](const auto &key) {
       for (const auto &item : m_fieldsToBackup)
       {
-        if (key == "Conf/installationUuid")
+        if (key == "Conf/installationUuid" || key == "Conf/remoteLogTokens" || key.startsWith("Conf/remoteLogTokens/"))
         {
           return false;
         }
@@ -146,7 +204,7 @@ QByteArray SecureQSettings::backupAppConfig() const
             continue;
         }
 
-        cfg.insert(key, QJsonValue::fromVariant(value(key)));
+        cfg.insert(key, QJsonValue::fromVariant(sanitizedBackupValue(key, value(key))));
     }
 
     return QJsonDocument(cfg).toJson();
@@ -161,11 +219,11 @@ bool SecureQSettings::restoreAppConfig(const QByteArray &json)
         return false;
 
     for (const QString &key : cfg.keys()) {
-        if (key == "Conf/installationUuid") {
+        if (key == "Conf/installationUuid" || key == "Conf/remoteLogTokens" || key.startsWith("Conf/remoteLogTokens/")) {
             continue;
         }
 
-        setValue(key, cfg.value(key).toVariant());
+        setValue(key, sanitizedBackupValue(key, cfg.value(key).toVariant()));
     }
 
     return true;

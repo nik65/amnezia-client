@@ -233,6 +233,11 @@ void AndroidController::setSaveLogs(bool enabled)
     callActivityMethod("setSaveLogs", "(Z)V", enabled);
 }
 
+QString AndroidController::getLogs()
+{
+    return callActivityMethod<jstring>("getLogs", "()Ljava/lang/String;").toString();
+}
+
 void AndroidController::exportLogsFile(const QString &fileName)
 {
     callActivityMethod("exportLogsFile", "(Ljava/lang/String;)V",

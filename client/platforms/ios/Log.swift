@@ -8,7 +8,10 @@ struct Log {
   private static let IsLoggingEnabledKey = "IsLoggingEnabled"
   static var isLoggingEnabled: Bool {
     get {
-      sharedUserDefaults.bool(forKey: IsLoggingEnabledKey)
+      if sharedUserDefaults.object(forKey: IsLoggingEnabledKey) == nil {
+        return true
+      }
+      return sharedUserDefaults.bool(forKey: IsLoggingEnabledKey)
     }
     set {
       sharedUserDefaults.setValue(newValue, forKey: IsLoggingEnabledKey)

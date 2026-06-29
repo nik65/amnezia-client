@@ -43,6 +43,7 @@ public:
 
     const QString &remoteAddress() const;
     int serverIndex() const;
+    DockerContainer container() const;
     QString serverRoutingRulesSyncHost() const;
     void addSitesRoutes(const QString &gw, amnezia::RouteMode mode);
 

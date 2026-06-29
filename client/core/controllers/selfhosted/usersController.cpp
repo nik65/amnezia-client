@@ -14,6 +14,7 @@
 #include "core/protocols/protocolUtils.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/constants/protocolConstants.h"
+#include "core/utils/selfhosted/clientLogsUtils.h"
 #include "core/models/containerConfig.h"
 
 using namespace amnezia;
@@ -21,6 +22,78 @@ using namespace amnezia;
 namespace
 {
     Logger logger("UsersController");
+
+    QString clientLogsStorageId(DockerContainer container, const QString &clientId)
+    {
+        return clientLogsUtils::storageId(container, clientId);
+    }
+
+    bool isAlphaNumericId(const QString &clientId)
+    {
+        if (clientId.isEmpty()) {
+            return false;
+        }
+        for (const QChar ch : clientId) {
+            if (!ch.isLetterOrNumber()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool sectionHasExactPublicKey(const QString &section, const QString &clientId)
+    {
+        if (clientId.isEmpty()) {
+            return false;
+        }
+        const QStringList lines = section.split(QLatin1Char('\n'));
+        for (const QString &line : lines) {
+            const QString trimmedLine = line.trimmed();
+            const int separatorIndex = trimmedLine.indexOf(QLatin1Char('='));
+            if (separatorIndex < 0) {
+                continue;
+            }
+            if (trimmedLine.left(separatorIndex).trimmed() == QLatin1String("PublicKey")
+                && trimmedLine.mid(separatorIndex + 1).trimmed() == clientId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    ErrorCode removeClientLogAccess(const ServerCredentials &credentials, DockerContainer container, const QString &clientId)
+    {
+        if (clientId.isEmpty()) {
+            return ErrorCode::NoError;
+        }
+
+        const QString clientLogId = clientLogsStorageId(container, clientId);
+        const QString hostDirectory = QString::fromLatin1(protocols::clientLogs::hostDirectory);
+        constexpr char cleanupErrorMarker[] = "__AMNEZIA_CLIENT_LOGS_CLEANUP_ERROR__";
+        QString script = QStringLiteral(R"(
+sudo sh -c "[ -d '__HOST_DIRECTORY__' ] || exit 0; i=0; while ! mkdir '__HOST_DIRECTORY__/tokens.lock' 2>/dev/null; do i=\$((i + 1)); [ \$i -lt 30 ] || { echo __ERROR_MARKER__:tokens_lock; exit 0; }; sleep 1; done; trap 'rm -rf \"__HOST_DIRECTORY__/tokens.lock\" \"__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp\" \"__HOST_DIRECTORY__/legacy_tokens.tsv.__CLIENT_LOG_ID__.tmp\" \"__HOST_DIRECTORY__/legacy.__CLIENT_LOG_ID__.tmpdir\"' EXIT; if [ -f '__HOST_DIRECTORY__/tokens.tsv' ]; then grep -v '^__CLIENT_LOG_ID__[[:space:]]' '__HOST_DIRECTORY__/tokens.tsv' > '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp' || true; else : > '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp'; fi; if [ -f '__HOST_DIRECTORY__/legacy_tokens.tsv' ]; then grep -v '^__CLIENT_LOG_ID__[[:space:]]' '__HOST_DIRECTORY__/legacy_tokens.tsv' > '__HOST_DIRECTORY__/legacy_tokens.tsv.__CLIENT_LOG_ID__.tmp' || true; else : > '__HOST_DIRECTORY__/legacy_tokens.tsv.__CLIENT_LOG_ID__.tmp'; fi; install -m 0600 '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp' '__HOST_DIRECTORY__/tokens.tsv' || { echo __ERROR_MARKER__:tokens_install; exit 0; }; install -m 0600 '__HOST_DIRECTORY__/legacy_tokens.tsv.__CLIENT_LOG_ID__.tmp' '__HOST_DIRECTORY__/legacy_tokens.tsv' || { echo __ERROR_MARKER__:legacy_tokens_install; exit 0; }; if [ -d '__HOST_DIRECTORY__/legacy' ]; then mkdir '__HOST_DIRECTORY__/legacy.__CLIENT_LOG_ID__.tmpdir' || { echo __ERROR_MARKER__:legacy_dir; exit 0; }; for f in '__HOST_DIRECTORY__/legacy/'*.tsv; do [ -f \"\$f\" ] || continue; base=\$(basename \"\$f\"); grep -v '^[^[:space:]]*[[:space:]]__CLIENT_LOG_ID__[[:space:]]' \"\$f\" > \"__HOST_DIRECTORY__/legacy.__CLIENT_LOG_ID__.tmpdir/\$base\" || true; install -m 0600 \"__HOST_DIRECTORY__/legacy.__CLIENT_LOG_ID__.tmpdir/\$base\" \"\$f\" || { echo __ERROR_MARKER__:legacy_map_install; exit 0; }; done; fi"
+)");
+        script.replace(QStringLiteral("__HOST_DIRECTORY__"), hostDirectory);
+        script.replace(QStringLiteral("__CLIENT_LOG_ID__"), clientLogId);
+        script.replace(QStringLiteral("__ERROR_MARKER__"), QString::fromLatin1(cleanupErrorMarker));
+
+        SshSession sshSession;
+        QString cleanupOutput;
+        auto cbReadOutput = [&cleanupOutput](const QString &data, libssh::Client &) {
+            cleanupOutput += data + QStringLiteral("\n");
+            return ErrorCode::NoError;
+        };
+        const ErrorCode errorCode = sshSession.runScript(credentials, script, cbReadOutput, cbReadOutput);
+        if (errorCode != ErrorCode::NoError) {
+            logger.warning() << "Failed to remove revoked client log access" << errorCode;
+            return errorCode;
+        }
+        if (cleanupOutput.contains(QString::fromLatin1(cleanupErrorMarker))) {
+            logger.warning() << "Failed to remove revoked client log access:" << cleanupOutput;
+            return ErrorCode::ServerCheckFailed;
+        }
+        return ErrorCode::NoError;
+    }
 }
 
 UsersController::UsersController(SecureServersRepository* serversRepository, QObject *parent)
@@ -498,10 +571,16 @@ ErrorCode UsersController::revokeOpenVpn(const int row, const DockerContainer co
 
     auto client = clientsTable.at(row).toObject();
     QString clientId = client.value(configKey::clientId).toString();
+    if (!isAlphaNumericId(clientId)) {
+        logger.error() << "Invalid OpenVPN client id for revoke";
+        return ErrorCode::InternalError;
+    }
 
     const QString getOpenVpnCertData = QString("sudo docker exec -i $CONTAINER_NAME bash -c '"
+                                               "set -e ;\\"
+                                               "export EASYRSA_BATCH=1 ;\\"
                                                "cd /opt/amnezia/openvpn ;\\"
-                                               "easyrsa revoke %1 ;\\"
+                                               "easyrsa revoke \"%1\" ;\\"
                                                "easyrsa gen-crl ;\\"
                                                "chmod 666 pki/crl.pem ;\\"
                                                "cp pki/crl.pem .'")
@@ -554,15 +633,27 @@ ErrorCode UsersController::revokeWireGuard(const int row, const DockerContainer 
 
     auto client = clientsTable.at(row).toObject();
     QString clientId = client.value(configKey::clientId).toString();
+    if (clientId.isEmpty() || clientId.contains(QLatin1Char('\n')) || clientId.contains(QLatin1Char('\r'))) {
+        logger.error() << "Invalid WireGuard client id for revoke";
+        return ErrorCode::InternalError;
+    }
 
     auto configSections = wireguardConfigString.split("[", Qt::SkipEmptyParts);
-    for (auto &section : configSections) {
-        if (section.contains(clientId)) {
-            configSections.removeOne(section);
-            break;
+    int removedSections = 0;
+    QStringList retainedSections;
+    retainedSections.reserve(configSections.size());
+    for (const QString &section : std::as_const(configSections)) {
+        if (sectionHasExactPublicKey(section, clientId)) {
+            ++removedSections;
+            continue;
         }
+        retainedSections.append(section);
     }
-    QString newWireGuardConfig = configSections.join("[");
+    if (removedSections != 1) {
+        logger.error() << "Failed to find exactly one WireGuard peer for revoke";
+        return ErrorCode::InternalError;
+    }
+    QString newWireGuardConfig = retainedSections.join("[");
     newWireGuardConfig.insert(0, "[");
     error = sshSession->uploadTextFileToContainer(container, credentials, newWireGuardConfig, configPath);
     if (error != ErrorCode::NoError) {
@@ -751,6 +842,11 @@ ErrorCode UsersController::revokeClient(const QString &serverId, const int index
     }
 
     if (errorCode == ErrorCode::NoError) {
+        const ErrorCode logCleanupError = removeClientLogAccess(credentials, container, clientId);
+        if (logCleanupError != ErrorCode::NoError) {
+            logger.warning() << "Failed to remove revoked client log access after VPN revoke" << logCleanupError;
+        }
+
         auto adminConfig = m_serversRepository->selfHostedAdminConfig(serverId);
         if (!adminConfig.has_value()) {
             return ErrorCode::InternalError;
@@ -834,6 +930,11 @@ ErrorCode UsersController::revokeClient(const QString &serverId, const Container
     }
 
     if (errorCode == ErrorCode::NoError) {
+        errorCode = removeClientLogAccess(credentials, container, clientId);
+        if (errorCode != ErrorCode::NoError) {
+            return errorCode;
+        }
+
         emit adminConfigRevoked(serverId, container);
         emit clientRevoked(row);
         emit clientsUpdated(m_clientsTable);

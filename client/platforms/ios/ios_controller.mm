@@ -789,21 +789,12 @@ bool IosController::startOpenVPN(const QString &config)
 
     NETunnelProviderProtocol *appliedProtocol = (NETunnelProviderProtocol *)m_currentTunnel.protocolConfiguration;
     NSData *ovpnPayload = appliedProtocol.providerConfiguration[@"ovpn"];
-    NSString *payloadPreview = @"";
-    if (ovpnPayload != nil) {
-        NSString *decodedPayload = [[NSString alloc] initWithData:ovpnPayload encoding:NSUTF8StringEncoding];
-        if (decodedPayload != nil) {
-            payloadPreview = [decodedPayload substringToIndex:MIN((NSUInteger)512, decodedPayload.length)];
-        }
-    }
 
     qDebug().noquote() << "IosController::startOpenVPN protocolConfiguration"
                        << "bundleId=" << QString::fromNSString(appliedProtocol.providerBundleIdentifier ?: @"")
                        << "serverAddress=" << QString::fromNSString(appliedProtocol.serverAddress ?: @"")
                        << "providerKeys=" << QString::fromNSString([[appliedProtocol.providerConfiguration.allKeys description] copy])
                        << "ovpnBytes=" << (ovpnPayload != nil ? ovpnPayload.length : 0);
-    qDebug().noquote() << "IosController::startOpenVPN protocolConfiguration payloadPreview="
-                       << QString::fromNSString(payloadPreview);
 
     startTunnel();
 }

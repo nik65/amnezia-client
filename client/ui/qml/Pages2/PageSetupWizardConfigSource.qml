@@ -75,24 +75,6 @@ PageType {
                             headerText: qsTr("Settings")
                         }
 
-                        SwitcherType {
-                            id: switcher
-                            Layout.fillWidth: true
-                            Layout.topMargin: 16
-                            Layout.leftMargin: 16
-                            Layout.rightMargin: 16
-
-                            text: qsTr("Enable logs")
-
-                            visible: PageController.isStartPageVisible()
-                            checked: SettingsController.isLoggingEnabled
-                            onToggled: function() {
-                                if (checked !== SettingsController.isLoggingEnabled) {
-                                    SettingsController.isLoggingEnabled = checked
-                                }
-                            }
-                        }
-
                         LabelWithButtonType {
                             Layout.fillWidth: true
 

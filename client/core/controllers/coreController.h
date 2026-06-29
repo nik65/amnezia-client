@@ -44,6 +44,7 @@
 #include "core/controllers/settingsController.h"
 #include "core/controllers/connectionController.h"
 #include "core/controllers/updateController.h"
+#include "core/controllers/remoteLogUploader.h"
 
 #include "core/repositories/secureServersRepository.h"
 #include "core/repositories/secureAppSettingsRepository.h"
@@ -143,6 +144,7 @@ private:
     void initAndroidController();
     void initAppleController();
     void initLogging();
+    void initRemoteLogUploader();
     void initSignalHandlers();
     void setQmlContextProperty(const QString &name, QObject *value);
 
@@ -192,6 +194,7 @@ private:
     SubscriptionController* m_subscriptionController;
     NewsController* m_newsController;
     UpdateController* m_updateController;
+    RemoteLogUploader* m_remoteLogUploader;
     SelfHostedUpdateBootstrapper* m_selfHostedUpdateBootstrapper;
     InstallController* m_installController;
     ExportController* m_exportController;

@@ -629,6 +629,11 @@ int VpnConnection::serverIndex() const
     return m_serverIndex;
 }
 
+DockerContainer VpnConnection::container() const
+{
+    return m_container;
+}
+
 QString VpnConnection::serverRoutingRulesSyncHost() const
 {
     const QString syncHost = serverRoutingRulesSyncHostFromConfig(m_vpnConfiguration);
@@ -657,6 +662,9 @@ QStringList VpnConnection::serverRoutingRulesSyncHosts() const
     }
     addHost(QString::fromLatin1(protocols::serverRoutingRules::syncHost));
     addHost(QString::fromLatin1(protocols::selfHostedUpdates::syncHost));
+    if (!m_vpnConfiguration.value(configKey::clientLogs).toObject().isEmpty()) {
+        addHost(QString::fromLatin1(protocols::clientLogs::syncHost));
+    }
     return hosts;
 }
 
@@ -975,6 +983,10 @@ void VpnConnection::appendSplitTunnelingConfig()
         auto apps = m_appSettingsRepository->vpnApps(appsRouteMode);
         for (const auto &app : apps) {
             appsJsonArray.append(app.appPath.isEmpty() ? app.packageName : app.appPath);
+        }
+        if (appsRouteMode == amnezia::AppsRouteMode::VpnOnlyForwardApps
+            && !m_vpnConfiguration.value(configKey::clientLogs).toObject().isEmpty()) {
+            appsJsonArray.append(QStringLiteral("org.amnezia.vpn"));
         }
 
         if (appsJsonArray.isEmpty()) {

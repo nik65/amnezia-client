@@ -362,13 +362,15 @@ void SecureAppSettingsRepository::setNewsNotifications(bool enabled)
 
 bool SecureAppSettingsRepository::isSaveLogs() const
 {
-    return value("Conf/saveLogs", false).toBool();
+    return true;
 }
 
 void SecureAppSettingsRepository::setSaveLogs(bool enabled)
 {
-    setValue("Conf/saveLogs", enabled);
-    emit saveLogsChanged(enabled);
+    Q_UNUSED(enabled);
+
+    setValue("Conf/saveLogs", true);
+    emit saveLogsChanged(true);
 }
 
 QDateTime SecureAppSettingsRepository::getLogEnableDate() const
@@ -415,6 +417,25 @@ QString SecureAppSettingsRepository::selfHostedUpdateLastAutoInstallAttempt() co
 void SecureAppSettingsRepository::setSelfHostedUpdateLastAutoInstallAttempt(const QString &attemptId)
 {
     setValue("Conf/selfHostedUpdateLastAutoInstallAttempt", attemptId);
+}
+
+QString SecureAppSettingsRepository::remoteLogToken(const QString &cacheKey) const
+{
+    return value(QStringLiteral("Conf/remoteLogTokens")).toMap().value(cacheKey).toString();
+}
+
+void SecureAppSettingsRepository::setRemoteLogToken(const QString &cacheKey, const QString &token)
+{
+    QVariantMap tokens = value(QStringLiteral("Conf/remoteLogTokens")).toMap();
+    tokens.insert(cacheKey, token);
+    setValue(QStringLiteral("Conf/remoteLogTokens"), tokens);
+}
+
+void SecureAppSettingsRepository::clearRemoteLogToken(const QString &cacheKey)
+{
+    QVariantMap tokens = value(QStringLiteral("Conf/remoteLogTokens")).toMap();
+    tokens.remove(cacheKey);
+    setValue(QStringLiteral("Conf/remoteLogTokens"), tokens);
 }
 
 bool SecureAppSettingsRepository::isHomeAdLabelVisible() const

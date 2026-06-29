@@ -1,5 +1,6 @@
 #include "version.h"
 #include "localserver.h"
+#include "logger.h"
 #include "systemservice.h"
 
 
@@ -39,7 +40,7 @@ SystemService::SystemService(int argc, char **argv)
 
 void SystemService::start()
 {
-    QCoreApplication* app = application();
+    Logger::init(true);
     m_localServer  = new LocalServer();
 }
 

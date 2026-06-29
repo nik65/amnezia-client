@@ -9,7 +9,7 @@ struct OpenVPNConfig: Decodable {
     let splitTunnelSites: [String]
 
     var str: String {
-        "splitTunnelType: \(splitTunnelType) splitTunnelSites: \(splitTunnelSites) config: \(config)"
+        "splitTunnelType: \(splitTunnelType) splitTunnelSites: \(splitTunnelSites.count) configChars: \(config.count)"
     }
 }
 
@@ -30,11 +30,7 @@ extension PacketTunnelProvider {
 
         do {
             let openVPNConfig = try JSONDecoder().decode(OpenVPNConfig.self, from: openVPNConfigData)
-            ovpnLog(.info, title: "config: ", message: openVPNConfig.str)
-            let wrapperPreview = String(decoding: openVPNConfigData.prefix(512), as: UTF8.self)
-            let ovpnPreview = String(openVPNConfig.config.prefix(512))
-            ovpnLog(.info, title: "config wrapper", message: "bytes=\(openVPNConfigData.count) preview=\(wrapperPreview)")
-            ovpnLog(.info, title: "config raw", message: "chars=\(openVPNConfig.config.count) preview=\(ovpnPreview)")
+            ovpnLog(.info, title: "config wrapper", message: "bytes=\(openVPNConfigData.count)")
             let ovpnConfiguration = Data(openVPNConfig.config.utf8)
             splitTunnelType = openVPNConfig.splitTunnelType
             splitTunnelSites = openVPNConfig.splitTunnelSites
@@ -105,12 +101,6 @@ extension PacketTunnelProvider {
         let hasTlsAuthClose = configString.contains("</tls-auth>")
         ovpnLog(.info, title: "ConfigFlags", message: "tls-auth open=\(hasTlsAuthOpen) close=\(hasTlsAuthClose)")
 
-        let lines = configString.split(separator: "\n")
-        let head = lines.prefix(10).joined(separator: "\n")
-        let tail = lines.suffix(10).joined(separator: "\n")
-        ovpnLog(.debug, title: "ConfigHead", message: head)
-        ovpnLog(.debug, title: "ConfigTail", message: tail)
-
         if hasTlsAuthOpen && hasTlsAuthClose {
             ovpnLog(.info, title: "TLSAuthSanitized", message: "preserve original tls-auth block")
         }
@@ -155,8 +145,6 @@ extension PacketTunnelProvider {
             normalizedConfig.append("\n")
         }
         let normalizedLines = normalizedConfig.split(whereSeparator: \.isNewline)
-        let normalizedTail = normalizedLines.suffix(10).joined(separator: "\n")
-        ovpnLog(.debug, title: "ConfigTailSanitized", message: normalizedTail)
         let redirectLines = normalizedLines
             .map(String.init)
             .filter { $0.lowercased().contains("redirect-gateway") }
@@ -169,17 +157,6 @@ extension PacketTunnelProvider {
         if !controlScalars.isEmpty {
             ovpnLog(.error, title: "ConfigChars", message: "nonPrintableControlCount=\(controlScalars.count)")
         }
-#if os(macOS)
-        let dumpBaseURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        let dumpURL = dumpBaseURL.appendingPathComponent("amnezia_ovpn_adapter_config.conf")
-        do {
-            try normalizedConfig.write(to: dumpURL, atomically: true, encoding: .utf8)
-            ovpnLog(.info, title: "ConfigDump", message: "path=\(dumpURL.path) bytes=\(normalizedConfig.utf8.count)")
-        } catch {
-            ovpnLog(.error, title: "ConfigDump", message: "write failed: \(error.localizedDescription)")
-        }
-#endif
         let sanitizedData = Data(normalizedConfig.utf8)
 
         let configuration = OpenVPNConfiguration()
@@ -212,7 +189,8 @@ extension PacketTunnelProvider {
 
         } catch {
             let nsError = error as NSError
-            ovpnLog(.error, title: "ApplyConfig", message: "domain=\(nsError.domain) code=\(nsError.code) info=\(nsError.userInfo)")
+            let userInfoKeys = nsError.userInfo.keys.map { String(describing: $0) }.sorted().joined(separator: ",")
+            ovpnLog(.error, title: "ApplyConfig", message: "domain=\(nsError.domain) code=\(nsError.code) userInfoKeys=[\(userInfoKeys)]")
             completionHandler(error)
             return
         }

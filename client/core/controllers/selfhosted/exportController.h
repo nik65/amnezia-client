@@ -2,6 +2,7 @@
 #define EXPORTCONTROLLER_H
 
 #include <QObject>
+#include <QByteArray>
 #include <QJsonObject>
 #include <QList>
 #include <QString>
@@ -33,6 +34,13 @@ public:
         QList<QString> qrCodes;
     };
 
+    struct DownloadClientLogsResult
+    {
+        ErrorCode errorCode = ErrorCode::NoError;
+        bool logsFound = false;
+        QByteArray data;
+    };
+
     explicit ExportController(SecureServersRepository* serversRepository,
                               SecureAppSettingsRepository* appSettingsRepository,
                               QObject *parent = nullptr);
@@ -43,6 +51,7 @@ public:
     ExportResult generateWireGuardConfig(const QString &serverId, const QString &clientName);
     ExportResult generateAwgConfig(const QString &serverId, int containerIndex, const QString &clientName);
     ExportResult generateXrayConfig(const QString &serverId, const QString &clientName);
+    DownloadClientLogsResult downloadClientLogs(const QString &serverId, DockerContainer container, const QString &clientId);
 
 signals:
     void appendClientRequested(const QString &serverId, const QString &clientId, const QString &clientName, DockerContainer container);

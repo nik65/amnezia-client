@@ -44,6 +44,7 @@ public:
     int getNavigationBarHeight();
     void startQrReaderActivity();
     void setSaveLogs(bool enabled);
+    QString getLogs();
     void exportLogsFile(const QString &fileName);
     void clearLogs();
     void setScreenshotsEnabled(bool enabled);

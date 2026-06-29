@@ -413,7 +413,6 @@ void ImportController::importConfig(const QJsonObject &config)
         }
     } else {
         qDebug() << "Failed to import profile";
-        qDebug().noquote() << QJsonDocument(config).toJson();
         emit importErrorOccurred(ErrorCode::ImportInvalidConfigError, false);
     }
 }

@@ -110,6 +110,9 @@ QJsonObject SelfHostedAdminServerConfig::toJson() const
     if (!dns2.isEmpty()) {
         obj[configKey::dns2] = dns2;
     }
+    if (!clientLogs.isEmpty()) {
+        obj[configKey::clientLogs] = clientLogs;
+    }
 
     if (!userName.isEmpty()) {
         obj[configKey::userName] = userName;
@@ -147,6 +150,7 @@ SelfHostedAdminServerConfig SelfHostedAdminServerConfig::fromJson(const QJsonObj
 
     config.dns1 = json.value(configKey::dns1).toString();
     config.dns2 = json.value(configKey::dns2).toString();
+    config.clientLogs = json.value(configKey::clientLogs).toObject();
 
     config.userName = json.value(configKey::userName).toString();
     config.password = json.value(configKey::password).toString();

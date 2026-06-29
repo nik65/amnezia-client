@@ -159,7 +159,8 @@ function Invoke-Wsl([string] $Script) {
 
 function Invoke-WslScriptStatus([string] $Script) {
     $tempScript = [System.IO.Path]::ChangeExtension([System.IO.Path]::GetTempFileName(), ".sh")
-    [System.IO.File]::WriteAllText($tempScript, ("set -euo pipefail`n" + $Script), [System.Text.UTF8Encoding]::new($false))
+    $normalizedScript = $Script.Replace("`r`n", "`n").Replace("`r", "`n")
+    [System.IO.File]::WriteAllText($tempScript, ("set -euo pipefail`n" + $normalizedScript), [System.Text.UTF8Encoding]::new($false))
     try {
         $tempScriptWsl = Convert-ToWslPath $tempScript
         & wsl.exe bash $tempScriptWsl
@@ -171,7 +172,8 @@ function Invoke-WslScriptStatus([string] $Script) {
 
 function Invoke-WslScriptOutput([string] $Script) {
     $tempScript = [System.IO.Path]::ChangeExtension([System.IO.Path]::GetTempFileName(), ".sh")
-    [System.IO.File]::WriteAllText($tempScript, ("set -euo pipefail`n" + $Script), [System.Text.UTF8Encoding]::new($false))
+    $normalizedScript = $Script.Replace("`r`n", "`n").Replace("`r", "`n")
+    [System.IO.File]::WriteAllText($tempScript, ("set -euo pipefail`n" + $normalizedScript), [System.Text.UTF8Encoding]::new($false))
     try {
         $tempScriptWsl = Convert-ToWslPath $tempScript
         $output = & wsl.exe bash $tempScriptWsl

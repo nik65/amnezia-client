@@ -19,6 +19,7 @@ char** s_argv = nullptr;
 int runApplication(int argc, char** argv)
 {
     QCoreApplication app(argc,argv);
+    Logger::init(true);
 
 #ifdef Q_OS_WIN
     if(argc > 2){

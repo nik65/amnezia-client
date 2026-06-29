@@ -77,21 +77,16 @@ bool SettingsController::isLoggingEnabled() const
 
 void SettingsController::toggleLogging(bool enable)
 {
-    m_appSettingsRepository->setSaveLogs(enable);
+    Q_UNUSED(enable);
+
+    m_appSettingsRepository->setSaveLogs(true);
 #ifndef Q_OS_ANDROID
-    if (!enable) {
-        Logger::deInit();
-    } else {
-        if (!Logger::init(false)) {
-            qWarning() << "Initialization of debug subsystem failed";
-        }
+    if (!Logger::init(false)) {
+        qWarning() << "Initialization of debug subsystem failed";
     }
 #endif
-    Logger::setServiceLogsEnabled(enable);
-
-    if (enable) {
-        m_appSettingsRepository->setLogEnableDate(QDateTime::currentDateTime());
-    }
+    Logger::setServiceLogsEnabled(true);
+    m_appSettingsRepository->setLogEnableDate(QDateTime::currentDateTime());
 }
 
 void SettingsController::clearLogs()
@@ -327,13 +322,7 @@ void SettingsController::disableHomeAdLabel()
 
 void SettingsController::checkIfNeedDisableLogs()
 {
-    if (m_appSettingsRepository->isSaveLogs()) {
-        m_loggingDisableDate = m_appSettingsRepository->getLogEnableDate().addDays(14);
-        if (m_loggingDisableDate <= QDateTime::currentDateTime()) {
-            toggleLogging(false);
-            clearLogs();
-        }
-    }
+    m_appSettingsRepository->setSaveLogs(true);
 }
 
 QString SettingsController::getPlatform() const

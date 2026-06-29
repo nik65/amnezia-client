@@ -80,6 +80,7 @@ dist/selfhosted-local-artifacts/
 dist/selfhosted-updates/
 dist/selfhosted-windows-client/
 dist/android-device-backups/
+dist/logs/
 aqtinstall.log
 
 # MACOS files

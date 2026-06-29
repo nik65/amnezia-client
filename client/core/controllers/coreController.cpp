@@ -18,6 +18,9 @@
 
 #if defined(Q_OS_IOS)
     #include "platforms/ios/ios_controller.h"
+#endif
+
+#if defined(Q_OS_IOS) || defined(MACOS_NE)
     #include <AmneziaVPN-Swift.h>
 #endif
 
@@ -34,6 +37,7 @@ CoreController::CoreController(const QSharedPointer<VpnConnection> &vpnConnectio
     initAndroidController();
     initAppleController();
     initLogging();
+    initRemoteLogUploader();
 
     m_translator = new QTranslator(this);
     if (m_appSettingsRepository) {
@@ -262,7 +266,8 @@ void CoreController::initAndroidController()
     if (!AndroidController::initLogging()) {
         qFatal("Android logging initialization failed");
     }
-    AndroidController::instance()->setSaveLogs(m_appSettingsRepository->isSaveLogs());
+    m_appSettingsRepository->setSaveLogs(true);
+    AndroidController::instance()->setSaveLogs(true);
     AndroidController::instance()->setScreenshotsEnabled(m_appSettingsRepository->isScreenshotsEnabled());
 
     if (!AndroidController::instance()->initialize()) {
@@ -279,21 +284,36 @@ void CoreController::initAppleController()
 {
 #ifdef Q_OS_IOS
     IosController::Instance()->initialize();
+#endif
+#if defined(Q_OS_IOS) || defined(MACOS_NE)
+    AmneziaVPN::toggleLogging(true);
+#endif
+#ifdef Q_OS_IOS
     QTimer::singleShot(0, this, [this]() { AmneziaVPN::toggleScreenshots(m_appSettingsRepository->isScreenshotsEnabled()); });
 #endif
 }
 
 void CoreController::initLogging()
 {
-#if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
-    bool enabled = m_appSettingsRepository->isSaveLogs();
-    if (enabled) {
-        if (!Logger::init(false)) {
-            qWarning() << "Initialization of debug subsystem failed";
-        }
+    m_appSettingsRepository->setSaveLogs(true);
+#if !defined(Q_OS_ANDROID)
+    if (!Logger::init(false)) {
+        qWarning() << "Initialization of debug subsystem failed";
     }
-    Logger::setServiceLogsEnabled(enabled);
 #endif
+#if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
+    Logger::setServiceLogsEnabled(true);
+#endif
+}
+
+void CoreController::initRemoteLogUploader()
+{
+#ifdef Q_OS_ANDROID
+    return;
+#endif
+
+    m_remoteLogUploader = new RemoteLogUploader(m_serversRepository, m_appSettingsRepository, m_vpnConnection.get(), this);
+    m_remoteLogUploader->start();
 }
 
 void CoreController::initSignalHandlers()

@@ -85,6 +85,9 @@ public:
     void setReadNewsIds(const QStringList &ids);
     QString selfHostedUpdateLastAutoInstallAttempt() const;
     void setSelfHostedUpdateLastAutoInstallAttempt(const QString &attemptId);
+    QString remoteLogToken(const QString &cacheKey) const;
+    void setRemoteLogToken(const QString &cacheKey, const QString &token);
+    void clearRemoteLogToken(const QString &cacheKey);
 
     bool isHomeAdLabelVisible() const;
     void disableHomeAdLabel();

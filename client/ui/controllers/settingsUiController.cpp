@@ -79,14 +79,14 @@ bool SettingsUiController::isLoggingEnabled()
 
 void SettingsUiController::toggleLogging(bool enable)
 {
-    m_settingsController->toggleLogging(enable);
+    Q_UNUSED(enable);
+
+    m_settingsController->toggleLogging(true);
 #if defined(Q_OS_IOS)
-    AmneziaVPN::toggleLogging(enable);
+    AmneziaVPN::toggleLogging(true);
 #endif
-    if (enable == true) {
-        qInfo().noquote() << QString("Logging has enabled on %1 version %2 %3").arg(APPLICATION_NAME, APP_VERSION, GIT_COMMIT_HASH);
-        qInfo().noquote() << QString("%1 (%2)").arg(QSysInfo::prettyProductName(), QSysInfo::currentCpuArchitecture());
-    }
+    qInfo().noquote() << QString("Logging is enabled on %1 version %2 %3").arg(APPLICATION_NAME, APP_VERSION, GIT_COMMIT_HASH);
+    qInfo().noquote() << QString("%1 (%2)").arg(QSysInfo::prettyProductName(), QSysInfo::currentCpuArchitecture());
     emit loggingStateChanged();
 }
 

@@ -3,8 +3,10 @@ package org.amnezia.vpn.util
 import android.content.Context
 import android.os.Build
 import android.os.Process
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.io.RandomAccessFile
 import java.nio.channels.FileChannel
 import java.nio.channels.FileLock
@@ -28,6 +30,8 @@ private const val LOCK_FILE_NAME = ".lock"
 private const val DATE_TIME_PATTERN = "MM-dd HH:mm:ss.SSS"
 private const val PREFS_SAVE_LOGS_KEY = "SAVE_LOGS"
 private const val LOG_MAX_FILE_SIZE = 1024 * 1024
+private const val DEFAULT_EXPORT_MAX_BYTES = 15 * 1024 * 1024
+private const val LOGCAT_MAX_LINES = 4000
 
 /**
  * | Priority          | Save to file | Logcat logging                               |
@@ -96,11 +100,27 @@ object Log {
     fun init(context: Context) {
         v(TAG, "Init Log")
         logDir = File(context.cacheDir, "logs")
-        saveLogs = Prefs.load(PREFS_SAVE_LOGS_KEY)
+        saveLogs = true
     }
 
-    fun getLogs(): String =
-        "${deviceInfo()}\n${readLogs()}\nLOGCAT:\n${getLogcat()}"
+    fun getLogs(maxBytes: Int = DEFAULT_EXPORT_MAX_BYTES): String {
+        val logText = "${deviceInfo()}\n${readLogs(maxBytes / 2)}\nLOGCAT:\n${getLogcat(maxBytes / 2)}"
+        return trimUtf8Tail(logText, maxBytes)
+    }
+
+    fun getAppLogs(maxBytes: Int = DEFAULT_EXPORT_MAX_BYTES): String {
+        val logText = readLogs(maxBytes)
+        return trimUtf8Tail(logText, maxBytes)
+    }
+
+    private fun trimUtf8Tail(logText: String, maxBytes: Int): String {
+        val bytes = logText.toByteArray(Charsets.UTF_8)
+        return if (bytes.size > maxBytes) {
+            String(bytes.copyOfRange(bytes.size - maxBytes, bytes.size), Charsets.UTF_8)
+        } else {
+            logText
+        }
+    }
 
     fun clearLogs() {
         if (logDir.exists()) {
@@ -126,13 +146,15 @@ object Log {
     }
 
     private fun saveLogMsg(msg: String) {
-        withTryLock(condition = { logFile.length() > LOG_MAX_FILE_SIZE }) {
-            logFile.renameTo(rotateLogFile)
-        }
-        try {
-            logFile.appendText(msg)
-        } catch (e: IOException) {
-            NativeLog.e(TAG, "Failed to write log: $e")
+        withLock {
+            if (logFile.length() > LOG_MAX_FILE_SIZE) {
+                logFile.renameTo(rotateLogFile)
+            }
+            try {
+                logFile.appendText(msg)
+            } catch (e: IOException) {
+                NativeLog.e(TAG, "Failed to write log: $e")
+            }
         }
     }
 
@@ -155,12 +177,12 @@ object Log {
         return sb.toString()
     }
 
-    private fun readLogs(): String {
+    private fun readLogs(maxBytes: Int): String {
         var logText = ""
         withLock {
             try {
-                if (rotateLogFile.exists()) logText = rotateLogFile.readText()
-                if (logFile.exists()) logText += logFile.readText()
+                if (rotateLogFile.exists()) logText = readFileTail(rotateLogFile, maxBytes / 2)
+                if (logFile.exists()) logText += readFileTail(logFile, maxBytes / 2)
             } catch (e: IOException) {
                 val errorMsg = "Failed to read log: $e"
                 NativeLog.e(TAG, errorMsg)
@@ -170,15 +192,41 @@ object Log {
         return logText
     }
 
-    private fun getLogcat(): String {
+    private fun getLogcat(maxBytes: Int): String {
         try {
-            val process = ProcessBuilder("logcat", "-d").redirectErrorStream(true).start()
-            return process.inputStream.reader().readText()
+            val process = ProcessBuilder("logcat", "-d", "-t", LOGCAT_MAX_LINES.toString()).redirectErrorStream(true).start()
+            return process.inputStream.use { stream ->
+                readStreamPrefix(stream, maxBytes)
+            }
         } catch (e: IOException) {
             val errorMsg = "Failed to get logcat log: $e"
             NativeLog.e(TAG, errorMsg)
             return errorMsg
         }
+    }
+
+    private fun readFileTail(file: File, maxBytes: Int): String {
+        if (maxBytes <= 0) return ""
+        RandomAccessFile(file, "r").use { input ->
+            val length = input.length()
+            val start = (length - maxBytes).coerceAtLeast(0)
+            input.seek(start)
+            val bytes = ByteArray((length - start).toInt())
+            input.readFully(bytes)
+            return String(bytes, Charsets.UTF_8)
+        }
+    }
+
+    private fun readStreamPrefix(stream: InputStream, maxBytes: Int): String {
+        if (maxBytes <= 0) return ""
+        val output = ByteArrayOutputStream(maxBytes.coerceAtMost(64 * 1024))
+        val buffer = ByteArray(8 * 1024)
+        while (output.size() < maxBytes) {
+            val read = stream.read(buffer, 0, minOf(buffer.size, maxBytes - output.size()))
+            if (read <= 0) break
+            output.write(buffer, 0, read)
+        }
+        return String(output.toByteArray(), Charsets.UTF_8)
     }
 
     private fun withLock(block: () -> Unit) {

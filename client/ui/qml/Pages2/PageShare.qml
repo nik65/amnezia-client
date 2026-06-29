@@ -3,6 +3,8 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
 
+import QtCore
+
 import SortFilterProxyModel 0.2
 
 import PageEnum 1.0
@@ -91,7 +93,23 @@ PageType {
         }
 
         function onExportErrorOccurred(error) {
+            PageController.showBusyIndicator(false)
             PageController.showErrorMessage(error)
+        }
+
+        function onClientLogsDownloadFinished(saved, logsFound) {
+            PageController.showBusyIndicator(false)
+            if (!logsFound) {
+                PageController.showNotificationMessage(qsTr("No remote logs found"))
+                return
+            }
+            if (saved) {
+                if (GC.isMobile()) {
+                    PageController.showNotificationMessage(qsTr("Logs save dialog opened"))
+                } else {
+                    PageController.showNotificationMessage(qsTr("Logs file saved"))
+                }
+            }
         }
     }
 
@@ -126,6 +144,14 @@ PageType {
         id: xrayConnectionFormat
         readonly property string name: qsTr("XRay native format")
         readonly property int type: PageShare.ConfigType.Xray
+    }
+
+    function clientLogsFileBaseName(name) {
+        var normalized = name.replace(/[\\/:*?"<>|]/g, "_").trim()
+        if (normalized === "") {
+            normalized = "client"
+        }
+        return "amnezia_logs_" + normalized
     }
 
     FlickableType {
@@ -822,6 +848,47 @@ PageType {
                                 }
 
                                 BasicButtonType {
+                                    id: downloadLogsButton
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 8
+
+                                    defaultColor: AmneziaStyle.color.transparent
+                                    hoveredColor: AmneziaStyle.color.translucentWhite
+                                    pressedColor: AmneziaStyle.color.sheerWhite
+                                    disabledColor: AmneziaStyle.color.mutedGray
+                                    textColor: AmneziaStyle.color.paleGray
+                                    borderWidth: 1
+                                    leftImageSource: "qrc:/images/controls/download.svg"
+
+                                    text: qsTr("Download logs")
+
+                                    clickedFunc: function() {
+                                        var baseFileName = root.clientLogsFileBaseName(clientName)
+                                        var fileName = ""
+                                        if (GC.isMobile()) {
+                                            fileName = baseFileName + ".txt"
+                                        } else {
+                                            fileName = SystemController.getFileName(qsTr("Save logs"),
+                                                                                    qsTr("Text files (*.txt)"),
+                                                                                    StandardPaths.standardLocations(StandardPaths.DocumentsLocation) + "/" + baseFileName,
+                                                                                    true,
+                                                                                    ".txt")
+                                        }
+
+                                        if (fileName !== "") {
+                                            PageController.showBusyIndicator(true)
+                                            var started = ExportController.downloadClientLogs(ServersUiController.processedServerId,
+                                                                                              ServersUiController.processedContainerIndex,
+                                                                                              clientId,
+                                                                                              fileName)
+                                            if (!started) {
+                                                PageController.showBusyIndicator(false)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                BasicButtonType {
                                     id: revokeButton
                                     Layout.fillWidth: true
                                     Layout.topMargin: 8
@@ -837,7 +904,7 @@ PageType {
 
                                     clickedFunc: function() {
                                         var headerText = qsTr("Revoke the config for a user - %1?").arg(clientName)
-                                        var descriptionText = qsTr("The user will no longer be able to connect to your server.")
+                                        var descriptionText = qsTr("The user will no longer be able to connect to your server. Existing server-side logs will remain until the storage limit cleanup removes old log files.")
                                         var yesButtonText = qsTr("Continue")
                                         var noButtonText = qsTr("Cancel")
 
@@ -855,7 +922,7 @@ PageType {
                                                 ServersUiController.processedServerId,
                                                 ServersUiController.processedContainerIndex,
                                                 clientId)) {
-                                            PageController.showNotificationMessage("Unable to revoke current config during active connection")
+                                            PageController.showNotificationMessage(qsTr("Unable to revoke current config during active connection"))
                                         } else {
                                             showQuestionDrawer(headerText, descriptionText, yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
                                         }

@@ -25,6 +25,7 @@ struct SelfHostedUserServerConfig {
     DockerContainer defaultContainer;
     QString dns1;
     QString dns2;
+    QJsonObject clientLogs;
     bool hasCredentials() const;
     bool isReadOnly() const;
     std::optional<ServerCredentials> credentials() const;

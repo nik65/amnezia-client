@@ -40,11 +40,14 @@ public slots:
 
     void renameClient(int row, const QString &clientName, const QString &serverId, int containerIndex);
 
+    bool downloadClientLogs(const QString &serverId, int containerIndex, const QString &clientId, const QString &fileName);
+
 signals:
     void generateConfig(int type);
     void revokeConfigFinished();
     void exportErrorOccurred(const QString &errorMessage);
     void exportErrorOccurred(ErrorCode errorCode);
+    void clientLogsDownloadFinished(bool saved, bool logsFound);
 
     void exportConfigChanged();
 

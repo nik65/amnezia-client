@@ -18,6 +18,7 @@ public:
 
     static bool init(bool isServiceLogger);
     static void deInit();
+    static bool isInitialized();
 
     static bool setServiceLogsEnabled(bool enabled);
 

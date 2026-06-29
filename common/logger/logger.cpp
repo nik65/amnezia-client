@@ -16,7 +16,7 @@
     #include <core/utils/ipcClient.h>
 #endif
 
-#ifdef Q_OS_IOS
+#if defined(Q_OS_IOS) || defined(MACOS_NE)
     #include <AmneziaVPN-Swift.h>
 #endif
 
@@ -61,6 +61,10 @@ Logger &Logger::Instance()
 
 bool Logger::init(bool isServiceLogger)
 {
+    if (m_file.isOpen()) {
+        return true;
+    }
+
     QString path = isServiceLogger ? systemLogDir() : userLogsDir();
     QString logFileName = isServiceLogger ? m_serviceLogFileName : m_logFileName;
     QDir appDir(path);
@@ -86,6 +90,11 @@ void Logger::deInit()
 {
     m_textStream.setDevice(nullptr);
     m_file.close();
+}
+
+bool Logger::isInitialized()
+{
+    return m_file.isOpen();
 }
 
 bool Logger::setServiceLogsEnabled(bool enabled)
@@ -145,7 +154,7 @@ QString Logger::getLogFile()
     file.open(QIODevice::ReadOnly);
     QString qtLog = file.readAll();
 
-#ifdef Q_OS_IOS
+#if defined(Q_OS_IOS) || defined(MACOS_NE)
     return QString().fromStdString(AmneziaVPN::swiftUpdateLogData(qtLog.toStdString()));
 #else
     return qtLog;
@@ -162,7 +171,7 @@ QString Logger::getServiceLogFile()
     file.open(QIODevice::ReadOnly);
     QString qtLog = file.readAll();
 
-#ifdef Q_OS_IOS
+#if defined(Q_OS_IOS) || defined(MACOS_NE)
     return QString().fromStdString(AmneziaVPN::swiftUpdateLogData(qtLog.toStdString()));
 #else
     return qtLog;
@@ -193,7 +202,7 @@ void Logger::clearLogs(bool isServiceLogger)
     file.resize(0);
     file.close();
 
-#ifdef Q_OS_IOS
+#if defined(Q_OS_IOS) || defined(MACOS_NE)
     AmneziaVPN::swiftDeleteLog();
 #endif
 

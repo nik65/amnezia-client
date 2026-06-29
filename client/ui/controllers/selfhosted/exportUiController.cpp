@@ -1,6 +1,9 @@
 #include "exportUiController.h"
 
 #include <QDebug>
+#include <QFuture>
+#include <QFutureWatcher>
+#include <QtConcurrent>
 
 #include "../systemController.h"
 #include "core/utils/qrCodeUtils.h"
@@ -98,6 +101,43 @@ void ExportUiController::revokeConfig(int row, const QString &serverId, int cont
 void ExportUiController::renameClient(int row, const QString &clientName, const QString &serverId, int containerIndex)
 {
     m_exportController->renameClient(row, clientName, serverId, containerIndex);
+}
+
+bool ExportUiController::downloadClientLogs(const QString &serverId, int containerIndex, const QString &clientId, const QString &fileName)
+{
+    if (fileName.isEmpty()) {
+        return false;
+    }
+
+    auto *watcher = new QFutureWatcher<ExportController::DownloadClientLogsResult>(this);
+    connect(watcher, &QFutureWatcher<ExportController::DownloadClientLogsResult>::finished, this,
+            [this, watcher, fileName]() {
+                const auto result = watcher->result();
+                watcher->deleteLater();
+
+                if (result.errorCode != ErrorCode::NoError) {
+                    emit exportErrorOccurred(result.errorCode);
+                    return;
+                }
+
+                if (!result.logsFound) {
+                    emit clientLogsDownloadFinished(false, false);
+                    return;
+                }
+
+                if (!SystemController::saveFile(fileName, result.data)) {
+                    emit exportErrorOccurred(tr("Logs file was not saved"));
+                    return;
+                }
+
+                emit clientLogsDownloadFinished(true, true);
+            });
+
+    ExportController *exportController = m_exportController;
+    watcher->setFuture(QtConcurrent::run([exportController, serverId, containerIndex, clientId]() {
+        return exportController->downloadClientLogs(serverId, static_cast<DockerContainer>(containerIndex), clientId);
+    }));
+    return true;
 }
 
 int ExportUiController::getQrCodesCount()

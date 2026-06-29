@@ -558,7 +558,7 @@ class AmneziaActivity : QtActivity() {
         Log.d(TAG, "Bind service")
         vpnProto?.let { proto ->
             Intent(this, proto.serviceClass).also {
-                bindService(it, serviceConnection, BIND_ABOVE_CLIENT and BIND_AUTO_CREATE)
+                bindService(it, serviceConnection, BIND_ABOVE_CLIENT or BIND_AUTO_CREATE)
             }
             isInBoundState = true
         }
@@ -1021,14 +1021,17 @@ class AmneziaActivity : QtActivity() {
     fun setSaveLogs(enabled: Boolean) {
         Log.v(TAG, "Set save logs: $enabled")
         mainScope.launch {
-            Log.saveLogs = enabled
+            Log.saveLogs = true
             vpnServiceMessenger.send {
                 Action.SET_SAVE_LOGS.packToMessage {
-                    putBoolean(MSG_SAVE_LOGS, enabled)
+                    putBoolean(MSG_SAVE_LOGS, true)
                 }
             }
         }
     }
+
+    @Suppress("unused")
+    fun getLogs(): String = Log.getLogs()
 
     @Suppress("unused")
     fun exportLogsFile(fileName: String) {

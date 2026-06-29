@@ -203,21 +203,9 @@ PageType {
 
         target: SettingsController
 
-        function onLoggingDisableByWatcher() {
-            PageController.showNotificationMessage(qsTr("Logging was disabled after 14 days, log files were deleted"))
-        }
-
         function onRestoreBackupFinished() {
             PageController.showNotificationMessage(qsTr("Settings restored from backup file"))
             PageController.goToPageHome()
-        }
-
-        function onLoggingStateChanged() {
-            if (SettingsController.isLoggingEnabled) {
-                var message = qsTr("Logging is enabled. Note that logs will be automatically" +
-                                   "disabled after 14 days, and all log files will be deleted.")
-                PageController.showNotificationMessage(message)
-            }
         }
     }
 

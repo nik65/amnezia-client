@@ -13,13 +13,16 @@ private const val SECURE_PREFS_FILE = "$PREFS_FILE.secure"
 
 object Prefs {
     private lateinit var app: Application
+    private val encryptedPrefs: SharedPreferences
+        get() = EncryptedSharedPreferences(
+            app,
+            SECURE_PREFS_FILE,
+            MasterKey(app)
+        )
+
     val prefs: SharedPreferences
         get() = try {
-            EncryptedSharedPreferences(
-                app,
-                SECURE_PREFS_FILE,
-                MasterKey(app)
-            )
+            encryptedPrefs
         } catch (e: Exception) {
             Log.e(TAG, "Getting Encryption Storage failed: $e, plaintext fallback")
             app.getSharedPreferences(PREFS_FILE, Context.MODE_PRIVATE)
@@ -44,6 +47,22 @@ object Prefs {
 
     fun save(key: String, value: Float) =
         prefs.edit().putFloat(key, value).apply()
+
+    fun saveSecureString(key: String, value: String?): Boolean =
+        try {
+            encryptedPrefs.edit().putString(key, value).commit()
+        } catch (e: Exception) {
+            Log.e(TAG, "Saving secure string failed: $e")
+            false
+        }
+
+    fun loadSecureString(key: String): String =
+        try {
+            encryptedPrefs.getString(key, "").orEmpty()
+        } catch (e: Exception) {
+            Log.e(TAG, "Loading secure string failed: $e")
+            ""
+        }
 
     inline fun <reified T> load(key: String): T {
         return when (typeOf<T>()) {

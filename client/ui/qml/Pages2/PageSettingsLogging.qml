@@ -48,27 +48,7 @@ PageType {
                 Layout.rightMargin: 16
 
                 headerText: qsTr("Logging")
-                descriptionText: qsTr("Enabling this function will save application's logs automatically. " +
-                                      "By default, logging functionality is disabled. Enable log saving in case of application malfunction.")
-            }
-
-            SwitcherType {
-                id: switcher
-
-                Layout.fillWidth: true
-                Layout.topMargin: 16
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-
-                text: qsTr("Enable logs")
-
-                checked: SettingsController.isLoggingEnabled
-                
-                onToggled: function() {
-                    if (checked !== SettingsController.isLoggingEnabled) {
-                        SettingsController.isLoggingEnabled = checked
-                    }
-                }
+                descriptionText: qsTr("Application and service logs are saved automatically and sent to the configured server.")
             }
 
             DividerType {}
@@ -83,6 +63,7 @@ PageType {
 
                 clickedFunction: function() {
                     var headerText = qsTr("Clear logs?")
+                    var descriptionText = qsTr("This clears local log files. Remote copies remain on the server until retention cleanup.")
                     var yesButtonText = qsTr("Continue")
                     var noButtonText = qsTr("Cancel")
 
@@ -90,14 +71,14 @@ PageType {
                         PageController.showBusyIndicator(true)
                         SettingsController.clearLogs()
                         PageController.showBusyIndicator(false)
-                        PageController.showNotificationMessage(qsTr("Logs have been cleaned up"))
+                        PageController.showNotificationMessage(qsTr("Local logs have been cleaned up"))
                     }
 
                     var noButtonFunction = function() {
 
                     }
 
-                    showQuestionDrawer(headerText, "", yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
+                    showQuestionDrawer(headerText, descriptionText, yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
                 }
             }
         }

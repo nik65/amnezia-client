@@ -38,6 +38,19 @@ namespace amnezia
             constexpr int syncPort = 17865;
         }
 
+        namespace clientLogs
+        {
+            constexpr char syncHost[] = "172.29.172.251";
+            constexpr char uploadPath[] = "/logs";
+            constexpr char bootstrapPath[] = "/bootstrap";
+            constexpr char hostDirectory[] = "/opt/amnezia/client-logs";
+            constexpr char containerName[] = "amnezia-client-logs";
+            constexpr char tunnelContainerName[] = "amnezia-client-logs-vpn";
+            constexpr int syncPort = 17866;
+            constexpr int maxBytesPerUpload = 15 * 1024 * 1024;
+            constexpr int maxBytesPerClient = 30 * 1024 * 1024;
+        }
+
         namespace openvpn
         {
             constexpr char defaultSubnetAddress[] = "10.8.0.0";

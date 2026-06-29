@@ -215,8 +215,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let providerKeys = providerConfiguration?.keys.sorted().joined(separator: ",") ?? ""
             var protocolDetails = "bundleId=\(protocolConfiguration.providerBundleIdentifier ?? "") keys=[\(providerKeys)]"
             if let ovpnData = providerConfiguration?[Constants.ovpnConfigKey] as? Data {
-                let preview = String(decoding: ovpnData.prefix(512), as: UTF8.self)
-                protocolDetails += " ovpnBytes=\(ovpnData.count) ovpnPreview=\(preview)"
+                protocolDetails += " ovpnBytes=\(ovpnData.count)"
             }
             neLog(.info, title: "Protocol", message: protocolDetails)
 

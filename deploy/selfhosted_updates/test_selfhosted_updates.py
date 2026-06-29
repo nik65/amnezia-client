@@ -8,6 +8,7 @@ import io
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -77,6 +78,21 @@ def to_wsl_path(path: Path) -> str:
 
 def find_git() -> str | None:
     return shutil.which("git")
+
+
+def extract_client_logs_collector_script() -> str:
+    export_controller = (REPO_ROOT / "client/core/controllers/selfhosted/exportController.cpp").read_text(encoding="utf-8")
+    match = re.search(r'QString script = QStringLiteral\(R"PY\(\n(.*?)\n\)PY"\);', export_controller, re.S)
+    if not match:
+        raise AssertionError("client log collector script raw string was not found")
+    return (
+        match.group(1)
+        .replace("__MAX_UPLOAD_BYTES__", str(15 * 1024 * 1024))
+        .replace("__MAX_CLIENT_BYTES__", str(30 * 1024 * 1024))
+        .replace("__PORT__", "17866")
+        .replace("__UPLOAD_PATH__", "/logs")
+        .replace("__BOOTSTRAP_PATH__", "/bootstrap")
+    )
 
 
 def run_git(cwd: Path, *args: str, stdout: object | None = None) -> subprocess.CompletedProcess[str]:
@@ -512,6 +528,10 @@ class SourceContractTests(unittest.TestCase):
             update_controller.index("addHost(QString::fromLatin1(amnezia::protocols::selfHostedUpdates::syncHost));"),
             update_controller.index("for (const QString &host : serverCredentialHosts)"),
         )
+        vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
+        self.assertIn("addHost(QString::fromLatin1(protocols::clientLogs::syncHost));", vpn_connection)
+        self.assertIn("appsRouteMode == amnezia::AppsRouteMode::VpnOnlyForwardApps", vpn_connection)
+        self.assertIn('appsJsonArray.append(QStringLiteral("org.amnezia.vpn"));', vpn_connection)
         self.assertIn("normalizedSelfHostedManifestUrl", update_controller)
         self.assertIn("url.setPath(path + manifestPath)", update_controller)
         self.assertIn("url.setPort(amnezia::protocols::selfHostedUpdates::syncPort);", update_controller)
@@ -529,6 +549,255 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("ConnectionController::connectionStateChanged", signal_handlers)
         self.assertIn("state != Vpn::ConnectionState::Connected", signal_handlers)
         self.assertIn("QTimer::singleShot(5000, m_coreController->m_updateController, &UpdateController::checkForUpdates);", signal_handlers)
+
+    def test_always_on_remote_logs_contract(self) -> None:
+        remote_log_uploader = (REPO_ROOT / "client/core/controllers/remoteLogUploader.cpp").read_text(encoding="utf-8")
+        android_service = (REPO_ROOT / "client/android/src/org/amnezia/vpn/AmneziaVpnService.kt").read_text(encoding="utf-8")
+        android_log = (REPO_ROOT / "client/android/utils/src/main/kotlin/Log.kt").read_text(encoding="utf-8")
+        android_prefs = (REPO_ROOT / "client/android/utils/src/main/kotlin/Prefs.kt").read_text(encoding="utf-8")
+        android_activity = (REPO_ROOT / "client/android/src/org/amnezia/vpn/AmneziaActivity.kt").read_text(encoding="utf-8")
+        ios_packet_tunnel = (REPO_ROOT / "client/platforms/ios/PacketTunnelProvider.swift").read_text(encoding="utf-8")
+        ios_openvpn = (REPO_ROOT / "client/platforms/ios/PacketTunnelProvider+OpenVPN.swift").read_text(encoding="utf-8")
+        ios_controller = (REPO_ROOT / "client/platforms/ios/ios_controller.mm").read_text(encoding="utf-8")
+        import_controller = (REPO_ROOT / "client/core/controllers/selfhosted/importController.cpp").read_text(encoding="utf-8")
+        export_controller = (REPO_ROOT / "client/core/controllers/selfhosted/exportController.cpp").read_text(encoding="utf-8")
+        export_ui_controller = (REPO_ROOT / "client/ui/controllers/selfhosted/exportUiController.cpp").read_text(encoding="utf-8")
+        export_ui_controller_h = (REPO_ROOT / "client/ui/controllers/selfhosted/exportUiController.h").read_text(encoding="utf-8")
+        page_share = (REPO_ROOT / "client/ui/qml/Pages2/PageShare.qml").read_text(encoding="utf-8")
+        users_controller = (REPO_ROOT / "client/core/controllers/selfhosted/usersController.cpp").read_text(encoding="utf-8")
+        logger_cpp = (REPO_ROOT / "common/logger/logger.cpp").read_text(encoding="utf-8")
+        core_controller = (REPO_ROOT / "client/core/controllers/coreController.cpp").read_text(encoding="utf-8")
+        connection_controller = (REPO_ROOT / "client/core/controllers/connectionController.cpp").read_text(encoding="utf-8")
+        client_logs_utils = (REPO_ROOT / "client/core/utils/selfhosted/clientLogsUtils.cpp").read_text(encoding="utf-8")
+        protocol = (REPO_ROOT / "client/core/utils/constants/protocolConstants.h").read_text(encoding="utf-8")
+        system_service = (REPO_ROOT / "service/server/systemservice.cpp").read_text(encoding="utf-8")
+        ipc_server = (REPO_ROOT / "ipc/ipcserver.cpp").read_text(encoding="utf-8")
+        secure_qsettings = (REPO_ROOT / "client/secureQSettings.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("m_appSettingsRepository->setSaveLogs(true);", core_controller)
+        self.assertIn("Logger::setServiceLogsEnabled(true);", core_controller)
+        self.assertIn("#ifdef Q_OS_ANDROID\n    return;\n#endif\n\n    m_remoteLogUploader", core_controller)
+        self.assertIn("Logger::init(true);", system_service)
+        self.assertIn("#if defined(Q_OS_IOS) || defined(MACOS_NE)\n    #include <AmneziaVPN-Swift.h>\n#endif", core_controller)
+        self.assertIn("#if defined(Q_OS_IOS) || defined(MACOS_NE)\n    AmneziaVPN::toggleLogging(true);\n#endif", core_controller)
+        self.assertIn("#if defined(Q_OS_IOS) || defined(MACOS_NE)", logger_cpp)
+
+        self.assertIn("url.host() == QString::fromLatin1(amnezia::protocols::clientLogs::syncHost)", remote_log_uploader)
+        self.assertIn("url.port() == amnezia::protocols::clientLogs::syncPort", remote_log_uploader)
+        self.assertIn("url.path() == QString::fromLatin1(amnezia::protocols::clientLogs::uploadPath)", remote_log_uploader)
+        self.assertIn("QMetaObject::invokeMethod(m_vpnConnection", remote_log_uploader)
+        self.assertIn("snapshot.serverIndex = m_vpnConnection->serverIndex();", remote_log_uploader)
+        self.assertIn("snapshot.container = m_vpnConnection->container();", remote_log_uploader)
+        self.assertIn("snapshot.state != Vpn::ConnectionState::Connected", remote_log_uploader)
+        self.assertIn("m_serversRepository->serverIdAt(activeServerIndex)", remote_log_uploader)
+        self.assertNotIn("m_serversRepository->defaultServerId()", remote_log_uploader)
+        self.assertIn("serverJson.value(amnezia::configKey::clientLogs).toObject()", remote_log_uploader)
+        self.assertIn("clientLogsUtils::legacyBootstrapTarget", remote_log_uploader)
+        self.assertIn("bootstrapCurrentTarget()", remote_log_uploader)
+        self.assertIn("setRemoteLogToken(target.tokenCacheKey, token)", remote_log_uploader)
+        self.assertIn("clearRemoteLogToken(m_currentTarget.tokenCacheKey)", remote_log_uploader)
+        self.assertIn("request.setTransferTimeout(uploadTimeoutMs);", remote_log_uploader)
+        self.assertIn("m_logCursors.insert(payload.offsetKey, { payload.nextOffset, payload.fingerprint });", remote_log_uploader)
+        self.assertIn("fileFingerprint(file)", remote_log_uploader)
+        self.assertIn("maxBootstrapResponseBytes = 4096", remote_log_uploader)
+        self.assertIn("m_nextTokenRefreshAt = QDateTime::currentDateTimeUtc().addMSecs(uploadIntervalMs);", remote_log_uploader)
+        self.assertIn("payloadFromFile(QStringLiteral(\"client\"), Logger::userLogsFilePath())", remote_log_uploader)
+        self.assertIn("payloadFromFile(QStringLiteral(\"service\"), Logger::serviceLogsFilePath())", remote_log_uploader)
+        self.assertIn("sameTarget(findUploadTarget(), m_currentTarget)", remote_log_uploader)
+        self.assertNotIn("m_lastPayloadHashes", remote_log_uploader)
+        self.assertIn("vpnConfiguration[configKey::clientLogs] = clientLogs;", connection_controller)
+        self.assertIn("clientLogsUtils::legacyBootstrapTarget(container, containerConfig)", connection_controller)
+
+        self.assertIn('private const val CLIENT_LOGS_TRUSTED_ENDPOINT = "http://172.29.172.251:17866/logs"', android_service)
+        self.assertIn('private const val CLIENT_LOGS_BOOTSTRAP_ENDPOINT = "http://172.29.172.251:17866/bootstrap"', android_service)
+        self.assertIn("if (endpoint != CLIENT_LOGS_TRUSTED_ENDPOINT || clientId.isBlank() || (!bootstrap && token.isBlank()))", android_service)
+        self.assertIn("bootstrapRemoteLogTarget(target)", android_service)
+        self.assertIn("val tokenCacheKey = remoteLogTokenPrefsKey(config?.optString(\"hostName\").orEmpty(), clientId)", android_service)
+        self.assertIn("Prefs.loadSecureString(tokenCacheKey)", android_service)
+        self.assertIn("Prefs.saveSecureString(target.tokenCacheKey, token)", android_service)
+        self.assertIn("Prefs.saveSecureString(target.tokenCacheKey, \"\")", android_service)
+        self.assertIn("DISCONNECTED -> {\n                        networkState.unbindNetworkListener()\n                        stopRemoteLogUploader()", android_service)
+        self.assertIn("CONNECTED -> {\n                        networkState.bindNetworkListener()\n                        configureRemoteLogUploader(parseConfigToJson(Prefs.load(PREFS_CONFIG_KEY)))", android_service)
+        self.assertIn("configureRemoteLogUploader(config)", android_service)
+        self.assertIn("private fun stopRemoteLogUploader()", android_service)
+        self.assertIn("if (protocolState.value != CONNECTED) return", android_service)
+        self.assertIn("Log.getAppLogs(CLIENT_LOGS_MAX_PAYLOAD_BYTES)", android_service)
+        self.assertIn("remoteLogOffsetBytes", android_service)
+        self.assertIn("logBytes.copyOfRange(startOffset, logBytes.size)", android_service)
+        self.assertNotIn("lastRemoteLogUploadHash", android_service)
+        self.assertIn("try {\n            var target = remoteLogTarget ?: return", android_service)
+        self.assertIn("private fun uploadRemoteLogsOnce(allowTokenRefreshRetry: Boolean = true)", android_service)
+        self.assertIn("uploadRemoteLogsOnce(false)", android_service)
+        self.assertIn("CLIENT_LOGS_MAX_BOOTSTRAP_RESPONSE_BYTES = 4096", android_service)
+        self.assertIn("private fun readLimitedUtf8(stream: InputStream, maxBytes: Int): String?", android_service)
+        self.assertIn('setRequestProperty("X-Amnezia-Installation-Id", remoteLogInstallationId())', android_service)
+        self.assertIn('setRequestProperty("X-Amnezia-Log-Kind", "android")', android_service)
+        self.assertIn("fun getAppLogs(maxBytes: Int = DEFAULT_EXPORT_MAX_BYTES): String", android_log)
+        self.assertIn("withLock {\n            if (logFile.length() > LOG_MAX_FILE_SIZE)", android_log)
+        self.assertIn("fun saveSecureString(key: String, value: String?): Boolean", android_prefs)
+        self.assertIn("fun loadSecureString(key: String): String", android_prefs)
+        self.assertNotIn("BIND_ABOVE_CLIENT and BIND_AUTO_CREATE", android_activity)
+        self.assertIn("BIND_ABOVE_CLIENT or BIND_AUTO_CREATE", android_activity)
+        self.assertIn("logcat\", \"-d\", \"-t\", LOGCAT_MAX_LINES.toString()", android_log)
+        self.assertNotIn("qDebug().noquote() << QJsonDocument(config).toJson()", import_controller)
+        self.assertNotIn("ovpnPreview", ios_packet_tunnel)
+        self.assertIn("ovpnBytes=\\(ovpnData.count)", ios_packet_tunnel)
+        self.assertNotIn('ovpnLog(.info, title: "config: ", message: openVPNConfig.str)', ios_openvpn)
+        self.assertNotIn("amnezia_ovpn_adapter_config.conf", ios_openvpn)
+        self.assertNotIn("ConfigDump", ios_openvpn)
+        self.assertNotIn("config raw", ios_openvpn)
+        self.assertNotIn("preview=", ios_openvpn)
+        self.assertNotIn("ConfigHead", ios_openvpn)
+        self.assertNotIn("ConfigTail", ios_openvpn)
+        self.assertNotIn("ConfigTailSanitized", ios_openvpn)
+        self.assertNotIn("info=\\(nsError.userInfo\\)", ios_openvpn)
+        self.assertNotIn("payloadPreview", ios_controller)
+        self.assertNotIn("decodedPayload", ios_controller)
+        self.assertIn("Logger::init(true);", ipc_server)
+        self.assertNotIn("Logger::deInit();", ipc_server)
+        self.assertNotIn("Logger::cleanUp();", ipc_server)
+        self.assertNotIn("Logger::clearLogs(true);", ipc_server)
+        self.assertIn("withoutRemoteLogTokens", secure_qsettings)
+        self.assertIn('clientLogs.remove(QStringLiteral("token"));', secure_qsettings)
+        self.assertIn('clientLogs.insert(QStringLiteral("bootstrap"), true);', secure_qsettings)
+        self.assertIn("sanitizedBackupValue(key, value(key))", secure_qsettings)
+        self.assertIn("setValue(key, sanitizedBackupValue(key, cfg.value(key).toVariant()))", secure_qsettings)
+
+        self.assertIn("SAFE_CLIENT_ID = re.compile", export_controller)
+        self.assertIn("SAFE_INSTALLATION_ID = re.compile", export_controller)
+        self.assertIn("class LogServer(ThreadingHTTPServer):", export_controller)
+        self.assertIn("daemon_threads = True", export_controller)
+        self.assertIn("def authenticate_client(self):", export_controller)
+        self.assertIn('BOOTSTRAP_PATH = "__BOOTSTRAP_PATH__"', export_controller)
+        self.assertIn("ALLOW_BOOTSTRAP = os.environ.get", export_controller)
+        self.assertIn("def resolve_legacy_client_id(source_ip):", export_controller)
+        self.assertIn("def ensure_legacy_token(client_id):", export_controller)
+        self.assertIn("def is_legacy_token(client_id, token):", export_controller)
+        self.assertIn("def bootstrap_client(self):", export_controller)
+        self.assertIn("if legacy_scopes:", export_controller)
+        self.assertIn("if not ALLOW_BOOTSTRAP or CONTAINER_SCOPE not in legacy_scopes:", export_controller)
+        self.assertIn("MAX_BOOTSTRAP_BYTES = 1024", export_controller)
+        self.assertIn("content_length > MAX_BOOTSTRAP_BYTES", export_controller)
+        self.assertNotIn("def do_GET(self):", export_controller)
+        self.assertIn("QByteArray adminClientLogsDownloadScript", export_controller)
+        self.assertIn("ExportController::DownloadClientLogsResult ExportController::downloadClientLogs", export_controller)
+        self.assertIn("adminClientLogsDownloadScript(clientLogsStorageId(container, clientId))", export_controller)
+        self.assertIn("remoteClientExists(credentials, container, clientId, result.errorCode)", export_controller)
+        self.assertIn("QByteArray::fromBase64Encoding(downloadOutput.mid(statusEnd + 1).trimmed().toLatin1()", export_controller)
+        self.assertIn("QByteArray::AbortOnBase64DecodingErrors", export_controller)
+        self.assertIn("prune_client_dir(client_dir)", export_controller)
+        self.assertIn("content_length > MAX_UPLOAD_BYTES", export_controller)
+        self.assertIn("total <= MAX_CLIENT_BYTES", export_controller)
+        self.assertIn("printf '0\\n'", export_controller)
+        self.assertIn("printf '1\\n'", export_controller)
+        self.assertIn("find \"$CLIENT_DIR\" -maxdepth 1 -type f -name '*.log'", export_controller)
+        self.assertIn("downloadOutput.indexOf(QLatin1Char('\\n'))", export_controller)
+        self.assertIn("UPLOAD_SEMAPHORE = threading.BoundedSemaphore(4)", export_controller)
+        self.assertIn("CLIENT_LOCKS = {}", export_controller)
+        self.assertIn("with client_lock(client_id):", export_controller)
+        self.assertIn('name.endswith(".log")', export_controller)
+        self.assertIn("os.umask(0o077)", export_controller)
+        self.assertIn("os.makedirs(client_dir, mode=0o700, exist_ok=True)", export_controller)
+        self.assertIn("-d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__", export_controller)
+        self.assertIn("--memory=96m --cpus=0.5 --pids-limit=64", export_controller)
+        self.assertIn("AMNEZIA_CLIENT_LOGS_BOOTSTRAP=0", export_controller)
+        self.assertIn("AMNEZIA_CLIENT_LOGS_BOOTSTRAP=__ALLOW_LEGACY_BOOTSTRAP__", export_controller)
+        self.assertIn("read -r iface peer allowed_ips", export_controller)
+        self.assertIn("__WG_SHOW_BIN__ show all allowed-ips", export_controller)
+        self.assertIn("__HOST_DIRECTORY__/legacy/__CONTAINER_SCOPE__.tsv", export_controller)
+        self.assertIn("tokens.lock", export_controller)
+        self.assertIn("cleanupTmpFiles();", export_controller)
+        self.assertIn("echo __ERROR_MARKER__:network_subnet", export_controller)
+        self.assertNotIn("docker network rm amnezia-dns-net", export_controller)
+        self.assertLess(export_controller.index("emit appendClientRequested(serverId, clientId, clientName, container);"),
+                        export_controller.index("publishClientLogCollector(credentials, container, clientLogId, clientLogToken)"))
+        self.assertIn("maxBytesPerUpload = 15 * 1024 * 1024", protocol)
+        self.assertIn('constexpr char bootstrapPath[] = "/bootstrap";', protocol)
+        self.assertIn("clientLogs.insert(configKey::clientLogsBootstrap, true);", client_logs_utils)
+        self.assertIn("configKey::clientPubKey", client_logs_utils)
+        self.assertIn("removeClientLogAccess(credentials, container, clientId);", users_controller)
+        self.assertIn("tokens.lock", users_controller)
+        self.assertIn("tokens.tsv.__CLIENT_LOG_ID__.tmp", users_controller)
+        self.assertIn("legacy_tokens.tsv.__CLIENT_LOG_ID__.tmp", users_controller)
+        self.assertNotIn("logs/__CLIENT_LOG_ID__", users_controller)
+        self.assertIn("ErrorCode removeClientLogAccess", users_controller)
+        self.assertIn("__AMNEZIA_CLIENT_LOGS_CLEANUP_ERROR__", users_controller)
+        self.assertIn("return ErrorCode::ServerCheckFailed;", users_controller)
+        self.assertIn("isAlphaNumericId(clientId)", users_controller)
+        self.assertIn("set -e ;\\\\", users_controller)
+        self.assertIn("export EASYRSA_BATCH=1 ;\\\\", users_controller)
+        self.assertIn("sectionHasExactPublicKey(section, clientId)", users_controller)
+        self.assertIn("removedSections != 1", users_controller)
+        self.assertIn("bool downloadClientLogs(const QString &serverId, int containerIndex, const QString &clientId, const QString &fileName);", export_ui_controller_h)
+        self.assertIn("void clientLogsDownloadFinished(bool saved, bool logsFound);", export_ui_controller_h)
+        self.assertIn("QtConcurrent::run", export_ui_controller)
+        self.assertIn("static_cast<DockerContainer>(containerIndex)", export_ui_controller)
+        self.assertIn("return exportController->downloadClientLogs(serverId, static_cast<DockerContainer>(containerIndex), clientId);", export_ui_controller)
+        self.assertIn("if (!result.logsFound)", export_ui_controller)
+        self.assertIn("SystemController::saveFile(fileName, result.data)", export_ui_controller)
+        self.assertIn('text: qsTr("Download logs")', page_share)
+        self.assertIn("ExportController.downloadClientLogs(ServersUiController.processedServerId,", page_share)
+        self.assertIn("ServersUiController.processedContainerIndex,", page_share)
+        self.assertIn('qsTr("No remote logs found")', page_share)
+        self.assertIn('qsTr("Logs save dialog opened")', page_share)
+        self.assertIn("Existing server-side logs will remain until the storage limit cleanup removes old log files.", page_share)
+
+    def test_client_log_collector_prunes_oldest_files(self) -> None:
+        namespace: dict[str, object] = {"__name__": "collector_test"}
+        exec(extract_client_logs_collector_script(), namespace)
+        with tempfile.TemporaryDirectory() as tmp:
+            client_dir = Path(tmp) / "client"
+            client_dir.mkdir()
+            old_file = client_dir / "old.log"
+            new_file = client_dir / "new.log"
+            old_file.write_bytes(b"old")
+            new_file.write_bytes(b"newer")
+            os.utime(old_file, (1, 1))
+            os.utime(new_file, (2, 2))
+
+            namespace["MAX_CLIENT_BYTES"] = new_file.stat().st_size
+            namespace["prune_client_dir"](str(client_dir))  # type: ignore[index]
+
+            self.assertFalse(old_file.exists())
+            self.assertTrue(new_file.exists())
+            self.assertEqual(new_file.read_bytes(), b"newer")
+
+    def test_client_log_collector_legacy_bootstrap_uses_source_ip_map(self) -> None:
+        namespace: dict[str, object] = {"__name__": "collector_test"}
+        exec(extract_client_logs_collector_script(), namespace)
+        client_id = "a" * 64
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy_root = root / "legacy"
+            legacy_root.mkdir()
+            (legacy_root / "amnezia-awg2.tsv").write_text(
+                f"10.8.1.14\t{client_id}\tpeer-public-key\n",
+                encoding="utf-8",
+            )
+
+            namespace["ROOT"] = str(root)
+            namespace["TOKEN_FILE"] = str(root / "tokens.tsv")
+            namespace["TOKEN_LOCK_DIR"] = str(root / "tokens.lock")
+            namespace["LEGACY_TOKEN_FILE"] = str(root / "legacy_tokens.tsv")
+            namespace["LEGACY_ROOT"] = str(legacy_root)
+            namespace["ALLOW_BOOTSTRAP"] = False
+            namespace["CONTAINER_SCOPE"] = "amnezia-awg2"
+
+            self.assertEqual(namespace["resolve_legacy_client_id"]("10.8.1.14"), "")
+
+            namespace["ALLOW_BOOTSTRAP"] = True
+            self.assertEqual(namespace["resolve_legacy_client_id"]("10.8.1.14"), client_id)
+            self.assertEqual(namespace["resolve_legacy_client_id"]("10.8.1.99"), "")
+
+            token = namespace["ensure_legacy_token"](client_id)
+            self.assertTrue(token)
+            self.assertEqual(namespace["ensure_legacy_token"](client_id), token)
+            self.assertEqual(namespace["load_tokens"]()[client_id], token)
+            self.assertIn((client_id, token, "amnezia-awg2"), namespace["load_legacy_tokens"]())
+            self.assertEqual(namespace["is_legacy_token"](client_id, token), ["amnezia-awg2"])
+
+            namespace["CONTAINER_SCOPE"] = ""
+            self.assertEqual(namespace["is_legacy_token"](client_id, token), ["amnezia-awg2"])
 
     def test_selfhosted_publish_defaults_to_local_non_apple_platforms(self) -> None:
         workflow_paths = (
@@ -1049,8 +1318,8 @@ class SourceContractTests(unittest.TestCase):
         cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         readme = (REPO_ROOT / "deploy/selfhosted_updates/README.md").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.0.9)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2130)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.0.10)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2131)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
 
