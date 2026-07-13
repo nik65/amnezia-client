@@ -155,6 +155,9 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
+The current self-hosted release line is `4.9.0.11` with Android
+`versionCode` `2132`, following the `4.9.0.10` / `2131` artifact set.
+
 `local_release.ps1` parallelizes platform builds with the logical processor
 count by default. Override it when you want to leave CPU/RAM for other work:
 

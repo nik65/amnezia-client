@@ -2,6 +2,7 @@
 #define SERVERDESCRIPTION_H
 
 #include <QString>
+#include <QStringList>
 #include <QJsonArray>
 
 #include "core/utils/containerEnum.h"
@@ -40,6 +41,8 @@ struct ServerDescription
     bool isCountrySelectionAvailable = false;
     QJsonArray apiAvailableCountries;
     QString apiServerCountryCode;
+    QString apiServiceProtocol;
+    QStringList apiAvailableProtocols;
 
     bool isAdVisible = false;
     QString adHeader;

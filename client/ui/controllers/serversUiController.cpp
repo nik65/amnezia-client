@@ -272,6 +272,16 @@ bool ServersUiController::isDefaultServerFromApi() const
     return isServerFromApi(getDefaultServerId());
 }
 
+QString ServersUiController::getDefaultServerServiceProtocol() const
+{
+    return serverDescriptionById(getDefaultServerId()).apiServiceProtocol;
+}
+
+QStringList ServersUiController::getDefaultServerAvailableProtocols() const
+{
+    return serverDescriptionById(getDefaultServerId()).apiAvailableProtocols;
+}
+
 bool ServersUiController::hasServerWithWriteAccess() const
 {
     for (const auto &description : m_orderedServerDescriptions) {

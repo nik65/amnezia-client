@@ -20,6 +20,19 @@ PageType {
     id: root
 
     property var containersDropDownRef: null
+    property var apiAvailableProtocols: ServersUiController.defaultServerAvailableProtocols
+    property string apiCurrentProtocol: ServersUiController.defaultServerServiceProtocol
+
+    readonly property bool isApiProtocolSelectionVisible: ServersUiController.isDefaultServerFromApi
+        && root.apiAvailableProtocols.length > 0
+
+    function protocolDisplayName(protocol) {
+        switch (protocol) {
+        case "awg": return "AmneziaWG"
+        case "vless": return "VLESS"
+        default: return protocol
+        }
+    }
 
     Connections {
         target: Qt.application
@@ -311,7 +324,8 @@ PageType {
                     objectName: "rowLayoutLabel"
                     Layout.alignment: Qt.AlignHCenter | Qt.AlignVCenter
                     Layout.topMargin: 8
-                    Layout.bottomMargin: drawer.isCollapsedStateActive ? 44 : ServersUiController.isDefaultServerFromApi ? 61 : 16
+                    Layout.bottomMargin: root.isApiProtocolSelectionVisible ? 8
+                        : (drawer.isCollapsedStateActive ? 44 : ServersUiController.isDefaultServerFromApi ? 61 : 16)
                     spacing: 0
 
                     BasicButtonType {
@@ -362,6 +376,58 @@ PageType {
                             } else {
                                 PageController.goToPage(PageEnum.PageSettingsServerInfo)
                             }
+                        }
+                    }
+                }
+
+                RowLayout {
+                    objectName: "protocolRowLayout"
+                    Layout.alignment: Qt.AlignHCenter | Qt.AlignVCenter
+                    Layout.bottomMargin: drawer.isCollapsedStateActive ? 44 : 61
+                    spacing: 0
+
+                    visible: root.isApiProtocolSelectionVisible
+
+                    BasicButtonType {
+                        id: protocolButton
+                        objectName: "protocolButton"
+
+                        enabled: root.apiAvailableProtocols.length > 1
+                        hoverEnabled: enabled
+                        implicitHeight: 36
+                        leftPadding: 16
+                        rightPadding: 16
+
+                        defaultColor: AmneziaStyle.color.transparent
+                        hoveredColor: AmneziaStyle.color.translucentWhite
+                        pressedColor: AmneziaStyle.color.sheerWhite
+                        disabledColor: AmneziaStyle.color.transparent
+                        textColor: AmneziaStyle.color.mutedGray
+
+                        buttonTextLabel.lineHeight: 16
+                        buttonTextLabel.font.pixelSize: 13
+                        buttonTextLabel.font.weight: 400
+
+                        text: root.apiAvailableProtocols.length > 1
+                            ? root.protocolDisplayName(root.apiCurrentProtocol)
+                            : root.protocolDisplayName(root.apiAvailableProtocols[0])
+                        leftImageSource: "qrc:/images/controls/arrow-left-right.svg"
+                        leftImageColor: AmneziaStyle.color.mutedGray
+                        rightImageSource: enabled ? "qrc:/images/controls/chevron-down.svg" : ""
+
+                        Keys.onEnterPressed: this.clicked()
+                        Keys.onReturnPressed: this.clicked()
+
+                        onClicked: {
+                            if (ConnectionController.isConnectionInProgress) {
+                                PageController.showNotificationMessage(qsTr("Unable change protocol while trying to make an active connection"))
+                                return
+                            }
+                            if (ConnectionController.isConnected) {
+                                PageController.showNotificationMessage(qsTr("Cannot change protocol during active connection"))
+                                return
+                            }
+                            protocolSelectionDrawer.openTriggered()
                         }
                     }
                 }
@@ -474,6 +540,113 @@ PageType {
                     // this item shouldn't be focused when drawer is closed
                     function onIsOpenedChanged() {
                         serversMenuContent.isFocusable = drawer.isOpened
+                    }
+                }
+            }
+        }
+    }
+
+    DrawerType2 {
+        id: protocolSelectionDrawer
+        objectName: "protocolSelectionDrawer"
+
+        anchors.fill: parent
+
+        expandedStateContent: Item {
+            id: protocolDrawerContainer
+
+            implicitHeight: root.height * 0.5
+
+            Component.onCompleted: {
+                protocolSelectionDrawer.expandedHeight = protocolDrawerContainer.implicitHeight
+            }
+
+            ColumnLayout {
+                id: protocolDrawerHeader
+
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.topMargin: 16
+
+                BackButtonType {
+                    Layout.fillWidth: true
+                    backButtonImage: "qrc:/images/controls/arrow-left.svg"
+                    backButtonFunction: function() { protocolSelectionDrawer.closeTriggered() }
+                }
+
+                Header2Type {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 16
+                    Layout.leftMargin: 16
+                    Layout.rightMargin: 16
+                    headerText: qsTr("VPN protocol")
+                }
+            }
+
+            ListViewType {
+                id: protocolDrawerListView
+
+                anchors.top: protocolDrawerHeader.bottom
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.topMargin: 16
+
+                model: root.apiAvailableProtocols
+
+                ButtonGroup {
+                    id: protocolDrawerButtonGroup
+                }
+
+                delegate: Item {
+                    implicitWidth: protocolDrawerListView.width
+                    implicitHeight: protocolDrawerDelegate.implicitHeight
+
+                    ColumnLayout {
+                        id: protocolDrawerDelegate
+
+                        anchors.fill: parent
+                        anchors.leftMargin: 16
+                        anchors.rightMargin: 16
+
+                        VerticalRadioButton {
+                            id: protocolDrawerRadioButton
+
+                            Layout.fillWidth: true
+                            text: root.protocolDisplayName(modelData)
+                            ButtonGroup.group: protocolDrawerButtonGroup
+                            checkable: !ConnectionController.isConnected
+                            checked: modelData === root.apiCurrentProtocol
+
+                            onClicked: {
+                                protocolSelectionDrawer.closeTriggered()
+
+                                if (modelData === root.apiCurrentProtocol) {
+                                    return
+                                }
+                                if (ConnectionController.isConnected) {
+                                    PageController.showNotificationMessage(qsTr("Cannot change protocol during active connection"))
+                                    return
+                                }
+
+                                const previousProtocol = root.apiCurrentProtocol
+                                PageController.showBusyIndicator(true)
+                                SubscriptionUiController.setCurrentProtocol(ServersUiController.defaultServerId, modelData)
+                                if (!SubscriptionUiController.updateServiceFromGateway(ServersUiController.defaultServerId, "", "", true)) {
+                                    SubscriptionUiController.setCurrentProtocol(ServersUiController.defaultServerId, previousProtocol)
+                                }
+                                ServersUiController.updateModel()
+                                PageController.showBusyIndicator(false)
+                            }
+
+                            Keys.onEnterPressed: protocolDrawerRadioButton.clicked()
+                            Keys.onReturnPressed: protocolDrawerRadioButton.clicked()
+                        }
+
+                        DividerType {
+                            Layout.fillWidth: true
+                        }
                     }
                 }
             }

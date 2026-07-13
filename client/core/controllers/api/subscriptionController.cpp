@@ -225,8 +225,8 @@ void SubscriptionController::updateApiConfigInJson(QJsonObject &serverConfigJson
 
     if (serverConfigJson.value(configKey::configVersion).toInt() == serverConfigUtils::ConfigSource::AmneziaGateway) {
         QJsonObject responseObj = QJsonDocument::fromJson(apiResponseBody).object();
-        if (responseObj.contains(apiDefs::key::supportedProtocols)) {
-            apiConfig.insert(apiDefs::key::supportedProtocols, responseObj.value(apiDefs::key::supportedProtocols).toArray());
+        if (responseObj.contains(apiDefs::key::availableCountries)) {
+            apiConfig.insert(apiDefs::key::availableCountries, responseObj.value(apiDefs::key::availableCountries).toArray());
         }
         if (responseObj.contains(apiDefs::key::serviceInfo)) {
             apiConfig.insert(apiDefs::key::serviceInfo, responseObj.value(apiDefs::key::serviceInfo).toObject());
@@ -445,6 +445,27 @@ ErrorCode SubscriptionController::updateServiceFromGateway(const QString &server
     }
     const bool isTestPurchase = apiV2->apiConfig.isTestPurchase;
     QString serviceProtocol = apiV2->serviceProtocol();
+    if (!newCountryCode.isEmpty()) {
+        for (const QJsonValue &countryValue : apiV2->apiConfig.availableCountries) {
+            const QJsonObject country = countryValue.toObject();
+            if (country.value(apiDefs::key::serverCountryCode).toString() != newCountryCode) {
+                continue;
+            }
+
+            const QJsonArray availableProtocols = country.value(apiDefs::key::availableProtocols).toArray();
+            bool protocolAvailable = false;
+            for (const QJsonValue &protocolValue : availableProtocols) {
+                if (protocolValue.toString() == serviceProtocol) {
+                    protocolAvailable = true;
+                    break;
+                }
+            }
+            if (!availableProtocols.isEmpty() && !protocolAvailable) {
+                serviceProtocol = availableProtocols.first().toString();
+            }
+            break;
+        }
+    }
     ProtocolData protocolData = generateProtocolData(serviceProtocol);
 
     QJsonObject authDataJson = apiV2->authData.toJson();

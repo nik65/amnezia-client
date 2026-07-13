@@ -162,6 +162,17 @@ ServerDescription buildServerDescription(const ApiV2ServerConfig &server, bool /
     row.isCountrySelectionAvailable = !server.apiConfig.availableCountries.isEmpty();
     row.apiAvailableCountries = server.apiConfig.availableCountries;
     row.apiServerCountryCode = server.apiConfig.serverCountryCode;
+    row.apiServiceProtocol = server.apiConfig.serviceProtocol;
+    for (const QJsonValue &countryValue : server.apiConfig.availableCountries) {
+        const QJsonObject country = countryValue.toObject();
+        if (country.value(apiDefs::key::serverCountryCode).toString() != row.apiServerCountryCode) {
+            continue;
+        }
+        for (const QJsonValue &protocolValue : country.value(apiDefs::key::availableProtocols).toArray()) {
+            row.apiAvailableProtocols.append(protocolValue.toString());
+        }
+        break;
+    }
 
     row.isAdVisible = server.apiConfig.serviceInfo.isAdVisible;
     row.adHeader = server.apiConfig.serviceInfo.adHeader;

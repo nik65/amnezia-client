@@ -27,6 +27,8 @@ class ServersUiController : public QObject
     Q_PROPERTY(QString defaultServerDescriptionExpanded READ getDefaultServerDescriptionExpanded NOTIFY defaultServerIdChanged)
     Q_PROPERTY(bool isDefaultServerDefaultContainerHasSplitTunneling READ isDefaultServerDefaultContainerHasSplitTunneling NOTIFY defaultServerIdChanged)
     Q_PROPERTY(bool isDefaultServerFromApi READ isDefaultServerFromApi NOTIFY defaultServerIdChanged)
+    Q_PROPERTY(QString defaultServerServiceProtocol READ getDefaultServerServiceProtocol NOTIFY defaultServerIdChanged)
+    Q_PROPERTY(QStringList defaultServerAvailableProtocols READ getDefaultServerAvailableProtocols NOTIFY defaultServerIdChanged)
     
     Q_PROPERTY(QString processedServerId READ getProcessedServerId WRITE setProcessedServerId NOTIFY processedServerIdChanged)
     Q_PROPERTY(int processedServerIndex READ getProcessedServerIndex NOTIFY processedServerIndexChanged)
@@ -71,6 +73,8 @@ public slots:
     QString getDefaultServerDescriptionExpanded() const;
     bool isDefaultServerDefaultContainerHasSplitTunneling() const;
     bool isDefaultServerFromApi() const;
+    QString getDefaultServerServiceProtocol() const;
+    QStringList getDefaultServerAvailableProtocols() const;
     bool hasServerWithWriteAccess() const;
 
     QString serverName(const QString &serverId) const;
@@ -118,7 +122,7 @@ signals:
     void updateApiCountryModel();
 
 public:
-    void updateModel();
+    Q_INVOKABLE void updateModel();
     
 private:
     const ServerDescription &serverDescriptionById(const QString &serverId) const;

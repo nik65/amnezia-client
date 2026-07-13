@@ -20,6 +20,7 @@ namespace apiDefs
         constexpr QLatin1String cliName("cli_name");
         constexpr QLatin1String supportedProtocols("supported_protocols");
         constexpr QLatin1String availableCountries("available_countries");
+        constexpr QLatin1String availableProtocols("available_protocols");
         constexpr QLatin1String installationUuid("installation_uuid");
         constexpr QLatin1String uuid("installation_uuid");
         constexpr QLatin1String osVersion("os_version");

@@ -1,7 +1,6 @@
 #include "secureQSettings.h"
 
-#include "../client/3rd/QSimpleCrypto/src/include/QAead.h"
-#include "../client/3rd/QSimpleCrypto/src/include/QBlockCipher.h"
+#include "cryptoUtils.h"
 #include "core/utils/utilities.h"
 #include <QDataStream>
 #include <QDebug>
@@ -238,11 +237,8 @@ void SecureQSettings::clearSettings()
 
 QByteArray SecureQSettings::encryptText(const QByteArray &value) const
 {
-    QSimpleCrypto::QBlockCipher cipher;
-    QByteArray result;
-    try {
-        result = cipher.encryptAesBlockCipher(value, getEncKey(), getEncIv());
-    } catch (...) { // todo change error handling in QSimpleCrypto?
+    const QByteArray result = CryptoUtils::encryptAes256Cbc(value, getEncKey(), getEncIv());
+    if (result.isEmpty() && !value.isEmpty()) {
         qCritical() << "error when encrypting the settings value";
     }
     return result;
@@ -250,11 +246,8 @@ QByteArray SecureQSettings::encryptText(const QByteArray &value) const
 
 QByteArray SecureQSettings::decryptText(const QByteArray &ba) const
 {
-    QSimpleCrypto::QBlockCipher cipher;
-    QByteArray result;
-    try {
-        result = cipher.decryptAesBlockCipher(ba, getEncKey(), getEncIv());
-    } catch (...) { // todo change error handling in QSimpleCrypto?
+    const QByteArray result = CryptoUtils::decryptAes256Cbc(ba, getEncKey(), getEncIv());
+    if (result.isEmpty() && !ba.isEmpty()) {
         qCritical() << "error when decrypting the settings value";
     }
     return result;
@@ -283,8 +276,7 @@ QByteArray SecureQSettings::getEncKey() const
 
     if (m_key.isEmpty()) {
         // Create new key
-        QSimpleCrypto::QBlockCipher cipher;
-        QByteArray key = cipher.generatePrivateSalt(32);
+        const QByteArray key = CryptoUtils::generateRandomBytes(32);
         if (key.isEmpty()) {
             qCritical() << "SecureQSettings::getEncKey Unable to generate new enc key";
         }
@@ -312,8 +304,7 @@ QByteArray SecureQSettings::getEncIv() const
 
     if (m_iv.isEmpty()) {
         // Create new IV
-        QSimpleCrypto::QBlockCipher cipher;
-        QByteArray iv = cipher.generatePrivateSalt(32);
+        const QByteArray iv = CryptoUtils::generateRandomBytes(32);
         if (iv.isEmpty()) {
             qCritical() << "SecureQSettings::getEncIv Unable to generate new enc IV";
         }

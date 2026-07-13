@@ -29,6 +29,7 @@ struct ApiV2ServerConfig {
     QString dns1;
     QString dns2;
     QJsonObject serverRoutingRules;
+    QJsonArray sendPayload;
     
     QString name;
     bool nameOverriddenByUser = false;

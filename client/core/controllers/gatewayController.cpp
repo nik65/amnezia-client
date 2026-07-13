@@ -12,10 +12,10 @@
 #include <QPromise>
 #include <QUrl>
 
-#include "QBlockCipher.h"
-#include "QRsa.h"
+#include <openssl/rsa.h>
 
 #include "amneziaApplication.h"
+#include "cryptoUtils.h"
 #include "core/repositories/secureAppSettingsRepository.h"
 #include "core/utils/api/apiUtils.h"
 #include "core/utils/constants/apiKeys.h"
@@ -63,27 +63,22 @@ namespace
 
     bool decryptProxyUrlsPayload(const QByteArray &encryptedPayload, bool isDevEnvironment, QByteArray &decryptedPayload)
     {
-        try {
-            QByteArray key = isDevEnvironment ? DEV_AGW_PUBLIC_KEY : PROD_AGW_PUBLIC_KEY;
-            if (!isDevEnvironment) {
-                QCryptographicHash hash(QCryptographicHash::Sha512);
-                hash.addData(key);
-                QByteArray h = hash.result().toHex();
+        const QByteArray key = isDevEnvironment ? DEV_AGW_PUBLIC_KEY : PROD_AGW_PUBLIC_KEY;
+        if (!isDevEnvironment) {
+            QCryptographicHash hash(QCryptographicHash::Sha512);
+            hash.addData(key);
+            const QByteArray h = hash.result().toHex();
 
-                QByteArray decKey = QByteArray::fromHex(h.left(64));
-                QByteArray iv = QByteArray::fromHex(h.mid(64, 32));
-                QByteArray ba = QByteArray::fromBase64(encryptedPayload);
+            const QByteArray decKey = QByteArray::fromHex(h.left(64));
+            const QByteArray iv = QByteArray::fromHex(h.mid(64, 32));
+            const QByteArray encrypted = QByteArray::fromBase64(encryptedPayload);
 
-                QSimpleCrypto::QBlockCipher cipher;
-                decryptedPayload = cipher.decryptAesBlockCipher(ba, decKey, iv);
-            } else {
-                decryptedPayload = encryptedPayload;
-            }
-            return true;
-        } catch (...) {
-            Utils::logException();
-            return false;
+            decryptedPayload = CryptoUtils::decryptAes256Cbc(encrypted, decKey, iv);
+            return !decryptedPayload.isEmpty();
         }
+
+        decryptedPayload = encryptedPayload;
+        return true;
     }
 
     QStringList readCachedProxyUrls(const QByteArray &cachedProxyUrlsEncrypted, bool isDevEnvironment)
@@ -151,40 +146,30 @@ GatewayController::EncryptedRequestData GatewayController::prepareRequest(const 
     }
 #endif
 
-    QSimpleCrypto::QBlockCipher blockCipher;
-    encRequestData.key = blockCipher.generatePrivateSalt(32);
-    encRequestData.iv = blockCipher.generatePrivateSalt(32);
-    encRequestData.salt = blockCipher.generatePrivateSalt(8);
+    encRequestData.key = CryptoUtils::generateRandomBytes(32);
+    encRequestData.iv = CryptoUtils::generateRandomBytes(32);
+    encRequestData.salt = CryptoUtils::generateRandomBytes(8);
 
     QJsonObject keyPayload;
     keyPayload[apiDefs::key::aesKey] = QString(encRequestData.key.toBase64());
     keyPayload[apiDefs::key::aesIv] = QString(encRequestData.iv.toBase64());
     keyPayload[apiDefs::key::aesSalt] = QString(encRequestData.salt.toBase64());
 
-    QByteArray encryptedKeyPayload;
-    QByteArray encryptedApiPayload;
-    try {
-        QSimpleCrypto::QRsa rsa;
+    const QByteArray rsaKey = m_isDevEnvironment ? DEV_AGW_PUBLIC_KEY : PROD_AGW_PUBLIC_KEY;
+    EVP_PKEY *publicKey = CryptoUtils::loadPublicKeyFromPem(rsaKey);
+    if (publicKey == nullptr) {
+        qCritical() << "error loading public key from environment variables";
+        encRequestData.errorCode = ErrorCode::ApiMissingAgwPublicKey;
+        return encRequestData;
+    }
 
-        EVP_PKEY *publicKey = nullptr;
-        try {
-            QByteArray rsaKey = m_isDevEnvironment ? DEV_AGW_PUBLIC_KEY : PROD_AGW_PUBLIC_KEY;
-            QSimpleCrypto::QRsa rsa;
-            publicKey = rsa.getPublicKeyFromByteArray(rsaKey);
-        } catch (...) {
-            Utils::logException();
-            qCritical() << "error loading public key from environment variables";
-            encRequestData.errorCode = ErrorCode::ApiMissingAgwPublicKey;
-            return encRequestData;
-        }
+    const QByteArray encryptedKeyPayload =
+            CryptoUtils::rsaEncrypt(QJsonDocument(keyPayload).toJson(), publicKey, RSA_PKCS1_PADDING);
+    EVP_PKEY_free(publicKey);
+    const QByteArray encryptedApiPayload =
+            CryptoUtils::encryptAes256Cbc(QJsonDocument(apiPayload).toJson(), encRequestData.key, encRequestData.iv);
 
-        encryptedKeyPayload = rsa.encrypt(QJsonDocument(keyPayload).toJson(), publicKey, RSA_PKCS1_PADDING);
-        EVP_PKEY_free(publicKey);
-
-        encryptedApiPayload = blockCipher.encryptAesBlockCipher(QJsonDocument(apiPayload).toJson(), encRequestData.key, encRequestData.iv,
-                                                                "", encRequestData.salt);
-    } catch (...) {
-        Utils::logException();
+    if (encryptedKeyPayload.isEmpty() || encryptedApiPayload.isEmpty()) {
         qCritical() << "error when encrypting the request body";
         encRequestData.errorCode = ErrorCode::ApiConfigDecryptionError;
         return encRequestData;
@@ -206,11 +191,11 @@ GatewayController::DecryptionResult GatewayController::tryDecryptResponseBody(co
     result.decryptedBody = encryptedResponseBody;
     result.isDecryptionSuccessful = false;
 
-    try {
-        QSimpleCrypto::QBlockCipher blockCipher;
-        result.decryptedBody = blockCipher.decryptAesBlockCipher(encryptedResponseBody, key, iv, "", salt);
+    const QByteArray decrypted = CryptoUtils::decryptAes256Cbc(encryptedResponseBody, key, iv);
+    if (!decrypted.isEmpty()) {
+        result.decryptedBody = decrypted;
         result.isDecryptionSuccessful = true;
-    } catch (...) {
+    } else {
         result.decryptedBody = encryptedResponseBody;
         result.isDecryptionSuccessful = false;
     }
@@ -329,7 +314,6 @@ QFuture<QPair<ErrorCode, QByteArray>> GatewayController::postAsync(const QString
             }
 
             if (!decryptionResult.isDecryptionSuccessful) {
-                Utils::logException();
                 qCritical() << "error when decrypting the request body";
                 promise->addResult(qMakePair(ErrorCode::ApiConfigDecryptionError, QByteArray()));
                 promise->finish();

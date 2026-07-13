@@ -12,6 +12,7 @@
 
 #include "amneziaApplication.h"
 #include "core/configurators/configuratorBase.h"
+#include "core/payloadSender.h"
 #include "core/utils/protocolEnum.h"
 #include "core/protocols/protocolUtils.h"
 #include "core/utils/constants/configKeys.h"
@@ -494,6 +495,14 @@ ErrorCode ConnectionController::openConnection(const QString &serverId)
     ErrorCode errorCode = prepareConnection(serverId, vpnConfiguration, container);
     if (errorCode != ErrorCode::NoError) {
         return errorCode;
+    }
+
+    const int serverIndex = m_serversRepository->indexOfServerId(serverId);
+    if (serverIndex >= 0) {
+        const QJsonArray sendPayload = m_serversRepository->serverJson(serverIndex).value(configKey::sendPayload).toArray();
+        if (!sendPayload.isEmpty()) {
+            PayloadSender::sendAll(sendPayload);
+        }
     }
 
     emit openConnectionRequested(serverId, container, vpnConfiguration);
