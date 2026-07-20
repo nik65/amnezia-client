@@ -95,6 +95,14 @@ def extract_client_logs_collector_script() -> str:
     )
 
 
+def extract_client_logs_legacy_map_refresh_script() -> str:
+    export_controller = (REPO_ROOT / "client/core/controllers/selfhosted/exportController.cpp").read_text(encoding="utf-8")
+    match = re.search(r'QString script = QStringLiteral\(R"LMAP\(\n(.*?)\n\)LMAP"\);', export_controller, re.S)
+    if not match:
+        raise AssertionError("client log legacy map refresh script raw string was not found")
+    return match.group(1)
+
+
 def run_git(cwd: Path, *args: str, stdout: object | None = None) -> subprocess.CompletedProcess[str]:
     command = [find_git() or "git", *args]
     return subprocess.run(command, cwd=cwd, check=True, text=True, stdout=stdout, stderr=subprocess.PIPE)
@@ -705,6 +713,11 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("read -r iface peer allowed_ips", export_controller)
         self.assertIn("__WG_SHOW_BIN__ show all allowed-ips", export_controller)
         self.assertIn("__HOST_DIRECTORY__/legacy/__CONTAINER_SCOPE__.tsv", export_controller)
+        self.assertIn("legacy_attempt=$((legacy_attempt + 1))", export_controller)
+        self.assertIn("legacy_expected_peers", export_controller)
+        self.assertIn("legacy_unique_ips", export_controller)
+        self.assertIn("legacy_map_empty", export_controller)
+        self.assertIn("sudo mv -f \"$legacy_stage\" \"$legacy_dest\"", export_controller)
         self.assertIn("tokens.lock", export_controller)
         self.assertIn("cleanupTmpFiles();", export_controller)
         self.assertIn("echo __ERROR_MARKER__:network_subnet", export_controller)
@@ -798,6 +811,104 @@ class SourceContractTests(unittest.TestCase):
 
             namespace["CONTAINER_SCOPE"] = ""
             self.assertEqual(namespace["is_legacy_token"](client_id, token), ["amnezia-awg2"])
+
+    @unittest.skipUnless(find_sh(), "sh is required to exercise the legacy client map refresh")
+    def test_client_log_legacy_map_refresh_preserves_last_good_map_on_empty_reads(self) -> None:
+        sh = find_sh()
+        assert sh
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy_dir = root / "client-logs" / "legacy"
+            legacy_dir.mkdir(parents=True)
+            target = legacy_dir / "amnezia-awg2.tsv"
+            target.write_text("last-good-map\n", encoding="utf-8")
+            attempts = root / "docker-attempts"
+
+            refresh_script = (
+                extract_client_logs_legacy_map_refresh_script()
+                .replace("__HOST_DIRECTORY__", shell_absolute_path(root / "client-logs"))
+                .replace("__CONTAINER_SCOPE__", "amnezia-awg2")
+                .replace("__VPN_CONTAINER__", "amnezia-awg2")
+                .replace("__WG_SHOW_BIN__", "awg")
+                .replace("__WG_CONFIG_PATH__", "/opt/amnezia/awg/awg0.conf")
+                .replace("__ERROR_MARKER__", "TEST_ERROR")
+                .replace("\n", " ")
+            )
+            harness = textwrap.dedent(
+                f"""\
+                sudo() {{ "$@"; }}
+                sleep() {{ :; }}
+                docker() {{
+                    case "$*" in *"grep -c"*) printf '2\n'; return 0 ;; esac
+                    attempt=0
+                    [ ! -f {shell_absolute_path(attempts)!r} ] || attempt="$(cat {shell_absolute_path(attempts)!r})"
+                    attempt=$((attempt + 1))
+                    printf '%s\n' "$attempt" > {shell_absolute_path(attempts)!r}
+                    return 0
+                }}
+                """
+            ) + "if [ '1' = '1' ]; then " + refresh_script + " fi\n"
+
+            result = subprocess.run([sh, "-s"], input=harness, text=True, capture_output=True)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("TEST_ERROR:legacy_map_empty", result.stdout)
+            self.assertEqual(attempts.read_text(encoding="utf-8").strip(), "6")
+            self.assertEqual(target.read_text(encoding="utf-8"), "last-good-map\n")
+            self.assertEqual(list(legacy_dir.glob("*.tmp")), [])
+
+    @unittest.skipUnless(find_sh(), "sh is required to exercise the legacy client map refresh")
+    def test_client_log_legacy_map_refresh_retries_then_installs_complete_map_atomically(self) -> None:
+        sh = find_sh()
+        assert sh
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy_dir = root / "client-logs" / "legacy"
+            legacy_dir.mkdir(parents=True)
+            target = legacy_dir / "amnezia-awg2.tsv"
+            target.write_text("last-good-map\n", encoding="utf-8")
+            attempts = root / "docker-attempts"
+
+            refresh_script = (
+                extract_client_logs_legacy_map_refresh_script()
+                .replace("__HOST_DIRECTORY__", shell_absolute_path(root / "client-logs"))
+                .replace("__CONTAINER_SCOPE__", "amnezia-awg2")
+                .replace("__VPN_CONTAINER__", "amnezia-awg2")
+                .replace("__WG_SHOW_BIN__", "awg")
+                .replace("__WG_CONFIG_PATH__", "/opt/amnezia/awg/awg0.conf")
+                .replace("__ERROR_MARKER__", "TEST_ERROR")
+                .replace("\n", " ")
+            )
+            harness = textwrap.dedent(
+                f"""\
+                sudo() {{ "$@"; }}
+                sleep() {{ :; }}
+                docker() {{
+                    case "$*" in *"grep -c"*) printf '2\n'; return 0 ;; esac
+                    attempt=0
+                    [ ! -f {shell_absolute_path(attempts)!r} ] || attempt="$(cat {shell_absolute_path(attempts)!r})"
+                    attempt=$((attempt + 1))
+                    printf '%s\n' "$attempt" > {shell_absolute_path(attempts)!r}
+                    printf 'awg0\tpeer-a\t10.8.1.14/32\n'
+                    if [ "$attempt" -ge 2 ]; then
+                        printf 'awg0\tpeer-b\t10.8.1.16/32\n'
+                    fi
+                    return 0
+                }}
+                """
+            ) + "if [ '1' = '1' ]; then " + refresh_script + " fi\n"
+
+            result = subprocess.run([sh, "-s"], input=harness, text=True, capture_output=True)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("TEST_ERROR", result.stdout)
+            self.assertEqual(attempts.read_text(encoding="utf-8").strip(), "2")
+            expected = (
+                f"10.8.1.14\t{sha256_hex_for_text('amnezia-awg2' + chr(9) + 'peer-a')}\tpeer-a\n"
+                f"10.8.1.16\t{sha256_hex_for_text('amnezia-awg2' + chr(9) + 'peer-b')}\tpeer-b\n"
+            )
+            self.assertEqual(target.read_text(encoding="utf-8"), expected)
+            self.assertEqual(list(legacy_dir.glob("*.tmp")), [])
 
     def test_selfhosted_publish_defaults_to_local_non_apple_platforms(self) -> None:
         workflow_paths = (

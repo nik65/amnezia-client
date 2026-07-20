@@ -437,6 +437,65 @@ if __name__ == "__main__":
     return script.toUtf8();
 }
 
+QString clientLogsLegacyMapRefreshScript()
+{
+    QString script = QStringLiteral(R"LMAP(
+legacy_dest='__HOST_DIRECTORY__/legacy/__CONTAINER_SCOPE__.tsv';
+legacy_raw="$(mktemp)";
+legacy_map="$(mktemp)";
+legacy_stage="${legacy_dest}.$$.tmp";
+legacy_ready=0;
+legacy_read_ok=0;
+legacy_install_failed=0;
+legacy_attempt=0;
+while [ "$legacy_attempt" -lt 6 ]; do
+    legacy_attempt=$((legacy_attempt + 1));
+    : > "$legacy_raw";
+    : > "$legacy_map";
+    if sudo docker exec '__VPN_CONTAINER__' sh -c '__WG_SHOW_BIN__ show all allowed-ips' > "$legacy_raw"; then
+        legacy_read_ok=1;
+        tr -d '\r' < "$legacy_raw" > "$legacy_raw.clean" && mv -f "$legacy_raw.clean" "$legacy_raw";
+        while IFS="$(printf '\t')" read -r iface peer allowed_ips; do
+            [ -n "$iface" ] && [ -n "$peer" ] && [ -n "$allowed_ips" ] || continue;
+            for allowed_ip in $allowed_ips; do
+                vpn_ip="${allowed_ip%%/*}";
+                case "$vpn_ip" in ''|*:*|0.0.0.0|*[!0-9.]*) continue ;; esac;
+                client_log_id="$(printf '%s\t%s' '__CONTAINER_SCOPE__' "$peer" | sha256sum | awk '{print $1}')";
+                printf '%s\t%s\t%s\n' "$vpn_ip" "$client_log_id" "$peer" >> "$legacy_map";
+            done;
+        done < "$legacy_raw";
+        legacy_raw_peers="$(awk -F '\t' 'NF >= 3 && $2 != "" {print $2}' "$legacy_raw" | sort -u | wc -l | tr -d '[:space:]')";
+        legacy_mapped_peers="$(awk -F '\t' 'NF == 3 && $3 != "" {print $3}' "$legacy_map" | sort -u | wc -l | tr -d '[:space:]')";
+        legacy_rows="$(wc -l < "$legacy_map" | tr -d '[:space:]')";
+        legacy_unique_ips="$(awk -F '\t' 'NF == 3 && $1 != "" {print $1}' "$legacy_map" | sort -u | wc -l | tr -d '[:space:]')";
+        legacy_expected_peers="$(sudo docker exec '__VPN_CONTAINER__' sh -c "grep -c '^\\[Peer\\]' '__WG_CONFIG_PATH__'" 2>/dev/null | tr -d '[:space:]')";
+        if [ "$legacy_expected_peers" -gt 0 ] 2>/dev/null && [ "$legacy_raw_peers" -eq "$legacy_expected_peers" ] && [ "$legacy_mapped_peers" -eq "$legacy_expected_peers" ] && [ "$legacy_rows" -gt 0 ] && [ "$legacy_unique_ips" -eq "$legacy_rows" ]; then
+            if sudo install -m 0600 "$legacy_map" "$legacy_stage" && sudo mv -f "$legacy_stage" "$legacy_dest"; then
+                legacy_ready=1;
+            else
+                legacy_install_failed=1;
+            fi;
+            break;
+        fi;
+    fi;
+    [ "$legacy_attempt" -ge 6 ] || sleep 1;
+done;
+if [ "$legacy_ready" != '1' ]; then
+    sudo rm -f "$legacy_stage" >/dev/null 2>&1 || true;
+    if [ "$legacy_install_failed" = '1' ]; then
+        echo __ERROR_MARKER__:legacy_map_install;
+    elif [ "$legacy_read_ok" = '1' ]; then
+        echo __ERROR_MARKER__:legacy_map_empty;
+    else
+        echo __ERROR_MARKER__:legacy_map_read;
+    fi;
+fi;
+rm -f "$legacy_raw" "$legacy_raw.clean" "$legacy_map";
+)LMAP");
+    script.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    return script;
+}
+
 QByteArray adminClientLogsDownloadScript(const QString &clientLogId)
 {
     QString script = QStringLiteral(R"SH(
@@ -505,10 +564,15 @@ ErrorCode publishClientLogCollector(const ServerCredentials &credentials,
     const bool publishTunnelEndpoint = !tunnelInterface.isEmpty();
     const QString containerScope = ContainerUtils::containerToString(container);
     QString wgShowBin;
+    QString wgConfigPath;
     if (container == DockerContainer::Awg2) {
         wgShowBin = QStringLiteral("awg");
+        wgConfigPath = QString::fromLatin1(protocols::awg::serverConfigPath);
     } else if (container == DockerContainer::Awg || container == DockerContainer::WireGuard) {
         wgShowBin = QStringLiteral("wg");
+        wgConfigPath = container == DockerContainer::Awg
+                ? QString::fromLatin1(protocols::awg::serverLegacyConfigPath)
+                : QString::fromLatin1(protocols::wireguard::serverConfigPath);
     }
     const bool allowLegacyBootstrap = !wgShowBin.isEmpty();
     const QString tunnelContainerName = QStringLiteral("%1-%2")
@@ -525,12 +589,13 @@ if sudo docker network inspect amnezia-dns-net >/dev/null 2>&1; then if ! sudo d
 if ! sudo docker image inspect '__COLLECTOR_IMAGE__' >/dev/null 2>&1; then sudo docker pull '__COLLECTOR_IMAGE__' >/dev/null || echo __ERROR_MARKER__:image_pull; fi
 sudo docker rm -f '__BRIDGE_CONTAINER__' >/dev/null 2>&1 || true
 sudo docker run -d --log-driver none --restart always --memory=96m --cpus=0.5 --pids-limit=64 --network amnezia-dns-net --ip=__BRIDGE_HOST__ --name '__BRIDGE_CONTAINER__' -e AMNEZIA_CLIENT_LOGS_BOOTSTRAP=0 -v __HOST_DIRECTORY__:/data:rw --entrypoint python '__COLLECTOR_IMAGE__' /data/collector.py || echo __ERROR_MARKER__:bridge_run
-if [ '__PUBLISH_TUNNEL__' = '1' ]; then if sudo docker ps --format '{{.Names}}' | grep -qx '__VPN_CONTAINER__'; then if [ '__ALLOW_LEGACY_BOOTSTRAP__' = '1' ]; then legacy_tmp="$(mktemp)"; if sudo docker exec -i '__VPN_CONTAINER__' sh -c '__WG_SHOW_BIN__ show all allowed-ips' > "$legacy_tmp.raw"; then : > "$legacy_tmp"; while IFS="$(printf '\t')" read -r iface peer allowed_ips; do for allowed_ip in $allowed_ips; do vpn_ip="${allowed_ip%%/*}"; case "$vpn_ip" in ''|*:*|0.0.0.0) continue ;; esac; client_log_id="$(printf '%s\t%s' '__CONTAINER_SCOPE__' "$peer" | sha256sum | awk '{print $1}')"; printf '%s\t%s\t%s\n' "$vpn_ip" "$client_log_id" "$peer"; done; done < "$legacy_tmp.raw"; sudo install -m 0600 "$legacy_tmp" '__HOST_DIRECTORY__/legacy/__CONTAINER_SCOPE__.tsv' || echo __ERROR_MARKER__:legacy_map; else echo __ERROR_MARKER__:legacy_map_read; fi; rm -f "$legacy_tmp" "$legacy_tmp.raw"; fi; sudo docker rm -f '__TUNNEL_CONTAINER__' >/dev/null 2>&1 || true; sudo docker exec -i '__VPN_CONTAINER__' sh -c 'while iptables -t nat -D PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__ 2>/dev/null; do :; done; iptables -t nat -A PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__' >/dev/null 2>&1 || echo __ERROR_MARKER__:tunnel_redirect; sudo docker run -d --log-driver none --restart always --memory=96m --cpus=0.5 --pids-limit=64 --network container:__VPN_CONTAINER__ --name '__TUNNEL_CONTAINER__' -e AMNEZIA_CLIENT_LOGS_BOOTSTRAP=__ALLOW_LEGACY_BOOTSTRAP__ -e AMNEZIA_CLIENT_LOGS_SCOPE='__CONTAINER_SCOPE__' -v __HOST_DIRECTORY__:/data:rw --entrypoint python '__COLLECTOR_IMAGE__' /data/collector.py || echo __ERROR_MARKER__:tunnel_run; else echo __ERROR_MARKER__:missing_vpn_container; fi; fi
+if [ '__PUBLISH_TUNNEL__' = '1' ]; then if sudo docker ps --format '{{.Names}}' | grep -qx '__VPN_CONTAINER__'; then if [ '__ALLOW_LEGACY_BOOTSTRAP__' = '1' ]; then __LEGACY_MAP_REFRESH__ fi; sudo docker rm -f '__TUNNEL_CONTAINER__' >/dev/null 2>&1 || true; sudo docker exec -i '__VPN_CONTAINER__' sh -c 'while iptables -t nat -D PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__ 2>/dev/null; do :; done; iptables -t nat -A PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__' >/dev/null 2>&1 || echo __ERROR_MARKER__:tunnel_redirect; sudo docker run -d --log-driver none --restart always --memory=96m --cpus=0.5 --pids-limit=64 --network container:__VPN_CONTAINER__ --name '__TUNNEL_CONTAINER__' -e AMNEZIA_CLIENT_LOGS_BOOTSTRAP=__ALLOW_LEGACY_BOOTSTRAP__ -e AMNEZIA_CLIENT_LOGS_SCOPE='__CONTAINER_SCOPE__' -v __HOST_DIRECTORY__:/data:rw --entrypoint python '__COLLECTOR_IMAGE__' /data/collector.py || echo __ERROR_MARKER__:tunnel_run; else echo __ERROR_MARKER__:missing_vpn_container; fi; fi
 sleep 1
 sudo docker ps --format '{{.Names}}' | grep -qx '__BRIDGE_CONTAINER__' || echo __ERROR_MARKER__:missing_bridge_container
 if [ '__PUBLISH_TUNNEL__' = '1' ]; then sudo docker ps --format '{{.Names}}' | grep -qx '__TUNNEL_CONTAINER__' || echo __ERROR_MARKER__:missing_tunnel_container; fi
 )SH");
 
+    script.replace("__LEGACY_MAP_REFRESH__", clientLogsLegacyMapRefreshScript());
     script.replace("__HOST_DIRECTORY__", QString::fromLatin1(protocols::clientLogs::hostDirectory));
     script.replace("__SCRIPT_TMP_FILE__", scriptTmpFileName);
     script.replace("__TOKEN_TMP_FILE__", tokenTmpFileName);
@@ -544,6 +609,7 @@ if [ '__PUBLISH_TUNNEL__' = '1' ]; then sudo docker ps --format '{{.Names}}' | g
     script.replace("__VPN_CONTAINER__", ContainerUtils::containerToString(container));
     script.replace("__TUNNEL_IFACE__", tunnelInterface);
     script.replace("__WG_SHOW_BIN__", wgShowBin);
+    script.replace("__WG_CONFIG_PATH__", wgConfigPath);
     script.replace("__CONTAINER_SCOPE__", containerScope);
     script.replace("__ALLOW_LEGACY_BOOTSTRAP__", allowLegacyBootstrap ? QStringLiteral("1") : QStringLiteral("0"));
     script.replace("__CLIENT_LOG_ID__", clientLogId);
