@@ -7,11 +7,73 @@
 #include "core/utils/utilities.h"
 
 #ifdef Q_OS_WIN
+#include <qt_windows.h>
+
 #include "platforms/windows/daemon/windowsdaemontunnel.h"
+#include "platforms/windows/daemon/windowsfirewall.h"
+#include "platforms/windows/daemon/windowssplittunnel.h"
 
 namespace {
 int s_argc = 0;
 char** s_argv = nullptr;
+
+constexpr auto CleanupServiceActiveExitCode = 2;
+
+enum class CleanupServiceState {
+    StoppedOrMissing,
+    Active,
+    QueryFailed,
+};
+
+CleanupServiceState cleanupServiceState()
+{
+    constexpr auto serviceName = L"AmneziaVPN-service";
+
+    const SC_HANDLE serviceManager =
+        OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (serviceManager == nullptr) {
+        qCritical() << "Unable to open SCM before persistent firewall cleanup:"
+                    << GetLastError();
+        return CleanupServiceState::QueryFailed;
+    }
+
+    const SC_HANDLE service =
+        OpenServiceW(serviceManager, serviceName, SERVICE_QUERY_STATUS);
+    if (service == nullptr) {
+        const DWORD error = GetLastError();
+        CloseServiceHandle(serviceManager);
+        if (error == ERROR_SERVICE_DOES_NOT_EXIST) {
+            return CleanupServiceState::StoppedOrMissing;
+        }
+
+        qCritical() << "Unable to query the service before persistent firewall cleanup:"
+                    << error;
+        return CleanupServiceState::QueryFailed;
+    }
+
+    SERVICE_STATUS_PROCESS status {};
+    DWORD bytesNeeded = 0;
+    const bool queried = QueryServiceStatusEx(
+        service, SC_STATUS_PROCESS_INFO, reinterpret_cast<LPBYTE>(&status),
+        sizeof(status), &bytesNeeded) != FALSE;
+    const DWORD error = queried ? ERROR_SUCCESS : GetLastError();
+
+    CloseServiceHandle(service);
+    CloseServiceHandle(serviceManager);
+
+    if (!queried) {
+        qCritical() << "Unable to read the service state before persistent firewall cleanup:"
+                    << error;
+        return CleanupServiceState::QueryFailed;
+    }
+    if (status.dwCurrentState != SERVICE_STOPPED) {
+        qCritical() << "Refusing persistent firewall cleanup while the service state is"
+                    << status.dwCurrentState;
+        return CleanupServiceState::Active;
+    }
+
+    return CleanupServiceState::StoppedOrMissing;
+}
 }  // namespace
 
 #endif
@@ -46,6 +108,26 @@ int runApplication(int argc, char** argv)
 int main(int argc, char **argv)
 {
     Utils::initializePath(Logger::systemLogDir());
+
+#ifdef Q_OS_WIN
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("cleanup-firewall")) {
+        QCoreApplication app(argc, argv);
+        Logger::init(true);
+
+        const CleanupServiceState serviceState = cleanupServiceState();
+        if (serviceState == CleanupServiceState::Active) {
+            return CleanupServiceActiveExitCode;
+        }
+        if (serviceState == CleanupServiceState::QueryFailed) {
+            return EXIT_FAILURE;
+        }
+
+        const bool driverRemoved = WindowsSplitTunnel::removeForUninstall();
+        const bool firewallRemoved =
+            driverRemoved && WindowsFirewall::removePersistentPolicy();
+        return firewallRemoved ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+#endif
 
     if (argc >= 2) {
         qInfo() << "Started as console application";

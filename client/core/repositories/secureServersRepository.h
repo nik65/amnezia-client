@@ -15,6 +15,7 @@
 #include "core/models/api/legacyApiServerConfig.h"
 #include "core/models/containerConfig.h"
 #include "core/utils/routeModes.h"
+#include "core/utils/managedRoutePolicy.h"
 #include "core/utils/serverConfigUtils.h"
 #include "secureQSettings.h"
 
@@ -25,7 +26,8 @@ class SecureServersRepository : public QObject
     Q_OBJECT
 
 public:
-    explicit SecureServersRepository(SecureQSettings *settings, QObject *parent = nullptr);
+    explicit SecureServersRepository(SecureQSettings *settings, QObject *parent = nullptr,
+                                     bool persistDefaultSelection = true);
 
     QString addServer(const QString &serverId, const QJsonObject &serverJson, serverConfigUtils::ConfigType kind);
     void editServer(const QString &serverId, const QJsonObject &serverJson, serverConfigUtils::ConfigType kind);
@@ -52,14 +54,17 @@ public:
 
     QVariantMap managedVpnSites(int serverIndex, RouteMode mode) const;
     QVariantMap managedVpnSitesForRouting(int serverIndex, RouteMode mode) const;
+    QVariantMap rawManagedVpnSites(int serverIndex, RouteMode mode) const;
     void setManagedVpnSites(int serverIndex, RouteMode mode, const QVariantMap &sites);
     bool addManagedVpnSite(int serverIndex, RouteMode mode, const QString &site, const QString &ip = "");
     void addManagedVpnSites(int serverIndex, RouteMode mode, const QMap<QString, QString> &sites);
     void removeManagedVpnSite(int serverIndex, RouteMode mode, const QString &site);
     void removeAllManagedVpnSites(int serverIndex, RouteMode mode);
     bool isManagedSplitTunnelingForceEnabled(int serverIndex) const;
+    bool rawManagedSplitTunnelingForceEnabled(int serverIndex) const;
     void setManagedSplitTunnelingForceEnabled(int serverIndex, bool enabled);
     RouteMode effectiveSiteRouteMode(int serverIndex, bool localSplitEnabled, RouteMode localRouteMode) const;
+    std::optional<ManagedRoutePolicyMetadata> managedRoutePolicyMetadata(int serverIndex) const;
 
     ServerCredentials serverCredentials(int index) const;
     bool hasServerWithVpnKey(const QString &vpnKey) const;

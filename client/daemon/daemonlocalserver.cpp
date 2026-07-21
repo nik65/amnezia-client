@@ -4,22 +4,14 @@
 
 #include "daemonlocalserver.h"
 
-#include <QDir>
-#include <QFileInfo>
 #include <QLocalSocket>
+#include <QTimer>
 
 #include "daemonlocalserverconnection.h"
+#include "ipc.h"
 #include "leakdetector.h"
+#include "localpeerauthentication.h"
 #include "logger.h"
-
-#if defined(MZ_MACOS) || defined(MZ_LINUX)
-#  include <sys/stat.h>
-#  include <sys/types.h>
-#  include <unistd.h>
-
-constexpr const char* TMP_PATH = "/tmp/amneziavpn.socket";
-constexpr const char* VAR_PATH = "/var/run/amneziavpn/daemon.socket";
-#endif
 
 namespace {
 Logger logger("DaemonLocalServer");
@@ -32,13 +24,22 @@ DaemonLocalServer::DaemonLocalServer(QObject* parent) : QObject(parent) {
 DaemonLocalServer::~DaemonLocalServer() { MZ_COUNT_DTOR(DaemonLocalServer); }
 
 bool DaemonLocalServer::initialize() {
+  // Unelevated desktop users must be able to reach the root service; OS peer
+  // identity is therefore enforced before any JSON bytes are parsed.
+#ifndef Q_OS_WIN
   m_server.setSocketOptions(QLocalServer::WorldAccessOption);
+#endif
+  m_server.setMaxPendingConnections(16);
+  m_server.setListenBacklogSize(1);
 
   QString path = daemonPath();
   logger.debug() << "Server path:" << path;
 
-  if (QFileInfo::exists(path)) {
-    QFile::remove(path);
+  QString runtimeError;
+  if (!amnezia::ipc::preparePrivilegedIpcRuntime(&runtimeError)
+      || !amnezia::ipc::removeStalePrivilegedSocket(path, &runtimeError)) {
+    logger.error() << "Failed to prepare daemon IPC:" << runtimeError;
+    return false;
   }
 
   if (!m_server.listen(path)) {
@@ -46,7 +47,7 @@ bool DaemonLocalServer::initialize() {
     return false;
   }
 
-  connect(&m_server, &QLocalServer::newConnection, [&] {
+  connect(&m_server, &amnezia::ipc::PrivilegedLocalServer::newConnection, [&] {
     logger.debug() << "New connection received";
 
     if (!m_server.hasPendingConnections()) {
@@ -56,42 +57,49 @@ bool DaemonLocalServer::initialize() {
     QLocalSocket* socket = m_server.nextPendingConnection();
     Q_ASSERT(socket);
 
+    if (m_activeConnections >= 16) {
+      logger.warning() << "Rejecting daemon IPC connection: connection limit reached";
+      socket->abort();
+      socket->deleteLater();
+      return;
+    }
+
+    QString authorizationError;
+    amnezia::ipc::LocalPeerIdentity peerIdentity;
+    if (!amnezia::ipc::authorizePrivilegedClient(
+            socket, amnezia::ipc::installedClientExecutablePath(), &peerIdentity,
+            &authorizationError)) {
+      logger.warning() << "Rejected unauthorized daemon IPC connection:"
+                       << authorizationError;
+      socket->abort();
+      socket->deleteLater();
+      return;
+    }
+
     DaemonLocalServerConnection* connection =
         new DaemonLocalServerConnection(&m_server, socket);
+    auto *firstFrameTimer = new QTimer(connection);
+    firstFrameTimer->setSingleShot(true);
+    firstFrameTimer->setInterval(5000);
+    connect(firstFrameTimer, &QTimer::timeout, socket, [socket] {
+      logger.warning() << "Closing daemon IPC connection without a first frame";
+      socket->abort();
+    });
+    connect(socket, &QLocalSocket::readyRead, firstFrameTimer, &QTimer::stop);
+    firstFrameTimer->start();
+    logger.debug() << "Accepted daemon IPC peer" << peerIdentity.userIdentifier
+                   << "session" << peerIdentity.sessionId;
+    ++m_activeConnections;
     connect(socket, &QLocalSocket::disconnected, connection,
-            &DaemonLocalServerConnection::deleteLater);
+            [this, connection] {
+              --m_activeConnections;
+              connection->deleteLater();
+            });
   });
 
   return true;
 }
 
 QString DaemonLocalServer::daemonPath() const {
-#if defined(MZ_WINDOWS)
-  return "\\\\.\\pipe\\amneziavpn";
-#endif
-#if defined(MZ_MACOS) || defined(MZ_LINUX)
-  QDir dir("/var/run");
-  if (!dir.exists()) {
-    logger.warning() << "/var/run doesn't exist. Fallback /tmp.";
-    return TMP_PATH;
-  }
-
-  if (dir.exists("amneziavpn")) {
-    logger.debug() << "/var/run/amneziavpn seems to be usable";
-    return VAR_PATH;
-  }
-
-  if (!dir.mkdir("amneziavpn")) {
-    logger.warning() << "Failed to create /var/run/amneziavpn";
-    return TMP_PATH;
-  }
-
-  if (chmod("/var/run/amneziavpn", S_IRWXU | S_IRWXG | S_IRWXO) < 0) {
-    logger.warning()
-        << "Failed to set the right permissions to /var/run/amneziavpn";
-    return TMP_PATH;
-  }
-
-  return VAR_PATH;
-#endif
+  return amnezia::getDaemonServiceUrl();
 }

@@ -3,6 +3,7 @@
 
 #include <QLocalSocket>
 #include <QObject>
+#include <QPointer>
 
 #include "rep_ipc_interface_replica.h"
 #include "rep_ipc_process_interface_replica.h"
@@ -21,10 +22,10 @@ public:
     template <typename Func>
     static auto withInterface(Func func)
     {
-        QSharedPointer<IpcInterfaceReplica> iface = Instance().m_interface;
+        QSharedPointer<IpcInterfaceReplica> iface = Instance().readyInterface();
         using ReturnType = decltype(func(std::declval<QSharedPointer<IpcInterfaceReplica>>()));
 
-        if (iface.isNull() || !iface->waitForSource(1000) || !iface->isReplicaValid()) {
+        if (iface.isNull()) {
             qWarning() << "IpcClient::withInterface(): Service is not running";
 
             if constexpr (std::is_void_v<ReturnType>)
@@ -39,8 +40,8 @@ public:
     template <typename OnSuccess, typename OnFailure>
     static auto withInterface(OnSuccess onSuccess, OnFailure onFailure)
     {
-        QSharedPointer<IpcInterfaceReplica> iface = Instance().m_interface;
-        if (iface.isNull() || !iface->waitForSource(1000) || !iface->isReplicaValid()) {
+        QSharedPointer<IpcInterfaceReplica> iface = Instance().readyInterface();
+        if (iface.isNull()) {
             return onFailure();
         }
 
@@ -49,8 +50,13 @@ public:
 signals:
 
 private:
+    QSharedPointer<IpcInterfaceReplica> readyInterface();
+    void resetServiceConnection();
+
     QRemoteObjectNode m_node;
     QSharedPointer<IpcInterfaceReplica> m_interface;
+    QPointer<QLocalSocket> m_socket;
+    bool m_protocolValidated = false;
 };
 
 #endif // IPCCLIENT_H

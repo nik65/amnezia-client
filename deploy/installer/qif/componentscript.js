@@ -85,6 +85,10 @@ Component.prototype.createOperations = function()
         }
 
         let pu_path = installer.value("TargetDir").replace(/\//g, '\\') + "\\"
+        // Qt IFW 4.7 offers Ignore for a failed undo operation. The uninstall
+        // script therefore retries internally and returns only after the
+        // persistent firewall policy is removed, keeping TargetDir available
+        // as the recovery surface until cleanup succeeds.
         component.addElevatedOperation("Execute",
                                        ["sc", "create", serviceName(), "binpath=", pu_path + serviceName() + ".exe",
                                         "start=", "auto", "depend=", "BFE/nsi"],

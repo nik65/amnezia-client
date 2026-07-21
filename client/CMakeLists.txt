@@ -86,8 +86,16 @@ set(AMNEZIAVPN_TS_FILES
     ${CMAKE_CURRENT_LIST_DIR}/translations/amneziavpn_hi_IN.ts
 )
 
+# QML files are embedded through qml.qrc and therefore are not visible in the
+# target's SOURCES property that Qt Linguist scans by default. Keep them in the
+# lupdate source set explicitly so new pages cannot silently ship untranslated.
+file(GLOB_RECURSE AMNEZIAVPN_QML_TRANSLATION_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_LIST_DIR}/ui/qml/*.qml
+)
+
 qt6_add_translations(${PROJECT}
     TS_FILES ${AMNEZIAVPN_TS_FILES}
+    SOURCES ${AMNEZIAVPN_QML_TRANSLATION_SOURCES}
     RESOURCE_PREFIX "/translations"
 )
 # -- i18n end
@@ -144,6 +152,7 @@ if(WIN32)
         iphlpapi
         ws2_32
         gdi32
+        Advapi32
     )
 
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")

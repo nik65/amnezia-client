@@ -104,6 +104,8 @@ PageType {
     property list<QtObject> settingsEntries: [
         servers,
         connection,
+        fleetCenter,
+        routeInspector,
         application,
         news,
         backup,
@@ -141,6 +143,28 @@ PageType {
         property bool isVisible: true
         readonly property var clickedHandler: function() {
             PageController.goToPage(PageEnum.PageSettingsApplication)
+        }
+    }
+
+    QtObject {
+        id: fleetCenter
+
+        property string title: qsTr("Fleet Center")
+        readonly property string leftImagePath: "qrc:/images/controls/gauge.svg"
+        property bool isVisible: true
+        readonly property var clickedHandler: function() {
+            PageController.goToPage(PageEnum.PageFleetCenter)
+        }
+    }
+
+    QtObject {
+        id: routeInspector
+
+        property string title: qsTr("Route Inspector")
+        readonly property string leftImagePath: "qrc:/images/controls/scan-line.svg"
+        property bool isVisible: true
+        readonly property var clickedHandler: function() {
+            PageController.goToPage(PageEnum.PageRouteInspector)
         }
     }
 

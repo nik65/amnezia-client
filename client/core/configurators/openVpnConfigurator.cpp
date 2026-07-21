@@ -25,6 +25,7 @@
 #include "core/utils/selfhosted/scriptsRegistry.h"
 #include "core/utils/utilities.h"
 #include "core/models/protocols/openVpnProtocolConfig.h"
+#include "ipc.h"
 
 using namespace amnezia;
 
@@ -186,6 +187,7 @@ ProtocolConfig OpenVpnConfigurator::processConfigWithLocalSettings(const Connect
                          "up %1/update-resolv-conf.sh\n"
                          "down %1/update-resolv-conf.sh\n")
                   .arg(qApp->applicationDirPath()));
+    config = QString::fromUtf8(amnezia::hardenOpenVpnConfigContent(config.toUtf8()));
 #endif
 
     protocolConfig.setNativeConfig(config);

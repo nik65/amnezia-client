@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 #
 # Parses DHCP options from openvpn to update resolv.conf
 # To use set as 'up' and 'down' script in your openvpn *.conf:
@@ -17,54 +17,85 @@
 # foreign_option_3='dhcp-option DOMAIN be.bnc.ch'
 # foreign_option_4='dhcp-option DOMAIN-SEARCH bnc.local'
 
-## The 'type' builtins will look for file in $PATH variable, so we set the
-## PATH below. You might need to directly set the path to 'resolvconf'
-## manually if it still doesn't work, i.e.
-## RESOLVCONF=/usr/sbin/resolvconf
-export PATH=$PATH:/sbin:/usr/sbin:/bin:/usr/bin
-RESOLVCONF=$(type -p resolvconf)
+readonly TRUSTED_PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+PATH="$TRUSTED_PATH"
+LC_ALL=C
+LANG=C
+readonly PATH LC_ALL LANG
+export PATH LC_ALL LANG
 
-case $script_type in
+# OpenVPN must not pass loader or shell startup controls to this root script.
+# The launcher and pull-filter enforce that boundary before /bin/bash starts;
+# clear them again before invoking any child process.
+set +x
+builtin unset BASH_ENV ENV CDPATH GLOBIGNORE BASH_XTRACEFD PS4 POSIXLY_CORRECT \
+  LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_PROFILE \
+  DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH \
+  DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH
+IFS=$' \t\n'
+umask 077
+
+case "$script_type" in
+  up|down) ;;
+  *) exit 0 ;;
+esac
+
+[[ "$dev" =~ ^[A-Za-z0-9_.:-]{1,64}$ ]] || exit 0
+
+RESOLVCONF=''
+for candidate in /usr/sbin/resolvconf /sbin/resolvconf /usr/bin/resolvconf /bin/resolvconf; do
+  if [[ -x "$candidate" ]]; then
+    RESOLVCONF="$candidate"
+    break
+  fi
+done
+[[ -n "$RESOLVCONF" ]] || exit 0
+readonly RESOLVCONF
+
+case "$script_type" in
 
 up)
-  for optionname in ${!foreign_option_*} ; do
+  DNS_NAMESERVERS=()
+  DNS_SEARCH=()
+  for optionname in "${!foreign_option_@}" ; do
     option="${!optionname}"
-    echo $option
-    part1=$(echo "$option" | cut -d " " -f 1)
-    if [ "$part1" == "dhcp-option" ] ; then
-      part2=$(echo "$option" | cut -d " " -f 2)
-      part3=$(echo "$option" | cut -d " " -f 3)
-      if [ "$part2" == "DNS" ] ; then
-        IF_DNS_NAMESERVERS="$IF_DNS_NAMESERVERS $part3"
+    builtin printf '%s\n' "$option"
+    part1=''
+    part2=''
+    part3=''
+    builtin read -r part1 part2 part3 _ <<< "$option"
+    if [[ "$part1" == "dhcp-option" ]] ; then
+      if [[ "$part2" == "DNS" && -n "$part3" ]] ; then
+        DNS_NAMESERVERS+=("$part3")
       fi
-      if [[ "$part2" == "DOMAIN" || "$part2" == "DOMAIN-SEARCH" ]] ; then
-        IF_DNS_SEARCH="$IF_DNS_SEARCH $part3"
+      if [[ ( "$part2" == "DOMAIN" || "$part2" == "DOMAIN-SEARCH" ) && -n "$part3" ]] ; then
+        DNS_SEARCH+=("$part3")
       fi
     fi
   done
-  R=""
-  if [ "$IF_DNS_SEARCH" ]; then
-    R="search "
-    for DS in $IF_DNS_SEARCH ; do
-      R="${R} $DS"
+  R=''
+  if (( ${#DNS_SEARCH[@]} )); then
+    R='search'
+    for DS in "${DNS_SEARCH[@]}" ; do
+      R+=" $DS"
     done
-  R="${R}
-"
+    R+=$'\n'
   fi
 
-  for NS in $IF_DNS_NAMESERVERS ; do
-    R="${R}nameserver $NS
-"
+  for NS in "${DNS_NAMESERVERS[@]}" ; do
+    R+="nameserver $NS"$'\n'
   done
-  #echo -n "$R" | $RESOLVCONF -x -p -a "${dev}"
-  echo -n "$R" | $RESOLVCONF -x -a "${dev}.inet"
+  builtin printf '%s' "$R" \
+    | /usr/bin/env -i PATH="$TRUSTED_PATH" LC_ALL=C LANG=C \
+        "$RESOLVCONF" -x -a "${dev}.inet"
   ;;
 down)
-  $RESOLVCONF -d "${dev}.inet"
+  /usr/bin/env -i PATH="$TRUSTED_PATH" LC_ALL=C LANG=C \
+    "$RESOLVCONF" -d "${dev}.inet"
   ;;
 esac
 
-# Workaround / jm@epiclabs.io 
+# Workaround / jm@epiclabs.io
 # force exit with no errors. Due to an apparent conflict with the Network Manager
 # $RESOLVCONF sometimes exits with error code 6 even though it has performed the
 # action correctly and OpenVPN shuts down.

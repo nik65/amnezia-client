@@ -32,8 +32,22 @@ Logger logger("WindowsDaemon");
 
 WindowsDaemon::WindowsDaemon() : Daemon(nullptr) {
   MZ_COUNT_CTOR(WindowsDaemon);
+  // A foreign driver using the shared sublayers could install soft permits
+  // that undermine Amnezia's block policy. Refuse firewall startup instead of
+  // resetting, removing, or silently coexisting with foreign WFP callouts.
+  if (WindowsSplitTunnel::detectConflict()) {
+    logger.error() << "Foreign split-tunnel driver conflict detected";
+    return;
+  }
+  if (!WindowsSplitTunnel::resetForFirewallMigration()) {
+    logger.error() << "Failed to prepare split-tunnel WFP state";
+    return;
+  }
   m_firewallManager = WindowsFirewall::create(this);
-  Q_ASSERT(m_firewallManager != nullptr);
+  if (m_firewallManager == nullptr) {
+    logger.error() << "Failed to initialize Windows Filtering Platform";
+    return;
+  }
 
   m_wgutils = WireguardUtilsWindows::create(m_firewallManager, this);
   m_dnsutils = new DnsUtilsWindows(this);
@@ -42,7 +56,11 @@ WindowsDaemon::WindowsDaemon() : Daemon(nullptr) {
   connect(m_wgutils.get(), &WireguardUtilsWindows::backendFailure, this,
           &WindowsDaemon::monitorBackendFailure);
   connect(this, &WindowsDaemon::activationFailure,
-          [this]() { m_firewallManager->disableKillSwitch(); });
+          [this]() {
+            if (m_firewallManager != nullptr) {
+              m_firewallManager->disableKillSwitch();
+            }
+          });
 }
 
 WindowsDaemon::~WindowsDaemon() {

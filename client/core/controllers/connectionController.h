@@ -82,6 +82,15 @@ signals:
 #endif
 
 private:
+    struct ManagedRouteSyncSnapshot
+    {
+        RouteMode appliedRouteMode = RouteMode::VpnAllSites;
+        QStringList appliedManagedIps;
+        QString appliedContentHash;
+        bool localSplitEnabled = false;
+        RouteMode localRouteMode = RouteMode::VpnAllSites;
+    };
+
     ErrorCode defaultContainerForServer(const QString &serverId, DockerContainer &container) const;
 
     void onVpnConnectionStateChanged(Vpn::ConnectionState state);
@@ -89,19 +98,26 @@ private:
     void scheduleNextServerRoutingRulesSync(bool success);
     void finishServerRoutingRulesSync(bool success);
     void syncServerRoutingRules();
-    void syncServerRoutingRulesFromUrls(const QList<QUrl> &syncUrls, int urlIndex, int serverIndex,
-                                        RouteMode oldRouteMode, const QStringList &oldSplitTunnelIps,
-                                        int syncGeneration);
-    bool applyServerRoutingRulesPayload(int serverIndex, const QJsonObject &payload);
-    QStringList effectiveSplitTunnelIpsForSync(int serverIndex, RouteMode routeMode) const;
+    void syncServerRoutingRulesFromUrls(const QList<QUrl> &syncUrls, int urlIndex, const QString &serverId,
+                                        const ManagedRouteSyncSnapshot &routeSnapshot, int syncGeneration);
+    bool applyServerRoutingRulesPayload(int serverIndex, const QJsonObject &payload,
+                                        const ManagedRoutePolicyMetadata &metadata);
+    QStringList managedSplitTunnelIpsForSync(int serverIndex, RouteMode routeMode) const;
+    QString effectiveManagedRouteContentHash(int serverIndex) const;
+    bool reconcileManagedRouteState(const QString &serverId,
+                                    const ManagedRouteSyncSnapshot &routeSnapshot,
+                                    const QString &reason);
     int currentConnectionServerIndex() const;
+    QString currentConnectionServerId() const;
     bool isCurrentConnectionServerIndex(int serverIndex) const;
+    bool isCurrentConnectionServerId(const QString &serverId) const;
 
     void scheduleClientManagedSitesResolve(int serverIndex);
     void startClientManagedSitesResolve();
     void resolveNextClientManagedSite();
     void finishClientManagedSitesResolve();
     void cancelClientManagedSitesResolve();
+    void scheduleClientManagedSitesResolveRetry(int serverIndex);
 
     SecureServersRepository* m_serversRepository;
     SecureAppSettingsRepository* m_appSettingsRepository;
@@ -113,13 +129,23 @@ private:
     bool m_serverRoutingRulesSyncPendingRefresh = false;
     int m_serverRoutingRulesSyncFastRetryCount = 0;
     int m_serverRoutingRulesSyncGeneration = 0;
+    bool m_hasAppliedManagedRouteState = false;
+    RouteMode m_appliedManagedRouteMode = RouteMode::VpnAllSites;
+    QStringList m_appliedManagedSplitTunnelIps;
+    QString m_appliedManagedContentHash;
 
     bool m_isClientManagedSitesResolveInProgress = false;
-    int m_clientManagedSitesResolveServerIndex = -1;
+    int m_clientManagedSitesResolveGeneration = 0;
+    QString m_clientManagedSitesResolveServerId;
     QStringList m_clientManagedSitesResolveQueue;
     QJsonObject m_clientManagedSitesResolvedCache;
+    bool m_clientManagedSitesResolveHadFailure = false;
+    int m_clientManagedSitesResolveRetryCount = 0;
     RouteMode m_clientManagedSitesResolveOldRouteMode = RouteMode::VpnAllSites;
-    QStringList m_clientManagedSitesResolveOldSplitTunnelIps;
+    QStringList m_clientManagedSitesResolveOldManagedSplitTunnelIps;
+    QString m_clientManagedSitesResolveOldContentHash;
+    bool m_clientManagedSitesResolveOldLocalSplitEnabled = false;
+    RouteMode m_clientManagedSitesResolveOldLocalRouteMode = RouteMode::VpnAllSites;
 };
 
 #endif

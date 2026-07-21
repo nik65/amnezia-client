@@ -23,6 +23,30 @@ class InstallerBase;
 
 using namespace amnezia;
 
+struct ServerRoutingRulesPublishResult
+{
+    ErrorCode errorCode = ErrorCode::UnknownError;
+    qint64 expectedRevision = -1;
+    qint64 currentRevision = -1;
+    qint64 publishedRevision = -1;
+    QString contentSha256;
+    QString failureReason;
+    QString signingBlocker;
+    QString remoteRollbackStatus;
+    bool conflict = false;
+    bool signatureAvailable = false;
+    bool candidateValidated = false;
+    bool publicationVerified = false;
+    bool remoteRollbackAttempted = false;
+    bool remoteRollbackSucceeded = false;
+
+    bool succeeded() const
+    {
+        return errorCode == ErrorCode::NoError && !conflict && publishedRevision >= 0
+                && candidateValidated && publicationVerified;
+    }
+};
+
 class InstallController : public QObject
 {
     Q_OBJECT
@@ -79,6 +103,9 @@ public:
 
     ErrorCode publishServerRoutingRules(const ServerCredentials &credentials, const QJsonObject &rules,
                                         DockerContainer container = DockerContainer::None);
+    ServerRoutingRulesPublishResult publishVersionedServerRoutingRules(
+            const ServerCredentials &credentials, const QJsonObject &rules,
+            DockerContainer container = DockerContainer::None, qint64 expectedRevision = -1);
 
     void cancelInstallation();
 

@@ -10,12 +10,32 @@ param(
     [int] $BuildJobs = 0,
     [string] $EnvFile = "",
     [string] $LogDir = "",
+    [ValidateSet(1, 2)]
+    [int] $PayloadSchema = 1,
+    [ValidateSet("stable", "canary", "emergency")]
+    [string] $Channel = "stable",
+    [ValidateRange(0, 100)]
+    [int] $RolloutPercentage = 100,
+    [string] $CohortSaltId = "fleet-v1",
+    [string] $MinimumEligibleVersion = "",
+    [string] $MaximumEligibleVersion = "",
+    [ValidateRange(60, 86400)]
+    [int] $HealthDeadlineSeconds = 600,
+    [ValidateRange(0, 9007199254740991)]
+    [long] $PolicyGeneration = 0,
+    [string] $GeneratedAt = "",
+    [string] $ExpiresAt = "",
+    [ValidateRange(1, 8760)]
+    [int] $PolicyValidForHours = 168,
+    [string] $PreviousVersion = "",
+    [string[]] $RollbackArtifact = @(),
     [switch] $SkipPreflight,
     [switch] $NoBundleUpdatesInWindowsClient
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$RebuildBoundParameters = @{} + $PSBoundParameters
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $RepoRoot = (Resolve-Path (Join-Path $ScriptRoot "..\..")).Path
@@ -55,6 +75,45 @@ function New-LocalReleaseCommand([switch] $PreflightCommand) {
     }
     if ($NoBundleUpdatesInWindowsClient) {
         $parts += "-NoBundleUpdatesInWindowsClient"
+    }
+    if ($RebuildBoundParameters.ContainsKey("PayloadSchema")) {
+        $parts += "-PayloadSchema $PayloadSchema"
+    }
+    if ($RebuildBoundParameters.ContainsKey("Channel")) {
+        $parts += "-Channel " + (Quote-PowerShellString $Channel)
+    }
+    if ($RebuildBoundParameters.ContainsKey("RolloutPercentage")) {
+        $parts += "-RolloutPercentage $RolloutPercentage"
+    }
+    if ($RebuildBoundParameters.ContainsKey("CohortSaltId")) {
+        $parts += "-CohortSaltId " + (Quote-PowerShellString $CohortSaltId)
+    }
+    if ($RebuildBoundParameters.ContainsKey("MinimumEligibleVersion")) {
+        $parts += "-MinimumEligibleVersion " + (Quote-PowerShellString $MinimumEligibleVersion)
+    }
+    if ($RebuildBoundParameters.ContainsKey("MaximumEligibleVersion")) {
+        $parts += "-MaximumEligibleVersion " + (Quote-PowerShellString $MaximumEligibleVersion)
+    }
+    if ($RebuildBoundParameters.ContainsKey("HealthDeadlineSeconds")) {
+        $parts += "-HealthDeadlineSeconds $HealthDeadlineSeconds"
+    }
+    if ($RebuildBoundParameters.ContainsKey("PolicyGeneration")) {
+        $parts += "-PolicyGeneration $PolicyGeneration"
+    }
+    if ($RebuildBoundParameters.ContainsKey("GeneratedAt")) {
+        $parts += "-GeneratedAt " + (Quote-PowerShellString $GeneratedAt)
+    }
+    if ($RebuildBoundParameters.ContainsKey("ExpiresAt")) {
+        $parts += "-ExpiresAt " + (Quote-PowerShellString $ExpiresAt)
+    }
+    if ($RebuildBoundParameters.ContainsKey("PolicyValidForHours")) {
+        $parts += "-PolicyValidForHours $PolicyValidForHours"
+    }
+    if ($RebuildBoundParameters.ContainsKey("PreviousVersion")) {
+        $parts += "-PreviousVersion " + (Quote-PowerShellString $PreviousVersion)
+    }
+    if ($RebuildBoundParameters.ContainsKey("RollbackArtifact")) {
+        $parts += "-RollbackArtifact " + (Format-PowerShellStringArray $RollbackArtifact)
     }
     if ($PreflightCommand) {
         $parts += "-Preflight"

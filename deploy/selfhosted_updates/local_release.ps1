@@ -15,6 +15,25 @@ param(
     [string] $PrivateKey = $env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH,
     [string] $PublicKeyBase64 = $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64,
     [string] $WslAndroidHome = $(if ($env:WSL_ANDROID_HOME) { $env:WSL_ANDROID_HOME } else { "" }),
+    [ValidateSet(1, 2)]
+    [int] $PayloadSchema = $(if ($env:SELFHOSTED_UPDATE_PAYLOAD_SCHEMA) { [int] $env:SELFHOSTED_UPDATE_PAYLOAD_SCHEMA } else { 1 }),
+    [ValidateSet("stable", "canary", "emergency")]
+    [string] $Channel = $(if ($env:SELFHOSTED_UPDATE_CHANNEL) { $env:SELFHOSTED_UPDATE_CHANNEL } else { "stable" }),
+    [ValidateRange(0, 100)]
+    [int] $RolloutPercentage = $(if ($env:SELFHOSTED_UPDATE_ROLLOUT_PERCENTAGE) { [int] $env:SELFHOSTED_UPDATE_ROLLOUT_PERCENTAGE } else { 100 }),
+    [string] $CohortSaltId = $(if ($env:SELFHOSTED_UPDATE_COHORT_SALT_ID) { $env:SELFHOSTED_UPDATE_COHORT_SALT_ID } else { "fleet-v1" }),
+    [string] $MinimumEligibleVersion = $(if ($env:SELFHOSTED_UPDATE_MINIMUM_ELIGIBLE_VERSION) { $env:SELFHOSTED_UPDATE_MINIMUM_ELIGIBLE_VERSION } else { "" }),
+    [string] $MaximumEligibleVersion = $(if ($env:SELFHOSTED_UPDATE_MAXIMUM_ELIGIBLE_VERSION) { $env:SELFHOSTED_UPDATE_MAXIMUM_ELIGIBLE_VERSION } else { "" }),
+    [ValidateRange(60, 86400)]
+    [int] $HealthDeadlineSeconds = $(if ($env:SELFHOSTED_UPDATE_HEALTH_DEADLINE_SECONDS) { [int] $env:SELFHOSTED_UPDATE_HEALTH_DEADLINE_SECONDS } else { 600 }),
+    [ValidateRange(0, 9007199254740991)]
+    [long] $PolicyGeneration = $(if ($env:SELFHOSTED_UPDATE_POLICY_GENERATION) { [long] $env:SELFHOSTED_UPDATE_POLICY_GENERATION } else { 0 }),
+    [string] $GeneratedAt = $(if ($env:SELFHOSTED_UPDATE_GENERATED_AT) { $env:SELFHOSTED_UPDATE_GENERATED_AT } else { "" }),
+    [string] $ExpiresAt = $(if ($env:SELFHOSTED_UPDATE_EXPIRES_AT) { $env:SELFHOSTED_UPDATE_EXPIRES_AT } else { "" }),
+    [ValidateRange(1, 8760)]
+    [int] $PolicyValidForHours = $(if ($env:SELFHOSTED_UPDATE_POLICY_VALID_FOR_HOURS) { [int] $env:SELFHOSTED_UPDATE_POLICY_VALID_FOR_HOURS } else { 168 }),
+    [string] $PreviousVersion = $(if ($env:SELFHOSTED_UPDATE_PREVIOUS_VERSION) { $env:SELFHOSTED_UPDATE_PREVIOUS_VERSION } else { "" }),
+    [string[]] $RollbackArtifact = @(),
     [ValidateRange(0, 256)]
     [int] $BuildJobs = 0,
     [switch] $SkipBuild,
@@ -24,6 +43,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($RollbackArtifact.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:SELFHOSTED_UPDATE_ROLLBACK_ARTIFACTS)) {
+    $RollbackArtifact = @($env:SELFHOSTED_UPDATE_ROLLBACK_ARTIFACTS -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $RepoRoot = (Resolve-Path (Join-Path $ScriptRoot "..\..")).Path
@@ -69,6 +92,18 @@ function Get-ProjectVersion {
     return $Matches[1]
 }
 
+function Get-ProjectAndroidVersionCode {
+    $cmakeLists = Get-Content -LiteralPath (Join-Path $RepoRoot "CMakeLists.txt") -Raw
+    if ($cmakeLists -notmatch "set\(APP_ANDROID_VERSION_CODE\s+([0-9]+)\)") {
+        throw "Could not read APP_ANDROID_VERSION_CODE from CMakeLists.txt"
+    }
+    $versionCode = [long] $Matches[1]
+    if ($versionCode -lt 1 -or $versionCode -gt 2100000000) {
+        throw "APP_ANDROID_VERSION_CODE must be from 1 to 2100000000: $versionCode"
+    }
+    return $versionCode
+}
+
 function Get-RequiredAndroidBuildToolsRevision {
     $androidCmake = Get-Content -LiteralPath (Join-Path $RepoRoot "client\cmake\android.cmake") -Raw
     if ($androidCmake -match "QT_ANDROID_SDK_BUILD_TOOLS_REVISION\s+([0-9]+(?:\.[0-9]+)+)") {
@@ -90,6 +125,44 @@ function Assert-ReleaseInputs {
     }
     if ($SyncHost -match "://|/") {
         throw "SELFHOSTED_UPDATE_SYNC_HOST must be a host or IP without scheme/path/CIDR: $SyncHost"
+    }
+    Assert-SafeFleetPolicy
+}
+
+function Assert-SafeFleetPolicy {
+    $restrictivePolicyRequested = (
+        $Channel -ne "stable" -or
+        $RolloutPercentage -ne 100 -or
+        $CohortSaltId -ne "fleet-v1" -or
+        -not [string]::IsNullOrWhiteSpace($MinimumEligibleVersion) -or
+        -not [string]::IsNullOrWhiteSpace($MaximumEligibleVersion) -or
+        $HealthDeadlineSeconds -ne 600 -or
+        $PolicyGeneration -ne 0 -or
+        -not [string]::IsNullOrWhiteSpace($GeneratedAt) -or
+        -not [string]::IsNullOrWhiteSpace($ExpiresAt) -or
+        $PolicyValidForHours -ne 168 -or
+        -not [string]::IsNullOrWhiteSpace($PreviousVersion) -or
+        $RollbackArtifact.Count -gt 0
+    )
+    if ($PayloadSchema -eq 1 -and $restrictivePolicyRequested) {
+        throw "Safe fleet rollout, eligibility, expiry, health, and rollback options require explicit -PayloadSchema 2. Schema 1 is restricted to stable 100%."
+    }
+    if ($PayloadSchema -eq 2 -and ($PolicyGeneration -le 0 -or $PolicyGeneration -gt 9007199254740991)) {
+        throw "-PolicyGeneration must be a positive monotonic JSON-safe integer up to 9007199254740991 with -PayloadSchema 2"
+    }
+    if ([string]::IsNullOrWhiteSpace($PreviousVersion) -ne ($RollbackArtifact.Count -eq 0)) {
+        throw "-PreviousVersion and at least one -RollbackArtifact platform=path must be supplied together"
+    }
+    foreach ($entry in $RollbackArtifact) {
+        if ($entry -notmatch "^([^=]+)=(.+)$") {
+            throw "-RollbackArtifact must be platform=path: $entry"
+        }
+        $rollbackPlatform = $Matches[1].Trim()
+        $rollbackPath = $Matches[2]
+        if ($rollbackPlatform -match "^(?i:android(?:-.+)?)$") {
+            throw "Android rollback artifacts are unsupported because the package installer rejects ordinary lower-versionCode APKs: $rollbackPlatform"
+        }
+        Assert-ExistingFile $rollbackPath "Rollback artifact $rollbackPlatform"
     }
 }
 
@@ -690,8 +763,42 @@ $manifestArgs = @(
     "--private-key", $PrivateKey,
     "--public-key-base64", $PublicKeyBase64,
     "--out-dir", $OutDir,
-    "--auto-install"
+    "--auto-install",
+    "--payload-schema", [string] $PayloadSchema,
+    "--channel", $Channel,
+    "--rollout-percentage", [string] $RolloutPercentage,
+    "--cohort-salt-id", $CohortSaltId,
+    "--health-deadline-seconds", [string] $HealthDeadlineSeconds
 )
+$hasAndroidManifestArtifact = @(
+    $RequirePlatform | Where-Object { $_ -match "^(?i:android(?:-.+)?)$" }
+).Count -gt 0
+if ($hasAndroidManifestArtifact) {
+    $manifestArgs += @("--android-version-code", [string] (Get-ProjectAndroidVersionCode))
+}
+if ($PolicyGeneration -gt 0) {
+    $manifestArgs += @("--policy-generation", [string] $PolicyGeneration)
+}
+if (-not [string]::IsNullOrWhiteSpace($MinimumEligibleVersion)) {
+    $manifestArgs += @("--minimum-eligible-version", $MinimumEligibleVersion)
+}
+if (-not [string]::IsNullOrWhiteSpace($MaximumEligibleVersion)) {
+    $manifestArgs += @("--maximum-eligible-version", $MaximumEligibleVersion)
+}
+if (-not [string]::IsNullOrWhiteSpace($GeneratedAt)) {
+    $manifestArgs += @("--generated-at", $GeneratedAt)
+}
+if (-not [string]::IsNullOrWhiteSpace($ExpiresAt)) {
+    $manifestArgs += @("--expires-at", $ExpiresAt)
+} else {
+    $manifestArgs += @("--policy-valid-for-hours", [string] $PolicyValidForHours)
+}
+if (-not [string]::IsNullOrWhiteSpace($PreviousVersion)) {
+    $manifestArgs += @("--previous-version", $PreviousVersion)
+}
+foreach ($entry in $RollbackArtifact) {
+    $manifestArgs += @("--rollback-artifact", $entry)
+}
 foreach ($platform in $RequirePlatform) {
     if (-not $requiredArtifactNames.ContainsKey($platform)) {
         throw "Unsupported local self-hosted release platform: $platform"

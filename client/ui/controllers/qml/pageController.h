@@ -92,6 +92,9 @@ namespace PageLoader
         PageProtocolXrayFlowSettings,
         PageProtocolXraySecuritySettings,
         PageProtocolXrayXPaddingBytesSettings,
+
+        PageFleetCenter,
+        PageRouteInspector,
     };
     Q_ENUM_NS(PageEnum)
 

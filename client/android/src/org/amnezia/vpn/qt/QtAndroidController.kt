@@ -23,8 +23,19 @@ object QtAndroidController {
 
     external fun onFileOpened(uri: String)
 
+    /** Requires a durable native authorization before Android can open an APK installer. */
+    external fun authorizeApkInstallerLaunch(
+        fileName: String,
+        packageName: String,
+        versionName: String,
+        versionCode: Long
+    ): Boolean
+
     /** Notifies C++ that Android opened the system APK installer for a downloaded update. */
     external fun onApkInstallerStarted(fileName: String)
+
+    /** Lets C++ cancel a prepared authorization when Android could not open the installer. */
+    external fun onApkInstallerStartFailed(fileName: String, reason: String)
 
     external fun onConfigImported(data: String)
 

@@ -32,7 +32,8 @@ void removeClientResolvedServerRoutingRules(QJsonObject &serverConfig)
 }
 
 constexpr char clientLogsPublishErrorMarker[] = "__AMNEZIA_CLIENT_LOGS_PUBLISH_ERROR__";
-constexpr char clientLogsCollectorImage[] = "python:3.12-alpine";
+constexpr char clientLogsCollectorImage[] =
+        "python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df";
 
 QString clientLogsTunnelInterface(DockerContainer container)
 {
@@ -100,13 +101,16 @@ bool remoteClientExists(const ServerCredentials &credentials, DockerContainer co
 
 QByteArray clientLogsCollectorScript()
 {
-    QString script = QStringLiteral(R"PY(
+    QString script = QStringLiteral(R"PY1(
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import contextlib
+import fcntl
+import hashlib
 import json
 import os
 import re
 import secrets
+import sqlite3
 import threading
 import time
 
@@ -117,20 +121,104 @@ LEGACY_TOKEN_FILE = os.path.join(ROOT, "legacy_tokens.tsv")
 LEGACY_ROOT = os.path.join(ROOT, "legacy")
 LOG_ROOT = os.path.join(ROOT, "logs")
 LOCK_ROOT = os.path.join(ROOT, "locks")
+RETENTION_LOCK_FILE = os.path.join(ROOT, "retention.lock")
+RETENTION_STATE_FILE = os.path.join(ROOT, "retention.last")
+RECEIPT_DB = os.path.join(ROOT, "batch-receipts.sqlite3")
 MAX_UPLOAD_BYTES = __MAX_UPLOAD_BYTES__
 MAX_BOOTSTRAP_BYTES = 1024
 MAX_CLIENT_BYTES = __MAX_CLIENT_BYTES__
+MAX_FILES_PER_CLIENT = 512
+MAX_TOTAL_BYTES = 512 * 1024 * 1024
+MAX_TOTAL_FILES = 8192
+MAX_LOG_AGE_SECONDS = 30 * 24 * 60 * 60
+MAX_TMP_AGE_SECONDS = 60 * 60
+RECEIPT_TTL_SECONDS = 35 * 24 * 60 * 60
+MAX_RECEIPTS_PER_CLIENT = 131072
+MAX_TOTAL_RECEIPTS = 1048576
+RETENTION_INTERVAL_SECONDS = 60 * 60
+RETENTION_CHECK_INTERVAL_SECONDS = 60
+TOKEN_LOCK_STALE_SECONDS = 2 * 60
+HEALTH_CACHE_SECONDS = 15
+PRE_HEADER_TIMEOUT_SECONDS = 10
+MAX_HANDLER_THREADS = 16
 PORT = __PORT__
 UPLOAD_PATH = "__UPLOAD_PATH__"
 BOOTSTRAP_PATH = "__BOOTSTRAP_PATH__"
+HEALTH_PATH = "/healthz"
 ALLOW_BOOTSTRAP = os.environ.get("AMNEZIA_CLIENT_LOGS_BOOTSTRAP", "0") == "1"
 CONTAINER_SCOPE = os.environ.get("AMNEZIA_CLIENT_LOGS_SCOPE", "")
 SAFE_CLIENT_ID = re.compile(r"^[a-f0-9]{64}$")
 SAFE_KIND = re.compile(r"^(android|client|service)$")
 SAFE_INSTALLATION_ID = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+SAFE_BATCH_ID = re.compile(r"^[a-f0-9]{64}$")
 UPLOAD_SEMAPHORE = threading.BoundedSemaphore(4)
 CLIENT_LOCKS = {}
 CLIENT_LOCKS_GUARD = threading.Lock()
+METRICS_LOCK = threading.Lock()
+HEALTH_CACHE_LOCK = threading.Lock()
+HEALTH_SEMAPHORE = threading.BoundedSemaphore(8)
+RECEIPT_MAINTENANCE_LOCK = threading.Lock()
+RECEIPT_SCHEMA_LOCK = threading.Lock()
+RETENTION_RUNTIME_LOCK = threading.Lock()
+GLOBAL_STORAGE_THREAD_LOCK = threading.Lock()
+TOKEN_CACHE_LOCK = threading.Lock()
+STARTED_AT = time.monotonic()
+HEALTH_CACHE = {"expiresAt": 0.0, "ready": None}
+RECEIPT_INSERTS_SINCE_MAINTENANCE = 0
+RECEIPT_SCHEMA_READY = False
+NEXT_RETENTION_CHECK_AT = 0.0
+TOKEN_CACHE_UNSET = object()
+TOKEN_CACHE = {"signature": TOKEN_CACHE_UNSET, "value": {}}
+LEGACY_TOKEN_CACHE = {"signature": TOKEN_CACHE_UNSET, "value": frozenset()}
+LEGACY_MAP_CACHE = {"signature": TOKEN_CACHE_UNSET, "value": {}}
+METRICS = {
+    "accepted": 0,
+    "replayed": 0,
+    "legacyAccepted": 0,
+    "errors": 0,
+    "lastSuccessAt": 0.0,
+}
+
+
+class StorageQuotaExceeded(Exception):
+    pass
+
+
+def increment_metric(name):
+    with METRICS_LOCK:
+        METRICS[name] += 1
+        if name in ("accepted", "legacyAccepted", "replayed"):
+            METRICS["lastSuccessAt"] = time.monotonic()
+
+
+def metrics_snapshot():
+    with METRICS_LOCK:
+        return dict(METRICS)
+
+
+def invalidate_health_cache():
+    with HEALTH_CACHE_LOCK:
+        HEALTH_CACHE["expiresAt"] = 0.0
+        HEALTH_CACHE["ready"] = None
+
+
+@contextlib.contextmanager
+def filesystem_lock(path):
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    with open(path, "a+b") as lock_file:
+        os.chmod(path, 0o600)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def global_storage_lock():
+    with GLOBAL_STORAGE_THREAD_LOCK:
+        with filesystem_lock(RETENTION_LOCK_FILE):
+            yield
 
 
 @contextlib.contextmanager
@@ -141,23 +229,11 @@ def client_lock(client_id):
             lock = threading.Lock()
             CLIENT_LOCKS[client_id] = lock
     lock.acquire()
-    lock_dir = os.path.join(LOCK_ROOT, client_id)
     try:
         os.makedirs(LOCK_ROOT, mode=0o700, exist_ok=True)
-        for attempt in range(30):
-            try:
-                os.mkdir(lock_dir)
-                break
-            except FileExistsError:
-                if attempt == 29:
-                    raise TimeoutError("client lock timeout")
-                time.sleep(1)
-        yield
+        with filesystem_lock(os.path.join(LOCK_ROOT, client_id + ".lock")):
+            yield
     finally:
-        try:
-            os.rmdir(lock_dir)
-        except FileNotFoundError:
-            pass
         lock.release()
 
 
@@ -168,6 +244,12 @@ def with_token_file_lock(callback):
             os.mkdir(TOKEN_LOCK_DIR)
             break
         except FileExistsError:
+            try:
+                if time.time() - os.stat(TOKEN_LOCK_DIR).st_mtime > TOKEN_LOCK_STALE_SECONDS:
+                    os.rmdir(TOKEN_LOCK_DIR)
+                    continue
+            except (FileNotFoundError, OSError):
+                pass
             if attempt == 29:
                 raise TimeoutError("token lock timeout")
             time.sleep(1)
@@ -180,38 +262,77 @@ def with_token_file_lock(callback):
             pass
 
 
-def load_tokens():
-    tokens = {}
+def file_signature(path):
     try:
-        with open(TOKEN_FILE, "r", encoding="utf-8") as token_file:
-            for line in token_file:
-                line = line.rstrip("\n")
-                if not line:
-                    continue
-                parts = line.rstrip("\n").split("\t")
-                client_id = parts[0] if len(parts) > 0 else ""
-                token = parts[1] if len(parts) > 1 else ""
-                if client_id and token:
-                    tokens[client_id] = token
+        stat = os.stat(path, follow_symlinks=False)
     except FileNotFoundError:
-        pass
+        return None
+    return (path, stat.st_mtime_ns, stat.st_size, stat.st_ino)
+
+
+def read_stable_lines(path):
+    for _ in range(3):
+        before = file_signature(path)
+        if before is None:
+            return (), None
+        try:
+            with open(path, "r", encoding="utf-8") as source_file:
+                lines = tuple(source_file)
+        except FileNotFoundError:
+            continue
+        after = file_signature(path)
+        if before == after:
+            return lines, after
+    raise OSError("token map changed while reading")
+
+
+def cached_file_value(path, cache, parser):
+    with TOKEN_CACHE_LOCK:
+        signature = file_signature(path)
+        if cache["signature"] == signature:
+            return cache["value"]
+        lines, stable_signature = read_stable_lines(path)
+        value = parser(lines)
+        cache["signature"] = stable_signature
+        cache["value"] = value
+        return value
+
+
+def invalidate_token_caches():
+    with TOKEN_CACHE_LOCK:
+        TOKEN_CACHE["signature"] = TOKEN_CACHE_UNSET
+        LEGACY_TOKEN_CACHE["signature"] = TOKEN_CACHE_UNSET
+
+
+def parse_tokens(lines):
+    tokens = {}
+    for line in lines:
+        parts = line.rstrip("\n").split("\t")
+        client_id = parts[0] if len(parts) > 0 else ""
+        token = parts[1] if len(parts) > 1 else ""
+        if client_id and token:
+            tokens[client_id] = token
     return tokens
 
 
-def load_legacy_tokens():
+def load_tokens():
+    return cached_file_value(TOKEN_FILE, TOKEN_CACHE, parse_tokens)
+
+
+def parse_legacy_tokens(lines):
     legacy_tokens = set()
-    try:
-        with open(LEGACY_TOKEN_FILE, "r", encoding="utf-8") as token_file:
-            for line in token_file:
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) < 3:
-                    continue
-                client_id, token, scope = parts[0], parts[1], parts[2]
-                if client_id and token and scope:
-                    legacy_tokens.add((client_id, token, scope))
-    except FileNotFoundError:
-        pass
-    return legacy_tokens
+    for line in lines:
+        parts = line.rstrip("\n").split("\t")
+        if len(parts) < 3:
+            continue
+        client_id, token, scope = parts[0], parts[1], parts[2]
+        if client_id and token and scope:
+            legacy_tokens.add((client_id, token, scope))
+    return frozenset(legacy_tokens)
+
+
+def load_legacy_tokens():
+    return cached_file_value(LEGACY_TOKEN_FILE, LEGACY_TOKEN_CACHE, parse_legacy_tokens)
 
 
 def is_legacy_token(client_id, token):
@@ -223,23 +344,24 @@ def resolve_legacy_client_id(source_ip):
     if not ALLOW_BOOTSTRAP or not CONTAINER_SCOPE:
         return ""
     legacy_map = os.path.join(LEGACY_ROOT, CONTAINER_SCOPE + ".tsv")
-    try:
-        with open(legacy_map, "r", encoding="utf-8") as map_file:
-            for line in map_file:
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) < 2:
-                    continue
-                vpn_ip, client_id = parts[0], parts[1]
-                if vpn_ip == source_ip and SAFE_CLIENT_ID.match(client_id):
-                    return client_id
-    except FileNotFoundError:
-        pass
-    return ""
+
+    def parse_legacy_map(lines):
+        clients = {}
+        for line in lines:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 2:
+                continue
+            vpn_ip, client_id = parts[0], parts[1]
+            if vpn_ip and SAFE_CLIENT_ID.fullmatch(client_id):
+                clients[vpn_ip] = client_id
+        return clients
+
+    return cached_file_value(legacy_map, LEGACY_MAP_CACHE, parse_legacy_map).get(source_ip, "")
 
 
 def ensure_legacy_token(client_id):
     def update_token_files():
-        tokens = load_tokens()
+        tokens = dict(load_tokens())
         token = tokens.get(client_id)
         if not token:
             token = secrets.token_urlsafe(36)
@@ -265,37 +387,461 @@ def ensure_legacy_token(client_id):
         with open(legacy_tmp, "w", encoding="utf-8") as token_file:
             token_file.write("\n".join(legacy_rows))
             token_file.write("\n")
-        os.replace(tokens_tmp, TOKEN_FILE)
         os.replace(legacy_tmp, LEGACY_TOKEN_FILE)
+        os.replace(tokens_tmp, TOKEN_FILE)
         os.chmod(TOKEN_FILE, 0o600)
         os.chmod(LEGACY_TOKEN_FILE, 0o600)
+        invalidate_token_caches()
         return token
 
     return with_token_file_lock(update_token_files)
-
+)PY1");
+    script += QStringLiteral(R"PY2(
 
 def prune_client_dir(client_dir):
     files = []
     total = 0
-    for name in os.listdir(client_dir):
-        path = os.path.join(client_dir, name)
-        if not name.endswith(".log") or not os.path.isfile(path):
-            continue
-        stat = os.stat(path)
-        files.append((stat.st_mtime, path, stat.st_size))
-        total += stat.st_size
+    with os.scandir(client_dir) as entries:
+        for entry in entries:
+            if not entry.name.endswith(".log") or not entry.is_file(follow_symlinks=False):
+                continue
+            try:
+                stat = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            files.append((stat.st_mtime, entry.path, stat.st_size))
+            total += stat.st_size
+    remaining_files = len(files)
     for _, path, size in sorted(files):
-        if total <= MAX_CLIENT_BYTES:
+        if total <= MAX_CLIENT_BYTES and remaining_files <= MAX_FILES_PER_CLIENT:
             break
         try:
             os.remove(path)
             total -= size
+            remaining_files -= 1
         except FileNotFoundError:
             pass
 
 
+def collect_log_files():
+    files = []
+    if not os.path.isdir(LOG_ROOT):
+        return files
+    with os.scandir(LOG_ROOT) as client_entries:
+        for client_entry in client_entries:
+            if not client_entry.is_dir(follow_symlinks=False):
+                continue
+            with os.scandir(client_entry.path) as entries:
+                for entry in entries:
+                    if not entry.name.endswith(".log") or not entry.is_file(follow_symlinks=False):
+                        continue
+                    try:
+                        stat = entry.stat(follow_symlinks=False)
+                    except FileNotFoundError:
+                        continue
+                    files.append((stat.st_mtime, entry.path, stat.st_size))
+    return files
+
+
+def reserve_global_log_capacity_unlocked(reserve_bytes=0, reserve_files=0):
+    if (reserve_bytes < 0 or reserve_files < 0
+            or reserve_bytes > MAX_TOTAL_BYTES or reserve_files > MAX_TOTAL_FILES):
+        return False
+    now = time.time()
+    files = collect_log_files()
+    retained = []
+    changed_directories = set()
+    total = 0
+    for modified_at, path, size in files:
+        if modified_at < now - MAX_LOG_AGE_SECONDS:
+            try:
+                os.remove(path)
+                changed_directories.add(os.path.dirname(path))
+            except FileNotFoundError:
+                pass
+            continue
+        retained.append((modified_at, path, size))
+        total += size
+    byte_limit = MAX_TOTAL_BYTES - reserve_bytes
+    file_limit = MAX_TOTAL_FILES - reserve_files
+    remaining_files = len(retained)
+    for _, path, size in sorted(retained):
+        if total <= byte_limit and remaining_files <= file_limit:
+            break
+        try:
+            os.remove(path)
+            changed_directories.add(os.path.dirname(path))
+        except FileNotFoundError:
+            pass
+        total -= size
+        remaining_files -= 1
+
+    if os.path.isdir(LOG_ROOT):
+        with os.scandir(LOG_ROOT) as client_entries:
+            for client_entry in client_entries:
+                if not client_entry.is_dir(follow_symlinks=False):
+                    continue
+                with os.scandir(client_entry.path) as entries:
+                    for entry in entries:
+                        if not entry.name.endswith(".tmp") and ".tmp-" not in entry.name:
+                            continue
+                        try:
+                            stat = entry.stat(follow_symlinks=False)
+                            if entry.is_file(follow_symlinks=False) and stat.st_mtime < now - MAX_TMP_AGE_SECONDS:
+                                os.remove(entry.path)
+                                changed_directories.add(os.path.dirname(entry.path))
+                        except FileNotFoundError:
+                            pass
+    for directory in sorted(changed_directories):
+        fsync_directory(directory)
+    return total <= byte_limit and remaining_files <= file_limit
+
+
+def prune_all_logs_unlocked():
+    return reserve_global_log_capacity_unlocked()
+
+
+def prune_all_logs():
+    with global_storage_lock():
+        prune_all_logs_unlocked()
+    invalidate_health_cache()
+
+
+def storage_summary():
+    files = collect_log_files()
+    return {
+        "bytes": sum(item[2] for item in files),
+        "files": len(files),
+    }
+
+
+def file_body_metadata(path):
+    digest = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as stored_file:
+        while True:
+            chunk = stored_file.read(64 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
+def stored_batch_metadata(client_dir, batch_id):
+    suffix = "-" + batch_id + ".log"
+    with os.scandir(client_dir) as entries:
+        for entry in entries:
+            if ((entry.name == batch_id + ".log" or entry.name.endswith(suffix))
+                    and entry.is_file(follow_symlinks=False)):
+                try:
+                    return file_body_metadata(entry.path)
+                except FileNotFoundError:
+                    continue
+    return None
+
+
+def fsync_directory(path):
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(path, directory_flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def ensure_receipt_schema(connection):
+    global RECEIPT_SCHEMA_READY
+    with RECEIPT_SCHEMA_LOCK:
+        if RECEIPT_SCHEMA_READY:
+            return
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS batch_receipts ("
+                "client_id TEXT NOT NULL, batch_id TEXT NOT NULL, accepted_at INTEGER NOT NULL, "
+                "body_sha256 TEXT, body_length INTEGER, "
+                "PRIMARY KEY (client_id, batch_id))")
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(batch_receipts)")
+            }
+            if "body_sha256" not in columns:
+                connection.execute("ALTER TABLE batch_receipts ADD COLUMN body_sha256 TEXT")
+            if "body_length" not in columns:
+                connection.execute("ALTER TABLE batch_receipts ADD COLUMN body_length INTEGER")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS collector_health ("
+                "singleton INTEGER PRIMARY KEY CHECK (singleton = 1), touched_at INTEGER NOT NULL)")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS batch_receipts_age "
+                "ON batch_receipts (accepted_at)")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS batch_receipts_client_age "
+                "ON batch_receipts (client_id, accepted_at DESC)")
+            connection.commit()
+            RECEIPT_SCHEMA_READY = True
+        except Exception:
+            connection.rollback()
+            raise
+
+
+def open_receipt_db():
+    os.makedirs(ROOT, mode=0o700, exist_ok=True)
+    database_existed = os.path.exists(RECEIPT_DB)
+    connection = sqlite3.connect(RECEIPT_DB, timeout=30)
+    try:
+        connection.execute("PRAGMA busy_timeout=30000")
+        connection.execute("PRAGMA synchronous=FULL")
+        ensure_receipt_schema(connection)
+        os.chmod(RECEIPT_DB, 0o600)
+        if not database_existed:
+            fsync_directory(ROOT)
+        return connection
+    except Exception:
+        connection.close()
+        raise
+
+
+def batch_receipt_metadata(client_id, batch_id):
+    with contextlib.closing(open_receipt_db()) as connection:
+        row = connection.execute(
+            "SELECT body_sha256, body_length FROM batch_receipts "
+            "WHERE client_id = ? AND batch_id = ? LIMIT 1",
+            (client_id, batch_id)).fetchone()
+    return tuple(row) if row is not None else None
+
+
+def batch_receipt_exists(client_id, batch_id):
+    return batch_receipt_metadata(client_id, batch_id) is not None
+
+
+def prune_batch_receipts():
+    cutoff = int(time.time()) - RECEIPT_TTL_SECONDS
+    with contextlib.closing(open_receipt_db()) as connection:
+        connection.execute("DELETE FROM batch_receipts WHERE accepted_at < ?", (cutoff,))
+        connection.execute(
+            "DELETE FROM batch_receipts WHERE rowid IN ("
+            "SELECT rowid FROM batch_receipts ORDER BY accepted_at DESC, rowid DESC "
+            "LIMIT -1 OFFSET ?)",
+            (MAX_TOTAL_RECEIPTS,))
+        connection.commit()
+
+
+def record_batch_receipt(client_id, batch_id, body_sha256, body_length):
+    global RECEIPT_INSERTS_SINCE_MAINTENANCE
+    if (not SAFE_CLIENT_ID.fullmatch(client_id) or not SAFE_BATCH_ID.fullmatch(batch_id)
+            or not SAFE_BATCH_ID.fullmatch(body_sha256) or body_length <= 0
+            or body_length > MAX_UPLOAD_BYTES):
+        raise ValueError("invalid batch receipt metadata")
+    with contextlib.closing(open_receipt_db()) as connection:
+        connection.execute(
+            "INSERT OR IGNORE INTO batch_receipts "
+            "(client_id, batch_id, accepted_at, body_sha256, body_length) VALUES (?, ?, ?, ?, ?)",
+            (client_id, batch_id, int(time.time()), body_sha256, body_length))
+        connection.execute(
+            "UPDATE batch_receipts SET body_sha256 = ?, body_length = ? "
+            "WHERE client_id = ? AND batch_id = ? "
+            "AND (body_sha256 IS NULL OR body_length IS NULL)",
+            (body_sha256, body_length, client_id, batch_id))
+        connection.execute(
+            "DELETE FROM batch_receipts WHERE rowid IN ("
+            "SELECT rowid FROM batch_receipts WHERE client_id = ? "
+            "ORDER BY accepted_at DESC, rowid DESC LIMIT -1 OFFSET ?)",
+            (client_id, MAX_RECEIPTS_PER_CLIENT))
+        connection.commit()
+
+    run_maintenance = False
+    with RECEIPT_MAINTENANCE_LOCK:
+        RECEIPT_INSERTS_SINCE_MAINTENANCE += 1
+        if RECEIPT_INSERTS_SINCE_MAINTENANCE >= 256:
+            RECEIPT_INSERTS_SINCE_MAINTENANCE = 0
+            run_maintenance = True
+    if run_maintenance:
+        prune_batch_receipts()
+
+
+def read_last_retention_at():
+    try:
+        with open(RETENTION_STATE_FILE, "r", encoding="ascii") as state_file:
+            completed_at = float(state_file.read(64).strip())
+    except (FileNotFoundError, OSError, ValueError):
+        return 0.0
+    now = time.time()
+    if completed_at < 0 or completed_at > now + 5 * 60:
+        return 0.0
+    return completed_at
+
+
+def write_last_retention_at(completed_at):
+    tmp_path = RETENTION_STATE_FILE + ".tmp-" + secrets.token_hex(8)
+    try:
+        with open(tmp_path, "w", encoding="ascii") as state_file:
+            state_file.write(f"{completed_at:.6f}\n")
+            state_file.flush()
+            os.fsync(state_file.fileno())
+        os.replace(tmp_path, RETENTION_STATE_FILE)
+        os.chmod(RETENTION_STATE_FILE, 0o600)
+        fsync_directory(ROOT)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass
+
+
+def run_retention_pass(force=False):
+    global NEXT_RETENTION_CHECK_AT
+    monotonic_now = time.monotonic()
+    with RETENTION_RUNTIME_LOCK:
+        if not force and monotonic_now < NEXT_RETENTION_CHECK_AT:
+            return False
+        NEXT_RETENTION_CHECK_AT = monotonic_now + RETENTION_CHECK_INTERVAL_SECONDS
+
+    with global_storage_lock():
+        now = time.time()
+        if not force and now - read_last_retention_at() < RETENTION_INTERVAL_SECONDS:
+            return False
+        prune_all_logs_unlocked()
+        prune_batch_receipts()
+        write_last_retention_at(now)
+    invalidate_health_cache()
+    return True
+
+
+def token_store_ready():
+    lines, signature = read_stable_lines(TOKEN_FILE)
+    if signature is None:
+        return False
+    for line in lines:
+        stripped = line.rstrip("\n")
+        if not stripped:
+            continue
+        parts = stripped.split("\t")
+        if len(parts) != 2:
+            return False
+        client_id, token = parts
+        if (not SAFE_CLIENT_ID.fullmatch(client_id) or not token
+                or len(token) > 512 or not token.isascii()):
+            return False
+    return True
+
+
+def receipt_store_ready():
+    with contextlib.closing(open_receipt_db()) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute(
+                "INSERT OR REPLACE INTO collector_health (singleton, touched_at) VALUES (1, ?)",
+                (int(time.time()),))
+        finally:
+            connection.rollback()
+    return True
+
+
+def log_store_ready():
+    os.makedirs(LOG_ROOT, mode=0o700, exist_ok=True)
+    probe_path = os.path.join(LOG_ROOT, ".health-" + secrets.token_hex(8) + ".tmp")
+    descriptor = None
+    try:
+        descriptor = os.open(probe_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        if os.write(descriptor, b"1") != 1:
+            raise OSError("short health probe write")
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.remove(probe_path)
+        fsync_directory(LOG_ROOT)
+        return True
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            os.remove(probe_path)
+        except FileNotFoundError:
+            pass
+
+
+def global_log_quota_ready():
+    if MAX_TOTAL_BYTES <= 0 or MAX_TOTAL_FILES <= 0:
+        return False
+    with global_storage_lock():
+        summary = storage_summary()
+        return (summary["bytes"] <= MAX_TOTAL_BYTES
+                and summary["files"] <= MAX_TOTAL_FILES)
+
+
+def cached_health_ready():
+    now = time.monotonic()
+    with HEALTH_CACHE_LOCK:
+        if HEALTH_CACHE["ready"] is None or HEALTH_CACHE["expiresAt"] <= now:
+            try:
+                ready = (token_store_ready() and receipt_store_ready() and log_store_ready()
+                         and global_log_quota_ready())
+            except Exception:
+                ready = False
+            HEALTH_CACHE["ready"] = ready
+            HEALTH_CACHE["expiresAt"] = now + HEALTH_CACHE_SECONDS
+        return bool(HEALTH_CACHE["ready"])
+
+
+def read_body_metadata(stream, content_length):
+    remaining = content_length
+    digest = hashlib.sha256()
+    while remaining > 0:
+        chunk = stream.read(min(64 * 1024, remaining))
+        if not chunk:
+            raise ConnectionError("short request body")
+        digest.update(chunk)
+        remaining -= len(chunk)
+    return digest.hexdigest(), content_length
+
+
+def retention_worker(stop_event, interval=RETENTION_CHECK_INTERVAL_SECONDS):
+    while not stop_event.wait(interval):
+        try:
+            run_retention_pass()
+        except Exception:
+            increment_metric("errors")
+)PY2");
+    script += QStringLiteral(R"PY3(
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AmneziaClientLogs/1.0"
+    server_version = "AmneziaClientLogs/3.0"
+
+    def send_no_content(self, batch_id="", replayed=False):
+        self.send_response(204)
+        self.send_header("Cache-Control", "no-store")
+        if batch_id:
+            self.send_header("X-Amnezia-Batch-Accepted", "1")
+            self.send_header("X-Amnezia-Batch-Id", batch_id)
+        if replayed:
+            self.send_header("X-Amnezia-Batch-Replayed", "1")
+        self.end_headers()
+
+    def do_GET(self):
+        if self.path != HEALTH_PATH:
+            self.send_error(404)
+            return
+        if not HEALTH_SEMAPHORE.acquire(blocking=False):
+            self.send_error(503)
+            return
+        try:
+            ready = cached_health_ready()
+            body = json.dumps({
+                "status": "ok" if ready else "degraded",
+                "collectorVersion": 3,
+            }, separators=(",", ":")).encode("utf-8")
+            self.send_response(200 if ready else 503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception:
+            increment_metric("errors")
+            self.send_error(503)
+        finally:
+            HEALTH_SEMAPHORE.release()
 
     def authenticate_client(self):
         client_id = self.headers.get("X-Amnezia-Client-Id", "")
@@ -303,18 +849,28 @@ class Handler(BaseHTTPRequestHandler):
         if not SAFE_CLIENT_ID.match(client_id):
             self.send_error(400)
             return None
-        if load_tokens().get(client_id) != token:
+        if not token or len(token) > 512 or not token.isascii():
             self.send_error(403)
             return None
-        legacy_scopes = is_legacy_token(client_id, token)
-        if legacy_scopes:
-            if not ALLOW_BOOTSTRAP or CONTAINER_SCOPE not in legacy_scopes:
+        try:
+            saved_token = load_tokens().get(client_id, "")
+            if (not saved_token or len(saved_token) > 512 or not saved_token.isascii()
+                    or not secrets.compare_digest(saved_token, token)):
                 self.send_error(403)
                 return None
-            source_client_id = resolve_legacy_client_id(self.client_address[0])
-            if source_client_id != client_id:
-                self.send_error(403)
-                return None
+            legacy_scopes = is_legacy_token(client_id, token)
+            if legacy_scopes:
+                if not ALLOW_BOOTSTRAP or CONTAINER_SCOPE not in legacy_scopes:
+                    self.send_error(403)
+                    return None
+                source_client_id = resolve_legacy_client_id(self.client_address[0])
+                if source_client_id != client_id:
+                    self.send_error(403)
+                    return None
+        except OSError:
+            increment_metric("errors")
+            self.send_error(503)
+            return None
         return client_id
 
     def do_POST(self):
@@ -344,11 +900,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         kind = self.headers.get("X-Amnezia-Log-Kind", "client")
         installation_id = self.headers.get("X-Amnezia-Installation-Id", "unknown")
+        batch_id = self.headers.get("X-Amnezia-Batch-Id", "")
         if not SAFE_KIND.match(kind):
             self.send_error(400)
             return
         if not SAFE_INSTALLATION_ID.match(installation_id):
             installation_id = "unknown"
+        if not batch_id:
+            self.send_error(428, "X-Amnezia-Batch-Id is required")
+            return
+        if not SAFE_BATCH_ID.fullmatch(batch_id):
+            self.send_error(400)
+            return
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -366,28 +929,95 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with client_lock(client_id):
                 os.makedirs(client_dir, mode=0o700, exist_ok=True)
+                receipt_metadata = batch_receipt_metadata(client_id, batch_id)
+                receipt_is_bound = (receipt_metadata is not None
+                                    and receipt_metadata[0] is not None
+                                    and receipt_metadata[1] is not None)
+                stored_metadata = None
+                if receipt_metadata is None or not receipt_is_bound:
+                    stored_metadata = stored_batch_metadata(client_dir, batch_id)
+                if receipt_metadata is not None or stored_metadata is not None:
+                    incoming_metadata = read_body_metadata(self.rfile, content_length)
+                    expected_metadata = receipt_metadata if receipt_is_bound else stored_metadata
+                    if expected_metadata is not None:
+                        expected_sha256, expected_length = expected_metadata
+                        if (not isinstance(expected_sha256, str)
+                                or not SAFE_BATCH_ID.fullmatch(expected_sha256)
+                                or not isinstance(expected_length, int)
+                                or expected_length <= 0
+                                or expected_length > MAX_UPLOAD_BYTES):
+                            raise OSError("invalid batch receipt metadata")
+                        if (expected_length != incoming_metadata[1]
+                                or not secrets.compare_digest(expected_sha256, incoming_metadata[0])):
+                            increment_metric("errors")
+                            self.send_error(409, "Batch body does not match the accepted receipt")
+                            return
+                    if stored_metadata is not None:
+                        fsync_directory(client_dir)
+                    if not receipt_is_bound:
+                        record_batch_receipt(
+                            client_id, batch_id, incoming_metadata[0], incoming_metadata[1])
+                    increment_metric("replayed")
+                    invalidate_health_cache()
+                    self.send_no_content(batch_id=batch_id, replayed=True)
+                    return
                 stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-                final_path = os.path.join(client_dir, f"{stamp}-{time.time_ns()}-{installation_id}-{kind}.log")
-                tmp_path = final_path + ".tmp"
+                batch_suffix = f"-{batch_id}" if batch_id else ""
+                final_path = os.path.join(
+                    client_dir,
+                    f"{stamp}-{time.time_ns()}-{installation_id}-{kind}{batch_suffix}.log")
+                tmp_path = final_path + ".tmp-" + secrets.token_hex(8)
                 remaining = content_length
+                body_digest = hashlib.sha256()
                 with open(tmp_path, "wb") as log_file:
                     while remaining > 0:
                         chunk = self.rfile.read(min(64 * 1024, remaining))
                         if not chunk:
                             raise ConnectionError("short request body")
                         log_file.write(chunk)
+                        body_digest.update(chunk)
                         remaining -= len(chunk)
-                os.replace(tmp_path, final_path)
-                prune_client_dir(client_dir)
-            self.send_response(204)
-            self.end_headers()
+                    log_file.flush()
+                    os.fsync(log_file.fileno())
+                with global_storage_lock():
+                    if not reserve_global_log_capacity_unlocked(
+                            reserve_bytes=content_length, reserve_files=1):
+                        raise StorageQuotaExceeded()
+                    os.replace(tmp_path, final_path)
+                    tmp_path = None
+                    fsync_directory(client_dir)
+                    record_batch_receipt(
+                        client_id, batch_id, body_digest.hexdigest(), content_length)
+                    prune_client_dir(client_dir)
+            run_retention_pass()
+            increment_metric("accepted")
+            invalidate_health_cache()
+            self.send_no_content(batch_id=batch_id)
+        except StorageQuotaExceeded:
+            if tmp_path is not None:
+                try:
+                    os.remove(tmp_path)
+                except FileNotFoundError:
+                    pass
+            increment_metric("errors")
+            invalidate_health_cache()
+            self.send_error(507, "Insufficient collector storage quota")
+        except (ConnectionError, ValueError):
+            if tmp_path is not None:
+                try:
+                    os.remove(tmp_path)
+                except FileNotFoundError:
+                    pass
+            increment_metric("errors")
+            self.send_error(400)
         except Exception:
             if tmp_path is not None:
                 try:
                     os.remove(tmp_path)
                 except FileNotFoundError:
                     pass
-            self.send_error(400)
+            increment_metric("errors")
+            self.send_error(500)
         finally:
             UPLOAD_SEMAPHORE.release()
 
@@ -418,17 +1048,77 @@ class Handler(BaseHTTPRequestHandler):
 
 class LogServer(ThreadingHTTPServer):
     daemon_threads = True
+    request_queue_size = 32
+
+    def __init__(self, *args, **kwargs):
+        self._handler_slots = threading.BoundedSemaphore(MAX_HANDLER_THREADS)
+        self._handler_count_lock = threading.Lock()
+        self._active_handler_count = 0
+        super().__init__(*args, **kwargs)
+
+    def active_handler_count(self):
+        with self._handler_count_lock:
+            return self._active_handler_count
+
+    def reserve_handler(self):
+        if not self._handler_slots.acquire(blocking=False):
+            return False
+        with self._handler_count_lock:
+            self._active_handler_count += 1
+        return True
+
+    def release_handler(self):
+        with self._handler_count_lock:
+            self._active_handler_count -= 1
+        self._handler_slots.release()
+
+    def process_request(self, request, client_address):
+        if not self.reserve_handler():
+            try:
+                request.settimeout(1)
+                request.sendall(
+                    b"HTTP/1.0 503 Service Unavailable\r\n"
+                    b"Connection: close\r\nContent-Length: 0\r\n\r\n")
+            except OSError:
+                pass
+            finally:
+                self.shutdown_request(request)
+            return
+
+        try:
+            request.settimeout(PRE_HEADER_TIMEOUT_SECONDS)
+            super().process_request(request, client_address)
+        except Exception:
+            self.release_handler()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.release_handler()
 
 
 def main():
     os.umask(0o077)
     os.makedirs(LOG_ROOT, mode=0o700, exist_ok=True)
-    LogServer(("0.0.0.0", PORT), Handler).serve_forever()
+    run_retention_pass()
+    retention_stop = threading.Event()
+    retention_thread = threading.Thread(
+        target=retention_worker, args=(retention_stop,), daemon=True)
+    retention_thread.start()
+    server = LogServer(("0.0.0.0", PORT), Handler)
+    try:
+        server.serve_forever()
+    finally:
+        retention_stop.set()
+        retention_thread.join(timeout=5)
+        server.server_close()
 
 
 if __name__ == "__main__":
     main()
-)PY");
+)PY3");
     script.replace(QStringLiteral("__MAX_UPLOAD_BYTES__"), QString::number(protocols::clientLogs::maxBytesPerUpload));
     script.replace(QStringLiteral("__MAX_CLIENT_BYTES__"), QString::number(protocols::clientLogs::maxBytesPerClient));
     script.replace(QStringLiteral("__PORT__"), QString::number(protocols::clientLogs::syncPort));
@@ -583,13 +1273,13 @@ ErrorCode publishClientLogCollector(const ServerCredentials &credentials,
 sudo install -d -m 0700 '__HOST_DIRECTORY__' '__HOST_DIRECTORY__/logs' '__HOST_DIRECTORY__/legacy' || echo __ERROR_MARKER__:mkdir
 sudo install -m 0755 '__SCRIPT_TMP_FILE__' '__HOST_DIRECTORY__/collector.py' || echo __ERROR_MARKER__:script_install
 sudo touch '__HOST_DIRECTORY__/tokens.tsv' || echo __ERROR_MARKER__:tokens_touch
-if [ '__UPSERT_TOKEN__' = '1' ]; then sudo sh -c "i=0; while ! mkdir '__HOST_DIRECTORY__/tokens.lock' 2>/dev/null; do i=\$((i + 1)); [ \$i -lt 30 ] || { echo __ERROR_MARKER__:tokens_lock; exit 0; }; sleep 1; done; trap 'rm -rf \"__HOST_DIRECTORY__/tokens.lock\" \"__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp\"' EXIT; grep -v '^__CLIENT_LOG_ID__[[:space:]]' '__HOST_DIRECTORY__/tokens.tsv' 2>/dev/null > '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp' || true; cat '__TOKEN_TMP_FILE__' >> '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp' || { echo __ERROR_MARKER__:token_append; exit 0; }; install -m 0600 '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp' '__HOST_DIRECTORY__/tokens.tsv' || echo __ERROR_MARKER__:tokens_install"; fi
+if [ '__UPSERT_TOKEN__' = '1' ]; then sudo sh -c "i=0; while ! mkdir '__HOST_DIRECTORY__/tokens.lock' 2>/dev/null; do if [ -d '__HOST_DIRECTORY__/tokens.lock' ] && find '__HOST_DIRECTORY__/tokens.lock' -maxdepth 0 -mmin +1 -print -quit | grep -q .; then rmdir '__HOST_DIRECTORY__/tokens.lock' 2>/dev/null || true; fi; i=\$((i + 1)); [ \$i -lt 30 ] || { echo __ERROR_MARKER__:tokens_lock; exit 0; }; sleep 1; done; trap 'rm -rf \"__HOST_DIRECTORY__/tokens.lock\" \"__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp\"' EXIT; grep -v '^__CLIENT_LOG_ID__[[:space:]]' '__HOST_DIRECTORY__/tokens.tsv' 2>/dev/null > '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp' || true; cat '__TOKEN_TMP_FILE__' >> '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp' || { echo __ERROR_MARKER__:token_append; exit 0; }; install -m 0600 '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp' '__HOST_DIRECTORY__/tokens.tsv' || echo __ERROR_MARKER__:tokens_install"; fi
 sudo rm -f '__SCRIPT_TMP_FILE__' '__TOKEN_TMP_FILE__' || true
 if sudo docker network inspect amnezia-dns-net >/dev/null 2>&1; then if ! sudo docker network inspect amnezia-dns-net --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' | grep -qw '172.29.172.0/24'; then echo __ERROR_MARKER__:network_subnet; fi; else sudo docker network create --driver bridge --subnet=172.29.172.0/24 --opt com.docker.network.bridge.name=amn0 amnezia-dns-net || echo __ERROR_MARKER__:network_create; fi
 if ! sudo docker image inspect '__COLLECTOR_IMAGE__' >/dev/null 2>&1; then sudo docker pull '__COLLECTOR_IMAGE__' >/dev/null || echo __ERROR_MARKER__:image_pull; fi
 sudo docker rm -f '__BRIDGE_CONTAINER__' >/dev/null 2>&1 || true
-sudo docker run -d --log-driver none --restart always --memory=96m --cpus=0.5 --pids-limit=64 --network amnezia-dns-net --ip=__BRIDGE_HOST__ --name '__BRIDGE_CONTAINER__' -e AMNEZIA_CLIENT_LOGS_BOOTSTRAP=0 -v __HOST_DIRECTORY__:/data:rw --entrypoint python '__COLLECTOR_IMAGE__' /data/collector.py || echo __ERROR_MARKER__:bridge_run
-if [ '__PUBLISH_TUNNEL__' = '1' ]; then if sudo docker ps --format '{{.Names}}' | grep -qx '__VPN_CONTAINER__'; then if [ '__ALLOW_LEGACY_BOOTSTRAP__' = '1' ]; then __LEGACY_MAP_REFRESH__ fi; sudo docker rm -f '__TUNNEL_CONTAINER__' >/dev/null 2>&1 || true; sudo docker exec -i '__VPN_CONTAINER__' sh -c 'while iptables -t nat -D PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__ 2>/dev/null; do :; done; iptables -t nat -A PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__' >/dev/null 2>&1 || echo __ERROR_MARKER__:tunnel_redirect; sudo docker run -d --log-driver none --restart always --memory=96m --cpus=0.5 --pids-limit=64 --network container:__VPN_CONTAINER__ --name '__TUNNEL_CONTAINER__' -e AMNEZIA_CLIENT_LOGS_BOOTSTRAP=__ALLOW_LEGACY_BOOTSTRAP__ -e AMNEZIA_CLIENT_LOGS_SCOPE='__CONTAINER_SCOPE__' -v __HOST_DIRECTORY__:/data:rw --entrypoint python '__COLLECTOR_IMAGE__' /data/collector.py || echo __ERROR_MARKER__:tunnel_run; else echo __ERROR_MARKER__:missing_vpn_container; fi; fi
+sudo docker run -d --log-driver none --restart always --memory=96m --cpus=0.5 --pids-limit=64 --cap-drop ALL --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777 --network amnezia-dns-net --ip=__BRIDGE_HOST__ --name '__BRIDGE_CONTAINER__' -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1 -e AMNEZIA_CLIENT_LOGS_BOOTSTRAP=0 -v __HOST_DIRECTORY__:/data:rw --entrypoint python '__COLLECTOR_IMAGE__' /data/collector.py || echo __ERROR_MARKER__:bridge_run
+if [ '__PUBLISH_TUNNEL__' = '1' ]; then if sudo docker ps --format '{{.Names}}' | grep -qx '__VPN_CONTAINER__'; then if [ '__ALLOW_LEGACY_BOOTSTRAP__' = '1' ]; then __LEGACY_MAP_REFRESH__ fi; sudo docker rm -f '__TUNNEL_CONTAINER__' >/dev/null 2>&1 || true; sudo docker exec -i '__VPN_CONTAINER__' sh -c 'while iptables -t nat -D PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__ 2>/dev/null; do :; done; iptables -t nat -A PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__' >/dev/null 2>&1 || echo __ERROR_MARKER__:tunnel_redirect; sudo docker run -d --log-driver none --restart always --memory=96m --cpus=0.5 --pids-limit=64 --cap-drop ALL --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777 --network container:__VPN_CONTAINER__ --name '__TUNNEL_CONTAINER__' -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1 -e AMNEZIA_CLIENT_LOGS_BOOTSTRAP=__ALLOW_LEGACY_BOOTSTRAP__ -e AMNEZIA_CLIENT_LOGS_SCOPE='__CONTAINER_SCOPE__' -v __HOST_DIRECTORY__:/data:rw --entrypoint python '__COLLECTOR_IMAGE__' /data/collector.py || echo __ERROR_MARKER__:tunnel_run; else echo __ERROR_MARKER__:missing_vpn_container; fi; fi
 sleep 1
 sudo docker ps --format '{{.Names}}' | grep -qx '__BRIDGE_CONTAINER__' || echo __ERROR_MARKER__:missing_bridge_container
 if [ '__PUBLISH_TUNNEL__' = '1' ]; then sudo docker ps --format '{{.Names}}' | grep -qx '__TUNNEL_CONTAINER__' || echo __ERROR_MARKER__:missing_tunnel_container; fi

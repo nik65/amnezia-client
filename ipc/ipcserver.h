@@ -1,15 +1,22 @@
 #ifndef IPCSERVER_H
 #define IPCSERVER_H
 
-#include <QLocalServer>
+#include <QMap>
 #include <QObject>
+#include <QPointer>
+#include <QProcess>
 #include <QRemoteObjectNode>
 #include <QJsonObject>
+#include <QSet>
+#include <QSharedPointer>
+#include <QTimer>
 #include "../client/daemon/interfaceconfig.h"
 #include "../client/mozilla/pinghelper.h"
 
 #include "ipc.h"
 #include "ipcserverprocess.h"
+#include "localpeerauthentication.h"
+#include "windowsprivilegedpipe.h"
 
 #include "rep_ipc_interface_source.h"
 
@@ -17,7 +24,8 @@ class IpcServer : public IpcInterfaceSource
 {
 public:
     explicit IpcServer(QObject *parent = nullptr);
-    virtual int createPrivilegedProcess() override;
+    int protocolVersion() override;
+    QString createPrivilegedProcess() override;
 
     virtual int routeAddList(const QString &gw, const QStringList &ips) override;
     virtual int routeAddTrustedList(const QString &gw, const QStringList &ips) override;
@@ -49,21 +57,39 @@ public:
     virtual bool stopNetworkCheck() override;
 
 private:
-    int m_localpid = 0;
-
-    struct ProcessDescriptor {
-        ProcessDescriptor (QObject *parent = nullptr) {
-            serverNode = QSharedPointer<QRemoteObjectHost>(new QRemoteObjectHost(parent));
-            ipcProcess = QSharedPointer<IpcServerProcess>(new IpcServerProcess(parent));
-            localServer = QSharedPointer<QLocalServer>(new QLocalServer(parent));
-        }
-
-        QSharedPointer<IpcServerProcess> ipcProcess;
-        QSharedPointer<QRemoteObjectHost> serverNode;
-        QSharedPointer<QLocalServer> localServer;
+    enum class ProcessPhase {
+        AwaitingClaim,
+        AwaitingStart,
+        Running,
+        Finished,
+        Terminating,
     };
 
-    QMap<int, ProcessDescriptor> m_processes;
+    struct ProcessDescriptor {
+        // Destruction is reverse declaration order. Keep the acceptor first so
+        // QtRO wrappers/process state are gone before its child QLocalSocket.
+        amnezia::ipc::PrivilegedLocalServer localServer;
+        QRemoteObjectHost serverNode;
+        IpcServerProcess ipcProcess;
+        QTimer lifecycleTimer;
+        QPointer<QLocalSocket> connection;
+        amnezia::ipc::LocalPeerIdentity peerIdentity;
+        ProcessPhase phase = ProcessPhase::AwaitingClaim;
+        QProcess::ProcessState processState = QProcess::NotRunning;
+        int rejectedPeers = 0;
+        int terminationAttempts = 0;
+    };
+
+    void handleProcessConnection(const QString &capability);
+    void handleProcessSocketGone(const QString &capability);
+    void handleProcessTimeout(const QString &capability);
+    void beginProcessTermination(const QString &capability);
+    void finalizeProcessCapability(const QString &capability);
+    [[nodiscard]] bool processQuotaAvailable(
+            const amnezia::ipc::LocalPeerIdentity &identity) const;
+
+    QMap<QString, QSharedPointer<ProcessDescriptor>> m_processes;
+    QSet<QString> m_trustedManagedRoutes;
     PingHelper m_pingHelper;
 };
 

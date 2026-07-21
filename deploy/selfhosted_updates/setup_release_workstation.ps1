@@ -16,6 +16,25 @@ param(
     [string] $AndroidReleaseKeystoreAlias = $(if ($env:QT_ANDROID_KEYSTORE_ALIAS) { $env:QT_ANDROID_KEYSTORE_ALIAS } else { "release" }),
     [string] $UpdateSyncHost = $(if ($env:SELFHOSTED_UPDATE_SYNC_HOST) { $env:SELFHOSTED_UPDATE_SYNC_HOST } else { "10.8.1.0" }),
     [string] $BaseUrl = $(if ($env:SELFHOSTED_UPDATE_BASE_URL) { $env:SELFHOSTED_UPDATE_BASE_URL } else { "" }),
+    [ValidateSet(1, 2)]
+    [int] $PayloadSchema = $(if ($env:SELFHOSTED_UPDATE_PAYLOAD_SCHEMA) { [int] $env:SELFHOSTED_UPDATE_PAYLOAD_SCHEMA } else { 1 }),
+    [ValidateSet("stable", "canary", "emergency")]
+    [string] $Channel = $(if ($env:SELFHOSTED_UPDATE_CHANNEL) { $env:SELFHOSTED_UPDATE_CHANNEL } else { "stable" }),
+    [ValidateRange(0, 100)]
+    [int] $RolloutPercentage = $(if ($env:SELFHOSTED_UPDATE_ROLLOUT_PERCENTAGE) { [int] $env:SELFHOSTED_UPDATE_ROLLOUT_PERCENTAGE } else { 100 }),
+    [string] $CohortSaltId = $(if ($env:SELFHOSTED_UPDATE_COHORT_SALT_ID) { $env:SELFHOSTED_UPDATE_COHORT_SALT_ID } else { "fleet-v1" }),
+    [string] $MinimumEligibleVersion = $(if ($env:SELFHOSTED_UPDATE_MINIMUM_ELIGIBLE_VERSION) { $env:SELFHOSTED_UPDATE_MINIMUM_ELIGIBLE_VERSION } else { "" }),
+    [string] $MaximumEligibleVersion = $(if ($env:SELFHOSTED_UPDATE_MAXIMUM_ELIGIBLE_VERSION) { $env:SELFHOSTED_UPDATE_MAXIMUM_ELIGIBLE_VERSION } else { "" }),
+    [ValidateRange(60, 86400)]
+    [int] $HealthDeadlineSeconds = $(if ($env:SELFHOSTED_UPDATE_HEALTH_DEADLINE_SECONDS) { [int] $env:SELFHOSTED_UPDATE_HEALTH_DEADLINE_SECONDS } else { 600 }),
+    [ValidateRange(0, 9007199254740991)]
+    [long] $PolicyGeneration = $(if ($env:SELFHOSTED_UPDATE_POLICY_GENERATION) { [long] $env:SELFHOSTED_UPDATE_POLICY_GENERATION } else { 0 }),
+    [string] $GeneratedAt = $(if ($env:SELFHOSTED_UPDATE_GENERATED_AT) { $env:SELFHOSTED_UPDATE_GENERATED_AT } else { "" }),
+    [string] $ExpiresAt = $(if ($env:SELFHOSTED_UPDATE_EXPIRES_AT) { $env:SELFHOSTED_UPDATE_EXPIRES_AT } else { "" }),
+    [ValidateRange(1, 8760)]
+    [int] $PolicyValidForHours = $(if ($env:SELFHOSTED_UPDATE_POLICY_VALID_FOR_HOURS) { [int] $env:SELFHOSTED_UPDATE_POLICY_VALID_FOR_HOURS } else { 168 }),
+    [string] $PreviousVersion = $(if ($env:SELFHOSTED_UPDATE_PREVIOUS_VERSION) { $env:SELFHOSTED_UPDATE_PREVIOUS_VERSION } else { "" }),
+    [string[]] $RollbackArtifact = @(),
     [string] $AndroidReleaseKeystoreEnvFile = "",
     [string] $EnvFile = "",
     [switch] $InstallMissing,
@@ -26,6 +45,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ($RollbackArtifact.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:SELFHOSTED_UPDATE_ROLLBACK_ARTIFACTS)) {
+    $RollbackArtifact = @($env:SELFHOSTED_UPDATE_ROLLBACK_ARTIFACTS -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $RepoRoot = (Resolve-Path (Join-Path $ScriptRoot "..\..")).Path
@@ -55,6 +78,37 @@ function Write-Step([string] $Message) {
 function Assert-Command([string] $CommandName) {
     if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
         throw "Required command is not available in PATH: $CommandName"
+    }
+}
+
+function Assert-SafeFleetPolicySettings {
+    $restrictivePolicyRequested = (
+        $Channel -ne "stable" -or
+        $RolloutPercentage -ne 100 -or
+        $CohortSaltId -ne "fleet-v1" -or
+        -not [string]::IsNullOrWhiteSpace($MinimumEligibleVersion) -or
+        -not [string]::IsNullOrWhiteSpace($MaximumEligibleVersion) -or
+        $HealthDeadlineSeconds -ne 600 -or
+        $PolicyGeneration -ne 0 -or
+        -not [string]::IsNullOrWhiteSpace($GeneratedAt) -or
+        -not [string]::IsNullOrWhiteSpace($ExpiresAt) -or
+        $PolicyValidForHours -ne 168 -or
+        -not [string]::IsNullOrWhiteSpace($PreviousVersion) -or
+        $RollbackArtifact.Count -gt 0
+    )
+    if ($PayloadSchema -eq 1 -and $restrictivePolicyRequested) {
+        throw "Safe fleet policy settings require explicit -PayloadSchema 2. Schema 1 is restricted to stable 100%."
+    }
+    if ($PayloadSchema -eq 2 -and ($PolicyGeneration -le 0 -or $PolicyGeneration -gt 9007199254740991)) {
+        throw "-PolicyGeneration must be a positive monotonic JSON-safe integer up to 9007199254740991 with -PayloadSchema 2"
+    }
+    if ([string]::IsNullOrWhiteSpace($PreviousVersion) -ne ($RollbackArtifact.Count -eq 0)) {
+        throw "-PreviousVersion and at least one -RollbackArtifact platform=path must be supplied together"
+    }
+    foreach ($entry in $RollbackArtifact) {
+        if ($entry -notmatch "^[^=]+=.+$") {
+            throw "-RollbackArtifact must be platform=path: $entry"
+        }
     }
 }
 
@@ -602,7 +656,20 @@ function Write-EnvironmentFile {
         "`$env:SELFHOSTED_UPDATE_BASE_URL = $(Quote-PsSingle $BaseUrl)",
         "`$env:SELFHOSTED_UPDATE_SYNC_HOST = $(Quote-PsSingle $UpdateSyncHost)",
         "`$env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH = $(Quote-PsSingle $PrivateKeyPath)",
-        "`$env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $(Quote-PsSingle $publicKeyBase64)"
+        "`$env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $(Quote-PsSingle $publicKeyBase64)",
+        "`$env:SELFHOSTED_UPDATE_PAYLOAD_SCHEMA = $(Quote-PsSingle ([string] $PayloadSchema))",
+        "`$env:SELFHOSTED_UPDATE_CHANNEL = $(Quote-PsSingle $Channel)",
+        "`$env:SELFHOSTED_UPDATE_ROLLOUT_PERCENTAGE = $(Quote-PsSingle ([string] $RolloutPercentage))",
+        "`$env:SELFHOSTED_UPDATE_COHORT_SALT_ID = $(Quote-PsSingle $CohortSaltId)",
+        "`$env:SELFHOSTED_UPDATE_MINIMUM_ELIGIBLE_VERSION = $(Quote-PsSingle $MinimumEligibleVersion)",
+        "`$env:SELFHOSTED_UPDATE_MAXIMUM_ELIGIBLE_VERSION = $(Quote-PsSingle $MaximumEligibleVersion)",
+        "`$env:SELFHOSTED_UPDATE_HEALTH_DEADLINE_SECONDS = $(Quote-PsSingle ([string] $HealthDeadlineSeconds))",
+        "`$env:SELFHOSTED_UPDATE_POLICY_GENERATION = $(Quote-PsSingle ([string] $PolicyGeneration))",
+        "`$env:SELFHOSTED_UPDATE_GENERATED_AT = $(Quote-PsSingle $GeneratedAt)",
+        "`$env:SELFHOSTED_UPDATE_EXPIRES_AT = $(Quote-PsSingle $ExpiresAt)",
+        "`$env:SELFHOSTED_UPDATE_POLICY_VALID_FOR_HOURS = $(Quote-PsSingle ([string] $PolicyValidForHours))",
+        "`$env:SELFHOSTED_UPDATE_PREVIOUS_VERSION = $(Quote-PsSingle $PreviousVersion)",
+        "`$env:SELFHOSTED_UPDATE_ROLLBACK_ARTIFACTS = $(Quote-PsSingle ($RollbackArtifact -join ';'))"
     )
     if (Test-Path -LiteralPath $AndroidReleaseKeystoreEnvFile -PathType Leaf) {
         $content += ". $(Quote-PsSingle $AndroidReleaseKeystoreEnvFile)"
@@ -620,6 +687,7 @@ function Write-EnvironmentFile {
     Write-Host "Wrote $EnvFile"
 }
 
+Assert-SafeFleetPolicySettings
 Assert-Command "wsl.exe"
 Ensure-WslJava
 Ensure-AqtInstall

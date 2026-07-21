@@ -29,7 +29,10 @@ That is a concrete host address, not the CIDR route `10.8.1.0/1`. The Docker
 bridge endpoint `172.29.172.252` may still exist server-side, but do not use it
 as the compiled fallback unless a representative client can actually reach it.
 The published manifest keeps local artifact URLs relative under `files/`, so
-artifacts resolve from whichever manifest host the client reached.
+artifacts resolve from whichever manifest host the client reached. Forward
+artifacts are content-addressed as `files/artifacts/<sha256>/<filename>`: a
+failed, stale, or concurrent publisher cannot overwrite bytes referenced by a
+manifest that is already live.
 
 ## Release freeze automation
 
@@ -73,7 +76,9 @@ Keep `selfhosted-update-private.pem` off client devices and logs.
 
 `SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64` is required at build time because the
 clients must embed that public key to accept the signed private update manifest.
-The private signing key is used only by the local publisher.
+The private signing key is used only by the local publisher. The manifest tools
+inspect the key type and reject RSA, generic EC, or any other non-Ed25519 keypair
+instead of emitting an envelope whose algorithm label clients cannot verify.
 
 ## Local release build
 
@@ -173,8 +178,9 @@ installed under `selfhosted_updates` next to `AmneziaVPN.exe`. That bundled
 installer is written to
 `dist\selfhosted-windows-client\<version>\AmneziaVPN_<version>_windows_x64_selfhosted.exe`.
 Install that file on the release workstation. On startup, the Windows client
-uses the saved self-hosted admin SSH credentials to upload `files/`, refresh the
-update-host container, and switch `manifest.json` on the server last.
+uses the saved self-hosted admin SSH credentials to upload immutable `files/`
+objects, refresh the update-host container, and switch `manifest.json` on the
+server last.
 `local_release.ps1` does not upload to the server. Use
 `-NoBundleUpdatesInWindowsClient` only when you intentionally need a thin
 Windows installer without embedded payload. `-SkipBuild` skips rebuilding
@@ -206,16 +212,245 @@ Example:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.8.16.0 \
-  --release-date 2026-06-06 \
+  --version 4.9.0.11 \
+  --release-date 2026-07-21 \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=deploy/build/AmneziaVPN_4.8.16.0_windows_x64.exe \
-  --artifact linux-x64=deploy/build/AmneziaVPN_4.8.16.0_linux_x64.run \
-  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.8.16.0_android9+_arm64-v8a.apk \
+  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.0.11_windows_x64.exe \
+  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.0.11_linux_x64.run \
+  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.0.11_android9+_arm64-v8a.apk \
+  --android-version-code 2132 \
   --auto-install
 ```
+
+### Safe fleet policy (payload schema 2)
+
+The manifest envelope remains `amnezia-selfhosted-update-v1` because it still
+contains an Ed25519 signature over the exact base64url payload bytes. Fleet
+policy uses payload `schema: 2`; all policy fields are inside those signed
+bytes, so changing a channel, cohort, eligibility window, expiry, health
+deadline, or rollback artifact invalidates the signature.
+
+Payload schema 1 remains the default for release-tool compatibility and never
+contains `releasePolicy`. It is allowed only for an unrestricted `stable` 100%
+release. `make_manifest.py` rejects canary/emergency channels, partial or paused
+rollouts, eligibility limits, custom expiry/health settings, and rollback flags
+unless `--payload-schema 2` is present. This is a security boundary: an old
+client would otherwise ignore unknown policy fields and bypass the restriction.
+
+Migration must therefore happen in two releases:
+
+1. Publish a payload-schema-1 bootstrap client whose update controller accepts
+   and enforces both payload schemas 1 and 2.
+2. After that bootstrap is deployed, publish policy-controlled manifests with
+   `--payload-schema 2`. Clients that predate the bootstrap reject schema 2
+   fail-closed instead of bypassing its rollout.
+
+`publish_release.py`, `local_release.ps1`, and `rebuild_clients.ps1` expose the
+same policy controls. Their defaults intentionally remain payload schema 1,
+`stable`, and 100%, producing the legacy unrestricted manifest. Supplying any
+restrictive option while schema 1 is selected fails; policy mode never enables
+itself implicitly. Select schema 2 and provide a new positive monotonic
+generation explicitly for every policy publication. Before a server upload,
+the publisher reads and verifies the live signed manifest. Once that channel has
+accepted schema 2 it refuses a schema-1 downgrade, a lower generation, reuse of
+the same generation for different payload bytes, or a lower four-part release
+version. Equal release versions remain valid for an idempotent publication or a
+higher-generation rollout-policy update, but the non-policy release content
+(including artifact URLs, hashes, changelog, and install flags) stays bound to
+that version. Version components are canonical decimal numbers and cannot
+contain leading zeroes. The final manifest switch
+checks both the previously observed envelope hash and the uploaded candidate
+hash under a server-side lock, so concurrent publishers cannot substitute a
+different candidate or overwrite state that changed after validation. Local
+publication holds one channel lock from the fresh local transition check through
+the optional remote commit and the final local switch. Immutable local files are
+merged first and `manifest.json` is replaced atomically last; interruption cannot
+remove the previously published local manifest, and a retry reuses identical
+content-addressed files.
+
+Remote publication requires a dedicated normalized absolute `--server-dir`;
+root, dot/dot-dot aliases, and a path resolving to the host root are rejected
+before upload. The directory carries the root-owned
+`.amnezia-update-channel-v1` marker and may contain only the channel marker,
+manifest, publication lock, and `files/` tree. An empty directory is adopted on
+first publication; a legacy nonempty channel is adopted only when its regular
+`manifest.json` still matches the signed envelope verified by the local
+publisher. This prevents accidentally serving an unrelated root-owned directory.
+Each upload uses a fresh random mode-0700 staging directory. File publication and
+temporary-file recovery run under the same channel lock. Uploaded bytes are first
+snapshotted without privilege, handed into a root-only quarantine, then copied
+with signed byte limits into fresh root-owned inodes. Exact candidate paths,
+sizes, and SHA-256 values are checked again on the sealed tree and on any
+concurrent no-clobber winner before it can be referenced by `manifest.json`.
+The manifest uses the same bounded two-stage seal. Signal/exit traps remove
+unfinished stages; a retry can reconcile an exact remote manifest committed just
+before a local crash without republishing or changing its signed policy window.
+
+Example of a signed 10% canary with an explicit eligibility window, one-hour
+post-install health deadline, seven-day policy lifetime, and a previous Windows
+artifact available for rollback:
+
+```bash
+python deploy/selfhosted_updates/make_manifest.py \
+  --version 4.9.0.12 \
+  --payload-schema 2 \
+  --channel canary \
+  --rollout-percentage 10 \
+  --cohort-salt-id canary-2026q3 \
+  --minimum-eligible-version 4.9.0.1 \
+  --maximum-eligible-version 4.9.0.11 \
+  --health-deadline-seconds 3600 \
+  --policy-generation 1721470000 \
+  --generated-at 2026-07-20T10:00:00Z \
+  --expires-at 2026-07-27T10:00:00Z \
+  --previous-version 4.9.0.11 \
+  --rollback-artifact windows-x64=dist/previous/AmneziaVPN_4.9.0.11_windows_x64.exe \
+  --base-url http://172.29.172.252:17865 \
+  --private-key selfhosted-update-private.pem \
+  --out-dir dist/selfhosted-updates \
+  --artifact windows-x64=dist/current/AmneziaVPN_4.9.0.12_windows_x64.exe \
+  --auto-install
+```
+
+The artifact-discovery publisher accepts the same flags, including repeatable
+rollback artifacts:
+
+```bash
+python deploy/selfhosted_updates/publish_release.py \
+  --version 4.9.0.12 \
+  --payload-schema 2 \
+  --channel canary \
+  --rollout-percentage 10 \
+  --cohort-salt-id canary-2026q3 \
+  --policy-generation 1721470000 \
+  --expires-at 2026-07-27T10:00:00Z \
+  --previous-version 4.9.0.11 \
+  --rollback-artifact windows-x64=dist/previous/AmneziaVPN_4.9.0.11_windows_x64.exe \
+  --private-key selfhosted-update-private.pem \
+  --artifact-dir dist/current \
+  --base-url http://172.29.172.252:17865 \
+  --auto-install
+```
+
+For a local multi-platform build, use the corresponding PowerShell names. A
+rollback-enabled release must provide one rollback artifact for every supported
+local rollback platform in the current manifest. Android remains in the forward
+release, but is excluded from rollback coverage because the normal package
+installer rejects an ordinary APK with a lower `versionCode`:
+
+```powershell
+& .\deploy\selfhosted_updates\rebuild_clients.ps1 `
+  -PayloadSchema 2 `
+  -Channel canary `
+  -RolloutPercentage 10 `
+  -CohortSaltId canary-2026q3 `
+  -PolicyGeneration 1721470000 `
+  -PolicyValidForHours 168 `
+  -PreviousVersion 4.9.0.11 `
+  -RollbackArtifact @(
+    'windows-x64=dist\previous\AmneziaVPN_4.9.0.11_windows_x64.exe',
+    'linux-x64=dist\previous\AmneziaVPN_4.9.0.11_linux_x64.run'
+  )
+```
+
+`setup_release_workstation.ps1` can persist these values into
+`dist\selfhosted-release-env.ps1` using the same parameter names. Treat
+`PolicyGeneration`, `GeneratedAt`, `ExpiresAt`, `PreviousVersion`, and rollback
+paths as per-release values: refresh them before publishing rather than reusing
+an old workstation environment unchanged. Rollback artifact environment values
+are stored as a semicolon-separated
+`SELFHOSTED_UPDATE_ROLLBACK_ARTIFACTS` list.
+
+The signed `releasePolicy` has this shape:
+
+```json
+{
+  "schema": 2,
+  "generation": 1721470000,
+  "generatedAt": "2026-07-20T10:00:00Z",
+  "expiresAt": "2026-07-27T10:00:00Z",
+  "channel": "canary",
+  "rollout": {
+    "percentage": 10,
+    "cohortSaltId": "canary-2026q3"
+  },
+  "eligibility": {
+    "minimumVersion": "4.9.0.1",
+    "maximumVersion": "4.9.0.11"
+  },
+  "healthDeadlineSeconds": 3600,
+  "previousVersion": "4.9.0.11",
+  "rollback": {
+    "version": "4.9.0.11",
+    "platforms": {
+      "windows-x64": {
+        "url": "files/rollback/1721470000/4.9.0.11/AmneziaVPN_4.9.0.11_windows_x64.exe",
+        "sha256": "<lowercase-sha256>",
+        "size": 123456789,
+        "autoInstall": true
+      }
+    }
+  }
+}
+```
+
+Rules enforced by the generator:
+
+- `channel` is exactly `stable`, `canary`, or `emergency`.
+- `rollout.percentage` is an integer from 0 (pause) through 100 (all eligible
+  clients). `cohortSaltId` is a public 1-64 character identifier, never a key or
+  secret.
+- `generation` is a required positive JSON-safe integer for schema 2, capped at
+  `9007199254740991` (`2^53 - 1`) so it remains lossless in Qt's JSON number
+  representation. Publishers must persist and increment it monotonically so
+  clients can reject policy replay; no timestamp-derived fallback is used.
+- Timestamps are canonical UTC. Generation time cannot be materially in the
+  future, expiry must still be in the future, and the signed window cannot be
+  longer than one year, including when `--expires-at` is explicit.
+  `--policy-valid-for-hours` defaults to 168.
+- Eligibility versions use the canonical four-part numeric application version
+  format with no leading-zero components;
+  minimum cannot be newer than maximum.
+- `healthDeadlineSeconds` is from 60 through 86400. The 60-second floor leaves
+  margin beyond the 30-second post-launch stabilization window before startup
+  health readiness is acknowledged.
+- `previousVersion` must be older than the release. Rollback artifacts use the
+  same relative URL, lowercase sha256, positive size, and boolean `autoInstall`
+  metadata contract as current local artifacts. They are copied under
+  `files/rollback/<generation>/<previousVersion>/`. The generation directory is
+  immutable: it is copied to a hidden server-side stage and atomically renamed
+  before the new manifest becomes visible, so a failed publish cannot overwrite
+  a rollback file referenced by the previous manifest. `macos`, `macos-x64`,
+  and `macos-arm64` rollback are rejected while those aliases can also target
+  MACOS_NE clients, which cannot apply a verified local rollback package.
+  Android rollback aliases are also rejected. Android forward artifacts do not
+  require a rollback counterpart, because ordinary lower-`versionCode` APKs
+  cannot be installed as a downgrade through the package installer.
+- Every generated local Android artifact may carry signed `versionCode`
+  metadata from `--android-version-code` (integer `1..2100000000`). Payload
+  schema 2 requires it whenever a local Android artifact is present. Schema 1
+  may omit it only to preserve compatibility with legacy manifests; the local
+  release wrapper reads `APP_ANDROID_VERSION_CODE` from `CMakeLists.txt` and
+  emits it for new schema-1 and schema-2 releases. The exact signed Android
+  `versionName` remains the enclosing top-level payload `version`, rather than a
+  duplicate artifact field.
+- The complete JSON envelope must remain at or below 1 MiB, matching the client
+  response cap. Oversized changelogs fail generation before `manifest.json` is
+  written.
+
+Cohort assignment is deterministic across platforms. Normalize the installation
+UUID with `trim().lower()`, hash UTF-8 bytes of
+`amnezia-update-cohort-v1\0<cohortSaltId>\0<installationUuid>` with SHA-256,
+interpret the first eight digest bytes as an unsigned big-endian integer, and
+take modulo 10000. A client is included when its bucket is lower than
+`percentage * 100`. Contract vector: installation UUID
+`123e4567-e89b-12d3-a456-426614174000` with `fleet-v1` has bucket `4110`.
+
+When a valid schema-2 manifest excludes a client, is paused, or has expired, the
+client must stop manifest fallback and report a valid no-update result. It must
+not try a stale mirror, because that could bypass the signed policy.
 
 Do not upload `dist/selfhosted-updates/<version>` with the release script. The
 generated Windows self-hosted client is the deployment vehicle: install/run
@@ -223,7 +458,11 @@ generated Windows self-hosted client is the deployment vehicle: install/run
 on the release workstation, and that client uploads the signed manifest and all
 three platform artifacts through the saved self-hosted admin SSH credentials.
 The client refreshes the server update-host container and writes
-`manifest.json` last so clients never read a half-published release.
+`manifest.json` last so clients never read a half-published release. Rollback
+trees use generation-specific immutable paths and a unique no-clobber directory
+stage; forward artifacts use SHA-256-addressed immutable paths. The manifest
+itself is switched under `flock` with compare-and-swap checks for both the live
+envelope and the exact staged candidate that the publisher validated.
 
 For `local_release.ps1` configure:
 

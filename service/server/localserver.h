@@ -9,6 +9,7 @@
 #include <QVector>
 
 #include "ipcserver.h"
+#include "windowsprivilegedpipe.h"
 
 #include "../../client/daemon/daemonlocalserver.h"
 #include "../../client/mozilla/networkwatcher.h"
@@ -25,7 +26,6 @@
 #include "macos/daemon/macosdaemon.h"
 #endif
 
-class QLocalServer;
 class QLocalSocket;
 class QProcess;
 
@@ -36,7 +36,7 @@ class LocalServer : public QObject
 public:
     explicit LocalServer(QObject* parent = nullptr);
     ~LocalServer();
-    QSharedPointer<QLocalServer> m_server;
+    QSharedPointer<amnezia::ipc::PrivilegedLocalServer> m_server;
     IpcServer m_ipcServer;
     QRemoteObjectHost m_serverNode;
     bool m_isRemotingEnabled = false;

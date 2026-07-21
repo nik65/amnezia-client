@@ -28,6 +28,7 @@ class WindowsServiceManager : public QObject {
 
   // true if the Service is running
   bool isRunning() { return getStatus().dwCurrentState == SERVICE_RUNNING; };
+  bool isStopped() { return getStatus().dwCurrentState == SERVICE_STOPPED; };
 
   // Starts the service if execute rights are present
   // Starts to poll for serviceStarted

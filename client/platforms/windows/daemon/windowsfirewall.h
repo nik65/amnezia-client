@@ -9,14 +9,16 @@
 
 // Note: The windows.h import needs to come before the fwpmu.h import.
 // clang-format off
+#include <winsock2.h>
 #include <windows.h>
 #include <fwpmu.h>
 // clang-format on
 
 #include <QByteArray>
 #include <QHostAddress>
+#include <QList>
+#include <QMultiMap>
 #include <QObject>
-#include <QSet>
 #include <QString>
 
 #include "../client/daemon/interfaceconfig.h"
@@ -37,6 +39,7 @@ class WindowsFirewall final : public QObject {
    * Platform.
    */
   static WindowsFirewall* create(QObject* parent);
+  static bool removePersistentPolicy();
   ~WindowsFirewall() override;
 
   bool enableInterface(int vpnAdapterIndex);
@@ -49,32 +52,44 @@ class WindowsFirewall final : public QObject {
   bool allowTrafficRange(const QStringList& ranges);
 
  private:
+  using FilterIdList = QList<quint64>;
+
   static bool initSublayer();
   WindowsFirewall(HANDLE session, QObject* parent);
-  HANDLE m_sessionHandle;
-  bool m_init = false;
-  QList<uint64_t> m_activeRules;
-  QMultiMap<QString, uint64_t> m_peerRules;
-  QSet<QString> m_ipv6BlockPeers;
+  HANDLE m_sessionHandle = INVALID_HANDLE_VALUE;
+  quint64 m_vpnInterfaceLuid = 0;
+  FilterIdList m_baseRules;
+  FilterIdList m_strictRules;
+  FilterIdList m_activationFenceRules;
+  FilterIdList m_adapterRules;
+  FilterIdList m_lanBypassRules;
+  FilterIdList m_allowedRangeRules;
+  FilterIdList m_orphanedRules;
+  QMultiMap<QString, quint64> m_peerRules;
+  QMultiMap<QString, quint64> m_ipv6BlockRules;
+  bool m_policyStateKnown = false;
 
   bool allowTrafficForAppOnAll(const QString& exePath, int weight,
-                               const QString& title);
+                               const QString& title, FilterIdList& target);
   bool blockTrafficTo(const QList<IPAddress>& range, uint8_t weight,
-                      const QString& title, const QString& peer = QString());
+                      const QString& title, FilterIdList& target);
   bool blockTrafficTo(const IPAddress& addr, uint8_t weight,
-                      const QString& title, const QString& peer = QString());
-  bool blockTrafficOnPort(uint port, uint8_t weight, const QString& title);
+                      const QString& title, FilterIdList& target);
   bool blockTrafficOnPort(uint port, uint8_t weight, const QString& title,
-                          const GUID& subLayerKey);
+                          const GUID& subLayerKey, FilterIdList& target);
   bool allowTrafficTo(const IPAddress& addr, int weight, const QString& title,
-                      const QString& peer = QString());
-  bool allowTrafficTo(const QHostAddress& targetIP, uint port, int weight,
-                      const QString& title, const QString& peer = QString());
-  bool allowTrafficOfAdapter(int networkAdapter, uint8_t weight,
-                             const QString& title);
-  bool allowDHCPTraffic(uint8_t weight, const QString& title);
-  bool allowHyperVTraffic(uint8_t weight, const QString& title);
-  bool allowLoopbackTraffic(uint8_t weight, const QString& title);
+                      FilterIdList& target);
+  bool allowDnsTrafficTo(const QHostAddress& targetIP, uint port, int weight,
+                         const QString& title, quint64 vpnInterfaceLuid,
+                         FilterIdList& target);
+  bool allowTrafficOfAdapter(quint64 networkAdapterLuid, uint8_t weight,
+                             const QString& title, FilterIdList& target);
+  bool allowDHCPTraffic(uint8_t weight, const QString& title,
+                        FilterIdList& target);
+  bool allowHyperVTraffic(uint8_t weight, const QString& title,
+                          FilterIdList& target);
+  bool allowLoopbackTraffic(uint8_t weight, const QString& title,
+                            FilterIdList& target);
 
   // Utils
   QString getCurrentPath();
@@ -83,8 +98,14 @@ class WindowsFirewall final : public QObject {
   void importAddress(const QHostAddress& addr, OUT FWP_CONDITION_VALUE0_& value,
                      OUT QByteArray* v6DataBuffer);
   bool enableFilter(FWPM_FILTER0* filter, const QString& title,
-                    const QString& description,
-                    const QString& peer = QString());
+                    const QString& description, FilterIdList& target);
+  bool enumerateProviderFilters(FilterIdList& filterIds);
+  bool loadProviderFilters();
+  bool reloadProviderState();
+  void abortTransactionAndRecover();
+  bool deleteFilters(const FilterIdList& filterIds);
+  bool verifyTrackedProviderGeneration();
+  FilterIdList allTrackedFilters() const;
 };
 
 #endif  // WINDOWSFIREWALL_H

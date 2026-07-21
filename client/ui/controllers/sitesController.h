@@ -2,6 +2,7 @@
 #define SITESCONTROLLER_H
 
 #include <QObject>
+#include <QHash>
 #include <QJsonObject>
 #include <QVector>
 
@@ -42,6 +43,18 @@ signals:
     void finished(const QString &message);
     void managedSplitTunnelingForceChanged();
     void managedSplitTunnelingRulesPublished(int serverIndex);
+    void managedSplitTunnelingRulesPublishPending(int serverIndex, const QString &expectedRevision);
+    void managedSplitTunnelingRulesPublishSucceeded(int serverIndex, const QString &publishedRevision,
+                                                     const QString &contentSha256, bool signatureAvailable);
+    void managedSplitTunnelingRulesPublishFailed(int serverIndex, const QString &expectedRevision,
+                                                 const QString &currentRevision, const QString &reason,
+                                                 bool conflict);
+    void managedSplitTunnelingRulesSigningBlocked(int serverIndex, const QString &blocker);
+    void managedSplitTunnelingRulesPublishRolledBack(int serverIndex);
+    void managedSplitTunnelingRulesLocalRollbackFinished(int serverIndex, bool applied,
+                                                         const QString &details);
+    void managedSplitTunnelingRulesRemoteRollbackFinished(int serverIndex, bool attempted,
+                                                          bool succeeded, const QString &status);
 
 private:
     int currentServerIndex() const;
@@ -51,7 +64,15 @@ private:
     QString normalizeHostname(const QString &hostname) const;
     bool validateHostname(const QString &hostname) const;
     QJsonObject managedRoutingRulesPayload(int serverIndex) const;
-    void publishManagedSplitTunnelingRules(int serverIndex);
+    struct ManagedSplitTunnelingLocalState {
+        QJsonObject serverJsonSnapshot;
+    };
+    ManagedSplitTunnelingLocalState managedSplitTunnelingLocalState(int serverIndex) const;
+    bool restoreManagedSplitTunnelingLocalState(const QString &serverId,
+                                                const ManagedSplitTunnelingLocalState &state);
+    void publishManagedSplitTunnelingRules(int serverIndex,
+                                           const ManagedSplitTunnelingLocalState &rollbackState,
+                                           const QString &successMessage = QString());
     void startNextManagedSplitTunnelingPublish();
 
     SecureServersRepository *m_serversRepository;
@@ -60,11 +81,16 @@ private:
     IpSplitTunnelingModel *m_managedExceptSitesModel;
     struct ManagedSplitTunnelingPublishJob {
         int serverIndex = -1;
+        QString serverId;
         amnezia::ServerCredentials credentials;
         QJsonObject rules;
         amnezia::DockerContainer container = amnezia::DockerContainer::None;
+        qint64 expectedRevision = -1;
+        ManagedSplitTunnelingLocalState rollbackState;
+        QString successMessage;
     };
     QVector<ManagedSplitTunnelingPublishJob> m_pendingManagedSplitTunnelingPublishJobs;
+    QHash<QString, qint64> m_lastPublishedRevisionByServerId;
     bool m_isManagedSplitTunnelingPublishInProgress = false;
 };
 

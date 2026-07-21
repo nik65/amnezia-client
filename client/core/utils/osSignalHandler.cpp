@@ -6,6 +6,9 @@
 
 #include "../amneziaApplication.h"
 
+#include <atomic>
+#include <csignal>
+
 #if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
     #include <pthread.h>
     #include <signal.h>
@@ -27,6 +30,12 @@ namespace
 {
 
     static bool initialized = false;
+    static std::atomic_int receivedTerminationExitCode { 0 };
+
+    static void rememberTerminationSignal(int signalNumber)
+    {
+        receivedTerminationExitCode.store(128 + signalNumber, std::memory_order_relaxed);
+    }
 
 #ifdef Q_OS_WIN
     class WindowsCloseFilter : public QAbstractNativeEventFilter
@@ -53,6 +62,26 @@ namespace
     };
 
     static WindowsCloseFilter *windowsFilter = nullptr;
+    static bool consoleControlHandlerInstalled = false;
+
+    static BOOL WINAPI consoleControlHandler(DWORD controlType)
+    {
+        switch (controlType) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+            rememberTerminationSignal(SIGINT);
+            break;
+        case CTRL_CLOSE_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            rememberTerminationSignal(SIGTERM);
+            break;
+        default:
+            return FALSE;
+        }
+        QMetaObject::invokeMethod(QCoreApplication::instance(), "quit", Qt::QueuedConnection);
+        return TRUE;
+    }
 #endif
 
 #if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
@@ -79,6 +108,7 @@ namespace
             ::read(signalFd, &fdsi, sizeof(fdsi));
 
             if (fdsi.ssi_signo == SIGINT || fdsi.ssi_signo == SIGTERM) {
+                rememberTerminationSignal(static_cast<int>(fdsi.ssi_signo));
                 QCoreApplication::quit();
             }
         });
@@ -87,10 +117,10 @@ namespace
     static int signalPipe[2] = { -1, -1 };
     static QSocketNotifier *socketNotifier = nullptr;
 
-    static void macSignalHandler(int)
+    static void macSignalHandler(int signalNumber)
     {
         if (signalPipe[1] >= 0) {
-            const char ch = 1;
+            const unsigned char ch = static_cast<unsigned char>(signalNumber);
             ::write(signalPipe[1], &ch, sizeof(ch));
         }
     }
@@ -106,8 +136,11 @@ namespace
         socketNotifier = new QSocketNotifier(signalPipe[0], QSocketNotifier::Read, QCoreApplication::instance());
 
         QObject::connect(socketNotifier, &QSocketNotifier::activated, QCoreApplication::instance(), [](int) {
-            char buf[16];
-            ::read(signalPipe[0], buf, sizeof(buf));
+            unsigned char buf[16] {};
+            const ssize_t bytesRead = ::read(signalPipe[0], buf, sizeof(buf));
+            if (bytesRead > 0) {
+                rememberTerminationSignal(static_cast<int>(buf[bytesRead - 1]));
+            }
             QCoreApplication::quit();
         });
 
@@ -161,6 +194,10 @@ namespace
 #endif
 
 #ifdef Q_OS_WIN
+        if (consoleControlHandlerInstalled) {
+            SetConsoleCtrlHandler(consoleControlHandler, FALSE);
+            consoleControlHandlerInstalled = false;
+        }
         if (windowsFilter) {
             QCoreApplication::instance()->removeNativeEventFilter(windowsFilter);
             delete windowsFilter;
@@ -174,7 +211,7 @@ OsSignalHandler::OsSignalHandler(QObject *parent) : QObject(parent)
 {
 }
 
-void OsSignalHandler::setup()
+void OsSignalHandler::setup(bool enableConsoleControlHandler)
 {
     if (initialized)
         return;
@@ -188,7 +225,17 @@ void OsSignalHandler::setup()
 #ifdef Q_OS_WIN
     windowsFilter = new WindowsCloseFilter();
     QCoreApplication::instance()->installNativeEventFilter(windowsFilter);
+    if (enableConsoleControlHandler) {
+        consoleControlHandlerInstalled = SetConsoleCtrlHandler(consoleControlHandler, TRUE) != FALSE;
+    }
+#else
+    Q_UNUSED(enableConsoleControlHandler)
 #endif
 
     QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, [] { cleanupUnixSignalHandler(); });
+}
+
+int OsSignalHandler::terminationExitCode()
+{
+    return receivedTerminationExitCode.load(std::memory_order_relaxed);
 }

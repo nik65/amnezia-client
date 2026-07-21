@@ -10,6 +10,7 @@
 #include <QHostAddress>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 
 #include "daemon/wireguardutils.h"
 #include "windowsroutemonitor.h"
@@ -57,6 +58,7 @@ class WireguardUtilsWindows final : public WireguardUtils {
   WindowsTunnelService m_tunnel;
   QPointer<WindowsRouteMonitor> m_routeMonitor;
   QPointer<WindowsFirewall> m_firewall;
+  QSet<QString> m_configuredPeers;
 };
 
 #endif  // WIREGUARDUTILSWINDOWS_H

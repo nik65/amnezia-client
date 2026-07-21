@@ -3,7 +3,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonValue>
-#include <QRegularExpression>
 #include <QSet>
 #include <QUuid>
 
@@ -63,29 +62,39 @@ void mergeSitesMap(QVariantMap &target, const QVariantMap &source)
 
 QStringList splitTunnelStoredIps(const QString &value)
 {
-    QStringList ips;
-    const QStringList tokens = value.split(QRegularExpression("[,;\\s]+"), Qt::SkipEmptyParts);
-    for (const QString &token : tokens) {
-        const QString ip = token.trimmed();
-        if (NetworkUtilities::checkIpSubnetFormat(ip) && !ips.contains(ip)) {
-            ips.append(ip);
-        }
-    }
-    return ips;
+    bool valid = false;
+    const QStringList routes = managedRoutePolicy::validatedManagedRouteTokens(value, &valid);
+    return valid ? routes : QStringList();
 }
 
-QString mergeSplitTunnelIpValues(const QStringList &values)
+QString mergeSplitTunnelIpValues(const QStringList &values, bool *valid = nullptr)
 {
+    bool isValid = true;
     QStringList ips;
     for (const QString &value : values) {
-        const QStringList storedIps = splitTunnelStoredIps(value);
+        bool valueValid = false;
+        const QStringList storedIps = managedRoutePolicy::validatedManagedRouteTokens(value, &valueValid);
+        if (!valueValid) {
+            isValid = false;
+            break;
+        }
         for (const QString &ip : storedIps) {
             if (!ips.contains(ip)) {
                 ips.append(ip);
+                if (ips.size() > managedRoutePolicy::maximumRoutesPerSite) {
+                    isValid = false;
+                    break;
+                }
             }
         }
+        if (!isValid) {
+            break;
+        }
     }
-    return ips.join(QStringLiteral(", "));
+    if (valid) {
+        *valid = isValid;
+    }
+    return isValid ? ips.join(QStringLiteral(", ")) : QString();
 }
 
 bool hasSplitTunnelRouteValues(const QVariantMap &sites)
@@ -119,7 +128,14 @@ QVariantMap routingManagedVpnSites(const QJsonObject &serverConfig, RouteMode mo
         return {};
     }
 
-    const QVariantMap sourceSites = sourceManagedVpnSites(serverConfig, mode);
+    bool sourceSitesValid = false;
+    const QJsonObject canonicalSourceSites = managedRoutePolicy::canonicalSourceSites(
+            QJsonObject::fromVariantMap(sourceManagedVpnSites(serverConfig, mode)), &sourceSitesValid);
+    if (!sourceSitesValid) {
+        qWarning() << "SecureServersRepository: rejected an unsafe managed source snapshot";
+        return {};
+    }
+    const QVariantMap sourceSites = canonicalSourceSites.toVariantMap();
     QVariantMap resolvedSites = normalizedManagedSites(serverConfig.value(configKey::serverExcept));
     const QVariantMap clientResolvedSites =
             normalizedManagedSites(serverConfig.value(configKey::managedSplitTunnelClientResolvedExceptSites));
@@ -128,18 +144,38 @@ QVariantMap routingManagedVpnSites(const QJsonObject &serverConfig, RouteMode mo
         || serverConfig.contains(configKey::managedSplitTunnelExceptSites)) {
         QVariantMap sites;
         for (auto it = sourceSites.constBegin(); it != sourceSites.constEnd(); ++it) {
+            bool mergedIpsValid = false;
             const QString mergedIps = mergeSplitTunnelIpValues({ it.value().toString(),
                                                                  resolvedSites.value(it.key()).toString(),
-                                                                 clientResolvedSites.value(it.key()).toString() });
+                                                                 clientResolvedSites.value(it.key()).toString() },
+                                                               &mergedIpsValid);
+            if (!mergedIpsValid) {
+                qWarning() << "SecureServersRepository: rejected an unsafe managed route merge";
+                return {};
+            }
             sites.insert(it.key(), mergedIps);
         }
-        return sites;
+        bool mergedSitesValid = false;
+        const QJsonObject canonicalMergedSites = managedRoutePolicy::canonicalSourceSites(
+                QJsonObject::fromVariantMap(sites), &mergedSitesValid);
+        if (!mergedSitesValid) {
+            qWarning() << "SecureServersRepository: managed route merge exceeded its safety boundary";
+            return {};
+        }
+        return canonicalMergedSites.toVariantMap();
     }
 
     QVariantMap sites = sourceSites;
     mergeSitesMap(sites, resolvedSites);
     mergeSitesMap(sites, clientResolvedSites);
-    return sites;
+    bool mergedSitesValid = false;
+    const QJsonObject canonicalMergedSites = managedRoutePolicy::canonicalSourceSites(
+            QJsonObject::fromVariantMap(sites), &mergedSitesValid);
+    if (!mergedSitesValid) {
+        qWarning() << "SecureServersRepository: legacy managed route merge exceeded its safety boundary";
+        return {};
+    }
+    return canonicalMergedSites.toVariantMap();
 }
 
 QString readStorageServerId(const QJsonObject &json)
@@ -202,11 +238,14 @@ QString storedServerDisplayName(const SecureServersRepository *repository, const
 
 } // namespace
 
-SecureServersRepository::SecureServersRepository(SecureQSettings *settings, QObject *parent)
+SecureServersRepository::SecureServersRepository(SecureQSettings *settings, QObject *parent,
+                                                 bool persistDefaultSelection)
     : QObject(parent), m_settings(settings)
 {
     loadFromStorage();
-    persistDefaultServerFields();
+    if (persistDefaultSelection) {
+        persistDefaultServerFields();
+    }
 }
 
 QVariant SecureServersRepository::value(const QString &key, const QVariant &defaultValue) const
@@ -349,10 +388,11 @@ QString SecureServersRepository::addServer(const QString &serverId, const QJsonO
     if (m_serverJsonById.contains(id) || kind == serverConfigUtils::ConfigType::Invalid) {
         return id;
     }
-    const QJsonObject strippedJson = withoutStorageServerId(serverJson);
+    QJsonObject strippedJson = withoutStorageServerId(serverJson);
     if (serverConfigUtils::configTypeFromJson(strippedJson) != kind) {
         return id;
     }
+    managedRoutePolicy::refreshEffectiveContentMetadata(strippedJson);
     m_serverJsonById.insert(id, embedStorageServerId(id, strippedJson));
 
     m_orderedServerIds.append(id);
@@ -380,7 +420,7 @@ void SecureServersRepository::editServer(const QString &serverId, const QJsonObj
 
     m_serverJsonById.remove(serverId);
 
-    const QJsonObject strippedNew = withoutStorageServerId(serverJson);
+    QJsonObject strippedNew = withoutStorageServerId(serverJson);
     if (serverConfigUtils::configTypeFromJson(strippedNew) != kind) {
         const QJsonObject strippedOld = withoutStorageServerId(oldJson);
         if (oldKind != serverConfigUtils::ConfigType::Invalid && serverConfigUtils::configTypeFromJson(strippedOld) == oldKind) {
@@ -388,6 +428,7 @@ void SecureServersRepository::editServer(const QString &serverId, const QJsonObj
         }
         return;
     }
+    managedRoutePolicy::refreshEffectiveContentMetadata(strippedNew);
     m_serverJsonById.insert(serverId, embedStorageServerId(serverId, strippedNew));
 
     syncToStorage();
@@ -585,7 +626,11 @@ QVariantMap SecureServersRepository::managedVpnSites(int serverIndex, RouteMode 
     if (serverIndex < 0 || serverIndex >= serversCount()) {
         return {};
     }
-    return sourceManagedVpnSites(serverJson(serverIndex), mode);
+    const QJsonObject config = serverJson(serverIndex);
+    if (!managedRoutePolicy::isEffective(config)) {
+        return {};
+    }
+    return rawManagedVpnSites(serverIndex, mode);
 }
 
 QVariantMap SecureServersRepository::managedVpnSitesForRouting(int serverIndex, RouteMode mode) const
@@ -593,7 +638,19 @@ QVariantMap SecureServersRepository::managedVpnSitesForRouting(int serverIndex, 
     if (serverIndex < 0 || serverIndex >= serversCount()) {
         return {};
     }
-    return routingManagedVpnSites(serverJson(serverIndex), mode);
+    const QJsonObject config = serverJson(serverIndex);
+    if (!managedRoutePolicy::isEffective(config)) {
+        return {};
+    }
+    return routingManagedVpnSites(config, mode);
+}
+
+QVariantMap SecureServersRepository::rawManagedVpnSites(int serverIndex, RouteMode mode) const
+{
+    if (serverIndex < 0 || serverIndex >= serversCount()) {
+        return {};
+    }
+    return sourceManagedVpnSites(serverJson(serverIndex), mode);
 }
 
 void SecureServersRepository::setManagedVpnSites(int serverIndex, RouteMode mode, const QVariantMap &sites)
@@ -608,7 +665,13 @@ void SecureServersRepository::setManagedVpnSites(int serverIndex, RouteMode mode
     }
 
     QJsonObject config = serverJson(serverIndex);
-    const QJsonObject jsonSites = QJsonObject::fromVariantMap(sites);
+    bool managedSitesValid = false;
+    const QJsonObject jsonSites = managedRoutePolicy::canonicalSourceSites(
+            QJsonObject::fromVariantMap(sites), &managedSitesValid);
+    if (!managedSitesValid) {
+        qWarning() << "SecureServersRepository: rejected unsafe or oversized managed routes";
+        return;
+    }
     for (const QString &key : keys) {
         config.insert(key, jsonSites);
     }
@@ -620,19 +683,24 @@ void SecureServersRepository::setManagedVpnSites(int serverIndex, RouteMode mode
 
 bool SecureServersRepository::addManagedVpnSite(int serverIndex, RouteMode mode, const QString &site, const QString &ip)
 {
-    QVariantMap sites = managedVpnSites(serverIndex, mode);
+    QVariantMap sites = rawManagedVpnSites(serverIndex, mode);
     if (sites.contains(site) && ip.isEmpty()) {
         return false;
     }
 
     sites.insert(site, ip);
+    bool valid = false;
+    managedRoutePolicy::canonicalSourceSites(QJsonObject::fromVariantMap(sites), &valid);
+    if (!valid) {
+        return false;
+    }
     setManagedVpnSites(serverIndex, mode, sites);
     return true;
 }
 
 void SecureServersRepository::addManagedVpnSites(int serverIndex, RouteMode mode, const QMap<QString, QString> &sites)
 {
-    QVariantMap allSites = managedVpnSites(serverIndex, mode);
+    QVariantMap allSites = rawManagedVpnSites(serverIndex, mode);
     for (auto it = sites.constBegin(); it != sites.constEnd(); ++it) {
         if (allSites.contains(it.key()) && allSites.value(it.key()) == it.value()) {
             continue;
@@ -645,7 +713,7 @@ void SecureServersRepository::addManagedVpnSites(int serverIndex, RouteMode mode
 
 void SecureServersRepository::removeManagedVpnSite(int serverIndex, RouteMode mode, const QString &site)
 {
-    QVariantMap sites = managedVpnSites(serverIndex, mode);
+    QVariantMap sites = rawManagedVpnSites(serverIndex, mode);
     if (!sites.contains(site)) {
         return;
     }
@@ -660,6 +728,16 @@ void SecureServersRepository::removeAllManagedVpnSites(int serverIndex, RouteMod
 }
 
 bool SecureServersRepository::isManagedSplitTunnelingForceEnabled(int serverIndex) const
+{
+    if (serverIndex < 0 || serverIndex >= serversCount()) {
+        return false;
+    }
+    const QJsonObject config = serverJson(serverIndex);
+    return managedRoutePolicy::isEffective(config)
+            && rawManagedSplitTunnelingForceEnabled(serverIndex);
+}
+
+bool SecureServersRepository::rawManagedSplitTunnelingForceEnabled(int serverIndex) const
 {
     if (serverIndex < 0 || serverIndex >= serversCount()) {
         return false;
@@ -700,6 +778,14 @@ RouteMode SecureServersRepository::effectiveSiteRouteMode(int serverIndex, bool 
     }
 
     return RouteMode::VpnAllSites;
+}
+
+std::optional<ManagedRoutePolicyMetadata> SecureServersRepository::managedRoutePolicyMetadata(int serverIndex) const
+{
+    if (serverIndex < 0 || serverIndex >= serversCount()) {
+        return std::nullopt;
+    }
+    return managedRoutePolicy::lastKnownGoodForEffectiveContent(serverJson(serverIndex));
 }
 
 ServerCredentials SecureServersRepository::serverCredentials(int index) const

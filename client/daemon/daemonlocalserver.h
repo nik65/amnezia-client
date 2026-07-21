@@ -5,7 +5,7 @@
 #ifndef DAEMONLOCALSERVER_H
 #define DAEMONLOCALSERVER_H
 
-#include <QLocalServer>
+#include "windowsprivilegedpipe.h"
 
 class DaemonLocalServer final : public QObject {
   Q_DISABLE_COPY_MOVE(DaemonLocalServer)
@@ -20,7 +20,8 @@ class DaemonLocalServer final : public QObject {
   QString daemonPath() const;
 
  private:
-  QLocalServer m_server;
+  amnezia::ipc::PrivilegedLocalServer m_server;
+  int m_activeConnections = 0;
 };
 
 #endif  // DAEMONLOCALSERVER_H

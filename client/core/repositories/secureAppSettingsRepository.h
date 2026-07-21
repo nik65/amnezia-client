@@ -85,6 +85,18 @@ public:
     void setReadNewsIds(const QStringList &ids);
     QString selfHostedUpdateLastAutoInstallAttempt() const;
     void setSelfHostedUpdateLastAutoInstallAttempt(const QString &attemptId);
+    qint64 selfHostedUpdateLastAcceptedPolicyGeneration() const;
+    void setSelfHostedUpdateLastAcceptedPolicyGeneration(qint64 generation);
+    QString selfHostedUpdateLastAcceptedPolicyPayloadSha256() const;
+    void setSelfHostedUpdateLastAcceptedPolicy(qint64 generation, const QString &payloadSha256);
+    QVariantMap selfHostedUpdatePendingHealthReceipt() const;
+    void setSelfHostedUpdatePendingHealthReceipt(const QVariantMap &receipt);
+    void clearSelfHostedUpdatePendingHealthReceipt();
+    QVariantMap selfHostedUpdateLastHealthReceipt() const;
+    void setSelfHostedUpdateLastHealthReceipt(const QVariantMap &receipt);
+    QVariantMap selfHostedUpdateAndroidInstallerAuthorization() const;
+    void setSelfHostedUpdateAndroidInstallerAuthorization(const QVariantMap &authorization);
+    void clearSelfHostedUpdateAndroidInstallerAuthorization();
     QString remoteLogToken(const QString &cacheKey) const;
     void setRemoteLogToken(const QString &cacheKey, const QString &token);
     void clearRemoteLogToken(const QString &cacheKey);

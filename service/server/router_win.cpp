@@ -10,6 +10,7 @@
 #include <QtConcurrent>
 
 #include <core/utils/networkUtilities.h>
+#include <core/utils/managedRoutePolicy.h>
 
 LONG (NTAPI * NtSuspendProcess)(HANDLE ProcessHandle) = NULL;
 LONG (NTAPI * NtResumeProcess)(HANDLE ProcessHandle)  = NULL;
@@ -116,7 +117,13 @@ int RouterWin::routeAddList(const QString &gw, const QStringList &ips)
 
 int RouterWin::routeAddTrustedList(const QString &gw, const QStringList &ips)
 {
-    return routeAddList(gw, ips, false);
+    bool valid = false;
+    const QStringList managedRoutes = amnezia::managedRoutePolicy::validatedManagedRoutes(ips, &valid);
+    if (!valid) {
+        qWarning() << "RouterWin::routeAddTrustedList rejected an unsafe or oversized batch";
+        return 0;
+    }
+    return routeAddList(gw, managedRoutes, false);
 }
 
 int RouterWin::routeAddList(const QString &gw, const QStringList &ips, bool validateRoutes)

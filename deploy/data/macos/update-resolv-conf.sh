@@ -10,36 +10,61 @@
 # up /etc/openvpn/update-resolv-conf
 # down /etc/openvpn/update-resolv-conf
 
-echo "*** starting update-resolv-config script ***"
+readonly TRUSTED_PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+PATH="$TRUSTED_PATH"
+LC_ALL=C
+LANG=C
+readonly PATH LC_ALL LANG
+export PATH LC_ALL LANG
 
-[ "$script_type" ] || exit 0
-[ "$dev" ] || exit 0
+# OpenVPN must not pass loader or shell startup controls to this root script.
+# The launcher and pull-filter enforce that boundary before /bin/bash starts;
+# clear them again before invoking any child process.
+set +x
+builtin unset BASH_ENV ENV CDPATH GLOBIGNORE BASH_XTRACEFD PS4 POSIXLY_CORRECT \
+  LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT LD_DEBUG LD_PROFILE \
+  DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH \
+  DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH
+IFS=$' \t\n'
+umask 077
 
-PATH=$PATH:/usr/sbin/
+builtin printf '%s\n' "*** starting update-resolv-config script ***"
+
+case "$script_type" in
+  up|down) ;;
+  *) exit 0 ;;
+esac
+[[ "$dev" =~ ^[A-Za-z0-9_.:-]{1,64}$ ]] || exit 0
+
 NMSRVRS=()
 SRCHS=()
 
-# Get adapter list
-IFS=$'\n' read -d '' -ra adapters < <(networksetup -listallnetworkservices |grep -v denotes) || true
-
-split_into_parts()
+run_networksetup()
 {
-        part1="$1"
-        part2="$2"
-        part3="$3"
+        /usr/bin/env -i PATH="$TRUSTED_PATH" LC_ALL=C LANG=C \
+                /usr/sbin/networksetup "$@"
 }
+
+# Get adapter list
+adapters=()
+while IFS= read -r adapter; do
+        [[ -n "$adapter" ]] || continue
+        [[ "$adapter" == *"denotes that a network service is disabled"* ]] && continue
+        adapter="${adapter#\*}"
+        [[ -n "$adapter" ]] && adapters+=("$adapter")
+done < <(run_networksetup -listallnetworkservices)
 
 update_all_dns()
 {
         for adapter in "${adapters[@]}"
         do
-        echo updating dns for $adapter
+        builtin printf 'updating dns for %s\n' "$adapter"
         # set dns server to the vpn dns server
-        if [[ "${SRCHS[@]}" ]]; then
-            networksetup -setsearchdomains "$adapter" "${SRCHS[@]}"
+        if (( ${#SRCHS[@]} )); then
+            run_networksetup -setsearchdomains "$adapter" "${SRCHS[@]}"
         fi
-        if [[ "${NMSRVRS[@]}" ]]; then
-            networksetup -setdnsservers "$adapter" "${NMSRVRS[@]}"
+        if (( ${#NMSRVRS[@]} )); then
+            run_networksetup -setdnsservers "$adapter" "${NMSRVRS[@]}"
         fi
         done
 }
@@ -48,23 +73,24 @@ clear_all_dns()
 {
         for adapter in "${adapters[@]}"
         do
-        echo updating dns for $adapter
-        networksetup -setdnsservers "$adapter" empty
-        networksetup -setsearchdomains "$adapter" empty
+        builtin printf 'updating dns for %s\n' "$adapter"
+        run_networksetup -setdnsservers "$adapter" empty
+        run_networksetup -setsearchdomains "$adapter" empty
         done
 }
 
 case "$script_type" in
   up)
-        for optionvarname in ${!foreign_option_*} ; do
+        for optionvarname in "${!foreign_option_@}" ; do
                 option="${!optionvarname}"
-                echo "$option"
-                split_into_parts $option
+                builtin printf '%s\n' "$option"
+                builtin read -r part1 part2 part3 _ <<< "$option"
                 if [ "$part1" = "dhcp-option" ] ; then
-                        if [ "$part2" = "DNS" ] ; then
-                                NMSRVRS=(${NMSRVRS[@]} $part3)
-                        elif [ "$part2" = "DOMAIN" ] || [ "$part2" = "DOMAIN-SEARCH" ]; then
-                                SRCHS=(${SRCHS[@]} $part3)
+                        if [ "$part2" = "DNS" ] && [ -n "$part3" ] ; then
+                                NMSRVRS+=("$part3")
+                        elif { [ "$part2" = "DOMAIN" ] || [ "$part2" = "DOMAIN-SEARCH" ]; } \
+                                && [ -n "$part3" ]; then
+                                SRCHS+=("$part3")
                         fi
                 fi
         done
@@ -75,4 +101,4 @@ case "$script_type" in
         ;;
 esac
 
-echo "*** finished update-resolv-config script ***"
+builtin printf '%s\n' "*** finished update-resolv-config script ***"

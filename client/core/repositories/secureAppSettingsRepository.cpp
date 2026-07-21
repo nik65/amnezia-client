@@ -419,6 +419,113 @@ void SecureAppSettingsRepository::setSelfHostedUpdateLastAutoInstallAttempt(cons
     setValue("Conf/selfHostedUpdateLastAutoInstallAttempt", attemptId);
 }
 
+qint64 SecureAppSettingsRepository::selfHostedUpdateLastAcceptedPolicyGeneration() const
+{
+    return qMax<qint64>(0, value(QStringLiteral("Conf/selfHostedUpdate/lastAcceptedPolicyGeneration"), 0).toLongLong());
+}
+
+void SecureAppSettingsRepository::setSelfHostedUpdateLastAcceptedPolicyGeneration(qint64 generation)
+{
+    if (generation <= selfHostedUpdateLastAcceptedPolicyGeneration()) {
+        return;
+    }
+    setValue(QStringLiteral("Conf/selfHostedUpdate/lastAcceptedPolicyGeneration"), generation);
+}
+
+QString SecureAppSettingsRepository::selfHostedUpdateLastAcceptedPolicyPayloadSha256() const
+{
+    return value(QStringLiteral("Conf/selfHostedUpdate/lastAcceptedPolicyPayloadSha256"))
+            .toString().trimmed().toLower();
+}
+
+void SecureAppSettingsRepository::setSelfHostedUpdateLastAcceptedPolicy(qint64 generation,
+                                                                        const QString &payloadSha256)
+{
+    const QString normalizedSha256 = payloadSha256.trimmed().toLower();
+    if (generation <= 0 || normalizedSha256.size() != 64) {
+        return;
+    }
+    for (const QChar character : normalizedSha256) {
+        const ushort codePoint = character.unicode();
+        if (!((codePoint >= '0' && codePoint <= '9')
+              || (codePoint >= 'a' && codePoint <= 'f'))) {
+            return;
+        }
+    }
+
+    const qint64 currentGeneration = selfHostedUpdateLastAcceptedPolicyGeneration();
+    if (generation < currentGeneration) {
+        return;
+    }
+    if (generation == currentGeneration) {
+        const QString currentSha256 = selfHostedUpdateLastAcceptedPolicyPayloadSha256();
+        if (!currentSha256.isEmpty() && currentSha256 != normalizedSha256) {
+            return;
+        }
+    }
+
+    // Advance the anti-replay floor first. If the process or storage fails
+    // before the digest is durably paired with it, equal-generation payloads
+    // are rejected as missing/conflicting while a later generation can still
+    // recover. Writing the digest first would leave the old floor in place and
+    // permit a different signed payload at this new generation after restart.
+    setValue(QStringLiteral("Conf/selfHostedUpdate/lastAcceptedPolicyGeneration"), generation);
+    setValue(QStringLiteral("Conf/selfHostedUpdate/lastAcceptedPolicyPayloadSha256"), normalizedSha256);
+}
+
+QVariantMap SecureAppSettingsRepository::selfHostedUpdatePendingHealthReceipt() const
+{
+    return value(QStringLiteral("Conf/selfHostedUpdate/pendingHealthReceipt")).toMap();
+}
+
+void SecureAppSettingsRepository::setSelfHostedUpdatePendingHealthReceipt(const QVariantMap &receipt)
+{
+    if (receipt.isEmpty()) {
+        clearSelfHostedUpdatePendingHealthReceipt();
+        return;
+    }
+    setValue(QStringLiteral("Conf/selfHostedUpdate/pendingHealthReceipt"), receipt);
+}
+
+void SecureAppSettingsRepository::clearSelfHostedUpdatePendingHealthReceipt()
+{
+    m_settings->remove(QStringLiteral("Conf/selfHostedUpdate/pendingHealthReceipt"));
+}
+
+QVariantMap SecureAppSettingsRepository::selfHostedUpdateLastHealthReceipt() const
+{
+    return value(QStringLiteral("Conf/selfHostedUpdate/lastHealthReceipt")).toMap();
+}
+
+void SecureAppSettingsRepository::setSelfHostedUpdateLastHealthReceipt(const QVariantMap &receipt)
+{
+    if (receipt.isEmpty()) {
+        m_settings->remove(QStringLiteral("Conf/selfHostedUpdate/lastHealthReceipt"));
+        return;
+    }
+    setValue(QStringLiteral("Conf/selfHostedUpdate/lastHealthReceipt"), receipt);
+}
+
+QVariantMap SecureAppSettingsRepository::selfHostedUpdateAndroidInstallerAuthorization() const
+{
+    return value(QStringLiteral("Conf/selfHostedUpdate/androidInstallerAuthorization")).toMap();
+}
+
+void SecureAppSettingsRepository::setSelfHostedUpdateAndroidInstallerAuthorization(
+        const QVariantMap &authorization)
+{
+    if (authorization.isEmpty()) {
+        clearSelfHostedUpdateAndroidInstallerAuthorization();
+        return;
+    }
+    setValue(QStringLiteral("Conf/selfHostedUpdate/androidInstallerAuthorization"), authorization);
+}
+
+void SecureAppSettingsRepository::clearSelfHostedUpdateAndroidInstallerAuthorization()
+{
+    m_settings->remove(QStringLiteral("Conf/selfHostedUpdate/androidInstallerAuthorization"));
+}
+
 QString SecureAppSettingsRepository::remoteLogToken(const QString &cacheKey) const
 {
     return value(QStringLiteral("Conf/remoteLogTokens")).toMap().value(cacheKey).toString();
@@ -470,9 +577,28 @@ bool SecureAppSettingsRepository::restoreAppConfig(const QByteArray &cfg)
 
 void SecureAppSettingsRepository::clearSettings()
 {
-    auto uuid = getInstallationUuid(false);
+    const QString uuid = getInstallationUuid(false);
+    const qint64 policyGeneration = selfHostedUpdateLastAcceptedPolicyGeneration();
+    const QString policyPayloadSha256 = selfHostedUpdateLastAcceptedPolicyPayloadSha256();
+    const QVariantMap pendingHealthReceipt = selfHostedUpdatePendingHealthReceipt();
+    const QVariantMap lastHealthReceipt = selfHostedUpdateLastHealthReceipt();
+
     m_settings->clearSettings();
     m_settings->setValue("Conf/installationUuid", uuid);
+    if (policyGeneration > 0) {
+        if (!policyPayloadSha256.isEmpty()) {
+            setSelfHostedUpdateLastAcceptedPolicy(policyGeneration, policyPayloadSha256);
+        } else {
+            // Preserve a fail-closed generation floor from pre-binding builds.
+            setSelfHostedUpdateLastAcceptedPolicyGeneration(policyGeneration);
+        }
+    }
+    if (!pendingHealthReceipt.isEmpty()) {
+        setSelfHostedUpdatePendingHealthReceipt(pendingHealthReceipt);
+    }
+    if (!lastHealthReceipt.isEmpty()) {
+        setSelfHostedUpdateLastHealthReceipt(lastHealthReceipt);
+    }
     emit settingsCleared();
 }
 

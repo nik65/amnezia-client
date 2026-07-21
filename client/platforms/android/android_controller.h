@@ -71,7 +71,11 @@ signals:
     void vpnStateChanged(ConnectionState state);
     void statisticsUpdated(quint64 rxBytes, quint64 txBytes);
     void fileOpened(QString uri);
+    void apkInstallerLaunchAuthorizationRequested(QString fileName, QString packageName,
+                                                   QString versionName, qint64 versionCode,
+                                                   bool *authorized);
     void apkInstallerStarted(QString fileName);
+    void apkInstallerStartFailed(QString fileName, QString reason);
     void configImported(QString config);
     void importConfigFromOutside(QString config);
     void initConnectionState(Vpn::ConnectionState state, int serverIndex);
@@ -106,7 +110,12 @@ private:
     static void onStatisticsUpdate(JNIEnv *env, jobject thiz, jlong rxBytes, jlong txBytes);
     static void onConfigImported(JNIEnv *env, jobject thiz, jstring data);
     static void onFileOpened(JNIEnv *env, jobject thiz, jstring uri);
+    static jboolean authorizeApkInstallerLaunch(JNIEnv *env, jobject thiz, jstring fileName,
+                                                jstring packageName, jstring versionName,
+                                                jlong versionCode);
     static void onApkInstallerStarted(JNIEnv *env, jobject thiz, jstring fileName);
+    static void onApkInstallerStartFailed(JNIEnv *env, jobject thiz, jstring fileName,
+                                          jstring reason);
     static void onAuthResult(JNIEnv *env, jobject thiz, jboolean result);
     static bool decodeQrCode(JNIEnv *env, jobject thiz, jstring data);
     static void onImeInsetsChanged(JNIEnv *env, jobject thiz, jint heightDp);

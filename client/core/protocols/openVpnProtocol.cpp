@@ -52,7 +52,7 @@ void OpenVpnProtocol::cleanupResources()
 #if defined(Q_OS_WIN) || defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
     IpcClient::withInterface([](QSharedPointer<IpcInterfaceReplica> iface) {
         QRemoteObjectPendingReply<bool> reply = iface->disableKillSwitch();
-        if (!reply.waitForFinished(1000) && !reply.returnValue()) {
+        if (!reply.waitForFinished(1000) || !reply.returnValue()) {
             qWarning() << "OpenVpnProtocol::cleanupResources(): Failed to disable killswitch";
         }
     });
@@ -354,25 +354,44 @@ void OpenVpnProtocol::updateVpnGateway(const QString &line)
                 m_vpnGateway = l.split(" ").at(2);
 #ifdef Q_OS_WIN
                 QThread::msleep(300);
-                IpcClient::withInterface([&](QSharedPointer<IpcInterfaceReplica> iface) {
+                const bool firewallReady = IpcClient::withInterface(
+                    [&](QSharedPointer<IpcInterfaceReplica> iface) {
                     QList<QNetworkInterface> netInterfaces = QNetworkInterface::allInterfaces();
-                    for (int i = 0; i < netInterfaces.size(); i++) {
-                        for (int j=0; j < netInterfaces.at(i).addressEntries().size(); j++)
-                        {
+                    for (const QNetworkInterface &netInterface : netInterfaces) {
+                        for (const QNetworkAddressEntry &addressEntry :
+                             netInterface.addressEntries()) {
                             // killSwitch toggle
-                            if (m_vpnLocalAddress == netInterfaces.at(i).addressEntries().at(j).ip().toString()) {
+                            if (m_vpnLocalAddress == addressEntry.ip().toString()) {
                                 if (QVariant(m_configData.value(configKey::killSwitchOption).toString()).toBool()) {
-                                    iface->enableKillSwitch(m_configData, netInterfaces.at(i).index());
+                                    QRemoteObjectPendingReply<bool> enableKillSwitch =
+                                        iface->enableKillSwitch(m_configData,
+                                                                netInterface.index());
+                                    if (!enableKillSwitch.waitForFinished(1000) ||
+                                        !enableKillSwitch.returnValue()) {
+                                        return false;
+                                    }
                                 }
-                                m_configData.insert("vpnAdapterIndex", netInterfaces.at(i).index());
+                                m_configData.insert("vpnAdapterIndex", netInterface.index());
                                 m_configData.insert("vpnGateway", m_vpnGateway);
                                 m_configData.insert("vpnServer",
                                                     NetworkUtilities::getIPAddress(m_configData.value(amnezia::configKey::hostName).toString()));
-                                iface->enablePeerTraffic(m_configData);
+                                QRemoteObjectPendingReply<bool> enablePeerTraffic =
+                                    iface->enablePeerTraffic(m_configData);
+                                return enablePeerTraffic.waitForFinished(1000) &&
+                                       enablePeerTraffic.returnValue();
                             }
                         }
                     }
-                });
+                    return false;
+                }, [] { return false; });
+                if (!firewallReady) {
+                    qCritical() << "OpenVpnProtocol::updateVpnGateway(): "
+                                   "Failed to commit Windows firewall policy";
+                    setLastError(ErrorCode::AmneziaServiceConnectionFailed);
+                    emit protocolError(lastError());
+                    stop();
+                    return;
+                }
 #endif
 #if defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
                 // killSwitch toggle

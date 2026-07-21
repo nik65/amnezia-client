@@ -1,5 +1,7 @@
 message("MAC build")
 
+find_library(FW_COREFOUNDATION CoreFoundation)
+find_library(LIB_PROC proc)
 find_library(FW_SYSTEMCONFIG SystemConfiguration)
 find_library(FW_SERVICEMGMT ServiceManagement)
 find_library(FW_SECURITY Security)
@@ -9,6 +11,8 @@ find_library(FW_USER_NOTIFICATIONS UserNotifications)
 find_library(FW_NETWORK_EXTENSION NetworkExtension)
 
 set(LIBS ${LIBS}
+    ${FW_COREFOUNDATION}
+    ${LIB_PROC}
     ${FW_SYSTEMCONFIG}
     ${FW_SERVICEMGMT}
     ${FW_SECURITY}

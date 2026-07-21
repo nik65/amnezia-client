@@ -23,6 +23,10 @@
 #include "leakdetector.h"
 #include "logger.h"
 #include "daemon/daemonerrors.h"
+#include "ipc.h"
+#include "localpeerauthentication.h"
+#include "windowsprivilegedpipe.h"
+#include "version.h"
 
 #include "core/utils/protocolEnum.h"
 #include "core/utils/routeModes.h"
@@ -49,6 +53,7 @@ LocalSocketController::LocalSocketController() {
   MZ_COUNT_CTOR(LocalSocketController);
 
   m_socket = new QLocalSocket(this);
+  m_socket->setReadBufferSize(amnezia::MaximumDaemonFrameSize + 1);
   connect(m_socket, &QLocalSocket::connected, this,
           &LocalSocketController::daemonConnected);
   connect(m_socket, &QLocalSocket::disconnected, this,
@@ -61,6 +66,13 @@ LocalSocketController::LocalSocketController() {
   m_initializingTimer.setSingleShot(true);
   connect(&m_initializingTimer, &QTimer::timeout, this,
           &LocalSocketController::initializeInternal);
+
+  m_incompleteFrameTimer.setSingleShot(true);
+  m_incompleteFrameTimer.setInterval(5000);
+  connect(&m_incompleteFrameTimer, &QTimer::timeout, this, [&] {
+    logger.error() << "Daemon IPC response frame timed out";
+    m_socket->abort();
+  });
 }
 
 LocalSocketController::~LocalSocketController() {
@@ -108,22 +120,37 @@ void LocalSocketController::initialize(const Device* device, const Keys* keys) {
 void LocalSocketController::initializeInternal() {
   m_daemonState = eInitializing;
 
-#ifdef MZ_WINDOWS
-  QString path = "\\\\.\\pipe\\amneziavpn";
-#else
-  QString path = "/var/run/amneziavpn/daemon.socket";
-  if (!QFileInfo::exists(path)) {
-    path = "/tmp/amneziavpn.socket";
-  }
-#endif
+  const QString path = amnezia::getDaemonServiceUrl();
 
   logger.debug() << "Connecting to:" << path;
+#ifdef Q_OS_WIN
+  QString connectionError;
+  if (!amnezia::ipc::connectWindowsPrivilegedPipe(
+          m_socket, path, CONNECTION_RETRY_TIMER_MSEC, &connectionError)) {
+    logger.warning() << "Unable to connect hardened daemon IPC:" << connectionError;
+    errorOccurred(QLocalSocket::ConnectionRefusedError);
+    return;
+  }
+  // setSocketDescriptor adopts an already-connected HANDLE but intentionally
+  // does not synthesize QLocalSocket::connected().
+  daemonConnected();
+#else
   m_socket->connectToServer(path);
+#endif
 }
 
 void LocalSocketController::daemonConnected() {
   logger.debug() << "Daemon connected";
   Q_ASSERT(m_daemonState == eInitializing);
+
+  QString authorizationError;
+  if (!amnezia::ipc::authorizePrivilegedServer(
+          m_socket, amnezia::ipc::installedServiceExecutablePath(),
+          QStringLiteral(SERVICE_NAME), nullptr, &authorizationError)) {
+    logger.error() << "Rejected untrusted VPN daemon:" << authorizationError;
+    m_socket->abort();
+    return;
+  }
   checkStatus();
 }
 
@@ -400,26 +427,45 @@ void LocalSocketController::readData() {
 
   Q_ASSERT(m_socket);
   Q_ASSERT(m_daemonState == eInitializing || m_daemonState == eReady);
-  QByteArray input = m_socket->readAll();
-  m_buffer.append(input);
-
-  while (true) {
-    int pos = m_buffer.indexOf("\n");
-    if (pos == -1) {
+  while (m_socket->bytesAvailable() > 0) {
+    const qsizetype remaining = amnezia::MaximumDaemonFrameSize + 1 - m_buffer.size();
+    if (remaining <= 0) {
+      logger.error() << "Daemon IPC response exceeded the frame limit";
+      m_socket->abort();
+      return;
+    }
+    const QByteArray input = m_socket->read(remaining);
+    if (input.isEmpty()) {
       break;
     }
+    m_buffer.append(input);
 
-    QByteArray line = m_buffer.left(pos);
-    m_buffer.remove(0, pos + 1);
+    while (true) {
+      QByteArray command;
+      const amnezia::DaemonFrameState frameState = amnezia::takeDaemonFrame(m_buffer, command);
+      if (frameState == amnezia::DaemonFrameState::TooLarge) {
+        logger.error() << "Daemon IPC response exceeded the frame limit";
+        m_socket->abort();
+        return;
+      }
+      if (frameState == amnezia::DaemonFrameState::NeedMoreData) {
+        break;
+      }
 
-    QByteArray command(line);
-    command = command.trimmed();
-
-    if (command.isEmpty()) {
-      continue;
+      command = command.trimmed();
+      if (!command.isEmpty()) {
+        parseCommand(command);
+        if (m_socket->state() != QLocalSocket::ConnectedState) {
+          return;
+        }
+      }
     }
+  }
 
-    parseCommand(command);
+  if (m_buffer.isEmpty()) {
+    m_incompleteFrameTimer.stop();
+  } else if (!m_incompleteFrameTimer.isActive()) {
+    m_incompleteFrameTimer.start();
   }
 }
 
@@ -427,13 +473,22 @@ void LocalSocketController::parseCommand(const QByteArray& command) {
   QJsonDocument json = QJsonDocument::fromJson(command);
   if (!json.isObject()) {
     logger.error() << "Invalid JSON - object expected";
+    m_socket->abort();
     return;
   }
 
   QJsonObject obj = json.object();
+  const QJsonValue protocolVersion = obj.value(amnezia::DaemonProtocolVersionKey);
+  if (!protocolVersion.isDouble()
+      || protocolVersion.toInt(-1) != amnezia::PrivilegedIpcProtocolVersion) {
+    logger.error() << "Daemon IPC protocol version mismatch";
+    m_socket->abort();
+    return;
+  }
   QJsonValue typeValue = obj.value("type");
   if (!typeValue.isString()) {
     logger.error() << "Invalid JSON - no type";
+    m_socket->abort();
     return;
   }
   QString type = typeValue.toString();
@@ -470,6 +525,7 @@ void LocalSocketController::parseCommand(const QByteArray& command) {
 
   if (m_daemonState != eReady) {
     logger.error() << "Unexpected command";
+    m_socket->abort();
     return;
   }
 
@@ -578,11 +634,20 @@ void LocalSocketController::parseCommand(const QByteArray& command) {
   }
 
   logger.warning() << "Invalid command received:" << command;
+  m_socket->abort();
 }
 
 void LocalSocketController::write(const QJsonObject& json) {
   Q_ASSERT(m_socket);
-  m_socket->write(QJsonDocument(json).toJson(QJsonDocument::Compact));
+  QJsonObject versioned = json;
+  versioned.insert(amnezia::DaemonProtocolVersionKey, amnezia::PrivilegedIpcProtocolVersion);
+  const QByteArray frame = QJsonDocument(versioned).toJson(QJsonDocument::Compact);
+  if (frame.size() > amnezia::MaximumDaemonFrameSize) {
+    logger.error() << "Refusing to write an oversized daemon IPC request";
+    m_socket->abort();
+    return;
+  }
+  m_socket->write(frame);
   m_socket->write("\n");
   m_socket->flush();
 }

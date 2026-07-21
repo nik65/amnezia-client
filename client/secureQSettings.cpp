@@ -12,6 +12,7 @@
 #include <QJsonValue>
 #include <QRandomGenerator>
 #include <QSharedPointer>
+#include <QSet>
 #include <QTimer>
 
 using namespace QKeychain;
@@ -53,15 +54,21 @@ namespace {
         return result;
     }
 
-    QVariant sanitizedBackupValue(const QString &key, const QVariant &value)
+    QVariant sanitizedBackupValue(const QString &key, const QVariant &value, bool *ok = nullptr)
     {
-        if (key != QLatin1String("Servers/serversList")) {
+        if (ok) {
+            *ok = true;
+        }
+        if (key.compare(QLatin1String("Servers/serversList"), Qt::CaseInsensitive) != 0) {
             return value;
         }
 
         const QJsonDocument document = QJsonDocument::fromJson(value.toByteArray());
         if (document.isNull()) {
-            return value;
+            if (ok) {
+                *ok = false;
+            }
+            return {};
         }
 
         QJsonDocument sanitized;
@@ -70,7 +77,10 @@ namespace {
         } else if (document.isObject()) {
             sanitized = QJsonDocument(withoutRemoteLogTokens(document.object()).toObject());
         } else {
-            return value;
+            if (ok) {
+                *ok = false;
+            }
+            return {};
         }
         return sanitized.toJson(QJsonDocument::Compact);
     }
@@ -86,7 +96,7 @@ SecureQSettings::SecureQSettings(const QString &organization, const QString &app
     // convert settings to encrypted for if updated to >= 2.1.0
     if (encryptionRequired() && !encrypted) {
         for (const QString &key : m_settings.allKeys()) {
-            if (encryptedKeys.contains(key)) {
+            if (amnezia::secureSettingsPolicy::isEncryptedSetting(key)) {
                 const QVariant &val = value(key);
                 setValue(key, val);
             }
@@ -98,18 +108,27 @@ SecureQSettings::SecureQSettings(const QString &organization, const QString &app
 QVariant SecureQSettings::value(const QString &key, const QVariant &defaultValue) const
 {
     QMutexLocker locker(&m_mutex);
-
-    if (m_cache.contains(key)) {
-        return m_cache.value(key);
+    if (!amnezia::secureSettingsPolicy::isValidSettingsKey(key)) {
+        qWarning() << "SecureQSettings::value rejected invalid settings key";
+        return defaultValue;
+    }
+    const QString canonicalKey = amnezia::secureSettingsPolicy::canonicalKey(key);
+    if (canonicalKey.isEmpty()) {
+        return defaultValue;
     }
 
-    if (!m_settings.contains(key))
+    const QString normalizedCacheKey = amnezia::secureSettingsPolicy::cacheKey(canonicalKey);
+    if (m_cache.contains(normalizedCacheKey)) {
+        return m_cache.value(normalizedCacheKey);
+    }
+
+    if (!m_settings.contains(canonicalKey))
         return defaultValue;
 
     QVariant retVal;
 
     // check if value is not encrypted, v. < 2.0.x
-    retVal = m_settings.value(key);
+    retVal = m_settings.value(canonicalKey);
     if (retVal.isValid()) {
         if (retVal.userType() == QMetaType::QByteArray && retVal.toByteArray().mid(0, magicString.size()) == magicString) {
 
@@ -135,15 +154,27 @@ QVariant SecureQSettings::value(const QString &key, const QVariant &defaultValue
         retVal = QVariant();
     }
 
-    m_cache.insert(key, retVal);
+    m_cache.insert(normalizedCacheKey, retVal);
     return retVal;
 }
 
 void SecureQSettings::setValue(const QString &key, const QVariant &value)
 {
     QMutexLocker locker(&m_mutex);
+    if (!amnezia::secureSettingsPolicy::isValidSettingsKey(key)) {
+        qCritical() << "SecureQSettings::setValue rejected invalid settings key";
+        return;
+    }
+    const QString canonicalKey = amnezia::secureSettingsPolicy::canonicalKey(key);
+    if (canonicalKey.isEmpty()) {
+        qCritical() << "SecureQSettings::setValue empty settings key";
+        return;
+    }
+    const bool durableWrite = amnezia::secureSettingsPolicy::requiresDurableWrite(canonicalKey);
+    const QString normalizedCacheKey = amnezia::secureSettingsPolicy::cacheKey(canonicalKey);
 
-    if (encryptionRequired() && encryptedKeys.contains(key)) {
+    if (encryptionRequired()
+        && amnezia::secureSettingsPolicy::isEncryptedSetting(canonicalKey)) {
         if (!getEncKey().isEmpty() && !getEncIv().isEmpty()) {
             QByteArray decryptedValue;
             {
@@ -152,25 +183,58 @@ void SecureQSettings::setValue(const QString &key, const QVariant &value)
             }
 
             QByteArray encryptedValue = encryptText(decryptedValue);
-            m_settings.setValue(key, magicString + encryptedValue);
+            m_settings.setValue(canonicalKey, magicString + encryptedValue);
         } else {
             qCritical() << "SecureQSettings::setValue Encryption required, but key is empty";
+            if (durableWrite) {
+                m_cache.insert(normalizedCacheKey, QVariant());
+            }
             return;
         }
 
     } else {
-        m_settings.setValue(key, value);
+        m_settings.setValue(canonicalKey, value);
     }
 
-    m_cache.insert(key, value);
+    if (durableWrite) {
+        m_settings.sync();
+        if (m_settings.status() != QSettings::NoError) {
+            // Do not let a cache read masquerade as durable anti-replay or
+            // rollback state. An invalid cached value makes callers fail closed.
+            m_cache.insert(normalizedCacheKey, QVariant());
+            qCritical() << "SecureQSettings::setValue durable settings write failed for"
+                        << canonicalKey << "status" << static_cast<int>(m_settings.status());
+            return;
+        }
+    }
+
+    m_cache.insert(normalizedCacheKey, value);
 }
 
 void SecureQSettings::remove(const QString &key)
 {
     QMutexLocker locker(&m_mutex);
+    if (!amnezia::secureSettingsPolicy::isValidSettingsKey(key)) {
+        qWarning() << "SecureQSettings::remove rejected invalid settings key";
+        return;
+    }
+    const QString canonicalKey = amnezia::secureSettingsPolicy::canonicalKey(key);
+    if (canonicalKey.isEmpty()) {
+        return;
+    }
 
-    m_settings.remove(key);
-    m_cache.remove(key);
+    const QString normalizedCacheKey = amnezia::secureSettingsPolicy::cacheKey(canonicalKey);
+    m_settings.remove(canonicalKey);
+    if (amnezia::secureSettingsPolicy::requiresDurableWrite(canonicalKey)) {
+        m_settings.sync();
+        if (m_settings.status() != QSettings::NoError) {
+            m_cache.insert(normalizedCacheKey, QVariant());
+            qCritical() << "SecureQSettings::remove durable settings write failed for"
+                        << canonicalKey << "status" << static_cast<int>(m_settings.status());
+            return;
+        }
+    }
+    m_cache.remove(normalizedCacheKey);
 }
 
 QByteArray SecureQSettings::backupAppConfig() const
@@ -180,14 +244,14 @@ QByteArray SecureQSettings::backupAppConfig() const
     QJsonObject cfg;
 
     const auto needToBackup = [this](const auto &key) {
+      if (amnezia::secureSettingsPolicy::isLocalOnlySetting(key))
+      {
+        return false;
+      }
+
       for (const auto &item : m_fieldsToBackup)
       {
-        if (key == "Conf/installationUuid" || key == "Conf/remoteLogTokens" || key.startsWith("Conf/remoteLogTokens/"))
-        {
-          return false;
-        }
-
-        if (key.startsWith(item))
+        if (key.startsWith(item, Qt::CaseInsensitive))
         {
             return true;
         }
@@ -196,14 +260,21 @@ QByteArray SecureQSettings::backupAppConfig() const
       return false;
     };
 
-    for (const QString &key : m_settings.allKeys()) {
+    for (const QString &storedKey : m_settings.allKeys()) {
+        const QString key = amnezia::secureSettingsPolicy::canonicalKey(storedKey);
 
-        if (!needToBackup(key))
+        if (key.isEmpty() || !needToBackup(key))
         {
             continue;
         }
 
-        cfg.insert(key, QJsonValue::fromVariant(sanitizedBackupValue(key, value(key))));
+        bool sanitized = false;
+        const QVariant backupValue = sanitizedBackupValue(key, value(storedKey), &sanitized);
+        if (!sanitized) {
+            qWarning() << "SecureQSettings::backupAppConfig rejected malformed protected value";
+            return {};
+        }
+        cfg.insert(key, QJsonValue::fromVariant(backupValue));
     }
 
     return QJsonDocument(cfg).toJson();
@@ -217,12 +288,43 @@ bool SecureQSettings::restoreAppConfig(const QByteArray &json)
     if (cfg.isEmpty())
         return false;
 
-    for (const QString &key : cfg.keys()) {
-        if (key == "Conf/installationUuid" || key == "Conf/remoteLogTokens" || key.startsWith("Conf/remoteLogTokens/")) {
+    // Preflight the complete import before the first write. Skipping a key is
+    // not sufficient on Windows: an embedded NUL can make the native registry
+    // backend write a shorter, security-sensitive key than Qt compared above.
+    QSet<QString> normalizedKeys;
+    QVariantMap sanitizedValues;
+    for (const QString &storedKey : cfg.keys()) {
+        if (!amnezia::secureSettingsPolicy::isValidSettingsKey(storedKey)
+            || amnezia::secureSettingsPolicy::canonicalKey(storedKey).isEmpty()) {
+            qWarning() << "SecureQSettings::restoreAppConfig rejected invalid settings key";
+            return false;
+        }
+        const QString key = amnezia::secureSettingsPolicy::canonicalKey(storedKey);
+#if defined(Q_OS_WINDOWS)
+        const QString identity = key.toCaseFolded();
+#else
+        const QString identity = key;
+#endif
+        if (normalizedKeys.contains(identity)) {
+            qWarning() << "SecureQSettings::restoreAppConfig rejected aliased settings keys";
+            return false;
+        }
+        normalizedKeys.insert(identity);
+        if (amnezia::secureSettingsPolicy::isLocalOnlySetting(key)) {
             continue;
         }
+        bool sanitized = false;
+        const QVariant sanitizedValue = sanitizedBackupValue(
+                key, cfg.value(storedKey).toVariant(), &sanitized);
+        if (!sanitized) {
+            qWarning() << "SecureQSettings::restoreAppConfig rejected malformed protected value";
+            return false;
+        }
+        sanitizedValues.insert(key, sanitizedValue);
+    }
 
-        setValue(key, sanitizedBackupValue(key, cfg.value(key).toVariant()));
+    for (auto it = sanitizedValues.constBegin(); it != sanitizedValues.constEnd(); ++it) {
+        setValue(it.key(), it.value());
     }
 
     return true;
@@ -231,7 +333,22 @@ bool SecureQSettings::restoreAppConfig(const QByteArray &json)
 void SecureQSettings::clearSettings()
 {
     QMutexLocker locker(&m_mutex);
-    m_settings.clear();
+    // Keep installation identity and update security state in place instead of
+    // clearing and restoring them later. That avoids a crash window in which a
+    // settings reset could erase the durable anti-replay generation floor or a
+    // pending health/rollback receipt. Other local-only data (for example log
+    // upload tokens) is still cleared as expected.
+    const QStringList storedKeys = m_settings.allKeys();
+    for (const QString &storedKey : storedKeys) {
+        if (!amnezia::secureSettingsPolicy::isRetainedAcrossSettingsClear(storedKey)) {
+            m_settings.remove(storedKey);
+        }
+    }
+    m_settings.sync();
+    if (m_settings.status() != QSettings::NoError) {
+        qCritical() << "SecureQSettings::clearSettings failed, status"
+                    << static_cast<int>(m_settings.status());
+    }
     m_cache.clear();
 }
 

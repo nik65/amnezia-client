@@ -19,6 +19,7 @@ class IpcProcessInterface
     SLOT( QByteArray readAllStandardError() );
     SLOT( QByteArray readAllStandardOutput() );
 
+    // Service-side waits are compatibility APIs with a strict one-second maximum.
     SLOT( bool waitForFinished() );
     SLOT( bool waitForFinished(int msecs) );
     SLOT( bool waitForStarted() );

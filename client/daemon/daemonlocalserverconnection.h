@@ -6,6 +6,7 @@
 #define DAEMONLOCALSERVERCONNECTION_H
 
 #include <QObject>
+#include <QTimer>
 
 #include "daemonerrors.h"
 
@@ -21,7 +22,7 @@ class DaemonLocalServerConnection final : public QObject {
  private:
   void readData();
 
-  void parseCommand(const QByteArray& json);
+  bool parseCommand(const QByteArray& json);
 
   void connected(const QString& pubkey);
   void disconnected();
@@ -33,6 +34,8 @@ class DaemonLocalServerConnection final : public QObject {
   QLocalSocket* m_socket = nullptr;
 
   QByteArray m_buffer;
+  QTimer m_incompleteFrameTimer;
+  bool m_receivedValidFrame = false;
 };
 
 #endif  // DAEMONLOCALSERVERCONNECTION_H

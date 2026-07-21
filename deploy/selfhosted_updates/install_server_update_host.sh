@@ -1,4 +1,5 @@
 #!/bin/sh
+# This entrypoint is executed directly by POSIX sh; keep it LF-only.
 set -eu
 
 HOST_DIRECTORY="${1:-/opt/amnezia/client-updates}"

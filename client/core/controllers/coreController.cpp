@@ -1,9 +1,14 @@
 #include "coreController.h"
 
+#include <QDateTime>
 #include <QDirIterator>
 #include <QTranslator>
 #include <QTimer>
+#include <QUrl>
 
+#include <algorithm>
+
+#include "amneziaApplication.h"
 #include "core/utils/selfhosted/sshSession.h"
 #include "core/controllers/selfhosted/installController.h"
 #include "core/controllers/selfhosted/importController.h"
@@ -28,6 +33,15 @@ CoreController::CoreController(const QSharedPointer<VpnConnection> &vpnConnectio
                                QQmlApplicationEngine *engine, QObject *parent)
     : QObject(parent), m_vpnConnection(vpnConnection), m_settings(settings), m_engine(engine)
 {
+    m_guardianPeriodicProbeTimer.setInterval(90 * 1000);
+    m_guardianPeriodicProbeTimer.setSingleShot(false);
+    connect(&m_guardianPeriodicProbeTimer, &QTimer::timeout, this, [this]() {
+        if (m_latestConnectionState == Vpn::ConnectionState::Connected
+            && m_connectionHealthController && !m_connectionHealthController->probeRunning()) {
+            scheduleGuardianConnectivityProbe(0);
+        }
+    });
+
     initRepositories();
     initCoreControllers();
     initModels();
@@ -38,11 +52,17 @@ CoreController::CoreController(const QSharedPointer<VpnConnection> &vpnConnectio
     initAppleController();
     initLogging();
     initRemoteLogUploader();
+    initDiagnosticsControllers();
 
     m_translator = new QTranslator(this);
     if (m_appSettingsRepository) {
         updateTranslator(m_appSettingsRepository->getAppLanguage());
     }
+
+    // A successful process launch alone is not a health signal. Give the GUI,
+    // controllers and companion service a bounded startup observation window
+    // before acknowledging the newly installed version.
+    QTimer::singleShot(30000, this, &CoreController::confirmRunningVersionHealthWhenReady);
 }
 
 void CoreController::setQmlContextProperty(const QString &name, QObject *value)
@@ -168,13 +188,73 @@ void CoreController::initCoreControllers()
     m_exportController = new ExportController(m_serversRepository, m_appSettingsRepository, this);
     m_importCoreController = new ImportController(m_serversRepository, m_appSettingsRepository, this);
     m_connectionController = new ConnectionController(m_serversRepository, m_appSettingsRepository, m_vpnConnection.get(), this);
+    m_connectionHealthController = new ConnectionHealthController(this);
+    m_routeInspectorController = new RouteInspectorController(m_serversRepository, m_appSettingsRepository,
+                                                              m_vpnConnection.get(), this);
     m_settingsController = new SettingsController(m_serversRepository, m_appSettingsRepository, this);
+
+    connect(m_connectionController, &ConnectionController::connectionStateChanged,
+            m_connectionHealthController, [this](Vpn::ConnectionState state) {
+                using HealthState = ConnectionHealthController::HealthState;
+                m_latestConnectionState = state;
+                switch (state) {
+                case Vpn::ConnectionState::Connected: {
+                    const bool reachable = !m_networkReachabilityController
+                            || m_networkReachabilityController->hasInternetAccess();
+                    m_connectionHealthController->recordHealthState(
+                        HealthState::Unknown,
+                        reachable ? QStringLiteral("awaiting_probe")
+                                  : QStringLiteral("reachability_hint_offline"));
+                    if (!reachable) {
+                        m_connectionHealthController->recordEvent(
+                                QStringLiteral("reachability"), QStringLiteral("hint_offline"),
+                                { { QStringLiteral("authoritative"), false } });
+                    }
+                    // Platform reachability/NCSI is only a hint and can be false
+                    // under a kill switch or restricted network. Route/DNS setup
+                    // completes immediately before Connected; let the bounded
+                    // origin probe provide the actual observation.
+                    scheduleGuardianConnectivityProbe(500);
+                    break;
+                }
+                case Vpn::ConnectionState::Reconnecting:
+                    cancelGuardianConnectivityProbe(QStringLiteral("tunnel_connecting"));
+                    m_connectionHealthController->recordHealthState(HealthState::Recovering,
+                                                                    QStringLiteral("recovering"));
+                    break;
+                case Vpn::ConnectionState::Error:
+                    cancelGuardianConnectivityProbe(QStringLiteral("tunnel_error"));
+                    m_connectionHealthController->recordHealthState(HealthState::Unhealthy,
+                                                                    QStringLiteral("tunnel_error"));
+                    m_connectionHealthController->evaluateRecovery(QStringLiteral("tunnel_error"));
+                    break;
+                case Vpn::ConnectionState::Preparing:
+                case Vpn::ConnectionState::Connecting:
+                    cancelGuardianConnectivityProbe(QStringLiteral("tunnel_connecting"));
+                    m_connectionHealthController->recordHealthState(HealthState::Unknown,
+                                                                    QStringLiteral("tunnel_connecting"));
+                    break;
+                case Vpn::ConnectionState::Disconnecting:
+                    cancelGuardianConnectivityProbe(QStringLiteral("tunnel_disconnected"));
+                    m_connectionHealthController->recordHealthState(HealthState::Unknown,
+                                                                    QStringLiteral("tunnel_disconnected"));
+                    break;
+                case Vpn::ConnectionState::Disconnected:
+                case Vpn::ConnectionState::Unknown:
+                    cancelGuardianConnectivityProbe(QStringLiteral("tunnel_disconnected"));
+                    m_connectionHealthController->recordHealthState(HealthState::Unknown,
+                                                                    QStringLiteral("tunnel_disconnected"));
+                    break;
+                }
+            });
 }
 
 void CoreController::initControllers()
 {
     m_connectionUiController = new ConnectionUiController(m_connectionController, m_serversController, this);
     setQmlContextProperty("ConnectionController", m_connectionUiController);
+    setQmlContextProperty("ConnectionHealthController", m_connectionHealthController);
+    setQmlContextProperty("RouteInspectorController", m_routeInspectorController);
 
     if (m_engine) {
         m_focusController = new FocusController(m_engine, this);
@@ -243,6 +323,23 @@ void CoreController::initControllers()
     m_networkReachabilityController = new NetworkReachabilityController(this);
     setQmlContextProperty("NetworkReachabilityController", m_networkReachabilityController);
     setQmlContextProperty("NetworkReachability", m_networkReachabilityController);
+    connect(m_networkReachabilityController, &NetworkReachabilityController::hasInternetAccessChanged,
+            m_connectionHealthController, [this]() {
+                if (m_latestConnectionState != Vpn::ConnectionState::Connected) {
+                    return;
+                }
+                const bool reachable = m_networkReachabilityController->hasInternetAccess();
+                m_connectionHealthController->recordHealthState(
+                    ConnectionHealthController::HealthState::Unknown,
+                    reachable ? QStringLiteral("awaiting_probe")
+                              : QStringLiteral("reachability_hint_offline"));
+                if (!reachable) {
+                    m_connectionHealthController->recordEvent(
+                            QStringLiteral("reachability"), QStringLiteral("hint_offline"),
+                            { { QStringLiteral("authoritative"), false } });
+                }
+                scheduleGuardianConnectivityProbe(250);
+            });
 
     m_servicesCatalogUiController = new ServicesCatalogUiController(m_servicesCatalogController, m_apiServicesModel, this);
     setQmlContextProperty("ServicesCatalogUiController", m_servicesCatalogUiController);
@@ -293,6 +390,50 @@ void CoreController::initAppleController()
 #endif
 }
 
+void CoreController::scheduleGuardianConnectivityProbe(int delayMs)
+{
+    if (m_latestConnectionState == Vpn::ConnectionState::Connected
+        && !m_guardianPeriodicProbeTimer.isActive()) {
+        m_guardianPeriodicProbeTimer.start();
+    }
+    const quint64 requestGeneration = ++m_guardianProbeRequestGeneration;
+    QTimer::singleShot(std::max(0, delayMs), this, [this, requestGeneration]() {
+        if (requestGeneration != m_guardianProbeRequestGeneration
+            || !m_connectionHealthController || !m_appSettingsRepository
+            || m_latestConnectionState != Vpn::ConnectionState::Connected) {
+            return;
+        }
+
+        QNetworkAccessManager *networkManager = amnApp ? amnApp->networkManager() : nullptr;
+        QUrl guardianProbeEndpoint(m_appSettingsRepository->getGatewayEndpoint());
+        // The production gateway historically defaults to plain HTTP for the
+        // legacy API transport. Guardian needs an authenticated origin before
+        // it may treat a successful exchange as meaningful health evidence.
+        // Upgrade only the known production origin; custom/dev endpoints keep
+        // their configured scheme and therefore remain explicitly unverified.
+        if (guardianProbeEndpoint.scheme().compare(QStringLiteral("http"), Qt::CaseInsensitive) == 0
+            && guardianProbeEndpoint.host().compare(QStringLiteral("gw.amnezia.org"), Qt::CaseInsensitive) == 0) {
+            guardianProbeEndpoint.setScheme(QStringLiteral("https"));
+            guardianProbeEndpoint.setPort(-1);
+        }
+
+        // A connected/full-tunnel configuration is not independent proof that
+        // this request used the VPN data path. Keep the path proof conservative
+        // until the platform can bind the probe or attest the observed egress.
+        m_connectionHealthController->startConnectivityProbe(
+                networkManager, guardianProbeEndpoint, true, 5000, false);
+    });
+}
+
+void CoreController::cancelGuardianConnectivityProbe(const QString &reason)
+{
+    ++m_guardianProbeRequestGeneration;
+    m_guardianPeriodicProbeTimer.stop();
+    if (m_connectionHealthController) {
+        m_connectionHealthController->cancelConnectivityProbe(reason);
+    }
+}
+
 void CoreController::initLogging()
 {
     m_appSettingsRepository->setSaveLogs(true);
@@ -314,6 +455,64 @@ void CoreController::initRemoteLogUploader()
 
     m_remoteLogUploader = new RemoteLogUploader(m_serversRepository, m_appSettingsRepository, m_vpnConnection.get(), this);
     m_remoteLogUploader->start();
+}
+
+void CoreController::initDiagnosticsControllers()
+{
+    // Keep the UI facade available on every platform. On Android the uploader
+    // is intentionally absent and the facade reports its safe unavailable state.
+    m_remoteLogHealthUiController = new RemoteLogHealthUiController(m_remoteLogUploader, this);
+    setQmlContextProperty("RemoteLogHealthUiController", m_remoteLogHealthUiController);
+
+    connect(this, &CoreController::translationsUpdated,
+            m_remoteLogHealthUiController, &RemoteLogHealthUiController::onTranslationsUpdated);
+}
+
+void CoreController::confirmRunningVersionHealthWhenReady()
+{
+    if (!m_updateController || !m_connectionController) {
+        return;
+    }
+
+    m_updateController->refreshPendingUpdateHealth();
+    if (!m_updateController->isUpdateHealthConfirmationPending()) {
+        return;
+    }
+
+    if (m_qmlRootReady && m_connectionController->isServiceReady()
+        && m_updateController->confirmRunningVersionHealthy()) {
+        return;
+    }
+
+    // Confirmation can fail because the companion service is still starting,
+    // or because this process is not yet the target version. Continue only
+    // while UpdateController still considers the receipt actionable.
+    if (!m_updateController->isUpdateHealthConfirmationPending()) {
+        return;
+    }
+
+    const QVariantMap receipt = m_updateController->getPendingUpdateHealthReceipt();
+    const QVariant storedDeadline = receipt.value(QStringLiteral("deadlineAt"));
+    QDateTime deadlineAt = storedDeadline.toDateTime();
+    if (!deadlineAt.isValid()) {
+        deadlineAt = QDateTime::fromString(storedDeadline.toString(), Qt::ISODateWithMs);
+    }
+    if (!deadlineAt.isValid()) {
+        deadlineAt = QDateTime::fromString(storedDeadline.toString(), Qt::ISODate);
+    }
+    if (!deadlineAt.isValid()) {
+        return;
+    }
+
+    deadlineAt = deadlineAt.toUTC();
+    const qint64 remainingMs = QDateTime::currentDateTimeUtc().msecsTo(deadlineAt);
+    if (remainingMs <= 0) {
+        m_updateController->refreshPendingUpdateHealth();
+        return;
+    }
+
+    const int retryDelayMs = remainingMs < 10000 ? static_cast<int>(remainingMs) : 10000;
+    QTimer::singleShot(retryDelayMs, this, &CoreController::confirmRunningVersionHealthWhenReady);
 }
 
 void CoreController::initSignalHandlers()
@@ -372,7 +571,9 @@ void CoreController::updateTranslator(const QLocale &locale)
 void CoreController::setQmlRoot()
 {
     if (m_engine && m_systemController) {
-        m_systemController->setQmlRoot(m_engine->rootObjects().value(0));
+        QObject *qmlRoot = m_engine->rootObjects().value(0);
+        m_qmlRootReady = qmlRoot != nullptr;
+        m_systemController->setQmlRoot(qmlRoot);
     }
 }
 

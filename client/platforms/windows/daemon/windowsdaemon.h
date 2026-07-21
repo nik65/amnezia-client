@@ -22,6 +22,10 @@ class WindowsDaemon final : public Daemon {
  public:
   WindowsDaemon();
   ~WindowsDaemon();
+  bool isInitialized() const {
+    return m_firewallManager != nullptr && m_wgutils != nullptr &&
+           m_dnsutils != nullptr;
+  }
 
   void prepareActivation(const InterfaceConfig& config, int inetAdapterIndex = 0) override;
   void activateSplitTunnel(const InterfaceConfig& config, int vpnAdapterIndex = 0) override;

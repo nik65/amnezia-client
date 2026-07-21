@@ -7,7 +7,8 @@ class OsSignalHandler : public QObject
 {
     Q_OBJECT
 public:
-    static void setup();
+    static void setup(bool enableConsoleControlHandler = false);
+    static int terminationExitCode();
 
 private:
     explicit OsSignalHandler(QObject *parent = nullptr);

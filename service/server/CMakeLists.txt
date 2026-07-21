@@ -19,11 +19,13 @@ qt_standard_project_setup()
 configure_file(${CMAKE_SOURCE_DIR}/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/version.h)
 
 set(HEADERS
+    ${CMAKE_CURRENT_LIST_DIR}/../../client/core/utils/managedRoutePolicy.h
     ${CMAKE_CURRENT_LIST_DIR}/../../client/core/utils/utilities.h
     ${CMAKE_CURRENT_LIST_DIR}/../../client/secureQSettings.h
     ${CMAKE_CURRENT_LIST_DIR}/../../client/core/utils/networkUtilities.h
     ${CMAKE_CURRENT_LIST_DIR}/../../common/crypto/cryptoUtils.h
     ${CMAKE_CURRENT_LIST_DIR}/../../ipc/ipc.h
+    ${CMAKE_CURRENT_LIST_DIR}/../../ipc/localpeerauthentication.h
     ${CMAKE_CURRENT_LIST_DIR}/../../ipc/ipcserver.h
     ${CMAKE_CURRENT_LIST_DIR}/../../ipc/ipcserverprocess.h
     ${CMAKE_CURRENT_LIST_DIR}/localserver.h
@@ -41,6 +43,7 @@ set(SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/../../client/core/utils/networkUtilities.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../../common/crypto/cryptoUtils.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../../ipc/ipcserver.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../../ipc/localpeerauthentication.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../../ipc/ipcserverprocess.cpp
     ${CMAKE_CURRENT_LIST_DIR}/localserver.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../../common/logger/logger.cpp
@@ -128,6 +131,7 @@ if(WIN32)
     )
 
     set(HEADERS ${HEADERS}
+        ${CMAKE_CURRENT_LIST_DIR}/../../ipc/windowsprivilegedpipe.h
         ${CMAKE_CURRENT_LIST_DIR}/tapcontroller_win.h
         ${CMAKE_CURRENT_LIST_DIR}/router_win.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../../client/platforms/windows/daemon/windowsdaemon.h
@@ -148,6 +152,7 @@ if(WIN32)
     )
 
     set(SOURCES ${SOURCES}
+        ${CMAKE_CURRENT_LIST_DIR}/../../ipc/windowsprivilegedpipe.cpp
         ${CMAKE_CURRENT_LIST_DIR}/tapcontroller_win.cpp
         ${CMAKE_CURRENT_LIST_DIR}/router_win.cpp
 
@@ -307,6 +312,7 @@ if(APPLE)
     )
 
     find_library(FW_COREFOUNDATION CoreFoundation)
+    find_library(LIB_PROC proc)
     find_library(FW_SYSTEMCONFIG SystemConfiguration)
     find_library(FW_SERVICEMGMT ServiceManagement)
     find_library(FW_SECURITY Security)
@@ -315,6 +321,7 @@ if(APPLE)
     find_library(FW_USER_NOTIFICATIONS UserNotifications)
 
     target_link_libraries(${PROJECT} PRIVATE ${FW_COREFOUNDATION})
+    target_link_libraries(${PROJECT} PRIVATE ${LIB_PROC})
     target_link_libraries(${PROJECT} PRIVATE ${FW_SYSTEMCONFIG})
     target_link_libraries(${PROJECT} PRIVATE ${FW_SERVICEMGMT})
     target_link_libraries(${PROJECT} PRIVATE ${FW_SECURITY})

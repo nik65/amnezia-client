@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QQmlContext>
 #include <QThread>
+#include <QTimer>
 
 #if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
     #include "ui/utils/systemTrayNotificationHandler.h"
@@ -30,6 +31,7 @@
 #include "ui/controllers/updateUiController.h"
 #include "ui/controllers/api/servicesCatalogUiController.h"
 #include "ui/controllers/networkReachabilityController.h"
+#include "ui/controllers/remoteLogHealthUiController.h"
 
 #include "core/controllers/serversController.h"
 #include "core/controllers/selfhosted/usersController.h"
@@ -43,6 +45,8 @@
 #include "core/controllers/selfhosted/installController.h"
 #include "core/controllers/settingsController.h"
 #include "core/controllers/connectionController.h"
+#include "core/controllers/connectionHealthController.h"
+#include "core/controllers/routeInspectorController.h"
 #include "core/controllers/updateController.h"
 #include "core/controllers/remoteLogUploader.h"
 
@@ -145,13 +149,18 @@ private:
     void initAppleController();
     void initLogging();
     void initRemoteLogUploader();
+    void initDiagnosticsControllers();
     void initSignalHandlers();
+    void confirmRunningVersionHealthWhenReady();
+    void scheduleGuardianConnectivityProbe(int delayMs = 500);
+    void cancelGuardianConnectivityProbe(const QString &reason);
     void setQmlContextProperty(const QString &name, QObject *value);
 
     QQmlApplicationEngine *m_engine {}; // TODO use parent child system here?
     SecureQSettings* m_settings;
     QSharedPointer<VpnConnection> m_vpnConnection;
     QTranslator* m_translator;
+    bool m_qmlRootReady = false;
 
     SecureServersRepository* m_serversRepository;
     SecureAppSettingsRepository* m_appSettingsRepository;
@@ -174,7 +183,7 @@ private:
     SitesController* m_sitesController;
     IpSplitTunnelingUiController* m_ipSplitTunnelingUiController;
     SystemController* m_systemController;
-    NetworkReachabilityController* m_networkReachabilityController;
+    NetworkReachabilityController* m_networkReachabilityController = nullptr;
     AppSplitTunnelingUiController* m_appSplitTunnelingUiController;
     AllowedDnsUiController* m_allowedDnsUiController;
     LanguageUiController* m_languageUiController;
@@ -194,11 +203,17 @@ private:
     SubscriptionController* m_subscriptionController;
     NewsController* m_newsController;
     UpdateController* m_updateController;
-    RemoteLogUploader* m_remoteLogUploader;
+    RemoteLogUploader* m_remoteLogUploader = nullptr;
+    RemoteLogHealthUiController* m_remoteLogHealthUiController = nullptr;
     SelfHostedUpdateBootstrapper* m_selfHostedUpdateBootstrapper;
     InstallController* m_installController;
     ExportController* m_exportController;
     ConnectionController* m_connectionController;
+    ConnectionHealthController* m_connectionHealthController = nullptr;
+    RouteInspectorController* m_routeInspectorController = nullptr;
+    Vpn::ConnectionState m_latestConnectionState = Vpn::ConnectionState::Unknown;
+    quint64 m_guardianProbeRequestGeneration = 0;
+    QTimer m_guardianPeriodicProbeTimer;
     SettingsController* m_settingsController;
 
     ContainersModel* m_containersModel;

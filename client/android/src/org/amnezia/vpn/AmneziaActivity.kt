@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.Intent.EXTRA_MIME_TYPES
 import android.content.Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY
 import android.content.ServiceConnection
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
@@ -45,6 +46,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.io.IOException
 import java.io.File
+import java.security.MessageDigest
 import kotlin.LazyThreadSafetyMode.NONE
 import kotlin.coroutines.CoroutineContext
 import kotlin.text.RegexOption.IGNORE_CASE
@@ -83,6 +85,22 @@ private const val KEY_PENDING_INSTALL_APK_PATH = "pending_install_apk_path"
 private const val APK_INSTALL_FAILED = 0
 private const val APK_INSTALL_STARTED = 1
 private const val APK_INSTALL_PERMISSION_SETTINGS_OPENED = 2
+private const val APK_INSTALL_FAILURE_REASON_MAX_LENGTH = 128
+
+@Suppress("DEPRECATION")
+private const val APK_PACKAGE_INFO_FLAGS =
+    PackageManager.GET_SIGNATURES or PackageManager.GET_SIGNING_CERTIFICATES
+
+private data class ApkInstallCandidate(
+    val packageName: String,
+    val versionName: String,
+    val versionCode: Long
+)
+
+private sealed interface ApkInstallCandidateInspection {
+    data class Valid(val candidate: ApkInstallCandidate) : ApkInstallCandidateInspection
+    data class Invalid(val reason: String) : ApkInstallCandidateInspection
+}
 
 class AmneziaActivity : QtActivity() {
 
@@ -106,6 +124,7 @@ class AmneziaActivity : QtActivity() {
     private var openFileDeliveryScheduled = false
     private var pendingInstallApkPath: String? = null
     private var installApkDeliveryScheduled = false
+    private var installApkDeliveryGeneration = 0L
 
     private val vpnServiceEventHandler: Handler by lazy(NONE) {
         object : Handler(Looper.getMainLooper()) {
@@ -379,6 +398,7 @@ class AmneziaActivity : QtActivity() {
         resumeHandler.removeCallbacksAndMessages(null)
         openFileDeliveryScheduled = false
         installApkDeliveryScheduled = false
+        installApkDeliveryGeneration++
         Log.d(TAG, "Pause Amnezia activity")
     }
 
@@ -405,13 +425,27 @@ class AmneziaActivity : QtActivity() {
             }, OPEN_FILE_AFTER_RESUME_DELAY_MS)
         }
 
-        if (pendingInstallApkPath != null && !installApkDeliveryScheduled && canRequestPackageInstall()) {
+        if (pendingInstallApkPath != null && !installApkDeliveryScheduled) {
             val apkPath = pendingInstallApkPath!!
+            val deliveryGeneration = ++installApkDeliveryGeneration
             installApkDeliveryScheduled = true
             resumeHandler.postDelayed({
-                installApkDeliveryScheduled = false
-                if (!isFinishing && !isDestroyed) {
-                    startApkInstaller(apkPath, openSettingsIfBlocked = false)
+                if (!isFinishing && !isDestroyed && isActivityResumed) {
+                    mainScope.launch {
+                        qtInitialized.await()
+                        if (deliveryGeneration != installApkDeliveryGeneration) {
+                            return@launch
+                        }
+                        installApkDeliveryScheduled = false
+                        if (pendingInstallApkPath == apkPath
+                            && isActivityResumed
+                            && !isFinishing
+                            && !isDestroyed) {
+                            startApkInstaller(apkPath, openSettingsIfBlocked = false)
+                        }
+                    }
+                } else if (deliveryGeneration == installApkDeliveryGeneration) {
+                    installApkDeliveryScheduled = false
                 }
             }, OPEN_FILE_AFTER_RESUME_DELAY_MS)
         }
@@ -908,17 +942,125 @@ class AmneziaActivity : QtActivity() {
     private fun canRequestPackageInstall(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()
 
+    @Suppress("DEPRECATION")
+    private fun getApkArchivePackageInfo(apkFile: File): PackageInfo? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getPackageArchiveInfo(
+                apkFile.absolutePath,
+                PackageManager.PackageInfoFlags.of(APK_PACKAGE_INFO_FLAGS.toLong())
+            )
+        } else {
+            packageManager.getPackageArchiveInfo(apkFile.absolutePath, APK_PACKAGE_INFO_FLAGS)
+        }
+
+    @Suppress("DEPRECATION")
+    private fun getInstalledPackageInfo(): PackageInfo =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getPackageInfo(
+                packageName,
+                PackageManager.PackageInfoFlags.of(
+                    PackageManager.GET_SIGNING_CERTIFICATES.toLong()
+                )
+            )
+        } else {
+            packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+        }
+
+    private fun sha256Hex(bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+        val hex = "0123456789abcdef"
+        return buildString(digest.size * 2) {
+            digest.forEach { byte ->
+                val value = byte.toInt() and 0xff
+                append(hex[value ushr 4])
+                append(hex[value and 0x0f])
+            }
+        }
+    }
+
+    private fun currentSignerSha256Set(packageInfo: PackageInfo): Set<String>? {
+        val signingInfo = packageInfo.signingInfo ?: return null
+        val currentSigners = if (signingInfo.hasMultipleSigners()) {
+            signingInfo.apkContentsSigners?.toList()
+        } else {
+            signingInfo.signingCertificateHistory?.lastOrNull()?.let(::listOf)
+        } ?: return null
+        if (currentSigners.isEmpty()) return null
+
+        val digests = currentSigners.map { sha256Hex(it.toByteArray()) }
+        val uniqueDigests = digests.toSet()
+        return uniqueDigests.takeIf { it.size == digests.size }
+    }
+
+    private fun inspectApkInstallCandidate(apkFile: File): ApkInstallCandidateInspection {
+        val archiveInfo: PackageInfo
+        val installedInfo: PackageInfo
+        try {
+            archiveInfo = getApkArchivePackageInfo(apkFile)
+                ?: return ApkInstallCandidateInspection.Invalid("apk_archive_invalid")
+            installedInfo = getInstalledPackageInfo()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to inspect APK install candidate: ${e.javaClass.simpleName}")
+            return ApkInstallCandidateInspection.Invalid("apk_archive_invalid")
+        }
+
+        if (archiveInfo.packageName != packageName) {
+            return ApkInstallCandidateInspection.Invalid("apk_package_mismatch")
+        }
+        val versionName = archiveInfo.versionName
+            ?.takeIf { it.isNotEmpty() }
+            ?: return ApkInstallCandidateInspection.Invalid("apk_version_name_invalid")
+        val versionCode = archiveInfo.longVersionCode
+        if (versionCode <= 0) {
+            return ApkInstallCandidateInspection.Invalid("apk_version_code_invalid")
+        }
+        if (versionCode <= installedInfo.longVersionCode) {
+            return ApkInstallCandidateInspection.Invalid("apk_version_not_newer")
+        }
+
+        val installedSigners = currentSignerSha256Set(installedInfo)
+            ?: return ApkInstallCandidateInspection.Invalid("apk_signer_invalid")
+        val candidateSigners = currentSignerSha256Set(archiveInfo)
+            ?: return ApkInstallCandidateInspection.Invalid("apk_signer_invalid")
+        if (installedSigners != candidateSigners) {
+            return ApkInstallCandidateInspection.Invalid("apk_signer_mismatch")
+        }
+
+        return ApkInstallCandidateInspection.Valid(
+            ApkInstallCandidate(archiveInfo.packageName, versionName, versionCode)
+        )
+    }
+
+    private fun failApkInstaller(fileName: String, reason: String): Int {
+        pendingInstallApkPath = null
+        try {
+            QtAndroidController.onApkInstallerStartFailed(
+                fileName,
+                reason.take(APK_INSTALL_FAILURE_REASON_MAX_LENGTH)
+            )
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to report APK installer failure to native code: ${e.javaClass.simpleName}")
+        }
+        return APK_INSTALL_FAILED
+    }
+
     private fun startApkInstaller(fileName: String, openSettingsIfBlocked: Boolean): Int {
         try {
             val apkFile = File(fileName)
             if (!apkFile.isFile) {
                 Log.e(TAG, "APK file does not exist: $fileName")
-                pendingInstallApkPath = null
-                return APK_INSTALL_FAILED
+                return failApkInstaller(fileName, "apk_missing")
+            }
+            val candidate = when (val inspection = inspectApkInstallCandidate(apkFile)) {
+                is ApkInstallCandidateInspection.Valid -> inspection.candidate
+                is ApkInstallCandidateInspection.Invalid -> {
+                    Log.e(TAG, "APK install candidate rejected: ${inspection.reason}")
+                    return failApkInstaller(fileName, inspection.reason)
+                }
             }
             if (!canRequestPackageInstall()) {
                 if (!openSettingsIfBlocked) {
-                    return APK_INSTALL_FAILED
+                    return failApkInstaller(fileName, "apk_install_permission_missing")
                 }
                 val intent = Intent(
                     Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
@@ -935,17 +1077,39 @@ class AmneziaActivity : QtActivity() {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
+            val launchAuthorized = try {
+                QtAndroidController.authorizeApkInstallerLaunch(
+                    fileName,
+                    candidate.packageName,
+                    candidate.versionName,
+                    candidate.versionCode
+                )
+            } catch (e: Throwable) {
+                Log.e(TAG, "Failed to obtain native APK installer authorization: ${e.javaClass.simpleName}")
+                false
+            }
+            if (!launchAuthorized) {
+                Log.e(TAG, "Native update authorization rejected APK installer launch: $fileName")
+                return failApkInstaller(fileName, "apk_authorization_rejected")
+            }
             pendingInstallApkPath = null
             startActivity(intent)
-            QtAndroidController.onApkInstallerStarted(fileName)
+            try {
+                QtAndroidController.onApkInstallerStarted(fileName)
+            } catch (e: Throwable) {
+                // The durable native authorization remains recoverable if the
+                // process dies after Android accepted the installer intent.
+                Log.e(TAG, "Failed to confirm APK installer start to native code: $e")
+            }
             return APK_INSTALL_STARTED
         } catch (e: ActivityNotFoundException) {
-            Log.e(TAG, "No activity found to install APK: $e")
+            Log.e(TAG, "No activity found to install APK: ${e.javaClass.simpleName}")
             Toast.makeText(this, "No application can install this update", Toast.LENGTH_LONG).show()
+            return failApkInstaller(fileName, "apk_installer_unavailable")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start APK installer: $e")
+            Log.e(TAG, "Failed to start APK installer: ${e.javaClass.simpleName}")
+            return failApkInstaller(fileName, "apk_installer_start_failed")
         }
-        return APK_INSTALL_FAILED
     }
 
     @Suppress("unused")

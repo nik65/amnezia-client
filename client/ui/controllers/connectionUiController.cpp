@@ -171,6 +171,11 @@ bool ConnectionUiController::isConnectionInProgress() const
     return m_isConnectionInProgress;
 }
 
+bool ConnectionUiController::isPreparing() const
+{
+    return m_state == Vpn::ConnectionState::Preparing;
+}
+
 bool ConnectionUiController::isConnected() const
 {
     return m_isConnected;

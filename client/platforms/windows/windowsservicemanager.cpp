@@ -33,12 +33,12 @@ std::unique_ptr<WindowsServiceManager> WindowsServiceManager::open(
   auto manager = OpenSCManager(NULL,  // local computer
                                NULL,  // servicesActive database
                                scm_rights);
-  err = GetLastError();
-  if (err != NULL) {
+  if (manager == nullptr) {
+    err = GetLastError();
     logger.error() << " OpenSCManager failed code: " << err;
     return {};
   }
-  logger.debug() << "OpenSCManager access given - " << err;
+  logger.debug() << "OpenSCManager access given";
 
   logger.debug() << "Opening Service - " << serviceName;
   // Try to get an elevated handle
@@ -46,8 +46,8 @@ std::unique_ptr<WindowsServiceManager> WindowsServiceManager::open(
       OpenService(manager,  // SCM database
                   service,  // name of service
                   (GENERIC_READ | SERVICE_START | SERVICE_STOP));
-  err = GetLastError();
-  if (err != NULL) {
+  if (serviceHandle == nullptr) {
+    err = GetLastError();
     CloseServiceHandle(manager);
     WindowsUtils::windowsLog("OpenService failed");
     return {};
@@ -94,13 +94,15 @@ bool WindowsServiceManager::startPolling(DWORD goal_state, int max_wait_sec) {
 }
 
 SERVICE_STATUS_PROCESS WindowsServiceManager::getStatus() {
-  SERVICE_STATUS_PROCESS serviceStatus;
+  SERVICE_STATUS_PROCESS serviceStatus = {};
   DWORD dwBytesNeeded;  // Contains missing bytes if struct is too small?
-  QueryServiceStatusEx(m_service,                       // handle to service
-                       SC_STATUS_PROCESS_INFO,          // information level
-                       (LPBYTE)&serviceStatus,          // address of structure
-                       sizeof(SERVICE_STATUS_PROCESS),  // size of structure
-                       &dwBytesNeeded);
+  if (!QueryServiceStatusEx(m_service,                       // handle to service
+                            SC_STATUS_PROCESS_INFO,          // information level
+                            (LPBYTE)&serviceStatus,          // address of structure
+                            sizeof(SERVICE_STATUS_PROCESS),  // size of structure
+                            &dwBytesNeeded)) {
+    WindowsUtils::windowsLog("Failed to retrieve service status");
+  }
   return serviceStatus;
 }
 
@@ -117,25 +119,33 @@ bool WindowsServiceManager::startService() {
                          NULL);      // no arguments
   if (ok) {
     logger.debug() << ("Service start requested");
-    startPolling(SERVICE_RUNNING, 30);
+    return startPolling(SERVICE_RUNNING, 30);
   } else {
     WindowsUtils::windowsLog("StartService failed");
   }
-  return ok;
+  return false;
 }
 
 bool WindowsServiceManager::stopService() {
   auto state = getStatus().dwCurrentState;
+  if (state == SERVICE_STOPPED) {
+    emit serviceStopped();
+    return true;
+  }
+  if (state == SERVICE_STOP_PENDING) {
+    return startPolling(SERVICE_STOPPED, 10);
+  }
   if (state != SERVICE_RUNNING && state != SERVICE_START_PENDING) {
-    logger.warning() << ("Service stop not possible, as its not running");
+    logger.warning() << ("Service stop not possible in state") << state;
+    return false;
   }
 
   bool ok = ControlService(m_service, SERVICE_CONTROL_STOP, NULL);
   if (ok) {
     logger.debug() << ("Service stop requested");
-    startPolling(SERVICE_STOPPED, 10);
+    return startPolling(SERVICE_STOPPED, 10);
   } else {
     WindowsUtils::windowsLog("StopService failed");
   }
-  return ok;
+  return false;
 }

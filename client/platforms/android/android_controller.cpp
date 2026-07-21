@@ -3,6 +3,7 @@
 #include <QQmlFile>
 #include <QEventLoop>
 #include <QImage>
+#include <QThread>
 
 #include <android/bitmap.h>
 
@@ -98,7 +99,9 @@ bool AndroidController::initialize()
         {"onVpnStateChanged", "(I)V", reinterpret_cast<void *>(onVpnStateChanged)},
         {"onStatisticsUpdate", "(JJ)V", reinterpret_cast<void *>(onStatisticsUpdate)},
         {"onFileOpened", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onFileOpened)},
+        {"authorizeApkInstallerLaunch", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Z", reinterpret_cast<void *>(authorizeApkInstallerLaunch)},
         {"onApkInstallerStarted", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onApkInstallerStarted)},
+        {"onApkInstallerStartFailed", "(Ljava/lang/String;Ljava/lang/String;)V", reinterpret_cast<void *>(onApkInstallerStartFailed)},
         {"onConfigImported", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onConfigImported)},
         {"onAuthResult", "(Z)V", reinterpret_cast<void *>(onAuthResult)},
         {"decodeQrCode", "(Ljava/lang/String;)Z", reinterpret_cast<bool *>(decodeQrCode)},
@@ -531,11 +534,49 @@ void AndroidController::onFileOpened(JNIEnv *env, jobject thiz, jstring uri)
 }
 
 // static
+jboolean AndroidController::authorizeApkInstallerLaunch(JNIEnv *env, jobject thiz, jstring fileName,
+                                                        jstring packageName, jstring versionName,
+                                                        jlong versionCode)
+{
+    Q_UNUSED(thiz);
+
+    AndroidController *controller = AndroidController::instance();
+    const QString path = AndroidUtils::convertJString(env, fileName);
+    const QString observedPackageName = AndroidUtils::convertJString(env, packageName);
+    const QString observedVersionName = AndroidUtils::convertJString(env, versionName);
+    const qint64 observedVersionCode = static_cast<qint64>(versionCode);
+    bool authorized = false;
+    const auto requestAuthorization = [controller, path, observedPackageName,
+                                       observedVersionName, observedVersionCode, &authorized]() {
+        emit controller->apkInstallerLaunchAuthorizationRequested(
+                path, observedPackageName, observedVersionName, observedVersionCode, &authorized);
+    };
+    if (QThread::currentThread() == controller->thread()) {
+        requestAuthorization();
+    } else if (!QMetaObject::invokeMethod(controller, requestAuthorization,
+                                           Qt::BlockingQueuedConnection)) {
+        return JNI_FALSE;
+    }
+    return authorized ? JNI_TRUE : JNI_FALSE;
+}
+
+// static
 void AndroidController::onApkInstallerStarted(JNIEnv *env, jobject thiz, jstring fileName)
 {
     Q_UNUSED(thiz);
 
     emit AndroidController::instance()->apkInstallerStarted(AndroidUtils::convertJString(env, fileName));
+}
+
+// static
+void AndroidController::onApkInstallerStartFailed(JNIEnv *env, jobject thiz, jstring fileName,
+                                                  jstring reason)
+{
+    Q_UNUSED(thiz);
+
+    emit AndroidController::instance()->apkInstallerStartFailed(
+            AndroidUtils::convertJString(env, fileName),
+            AndroidUtils::convertJString(env, reason));
 }
 
 // static

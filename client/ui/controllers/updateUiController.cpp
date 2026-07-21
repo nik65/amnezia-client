@@ -7,6 +7,12 @@ UpdateUiController::UpdateUiController(UpdateController* updateController, QObje
         connect(m_updateController, &UpdateController::updateFound, this, &UpdateUiController::updateFound);
         connect(m_updateController, &UpdateController::updateCheckFinished,
                 this, &UpdateUiController::onUpdateCheckFinished);
+        connect(m_updateController, &UpdateController::releasePolicyChanged,
+                this, &UpdateUiController::releasePolicyChanged);
+        connect(m_updateController, &UpdateController::updateHealthReceiptChanged,
+                this, &UpdateUiController::updateHealthReceiptChanged);
+        connect(m_updateController, &UpdateController::rollbackAvailabilityChanged,
+                this, &UpdateUiController::rollbackAvailabilityChanged);
     }
 }
 
@@ -76,6 +82,47 @@ bool UpdateUiController::isChecking() const
     return m_isChecking;
 }
 
+QString UpdateUiController::releaseChannel() const
+{
+    return m_updateController ? m_updateController->getReleaseChannel() : QString();
+}
+
+qint64 UpdateUiController::releasePolicyGeneration() const
+{
+    return m_updateController ? m_updateController->getReleasePolicyGeneration() : 0;
+}
+
+QString UpdateUiController::releasePolicyDisposition() const
+{
+    return m_updateController ? m_updateController->getReleasePolicyDisposition()
+                              : QStringLiteral("none");
+}
+
+bool UpdateUiController::healthConfirmationPending() const
+{
+    return m_updateController && m_updateController->isUpdateHealthConfirmationPending();
+}
+
+QVariantMap UpdateUiController::pendingHealthReceipt() const
+{
+    return m_updateController ? m_updateController->getPendingUpdateHealthReceipt() : QVariantMap();
+}
+
+QVariantMap UpdateUiController::lastHealthReceipt() const
+{
+    return m_updateController ? m_updateController->getLastUpdateHealthReceipt() : QVariantMap();
+}
+
+bool UpdateUiController::rollbackAvailable() const
+{
+    return m_updateController && m_updateController->isRollbackAvailable();
+}
+
+QVariantMap UpdateUiController::rollbackActionMetadata() const
+{
+    return m_updateController ? m_updateController->getRollbackActionMetadata() : QVariantMap();
+}
+
 void UpdateUiController::checkForUpdates()
 {
     if (!m_updateController || m_manualCheckRunning) {
@@ -98,6 +145,11 @@ void UpdateUiController::runInstaller()
     if (m_updateController) {
         m_updateController->runInstaller();
     }
+}
+
+bool UpdateUiController::runPendingRollback()
+{
+    return m_updateController && m_updateController->runPendingRollback();
 }
 
 void UpdateUiController::onUpdateCheckFinished(bool updateAvailable)

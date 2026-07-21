@@ -6,7 +6,8 @@
 
 class IpcInterface
 {
-    SLOT( int createPrivilegedProcess() ); // return local pid
+    SLOT( int protocolVersion() );
+    SLOT( QString createPrivilegedProcess() ); // return one-use random capability
 
     // Route functions
     SLOT( int routeAddList(const QString &gw, const QStringList &ips) );

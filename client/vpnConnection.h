@@ -43,9 +43,14 @@ public:
 
     const QString &remoteAddress() const;
     int serverIndex() const;
+    QString serverId() const;
     DockerContainer container() const;
+    amnezia::RouteMode appliedSiteRouteMode() const;
     QString serverRoutingRulesSyncHost() const;
     void addSitesRoutes(const QString &gw, amnezia::RouteMode mode);
+    bool updateManagedSplitTunnelRoutes(amnezia::RouteMode mode,
+                                        const QStringList &oldRoutes,
+                                        const QStringList &newRoutes);
 
 #ifdef Q_OS_ANDROID
     void restoreConnection(int serverIndex, DockerContainer container, const QJsonObject &vpnConfiguration,
@@ -85,13 +90,21 @@ private:
     QJsonObject m_routeMode;
     QString m_remoteAddress;
     int m_serverIndex = -1;
+    QString m_serverId;
     DockerContainer m_container = DockerContainer::None;
+    // Local and server-managed DNS work have different owners. A managed
+    // policy refresh must not discard a user's pending local lookup.
+    quint64 m_clientSplitRouteResolveGeneration = 0;
+    quint64 m_managedSplitRouteResolveGeneration = 0;
+    int m_pendingClientSplitRouteLookups = 0;
+    bool m_reconnectAfterClientRouteResolution = false;
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
     bool m_reconnectPending = false;
 #endif
 
     // Only for iOS for now, check counters
     QTimer m_checkTimer;
+    QTimer m_deferredManagedRouteReconnectTimer;
 
 #ifdef Q_OS_ANDROID
    AndroidVpnProtocol* androidVpnProtocol = nullptr;
@@ -100,9 +113,10 @@ private:
    void createAndroidConnections();
 #endif
 
-   Vpn::ConnectionState m_connectionState;
+   Vpn::ConnectionState m_connectionState = Vpn::ConnectionState::Unknown;
 
    void createProtocolConnections();
+   void invalidateAllSplitRouteResolutions();
    QStringList serverRoutingRulesSyncHosts() const;
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
    void startIosVpnWithCurrentConfig();

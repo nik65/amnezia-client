@@ -6,6 +6,9 @@ set(HEADERS ${HEADERS}
     ${CLIENT_ROOT_DIR}/amneziaApplication.h
     ${CLIENT_ROOT_DIR}/core/utils/errorCodes.h
     ${CLIENT_ROOT_DIR}/core/utils/routeModes.h
+    ${CLIENT_ROOT_DIR}/core/utils/managedRoutePolicy.h
+    ${CLIENT_ROOT_DIR}/core/utils/operatorCommand.h
+    ${CLIENT_ROOT_DIR}/core/utils/remoteLogSanitizer.h
     ${CLIENT_ROOT_DIR}/core/utils/commonStructs.h
     ${CLIENT_ROOT_DIR}/core/utils/containerEnum.h
     ${CLIENT_ROOT_DIR}/core/utils/protocolEnum.h
@@ -44,6 +47,8 @@ set(HEADERS ${HEADERS}
     ${CLIENT_ROOT_DIR}/core/controllers/allowedDnsController.h
     ${CLIENT_ROOT_DIR}/core/controllers/selfhosted/exportController.h
     ${CLIENT_ROOT_DIR}/core/controllers/connectionController.h
+    ${CLIENT_ROOT_DIR}/core/controllers/connectionHealthController.h
+    ${CLIENT_ROOT_DIR}/core/controllers/routeInspectorController.h
     ${CLIENT_ROOT_DIR}/core/controllers/settingsController.h
     ${CLIENT_ROOT_DIR}/core/controllers/remoteLogUploader.h
     ${CLIENT_ROOT_DIR}/core/controllers/api/servicesCatalogController.h
@@ -96,6 +101,7 @@ set(SOURCES ${SOURCES}
     ${CLIENT_ROOT_DIR}/core/utils/migrations.cpp
     ${CLIENT_ROOT_DIR}/amneziaApplication.cpp
     ${CLIENT_ROOT_DIR}/core/utils/errorStrings.cpp
+    ${CLIENT_ROOT_DIR}/core/utils/remoteLogSanitizer.cpp
     ${CLIENT_ROOT_DIR}/core/utils/containers/containerUtils.cpp
     ${CLIENT_ROOT_DIR}/core/protocols/protocolUtils.cpp
     ${CLIENT_ROOT_DIR}/core/utils/selfhosted/scriptsRegistry.cpp
@@ -126,6 +132,8 @@ set(SOURCES ${SOURCES}
     ${CLIENT_ROOT_DIR}/core/controllers/allowedDnsController.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/selfhosted/exportController.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/connectionController.cpp
+    ${CLIENT_ROOT_DIR}/core/controllers/connectionHealthController.cpp
+    ${CLIENT_ROOT_DIR}/core/controllers/routeInspectorController.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/settingsController.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/remoteLogUploader.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/api/servicesCatalogController.cpp
@@ -259,10 +267,12 @@ set(SOURCES ${SOURCES}
 if(WIN32)
     set(HEADERS ${HEADERS}
         ${CLIENT_ROOT_DIR}/core/protocols/ikev2VpnProtocolWindows.h
+        ${CLIENT_ROOT_DIR}/../ipc/windowsprivilegedpipe.h
     )
 
     set(SOURCES ${SOURCES}
         ${CLIENT_ROOT_DIR}/core/protocols/ikev2VpnProtocolWindows.cpp
+        ${CLIENT_ROOT_DIR}/../ipc/windowsprivilegedpipe.cpp
     )
 
     set(RESOURCES ${RESOURCES}
@@ -276,6 +286,7 @@ if(WIN32 OR (APPLE AND NOT IOS AND NOT MACOS_NE) OR (LINUX AND NOT ANDROID))
 
     set(HEADERS ${HEADERS}
         ${CLIENT_ROOT_DIR}/core/utils/ipcClient.h
+        ${CLIENT_ROOT_DIR}/../ipc/localpeerauthentication.h
         ${CLIENT_ROOT_DIR}/ui/utils/systemTrayNotificationHandler.h
         ${CLIENT_ROOT_DIR}/core/protocols/openVpnProtocol.h
         ${CLIENT_ROOT_DIR}/core/protocols/wireGuardProtocol.h
@@ -286,6 +297,7 @@ if(WIN32 OR (APPLE AND NOT IOS AND NOT MACOS_NE) OR (LINUX AND NOT ANDROID))
 
     set(SOURCES ${SOURCES}
         ${CLIENT_ROOT_DIR}/core/utils/ipcClient.cpp
+        ${CLIENT_ROOT_DIR}/../ipc/localpeerauthentication.cpp
         ${CLIENT_ROOT_DIR}/mozilla/localsocketcontroller.cpp
         ${CLIENT_ROOT_DIR}/ui/utils/systemTrayNotificationHandler.cpp
         ${CLIENT_ROOT_DIR}/core/protocols/openVpnProtocol.cpp

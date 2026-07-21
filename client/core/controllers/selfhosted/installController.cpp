@@ -2,6 +2,8 @@
 
 #include "core/models/protocolConfig.h"
 
+#include <QCryptographicHash>
+#include <QDateTime>
 #include <QDebug>
 #include <QEventLoop>
 #include <QFutureWatcher>
@@ -61,6 +63,10 @@ namespace
 {
     Logger logger("InstallController");
     constexpr char serverRoutingRulesPublishErrorMarker[] = "__AMNEZIA_ROUTING_RULES_PUBLISH_ERROR__";
+    constexpr char serverRoutingRulesPublishConflictMarker[] = "__AMNEZIA_ROUTING_RULES_PUBLISH_CONFLICT__";
+    constexpr char serverRoutingRulesPublishSuccessMarker[] = "__AMNEZIA_ROUTING_RULES_PUBLISH_SUCCESS__";
+    constexpr char serverRoutingRulesCandidateBeginMarker[] = "__AMNEZIA_ROUTING_RULES_CANDIDATE_BEGIN__";
+    constexpr char serverRoutingRulesCandidateEndMarker[] = "__AMNEZIA_ROUTING_RULES_CANDIDATE_END__";
     constexpr char serverRoutingRulesImage[] = "busybox:1.36.1";
     constexpr char serverRoutingRulesSourceFileName[] = "rules-source.txt";
     constexpr char serverRoutingRulesScriptFileName[] = "rules-server.sh";
@@ -69,6 +75,10 @@ namespace
     constexpr int serverRoutingRulesResolveJitterSeconds = 60 * 60;
     constexpr int serverRoutingRulesInitialResolveTimeoutSeconds = 90;
     constexpr int serverRoutingRulesInitialResolveRetrySeconds = 5;
+    constexpr int serverRoutingRulesPolicyLifetimeYears = 10;
+    constexpr qint64 serverRoutingRulesMaximumJsonRevision = 9007199254740991LL;
+    constexpr char serverRoutingRulesSigningBlocker[] =
+            "Managed routing policy signing key and trusted public-key distribution are not configured";
 
     QString serverRoutingRulesTunnelInterface(DockerContainer container)
     {
@@ -253,6 +263,124 @@ namespace
         return ips;
     }
 
+    bool serverRoutingRulesRevision(const QJsonObject &rules, qint64 &revision, QString &errorMessage)
+    {
+        QJsonValue revisionValue = rules.value(QStringLiteral("policy")).toObject().value(QStringLiteral("revision"));
+        if (revisionValue.isUndefined()) {
+            revisionValue = rules.value(QStringLiteral("revision"));
+        }
+        if (revisionValue.isUndefined() || revisionValue.isNull()) {
+            revision = 0;
+            return true;
+        }
+
+        bool ok = false;
+        qint64 parsedRevision = -1;
+        if (revisionValue.isDouble()) {
+            parsedRevision = revisionValue.toVariant().toLongLong(&ok);
+        } else if (revisionValue.isString()) {
+            parsedRevision = revisionValue.toString().trimmed().toLongLong(&ok);
+        }
+        if (!ok || parsedRevision < 0) {
+            errorMessage = QStringLiteral("Server routing policy has an invalid revision");
+            return false;
+        }
+
+        revision = parsedRevision;
+        return true;
+    }
+
+    ErrorCode readServerRoutingRulesRevision(const ServerCredentials &credentials, SshSession &sshSession,
+                                             qint64 &revision, QString &errorMessage)
+    {
+        QString stdOut;
+        auto cbReadStdOut = [&stdOut](const QString &data, libssh::Client &) {
+            stdOut.append(data);
+            return ErrorCode::NoError;
+        };
+
+        const QString rulesPath = QStringLiteral("%1/%2")
+                .arg(QString::fromLatin1(protocols::serverRoutingRules::hostDirectory),
+                     QString::fromLatin1(protocols::serverRoutingRules::fileName));
+        const QString script = QStringLiteral("sudo test -s '%1' && sudo cat '%1' || true").arg(rulesPath);
+        const ErrorCode errorCode = sshSession.runScript(credentials, script, cbReadStdOut);
+        if (errorCode != ErrorCode::NoError) {
+            errorMessage = QStringLiteral("Unable to read the current server routing policy revision");
+            return errorCode;
+        }
+
+        const QByteArray payload = stdOut.trimmed().toUtf8();
+        if (payload.isEmpty()) {
+            revision = 0;
+            return ErrorCode::NoError;
+        }
+
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(payload, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            errorMessage = QStringLiteral("Current server routing policy is not valid JSON: %1")
+                                   .arg(parseError.errorString());
+            return ErrorCode::ServerCheckFailed;
+        }
+        if (!serverRoutingRulesRevision(document.object(), revision, errorMessage)) {
+            return ErrorCode::ServerCheckFailed;
+        }
+        return ErrorCode::NoError;
+    }
+
+    QJsonObject canonicalServerRoutingRulesContent(const QJsonObject &rules)
+    {
+        QJsonObject content;
+        content.insert(QStringLiteral("schemaVersion"), 1);
+        content.insert(configKey::managedSplitTunnelExceptSourceSites, serverRoutingRulesSourceSites(rules));
+        content.insert(configKey::managedSplitTunnelForceEnabled,
+                       rules.value(configKey::managedSplitTunnelForceEnabled).toBool(false));
+        return content;
+    }
+
+    QJsonObject versionedServerRoutingRules(const QJsonObject &rules, qint64 revision,
+                                            QString &contentSha256)
+    {
+        const QDateTime generatedAt = QDateTime::currentDateTimeUtc();
+        const QDateTime expiresAt = generatedAt.addYears(serverRoutingRulesPolicyLifetimeYears);
+        const QJsonObject content = canonicalServerRoutingRulesContent(rules);
+        const QByteArray canonicalContent = QJsonDocument(content).toJson(QJsonDocument::Compact);
+        const QByteArray digest = QCryptographicHash::hash(canonicalContent, QCryptographicHash::Sha256).toHex();
+        contentSha256 = QStringLiteral("sha256:%1").arg(QString::fromLatin1(digest));
+
+        QJsonObject policy;
+        policy.insert(QStringLiteral("schemaVersion"), 1);
+        policy.insert(QStringLiteral("revision"), revision);
+        policy.insert(QStringLiteral("generatedAt"), generatedAt.toString(Qt::ISODateWithMs));
+        // `issuedAt` is retained as an alias for clients that already understand
+        // versioned managed-route policy metadata.
+        policy.insert(QStringLiteral("issuedAt"), generatedAt.toString(Qt::ISODateWithMs));
+        policy.insert(QStringLiteral("expiresAt"), expiresAt.toString(Qt::ISODateWithMs));
+        policy.insert(QStringLiteral("contentSha256"), contentSha256);
+        policy.insert(QStringLiteral("canonicalization"), QStringLiteral("qt-json-compact-v1"));
+        policy.insert(QStringLiteral("content"), content);
+
+        // This is deliberately metadata, not a signature. Advertising an
+        // algorithm without producing a verifiable signature would give
+        // consumers a false security signal.
+        QJsonObject signing;
+        signing.insert(QStringLiteral("status"), QStringLiteral("unavailable"));
+        signing.insert(QStringLiteral("reason"), QString::fromLatin1(serverRoutingRulesSigningBlocker));
+        policy.insert(QStringLiteral("signing"), signing);
+
+        QJsonObject versionedRules = rules;
+        versionedRules.insert(QStringLiteral("version"), 1);
+        versionedRules.insert(QStringLiteral("policy"), policy);
+        return versionedRules;
+    }
+
+    QString shellSingleQuoted(const QString &value)
+    {
+        QString escaped = value;
+        escaped.replace(QLatin1Char('\''), QStringLiteral("'\"'\"'"));
+        return QStringLiteral("'%1'").arg(escaped);
+    }
+
     QByteArray serverRoutingRulesSourceData(const QJsonObject &rules)
     {
         QByteArray data;
@@ -278,10 +406,15 @@ namespace
     QByteArray serverRoutingRulesResolverScript(const QJsonObject &rules)
     {
         const bool forceEnabled = rules.value(configKey::managedSplitTunnelForceEnabled).toBool(false);
+        const QJsonObject policy = rules.value(QStringLiteral("policy")).toObject();
+        const QString policyJson = policy.isEmpty()
+                ? QString()
+                : QString::fromUtf8(QJsonDocument(policy).toJson(QJsonDocument::Compact));
         QString script = QStringLiteral(R"SERVER_RULES_SH(#!/bin/sh
 RULES_FILE="/www/__RULES_FILE__"
 SOURCE_FILE="/www/__SOURCE_FILE__"
 READY_FILE="/www/__READY_FILE__"
+POLICY_JSON=__POLICY_JSON__
 SERVER_EXCEPT_KEY="__SERVER_EXCEPT_KEY__"
 MANAGED_EXCEPT_KEY="__MANAGED_EXCEPT_KEY__"
 SOURCE_EXCEPT_KEY="__SOURCE_EXCEPT_KEY__"
@@ -292,6 +425,18 @@ RESOLVE_JITTER_SECONDS=__RESOLVE_JITTER_SECONDS__
 INITIAL_RESOLVE_TIMEOUT_SECONDS=__INITIAL_RESOLVE_TIMEOUT_SECONDS__
 INITIAL_RESOLVE_RETRY_SECONDS=__INITIAL_RESOLVE_RETRY_SECONDS__
 resolve_deadline_seconds=0
+
+validate_source_file() {
+    [ -f "$SOURCE_FILE" ] || return 1
+    while IFS='|' read -r source_kind source_value source_fallback source_extra; do
+        [ -z "$source_kind$source_value$source_fallback$source_extra" ] && continue
+        [ -z "$source_extra" ] || return 1
+        [ "$source_kind" = "I" ] || [ "$source_kind" = "D" ] || return 1
+        [ -n "$source_value" ] || return 1
+        printf '%s%s' "$source_value" "$source_fallback" | grep -q '[[:cntrl:]]' && return 1
+    done < "$SOURCE_FILE"
+    return 0
+}
 
 json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -401,7 +546,11 @@ build_rules() {
 
     tmp_file="${RULES_FILE}.tmp"
     if {
-        printf '{"version":1,"%s":{' "$SERVER_EXCEPT_KEY"
+        printf '{"version":1'
+        if [ -n "$POLICY_JSON" ]; then
+            printf ',"policy":%s' "$POLICY_JSON"
+        fi
+        printf ',"%s":{' "$SERVER_EXCEPT_KEY"
         cat "$resolved_body_file"
         printf '},"%s":{' "$MANAGED_EXCEPT_KEY"
         cat "$source_body_file"
@@ -428,6 +577,8 @@ random_jitter() {
     echo $((jitter_seed % RESOLVE_JITTER_SECONDS))
 }
 
+validate_source_file || exit 20
+
 initial_start_seconds="$(current_time_seconds)"
 if [ "$initial_start_seconds" -gt 0 ]; then
     resolve_deadline_seconds=$((initial_start_seconds + INITIAL_RESOLVE_TIMEOUT_SECONDS))
@@ -441,6 +592,11 @@ else
     build_rules 0 || build_rules 1
 fi
 resolve_deadline_seconds=0
+
+if [ "${VALIDATE_ONLY:-0}" = "1" ]; then
+    [ -s "$RULES_FILE" ] && [ -s "$READY_FILE" ]
+    exit $?
+fi
 
 while [ ! -s "$READY_FILE" ]; do
     build_rules 1 && break
@@ -461,6 +617,7 @@ busybox httpd -f -p __SYNC_PORT__ -h /www
         script.replace("__RULES_FILE__", QString::fromLatin1(protocols::serverRoutingRules::fileName));
         script.replace("__SOURCE_FILE__", QString::fromLatin1(serverRoutingRulesSourceFileName));
         script.replace("__READY_FILE__", QString::fromLatin1(serverRoutingRulesReadyFileName));
+        script.replace("__POLICY_JSON__", shellSingleQuoted(policyJson));
         script.replace("__SERVER_EXCEPT_KEY__", QString(configKey::serverExcept));
         script.replace("__MANAGED_EXCEPT_KEY__", QString(configKey::managedSplitTunnelExceptSites));
         script.replace("__SOURCE_EXCEPT_KEY__", QString(configKey::managedSplitTunnelExceptSourceSites));
@@ -498,6 +655,92 @@ busybox httpd -f -p __SYNC_PORT__ -h /www
         }
         return script;
     }
+
+    QByteArray markedPayload(const QString &output, const QString &beginMarker, const QString &endMarker)
+    {
+        const int begin = output.indexOf(beginMarker);
+        if (begin < 0) {
+            return {};
+        }
+        const int payloadBegin = begin + beginMarker.size();
+        const int end = output.indexOf(endMarker, payloadBegin);
+        if (end < payloadBegin) {
+            return {};
+        }
+        return output.mid(payloadBegin, end - payloadBegin).trimmed().toUtf8();
+    }
+
+    QString publishFailureReason(const QString &output)
+    {
+        const QRegularExpression expression(
+                QStringLiteral("%1:([^\\r\\n]+)")
+                        .arg(QRegularExpression::escape(QString::fromLatin1(serverRoutingRulesPublishErrorMarker))));
+        const QRegularExpressionMatch match = expression.match(output);
+        return match.hasMatch() ? match.captured(1).trimmed() : QString();
+    }
+
+    void updateRemoteRollbackResult(const QString &output, ServerRoutingRulesPublishResult &result)
+    {
+        const QRegularExpression expression(QStringLiteral("remote_rollback=(not_needed|restored|partial)"));
+        const QRegularExpressionMatch match = expression.match(output);
+        if (!match.hasMatch()) {
+            return;
+        }
+        result.remoteRollbackStatus = match.captured(1);
+        result.remoteRollbackAttempted = result.remoteRollbackStatus != QStringLiteral("not_needed");
+        result.remoteRollbackSucceeded = result.remoteRollbackStatus == QStringLiteral("restored");
+    }
+
+    bool validateServerRoutingRulesCandidate(const QByteArray &payload, const QJsonObject &versionedRules,
+                                             qint64 revision, const QString &contentSha256,
+                                             QString &errorMessage)
+    {
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(payload, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            errorMessage = QStringLiteral("Candidate resolver output is not valid JSON: %1")
+                                   .arg(parseError.errorString());
+            return false;
+        }
+
+        const QJsonObject candidate = document.object();
+        if (candidate.value(QStringLiteral("version")).toInt(-1) != 1) {
+            errorMessage = QStringLiteral("Candidate resolver output has an unsupported schema version");
+            return false;
+        }
+
+        QString revisionError;
+        qint64 candidateRevision = -1;
+        if (!serverRoutingRulesRevision(candidate, candidateRevision, revisionError)
+            || candidateRevision != revision) {
+            errorMessage = revisionError.isEmpty()
+                    ? QStringLiteral("Candidate resolver output has revision %1 instead of %2")
+                              .arg(candidateRevision)
+                              .arg(revision)
+                    : revisionError;
+            return false;
+        }
+
+        const QJsonObject expectedPolicy = versionedRules.value(QStringLiteral("policy")).toObject();
+        const QJsonObject candidatePolicy = candidate.value(QStringLiteral("policy")).toObject();
+        if (candidatePolicy != expectedPolicy
+            || candidatePolicy.value(QStringLiteral("contentSha256")).toString() != contentSha256) {
+            errorMessage = QStringLiteral("Candidate resolver output policy metadata or content hash differs from the candidate");
+            return false;
+        }
+
+        const QJsonObject expectedSources = serverRoutingRulesSourceSites(versionedRules);
+        if (!candidate.value(configKey::serverExcept).isObject()
+            || candidate.value(configKey::managedSplitTunnelExceptSites).toObject() != expectedSources
+            || candidate.value(configKey::managedSplitTunnelExceptSourceSites).toObject() != expectedSources
+            || candidate.value(configKey::managedSplitTunnelForceEnabled).toBool(false)
+                    != versionedRules.value(configKey::managedSplitTunnelForceEnabled).toBool(false)) {
+            errorMessage = QStringLiteral("Candidate resolver output does not match the requested managed routing policy");
+            return false;
+        }
+
+        return true;
+    }
 }
 
 InstallController::InstallController(SecureServersRepository *serversRepository,
@@ -518,20 +761,82 @@ InstallController::~InstallController()
 ErrorCode InstallController::publishServerRoutingRules(const ServerCredentials &credentials, const QJsonObject &rules,
                                                        DockerContainer container)
 {
-    const QByteArray sourceData = serverRoutingRulesSourceData(rules);
+    return publishVersionedServerRoutingRules(credentials, rules, container).errorCode;
+}
+
+ServerRoutingRulesPublishResult InstallController::publishVersionedServerRoutingRules(
+        const ServerCredentials &credentials, const QJsonObject &rules, DockerContainer container,
+        qint64 expectedRevision)
+{
+    ServerRoutingRulesPublishResult result;
+    result.expectedRevision = expectedRevision;
+    result.signatureAvailable = false;
+    result.signingBlocker = QString::fromLatin1(serverRoutingRulesSigningBlocker);
+    result.remoteRollbackStatus = QStringLiteral("not_needed");
+
+    bool managedContentValid = false;
+    managedRoutePolicy::canonicalSourcePolicyContent(rules, &managedContentValid);
+    if (!managedContentValid) {
+        result.errorCode = ErrorCode::ServerCheckFailed;
+        result.failureReason = QStringLiteral(
+                "Managed routing policy contains an unsafe, malformed, or oversized route set");
+        return result;
+    }
+
     SshSession sshSession;
-    ErrorCode errorCode = ErrorCode::NoError;
+    QString revisionError;
+    ErrorCode errorCode = readServerRoutingRulesRevision(credentials, sshSession, result.currentRevision, revisionError);
+    if (errorCode != ErrorCode::NoError) {
+        result.errorCode = errorCode;
+        result.failureReason = revisionError;
+        return result;
+    }
+
+    if (expectedRevision >= 0 && expectedRevision != result.currentRevision) {
+        result.errorCode = ErrorCode::ServerCheckFailed;
+        result.conflict = true;
+        result.failureReason = QStringLiteral("Routing policy revision conflict: expected %1, server has %2")
+                                       .arg(expectedRevision)
+                                       .arg(result.currentRevision);
+        return result;
+    }
+
+    const qint64 compareAndSwapRevision = result.currentRevision;
+    result.expectedRevision = compareAndSwapRevision;
+    if (compareAndSwapRevision >= serverRoutingRulesMaximumJsonRevision) {
+        result.errorCode = ErrorCode::InternalError;
+        result.failureReason = QStringLiteral("Routing policy revision counter exceeds the JSON safe integer range");
+        return result;
+    }
+
+    const qint64 publishedRevision = compareAndSwapRevision + 1;
+    const QJsonObject versionedRules = versionedServerRoutingRules(rules, publishedRevision, result.contentSha256);
+    const QByteArray sourceData = serverRoutingRulesSourceData(versionedRules);
+    const QByteArray resolverScript = serverRoutingRulesResolverScript(versionedRules);
+    const QString sourceSha256 = QString::fromLatin1(
+            QCryptographicHash::hash(sourceData, QCryptographicHash::Sha256).toHex());
+    const QString scriptSha256 = QString::fromLatin1(
+            QCryptographicHash::hash(resolverScript, QCryptographicHash::Sha256).toHex());
+    const QString transactionId = Utils::getRandomString(16);
+    const QString candidateDirectory = QStringLiteral("%1/.candidate-%2")
+            .arg(QString::fromLatin1(protocols::serverRoutingRules::hostDirectory), transactionId);
 
     const QString sourceTmpFileName = QStringLiteral("/tmp/%1.txt").arg(Utils::getRandomString(16));
     errorCode = sshSession.uploadFileToHost(credentials, sourceData, sourceTmpFileName);
     if (errorCode != ErrorCode::NoError) {
-        return errorCode;
+        result.errorCode = errorCode;
+        result.failureReason = QStringLiteral("Unable to upload managed routing policy source data");
+        return result;
     }
 
     const QString scriptTmpFileName = QStringLiteral("/tmp/%1.sh").arg(Utils::getRandomString(16));
-    errorCode = sshSession.uploadFileToHost(credentials, serverRoutingRulesResolverScript(rules), scriptTmpFileName);
+    errorCode = sshSession.uploadFileToHost(credentials, resolverScript, scriptTmpFileName);
     if (errorCode != ErrorCode::NoError) {
-        return errorCode;
+        sshSession.runScript(credentials,
+                             QStringLiteral("sudo rm -f %1").arg(shellSingleQuoted(sourceTmpFileName)));
+        result.errorCode = errorCode;
+        result.failureReason = QStringLiteral("Unable to upload managed routing policy resolver");
+        return result;
     }
 
     const QString tunnelInterface = serverRoutingRulesTunnelInterface(container);
@@ -540,57 +845,437 @@ ErrorCode InstallController::publishServerRoutingRules(const ServerCredentials &
             .arg(QString::fromLatin1(protocols::serverRoutingRules::tunnelContainerName),
                  ContainerUtils::containerToString(container));
 
-    QString script = QStringLiteral(R"(
-sudo mkdir -p '__HOST_DIRECTORY__' || echo __ERROR_MARKER__:mkdir
-sudo install -m 0644 '__SOURCE_TMP_FILE__' '__HOST_DIRECTORY__/__SOURCE_FILE__' || echo __ERROR_MARKER__:source_install
-sudo install -m 0755 '__SCRIPT_TMP_FILE__' '__HOST_DIRECTORY__/__SCRIPT_FILE__' || echo __ERROR_MARKER__:script_install
-sudo rm -f '__SOURCE_TMP_FILE__' '__SCRIPT_TMP_FILE__' || true
-sudo rm -f '__HOST_DIRECTORY__/__READY_FILE__' || true
-if ! sudo docker network inspect amnezia-dns-net >/dev/null 2>&1; then sudo docker network create --driver bridge --subnet=172.29.172.0/24 --opt com.docker.network.bridge.name=amn0 amnezia-dns-net || echo __ERROR_MARKER__:network_create; fi
-sudo docker rm -f '__BRIDGE_CONTAINER__' >/dev/null 2>&1 || true
-if ! sudo docker image inspect '__ROUTING_RULES_IMAGE__' >/dev/null 2>&1; then sudo docker pull '__ROUTING_RULES_IMAGE__' >/dev/null || echo __ERROR_MARKER__:image_pull; fi
-sudo docker run -d --log-driver none --restart always --network amnezia-dns-net --ip=__BRIDGE_HOST__ --name '__BRIDGE_CONTAINER__' -v __HOST_DIRECTORY__:/www:rw --entrypoint sh '__ROUTING_RULES_IMAGE__' -c 'sh /www/__SCRIPT_FILE__' || echo __ERROR_MARKER__:bridge_run
-i=0; while [ $i -lt 120 ]; do sudo test -s '__HOST_DIRECTORY__/__READY_FILE__' && break; i=$((i + 1)); sleep 1; done
-sudo test -s '__HOST_DIRECTORY__/__READY_FILE__' || echo __ERROR_MARKER__:rules_ready
-if [ '__PUBLISH_TUNNEL__' = '1' ] && sudo test -s '__HOST_DIRECTORY__/__READY_FILE__'; then if sudo docker ps --format '{{.Names}}' | grep -qx '__VPN_CONTAINER__'; then sudo docker rm -f '__TUNNEL_CONTAINER__' >/dev/null 2>&1 || true; sudo docker exec -i '__VPN_CONTAINER__' sh -c 'while iptables -t nat -D PREROUTING -i __TUNNEL_IFACE__ -p tcp --dport __SYNC_PORT__ -j DNAT --to-destination __BRIDGE_HOST__:__SYNC_PORT__ 2>/dev/null; do :; done' >/dev/null 2>&1 || true; sudo docker run -d --log-driver none --restart always --network container:__VPN_CONTAINER__ --name '__TUNNEL_CONTAINER__' -v __HOST_DIRECTORY__:/www:ro --entrypoint sh '__ROUTING_RULES_IMAGE__' -c 'busybox httpd -f -p __SYNC_PORT__ -h /www' || echo __ERROR_MARKER__:tunnel_run; else echo __ERROR_MARKER__:missing_vpn_container; fi; fi
-sleep 1
-sudo docker ps --format '{{.Names}}' | grep -qx '__BRIDGE_CONTAINER__' || echo __ERROR_MARKER__:missing_bridge_container
-if [ '__PUBLISH_TUNNEL__' = '1' ] && sudo test -s '__HOST_DIRECTORY__/__READY_FILE__'; then sudo docker ps --format '{{.Names}}' | grep -qx '__TUNNEL_CONTAINER__' || echo __ERROR_MARKER__:missing_tunnel_container; fi
-)");
-
-    script.replace("__HOST_DIRECTORY__", QString::fromLatin1(protocols::serverRoutingRules::hostDirectory));
-    script.replace("__SOURCE_TMP_FILE__", sourceTmpFileName);
-    script.replace("__SCRIPT_TMP_FILE__", scriptTmpFileName);
-    script.replace("__SOURCE_FILE__", QString::fromLatin1(serverRoutingRulesSourceFileName));
-    script.replace("__SCRIPT_FILE__", QString::fromLatin1(serverRoutingRulesScriptFileName));
-    script.replace("__READY_FILE__", QString::fromLatin1(serverRoutingRulesReadyFileName));
-    script.replace("__BRIDGE_CONTAINER__", QString::fromLatin1(protocols::serverRoutingRules::containerName));
-    script.replace("__TUNNEL_CONTAINER__", tunnelContainerName);
-    script.replace("__ROUTING_RULES_IMAGE__", QString::fromLatin1(serverRoutingRulesImage));
-    script.replace("__BRIDGE_HOST__", QString::fromLatin1(protocols::serverRoutingRules::syncHost));
-    script.replace("__SYNC_PORT__", QString::number(protocols::serverRoutingRules::syncPort));
-    script.replace("__PUBLISH_TUNNEL__", publishTunnelEndpoint ? QStringLiteral("1") : QStringLiteral("0"));
-    script.replace("__VPN_CONTAINER__", ContainerUtils::containerToString(container));
-    script.replace("__TUNNEL_IFACE__", tunnelInterface);
-    script.replace("__ERROR_MARKER__", QString::fromLatin1(serverRoutingRulesPublishErrorMarker));
-
-    QString publishOutput;
-    auto cbReadOutput = [&publishOutput](const QString &data, libssh::Client &) {
-        publishOutput += data + QStringLiteral("\n");
-        return ErrorCode::NoError;
+    const QString hostDirectory = QString::fromLatin1(protocols::serverRoutingRules::hostDirectory);
+    const QString lockFile = hostDirectory + QStringLiteral("/.publish.lock");
+    auto replacePublishVariables = [&](QString &script) {
+        script.replace("__HOST_DIRECTORY__", hostDirectory);
+        script.replace("__LOCK_FILE__", lockFile);
+        script.replace("__CANDIDATE_DIRECTORY__", candidateDirectory);
+        script.replace("__TRANSACTION_ID__", transactionId);
+        script.replace("__SOURCE_TMP_FILE__", sourceTmpFileName);
+        script.replace("__SCRIPT_TMP_FILE__", scriptTmpFileName);
+        script.replace("__SOURCE_FILE__", QString::fromLatin1(serverRoutingRulesSourceFileName));
+        script.replace("__SCRIPT_FILE__", QString::fromLatin1(serverRoutingRulesScriptFileName));
+        script.replace("__READY_FILE__", QString::fromLatin1(serverRoutingRulesReadyFileName));
+        script.replace("__RULES_FILE__", QString::fromLatin1(protocols::serverRoutingRules::fileName));
+        script.replace("__EXPECTED_REVISION__", QString::number(compareAndSwapRevision));
+        script.replace("__PUBLISHED_REVISION__", QString::number(publishedRevision));
+        script.replace("__CONTENT_SHA256__", result.contentSha256);
+        script.replace("__SOURCE_SHA256__", sourceSha256);
+        script.replace("__SCRIPT_SHA256__", scriptSha256);
+        script.replace("__BRIDGE_CONTAINER__", QString::fromLatin1(protocols::serverRoutingRules::containerName));
+        script.replace("__TUNNEL_CONTAINER__", tunnelContainerName);
+        script.replace("__ROUTING_RULES_IMAGE__", QString::fromLatin1(serverRoutingRulesImage));
+        script.replace("__BRIDGE_HOST__", QString::fromLatin1(protocols::serverRoutingRules::syncHost));
+        script.replace("__SYNC_PORT__", QString::number(protocols::serverRoutingRules::syncPort));
+        script.replace("__PUBLISH_TUNNEL__", publishTunnelEndpoint ? QStringLiteral("1") : QStringLiteral("0"));
+        script.replace("__VPN_CONTAINER__", ContainerUtils::containerToString(container));
+        script.replace("__TUNNEL_IFACE__", tunnelInterface);
+        script.replace("__CANDIDATE_BEGIN_MARKER__", QString::fromLatin1(serverRoutingRulesCandidateBeginMarker));
+        script.replace("__CANDIDATE_END_MARKER__", QString::fromLatin1(serverRoutingRulesCandidateEndMarker));
+        script.replace("__SUCCESS_MARKER__", QString::fromLatin1(serverRoutingRulesPublishSuccessMarker));
+        script.replace("__CONFLICT_MARKER__", QString::fromLatin1(serverRoutingRulesPublishConflictMarker));
+        script.replace("__ERROR_MARKER__", QString::fromLatin1(serverRoutingRulesPublishErrorMarker));
     };
 
-    errorCode = sshSession.runScript(credentials, script, cbReadOutput, cbReadOutput);
-    if (errorCode != ErrorCode::NoError) {
-        return errorCode;
+    auto runPublishingScript = [&](const QString &script, QString &output) {
+        auto cbReadOutput = [&output](const QString &data, libssh::Client &) {
+            output += data + QStringLiteral("\n");
+            return ErrorCode::NoError;
+        };
+        return sshSession.runScript(credentials, script, cbReadOutput, cbReadOutput);
+    };
+
+    auto cleanupCandidate = [&]() {
+        const QString cleanupScript = QStringLiteral("sudo rm -rf %1; sudo rm -f %2 %3")
+                .arg(shellSingleQuoted(candidateDirectory), shellSingleQuoted(sourceTmpFileName),
+                     shellSingleQuoted(scriptTmpFileName));
+        sshSession.runScript(credentials, cleanupScript);
+    };
+
+    QString stageScript = QStringLiteral(R"STAGE_SH(
+set -u
+if ! sudo mkdir -p '__HOST_DIRECTORY__'; then
+    echo __ERROR_MARKER__:stage_mkdir
+    exit 0
+fi
+if ! sudo touch '__LOCK_FILE__'; then
+    echo __ERROR_MARKER__:stage_lock_create
+    exit 0
+fi
+stage_rc=0
+sudo flock -w 30 '__LOCK_FILE__' sh -s <<'AMNEZIA_ROUTING_STAGE' || stage_rc=$?
+set -u
+stage_complete=0
+candidate_ready=0
+failure_reason=unexpected_stage_failure
+cleanup_stage() {
+    trap - EXIT HUP INT TERM
+    rm -f '__SOURCE_TMP_FILE__' '__SCRIPT_TMP_FILE__' >/dev/null 2>&1 || true
+    if [ "$candidate_ready" != '1' ]; then
+        rm -rf '__CANDIDATE_DIRECTORY__' >/dev/null 2>&1 || true
+    fi
+    if [ "$stage_complete" != '1' ]; then
+        echo __ERROR_MARKER__:$failure_reason
+    fi
+    exit 0
+}
+trap cleanup_stage EXIT
+trap 'failure_reason=stage_interrupted; exit 1' HUP INT TERM
+fail_stage() {
+    failure_reason="$1"
+    exit 1
+}
+
+current_revision="$(sed -n 's/.*"revision":[[:space:]]*\([0-9][0-9]*\).*/\1/p' '__HOST_DIRECTORY__/__RULES_FILE__' 2>/dev/null | head -n 1)"
+[ -n "$current_revision" ] || current_revision=0
+if [ "$current_revision" != '__EXPECTED_REVISION__' ]; then
+    stage_complete=1
+    echo __CONFLICT_MARKER__:$current_revision
+    exit 0
+fi
+
+rm -rf '__CANDIDATE_DIRECTORY__' || fail_stage candidate_cleanup
+mkdir -p '__CANDIDATE_DIRECTORY__' || fail_stage candidate_mkdir
+install -m 0644 '__SOURCE_TMP_FILE__' '__CANDIDATE_DIRECTORY__/__SOURCE_FILE__' || fail_stage candidate_source_install
+install -m 0755 '__SCRIPT_TMP_FILE__' '__CANDIDATE_DIRECTORY__/__SCRIPT_FILE__' || fail_stage candidate_script_install
+rm -f '__SOURCE_TMP_FILE__' '__SCRIPT_TMP_FILE__' || fail_stage uploaded_file_cleanup
+sh -n '__CANDIDATE_DIRECTORY__/__SCRIPT_FILE__' || fail_stage candidate_script_syntax
+
+if ! docker network inspect amnezia-dns-net >/dev/null 2>&1; then
+    docker network create --driver bridge --subnet=172.29.172.0/24 --opt com.docker.network.bridge.name=amn0 amnezia-dns-net >/dev/null \
+        || fail_stage network_create
+fi
+if ! docker image inspect '__ROUTING_RULES_IMAGE__' >/dev/null 2>&1; then
+    docker pull '__ROUTING_RULES_IMAGE__' >/dev/null || fail_stage image_pull
+fi
+
+if command -v timeout >/dev/null 2>&1; then
+    timeout 150 docker run --rm --log-driver none --network amnezia-dns-net \
+        -e VALIDATE_ONLY=1 -v '__CANDIDATE_DIRECTORY__:/www:rw' --entrypoint sh \
+        '__ROUTING_RULES_IMAGE__' -c 'sh /www/__SCRIPT_FILE__' >/dev/null \
+        || fail_stage candidate_resolver_run
+else
+    docker run --rm --log-driver none --network amnezia-dns-net \
+        -e VALIDATE_ONLY=1 -v '__CANDIDATE_DIRECTORY__:/www:rw' --entrypoint sh \
+        '__ROUTING_RULES_IMAGE__' -c 'sh /www/__SCRIPT_FILE__' >/dev/null \
+        || fail_stage candidate_resolver_run
+fi
+test -s '__CANDIDATE_DIRECTORY__/__READY_FILE__' || fail_stage candidate_not_ready
+test -s '__CANDIDATE_DIRECTORY__/__RULES_FILE__' || fail_stage candidate_rules_missing
+
+candidate_ready=1
+stage_complete=1
+echo __CANDIDATE_BEGIN_MARKER__
+cat '__CANDIDATE_DIRECTORY__/__RULES_FILE__'
+echo
+echo __CANDIDATE_END_MARKER__
+exit 0
+AMNEZIA_ROUTING_STAGE
+if [ "$stage_rc" -ne 0 ]; then
+    echo __ERROR_MARKER__:stage_lock_failed
+fi
+)STAGE_SH");
+    replacePublishVariables(stageScript);
+
+    QString stageOutput;
+    errorCode = runPublishingScript(stageScript, stageOutput);
+
+    const QRegularExpression conflictExpression(
+            QStringLiteral("%1:([0-9]+)")
+                    .arg(QRegularExpression::escape(QString::fromLatin1(serverRoutingRulesPublishConflictMarker))));
+    QRegularExpressionMatch conflictMatch = conflictExpression.match(stageOutput);
+    if (conflictMatch.hasMatch()) {
+        bool parsed = false;
+        const qint64 currentRevision = conflictMatch.captured(1).toLongLong(&parsed);
+        if (parsed) {
+            result.currentRevision = currentRevision;
+        }
+        result.errorCode = ErrorCode::ServerCheckFailed;
+        result.conflict = true;
+        result.failureReason = QStringLiteral("Routing policy changed during candidate validation: expected %1, server has %2")
+                                       .arg(compareAndSwapRevision)
+                                       .arg(result.currentRevision);
+        cleanupCandidate();
+        return result;
     }
 
-    if (publishOutput.contains(QString::fromLatin1(serverRoutingRulesPublishErrorMarker))) {
+    const QString stageFailure = publishFailureReason(stageOutput);
+    if (errorCode != ErrorCode::NoError || !stageFailure.isEmpty()) {
+        result.errorCode = errorCode != ErrorCode::NoError ? errorCode : ErrorCode::ServerDockerFailedError;
+        result.failureReason = stageFailure.isEmpty()
+                ? QStringLiteral("Unable to validate the managed routing policy candidate on the server")
+                : QStringLiteral("Managed routing policy candidate validation failed: %1").arg(stageFailure);
+        cleanupCandidate();
+        return result;
+    }
+
+    const QByteArray candidatePayload = markedPayload(
+            stageOutput, QString::fromLatin1(serverRoutingRulesCandidateBeginMarker),
+            QString::fromLatin1(serverRoutingRulesCandidateEndMarker));
+    QString candidateError;
+    if (!validateServerRoutingRulesCandidate(candidatePayload, versionedRules, publishedRevision,
+                                             result.contentSha256, candidateError)) {
+        result.errorCode = ErrorCode::ServerCheckFailed;
+        result.failureReason = candidateError;
+        cleanupCandidate();
+        return result;
+    }
+    result.candidateValidated = true;
+
+    QString commitScript = QStringLiteral(R"COMMIT_SH(
+set -u
+commit_rc=0
+sudo flock -w 30 '__LOCK_FILE__' sh -s <<'AMNEZIA_ROUTING_COMMIT' || commit_rc=$?
+set -u
+transaction_started=0
+publication_verified=0
+terminal_marker_emitted=0
+failure_reason=unexpected_commit_failure
+remote_rollback_status=not_needed
+old_bridge_exists=0
+old_bridge_running=0
+old_tunnel_exists=0
+old_tunnel_running=0
+bridge_backed_up=0
+tunnel_backed_up=0
+new_bridge_created=0
+new_tunnel_created=0
+backup_directory='__HOST_DIRECTORY__/.rollback-__TRANSACTION_ID__'
+bridge_backup='__BRIDGE_CONTAINER__-rollback-__TRANSACTION_ID__'
+tunnel_backup='__TUNNEL_CONTAINER__-rollback-__TRANSACTION_ID__'
+
+restore_file() {
+    file_name="$1"
+    if [ -e "$backup_directory/.had-$file_name" ]; then
+        cp -p "$backup_directory/$file_name" '__HOST_DIRECTORY__/.restore-'"$file_name" || return 1
+        mv -f '__HOST_DIRECTORY__/.restore-'"$file_name" '__HOST_DIRECTORY__/'"$file_name" || return 1
+    else
+        rm -f '__HOST_DIRECTORY__/'"$file_name" || return 1
+    fi
+    return 0
+}
+
+rollback_publish() {
+    [ "$transaction_started" = '1' ] || {
+        remote_rollback_status=not_needed
+        return 0
+    }
+    rollback_ok=1
+    if [ "$new_tunnel_created" = '1' ]; then
+        docker rm -f '__TUNNEL_CONTAINER__' >/dev/null 2>&1 || rollback_ok=0
+    fi
+    if [ "$new_bridge_created" = '1' ]; then
+        docker rm -f '__BRIDGE_CONTAINER__' >/dev/null 2>&1 || rollback_ok=0
+    fi
+    restore_file '__SOURCE_FILE__' || rollback_ok=0
+    restore_file '__SCRIPT_FILE__' || rollback_ok=0
+    restore_file '__RULES_FILE__' || rollback_ok=0
+    restore_file '__READY_FILE__' || rollback_ok=0
+
+    if [ "$bridge_backed_up" = '1' ]; then
+        docker rename "$bridge_backup" '__BRIDGE_CONTAINER__' >/dev/null 2>&1 || rollback_ok=0
+        if [ "$old_bridge_running" = '1' ]; then
+            docker start '__BRIDGE_CONTAINER__' >/dev/null 2>&1 || rollback_ok=0
+        fi
+    fi
+    if [ "$tunnel_backed_up" = '1' ]; then
+        docker rename "$tunnel_backup" '__TUNNEL_CONTAINER__' >/dev/null 2>&1 || rollback_ok=0
+        if [ "$old_tunnel_running" = '1' ]; then
+            docker start '__TUNNEL_CONTAINER__' >/dev/null 2>&1 || rollback_ok=0
+        fi
+    fi
+
+    if [ "$rollback_ok" = '1' ]; then
+        remote_rollback_status=restored
+        return 0
+    fi
+    remote_rollback_status=partial
+    return 1
+}
+
+cleanup_commit() {
+    exit_status=$?
+    trap - EXIT HUP INT TERM
+    if [ "$publication_verified" != '1' ] && [ "$terminal_marker_emitted" != '1' ]; then
+        rollback_publish || true
+        terminal_marker_emitted=1
+        echo __ERROR_MARKER__:$failure_reason:remote_rollback=$remote_rollback_status
+    fi
+    rm -rf '__CANDIDATE_DIRECTORY__' >/dev/null 2>&1 || true
+    if [ "$publication_verified" = '1' ] || [ "$remote_rollback_status" = 'restored' ] \
+        || [ "$remote_rollback_status" = 'not_needed' ]; then
+        rm -rf "$backup_directory" >/dev/null 2>&1 || true
+    fi
+    exit 0
+}
+trap cleanup_commit EXIT
+trap 'failure_reason=commit_interrupted; exit 1' HUP INT TERM
+fail_commit() {
+    failure_reason="$1"
+    exit 1
+}
+
+current_revision="$(sed -n 's/.*"revision":[[:space:]]*\([0-9][0-9]*\).*/\1/p' '__HOST_DIRECTORY__/__RULES_FILE__' 2>/dev/null | head -n 1)"
+[ -n "$current_revision" ] || current_revision=0
+if [ "$current_revision" != '__EXPECTED_REVISION__' ]; then
+    terminal_marker_emitted=1
+    echo __CONFLICT_MARKER__:$current_revision
+    exit 0
+fi
+
+test -f '__CANDIDATE_DIRECTORY__/__SOURCE_FILE__' || fail_commit candidate_source_missing
+test -s '__CANDIDATE_DIRECTORY__/__SCRIPT_FILE__' || fail_commit candidate_script_missing
+test -s '__CANDIDATE_DIRECTORY__/__RULES_FILE__' || fail_commit candidate_rules_missing
+sh -n '__CANDIDATE_DIRECTORY__/__SCRIPT_FILE__' || fail_commit candidate_script_syntax
+command -v sha256sum >/dev/null 2>&1 || fail_commit sha256sum_missing
+candidate_source_sha="$(sha256sum '__CANDIDATE_DIRECTORY__/__SOURCE_FILE__' | awk '{print $1}')"
+candidate_script_sha="$(sha256sum '__CANDIDATE_DIRECTORY__/__SCRIPT_FILE__' | awk '{print $1}')"
+[ "$candidate_source_sha" = '__SOURCE_SHA256__' ] || fail_commit candidate_source_hash
+[ "$candidate_script_sha" = '__SCRIPT_SHA256__' ] || fail_commit candidate_script_hash
+grep -Fq '"revision":__PUBLISHED_REVISION__' '__CANDIDATE_DIRECTORY__/__RULES_FILE__' \
+    || fail_commit candidate_revision
+grep -Fq '"contentSha256":"__CONTENT_SHA256__"' '__CANDIDATE_DIRECTORY__/__RULES_FILE__' \
+    || fail_commit candidate_content_hash
+docker network inspect amnezia-dns-net >/dev/null 2>&1 || fail_commit network_missing
+docker image inspect '__ROUTING_RULES_IMAGE__' >/dev/null 2>&1 || fail_commit image_missing
+
+rm -rf "$backup_directory" || fail_commit backup_cleanup
+mkdir -p "$backup_directory" || fail_commit backup_mkdir
+for file_name in '__SOURCE_FILE__' '__SCRIPT_FILE__' '__RULES_FILE__' '__READY_FILE__'; do
+    if [ -e '__HOST_DIRECTORY__/'"$file_name" ]; then
+        cp -p '__HOST_DIRECTORY__/'"$file_name" "$backup_directory/$file_name" || fail_commit backup_file
+        touch "$backup_directory/.had-$file_name" || fail_commit backup_marker
+    fi
+done
+
+transaction_started=1
+if [ '__PUBLISH_TUNNEL__' = '1' ] && docker inspect '__TUNNEL_CONTAINER__' >/dev/null 2>&1; then
+    old_tunnel_exists=1
+    [ "$(docker inspect -f '{{.State.Running}}' '__TUNNEL_CONTAINER__')" = 'true' ] && old_tunnel_running=1
+    docker rename '__TUNNEL_CONTAINER__' "$tunnel_backup" >/dev/null || fail_commit tunnel_backup_rename
+    tunnel_backed_up=1
+    docker stop "$tunnel_backup" >/dev/null || fail_commit tunnel_backup_stop
+fi
+if docker inspect '__BRIDGE_CONTAINER__' >/dev/null 2>&1; then
+    old_bridge_exists=1
+    [ "$(docker inspect -f '{{.State.Running}}' '__BRIDGE_CONTAINER__')" = 'true' ] && old_bridge_running=1
+    docker rename '__BRIDGE_CONTAINER__' "$bridge_backup" >/dev/null || fail_commit bridge_backup_rename
+    bridge_backed_up=1
+    docker stop "$bridge_backup" >/dev/null || fail_commit bridge_backup_stop
+fi
+
+install -m 0644 '__CANDIDATE_DIRECTORY__/__SOURCE_FILE__' '__HOST_DIRECTORY__/.source-new-__TRANSACTION_ID__' \
+    || fail_commit source_stage
+mv -f '__HOST_DIRECTORY__/.source-new-__TRANSACTION_ID__' '__HOST_DIRECTORY__/__SOURCE_FILE__' \
+    || fail_commit source_switch
+install -m 0755 '__CANDIDATE_DIRECTORY__/__SCRIPT_FILE__' '__HOST_DIRECTORY__/.script-new-__TRANSACTION_ID__' \
+    || fail_commit script_stage
+mv -f '__HOST_DIRECTORY__/.script-new-__TRANSACTION_ID__' '__HOST_DIRECTORY__/__SCRIPT_FILE__' \
+    || fail_commit script_switch
+rm -f '__HOST_DIRECTORY__/__READY_FILE__' '__HOST_DIRECTORY__/__RULES_FILE__' || fail_commit old_output_remove
+
+docker run -d --log-driver none --restart always --network amnezia-dns-net --ip=__BRIDGE_HOST__ \
+    --name '__BRIDGE_CONTAINER__' -v '__HOST_DIRECTORY__:/www:rw' --entrypoint sh \
+    '__ROUTING_RULES_IMAGE__' -c 'sh /www/__SCRIPT_FILE__' >/dev/null || fail_commit bridge_run
+new_bridge_created=1
+i=0
+while [ "$i" -lt 120 ]; do
+    [ -s '__HOST_DIRECTORY__/__READY_FILE__' ] && break
+    i=$((i + 1))
+    sleep 1
+done
+test -s '__HOST_DIRECTORY__/__READY_FILE__' || fail_commit rules_not_ready
+test -s '__HOST_DIRECTORY__/__RULES_FILE__' || fail_commit rules_missing
+grep -Fq '"revision":__PUBLISHED_REVISION__' '__HOST_DIRECTORY__/__RULES_FILE__' || fail_commit live_revision
+grep -Fq '"contentSha256":"__CONTENT_SHA256__"' '__HOST_DIRECTORY__/__RULES_FILE__' || fail_commit live_content_hash
+docker ps --format '{{.Names}}' | grep -qx '__BRIDGE_CONTAINER__' || fail_commit bridge_not_running
+bridge_payload="$(docker exec '__BRIDGE_CONTAINER__' wget -qO- 'http://127.0.0.1:__SYNC_PORT__/__RULES_FILE__')" \
+    || fail_commit bridge_readiness_probe
+printf '%s' "$bridge_payload" | grep -Fq '"revision":__PUBLISHED_REVISION__' || fail_commit bridge_probe_revision
+printf '%s' "$bridge_payload" | grep -Fq '"contentSha256":"__CONTENT_SHA256__"' || fail_commit bridge_probe_hash
+
+if [ '__PUBLISH_TUNNEL__' = '1' ]; then
+    docker ps --format '{{.Names}}' | grep -qx '__VPN_CONTAINER__' || fail_commit vpn_container_missing
+    docker run -d --log-driver none --restart always --network container:__VPN_CONTAINER__ \
+        --name '__TUNNEL_CONTAINER__' -v '__HOST_DIRECTORY__:/www:ro' --entrypoint sh \
+        '__ROUTING_RULES_IMAGE__' -c 'busybox httpd -f -p __SYNC_PORT__ -h /www' >/dev/null \
+        || fail_commit tunnel_run
+    new_tunnel_created=1
+    sleep 1
+    docker ps --format '{{.Names}}' | grep -qx '__TUNNEL_CONTAINER__' || fail_commit tunnel_not_running
+    tunnel_payload="$(docker exec '__TUNNEL_CONTAINER__' wget -qO- 'http://127.0.0.1:__SYNC_PORT__/__RULES_FILE__')" \
+        || fail_commit tunnel_readiness_probe
+    printf '%s' "$tunnel_payload" | grep -Fq '"revision":__PUBLISHED_REVISION__' || fail_commit tunnel_probe_revision
+    printf '%s' "$tunnel_payload" | grep -Fq '"contentSha256":"__CONTENT_SHA256__"' || fail_commit tunnel_probe_hash
+fi
+
+[ "$(sha256sum '__HOST_DIRECTORY__/__SOURCE_FILE__' | awk '{print $1}')" = '__SOURCE_SHA256__' ] \
+    || fail_commit live_source_hash
+[ "$(sha256sum '__HOST_DIRECTORY__/__SCRIPT_FILE__' | awk '{print $1}')" = '__SCRIPT_SHA256__' ] \
+    || fail_commit live_script_hash
+
+publication_verified=1
+terminal_marker_emitted=1
+docker rm -f "$bridge_backup" >/dev/null 2>&1 || true
+docker rm -f "$tunnel_backup" >/dev/null 2>&1 || true
+echo __SUCCESS_MARKER__:__PUBLISHED_REVISION__:__CONTENT_SHA256__
+exit 0
+AMNEZIA_ROUTING_COMMIT
+if [ "$commit_rc" -ne 0 ]; then
+    echo __ERROR_MARKER__:commit_lock_failed:remote_rollback=not_needed
+fi
+)COMMIT_SH");
+    replacePublishVariables(commitScript);
+
+    QString publishOutput;
+    // From this point the remote transaction may have started. Unless the
+    // server returns a rollback receipt, its recovery state is unknown.
+    result.remoteRollbackStatus = QStringLiteral("not_reported");
+    errorCode = runPublishingScript(commitScript, publishOutput);
+
+    conflictMatch = conflictExpression.match(publishOutput);
+    if (conflictMatch.hasMatch()) {
+        bool parsed = false;
+        const qint64 currentRevision = conflictMatch.captured(1).toLongLong(&parsed);
+        if (parsed) {
+            result.currentRevision = currentRevision;
+        }
+        result.errorCode = ErrorCode::ServerCheckFailed;
+        result.conflict = true;
+        result.remoteRollbackStatus = QStringLiteral("not_needed");
+        result.failureReason = QStringLiteral("Routing policy changed during publication: expected %1, server has %2")
+                                       .arg(compareAndSwapRevision)
+                                       .arg(result.currentRevision);
+        cleanupCandidate();
+        return result;
+    }
+
+    updateRemoteRollbackResult(publishOutput, result);
+    const QString commitFailure = publishFailureReason(publishOutput);
+    const QRegularExpression successExpression(
+            QStringLiteral("%1:%2:%3")
+                    .arg(QRegularExpression::escape(QString::fromLatin1(serverRoutingRulesPublishSuccessMarker)),
+                         QString::number(publishedRevision), QRegularExpression::escape(result.contentSha256)));
+    const bool verifiedSuccess = successExpression.match(publishOutput).hasMatch();
+    if (errorCode != ErrorCode::NoError || !commitFailure.isEmpty() || !verifiedSuccess) {
         qWarning().noquote() << "InstallController::publishServerRoutingRules failed:" << publishOutput;
-        return ErrorCode::ServerDockerFailedError;
+        result.errorCode = errorCode != ErrorCode::NoError ? errorCode : ErrorCode::ServerDockerFailedError;
+        result.failureReason = commitFailure.isEmpty()
+                ? QStringLiteral("Server did not return a verified managed routing policy publication receipt")
+                : QStringLiteral("Managed routing policy publication failed: %1").arg(commitFailure);
+        cleanupCandidate();
+        return result;
     }
 
-    return ErrorCode::NoError;
+    result.errorCode = ErrorCode::NoError;
+    result.currentRevision = publishedRevision;
+    result.publishedRevision = publishedRevision;
+    result.publicationVerified = true;
+    result.remoteRollbackStatus = QStringLiteral("not_needed");
+    qWarning().noquote() << "InstallController: verified managed routing policy revision" << publishedRevision
+                         << "was published without a cryptographic signature:" << serverRoutingRulesSigningBlocker;
+    return result;
 }
 
 ErrorCode InstallController::setupContainer(const ServerCredentials &credentials, DockerContainer container, ContainerConfig &config,

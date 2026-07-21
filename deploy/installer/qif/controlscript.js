@@ -298,6 +298,12 @@ function Controller () {
         }
 
     } else if (installer.isUninstaller()) {
+        // Qt IFW 4.7 hardcodes Ignore as the default for failed undo
+        // operations. post_uninstall.cmd normally retries without returning;
+        // this answer also prevents a crashed or externally terminated cleanup
+        // process from turning into an ignorable firewall-cleanup failure.
+        installer.setMessageBoxAutomaticAnswer("installationErrorWithIgnore", QMessageBox.Retry);
+
         isDesktopAppProcessRunningMessageLoop();
 
         if (requestToQuitFromApp === true) {

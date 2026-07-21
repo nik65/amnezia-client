@@ -8,6 +8,19 @@
                 Description="Closing AmneziaVPN client"
                 TerminateProcess="1"
                 RebootPrompt="no" />
+        <CustomAction
+                Id="CleanupAmneziaPersistentFirewall"
+                FileRef="CM_FP_AmneziaVPN.AmneziaVPN_service.exe"
+                ExeCommand="cleanup-firewall"
+                Execute="deferred"
+                Impersonate="no"
+                Return="check" />
+        <InstallExecuteSequence>
+            <Custom
+                    Action="CleanupAmneziaPersistentFirewall"
+                    After="StopServices"
+                    Condition="REMOVE=&quot;ALL&quot;" />
+        </InstallExecuteSequence>
     </CPackWiXFragment>
 </CPackWiXPatch>
 

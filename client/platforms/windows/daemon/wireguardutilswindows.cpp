@@ -11,6 +11,7 @@
 #include <ws2ipdef.h>
 
 #include <QFileInfo>
+#include <QScopeGuard>
 
 #include "leakdetector.h"
 #include "logger.h"
@@ -114,6 +115,14 @@ bool WireguardUtilsWindows::addInterface(const InterfaceConfig& config) {
     logger.error() << "Failed to activate the tunnel service";
     return false;
   }
+  auto activationFailure = qScopeGuard([&] {
+    if (m_routeMonitor) {
+      delete m_routeMonitor;
+      m_routeMonitor = nullptr;
+    }
+    m_luid = 0;
+    m_tunnel.stop();
+  });
 
   // Determine the interface LUID
   NET_LUID luid;
@@ -128,12 +137,16 @@ bool WireguardUtilsWindows::addInterface(const InterfaceConfig& config) {
 
   if (config.m_killSwitchEnabled) {
     // Enable the windows firewall
-    NET_IFINDEX ifindex;
-    ConvertInterfaceLuidToIndex(&luid, &ifindex);
-    m_firewall->allowAllTraffic();
-    m_firewall->enableInterface(ifindex);
+    NET_IFINDEX ifindex = 0;
+    result = ConvertInterfaceLuidToIndex(&luid, &ifindex);
+    if (result != NO_ERROR || ifindex == 0 || m_firewall == nullptr ||
+        !m_firewall->enableInterface(static_cast<int>(ifindex))) {
+      logger.error() << "Failed to enable crash-safe Windows firewall policy";
+      return false;
+    }
   }
 
+  activationFailure.dismiss();
   logger.debug() << "Registration completed";
   return true;
 }
@@ -141,11 +154,15 @@ bool WireguardUtilsWindows::addInterface(const InterfaceConfig& config) {
 bool WireguardUtilsWindows::deleteInterface() {
   if (m_routeMonitor) {
     m_routeMonitor->deleteLater();
+    m_routeMonitor = nullptr;
   }
 
-  m_firewall->disableKillSwitch();
+  const bool firewallDisabled =
+      m_firewall != nullptr && m_firewall->disableKillSwitch();
   m_tunnel.stop();
-  return true;
+  m_luid = 0;
+  m_configuredPeers.clear();
+  return firewallDisabled;
 }
 
 bool WireguardUtilsWindows::updatePeer(const InterfaceConfig& config) {
@@ -156,10 +173,14 @@ bool WireguardUtilsWindows::updatePeer(const InterfaceConfig& config) {
 
   if (config.m_killSwitchEnabled) {
     // Enable the windows firewall for this peer.
-    m_firewall->enablePeerTraffic(config);
+    if (m_firewall == nullptr || !m_firewall->enablePeerTraffic(config)) {
+      logger.error() << "Failed to enable Windows firewall peer policy";
+      return false;
+    }
   }
   if (config.m_blockIpv6Traffic) {
-    if (!m_firewall->blockIpv6TrafficForPeer(config.m_serverPublicKey)) {
+    if (m_firewall == nullptr ||
+        !m_firewall->blockIpv6TrafficForPeer(config.m_serverPublicKey)) {
       logger.error() << "Failed to block unavailable IPv6 traffic";
       return false;
     }
@@ -203,6 +224,7 @@ bool WireguardUtilsWindows::updatePeer(const InterfaceConfig& config) {
 
   QString reply = m_tunnel.uapiCommand(message);
   logger.debug() << "DATA:" << reply;
+  m_configuredPeers.insert(config.m_serverPublicKey);
   return true;
 }
 
@@ -210,7 +232,13 @@ bool WireguardUtilsWindows::deletePeer(const InterfaceConfig& config) {
   QByteArray publicKey =
       QByteArray::fromBase64(qPrintable(config.m_serverPublicKey));
 
-  // Clear exclustion routes for this peer.
+  // The final peer's blocking policy must remain until deleteInterface()
+  // stops the tunnel and atomically transitions the kill switch. During a
+  // server switch another configured peer keeps the policy active, so the old
+  // peer generation can be removed after its UAPI removal succeeds.
+  const bool deferFirewallRemoval = m_configuredPeers.size() <= 1;
+
+  // Clear exclusion routes for this peer.
   if (m_routeMonitor && config.m_hopType != InterfaceConfig::MultiHopExit) {
     if (!config.m_serverIpv4AddrIn.isEmpty()) {
       m_routeMonitor->deleteExclusionRoute(IPAddress(config.m_serverIpv4AddrIn));
@@ -220,9 +248,6 @@ bool WireguardUtilsWindows::deletePeer(const InterfaceConfig& config) {
     }
   }
 
-  // Disable the windows firewall for this peer.
-  m_firewall->disablePeerTraffic(config.m_serverPublicKey);
-
   QString message;
   QTextStream out(&message);
   out << "set=1\n";
@@ -231,6 +256,14 @@ bool WireguardUtilsWindows::deletePeer(const InterfaceConfig& config) {
 
   QString reply = m_tunnel.uapiCommand(message);
   logger.debug() << "DATA:" << reply;
+  m_configuredPeers.remove(config.m_serverPublicKey);
+
+  if (!deferFirewallRemoval &&
+      (m_firewall == nullptr ||
+       !m_firewall->disablePeerTraffic(config.m_serverPublicKey))) {
+    logger.error() << "Failed to disable Windows firewall peer policy";
+    return false;
+  }
   return true;
 }
 

@@ -152,6 +152,99 @@ ProcessInfo getProcessInfo(HANDLE process, const PROCESSENTRY32W& processMeta) {
 
 }  // namespace
 
+bool WindowsSplitTunnel::resetForFirewallMigration() {
+  if (!isInstalled()) {
+    return true;
+  }
+
+  auto driverManager =
+      WindowsServiceManager::open(QString::fromWCharArray(DRIVER_SERVICE_NAME));
+  if (driverManager == nullptr) {
+    logger.error() << "Unable to open the split-tunnel service before WFP "
+                      "sublayer migration";
+    return false;
+  }
+  if (driverManager->isStopped()) {
+    return true;
+  }
+  if (!driverManager->isRunning()) {
+    return driverManager->stopService();
+  }
+
+  HANDLE driverFile =
+      CreateFileW(DRIVER_SYMLINK, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                  OPEN_EXISTING, 0, nullptr);
+  if (driverFile != INVALID_HANDLE_VALUE) {
+    const DRIVER_STATE state = getState(driverFile);
+    if (state != STATE_UNKNOWN && state < STATE_INITIALIZED) {
+      CloseHandle(driverFile);
+      return true;
+    }
+    if (state >= STATE_INITIALIZED && resetDriver(driverFile)) {
+      const DRIVER_STATE resetState = getState(driverFile);
+      CloseHandle(driverFile);
+      if (resetState != STATE_UNKNOWN && resetState < STATE_INITIALIZED) {
+        logger.debug() << "Released split-tunnel WFP objects before sublayer "
+                          "migration";
+        return true;
+      }
+      logger.warning() << "Split-tunnel driver did not reach a safe state "
+                          "after reset; unloading it";
+    } else {
+      CloseHandle(driverFile);
+      logger.warning() << "Could not verify a safe split-tunnel driver reset; "
+                          "unloading it";
+    }
+  } else {
+    WindowsUtils::windowsLog(
+        "Unable to open split-tunnel driver before WFP migration");
+  }
+
+  // Unloading the kernel driver closes its dynamic WFP session. create()
+  // starts it again after WindowsFirewall has recreated the shared sublayers.
+  if (!driverManager->stopService()) {
+    logger.error() << "Failed to unload split-tunnel driver before WFP "
+                      "sublayer migration";
+    return false;
+  }
+  return true;
+}
+
+bool WindowsSplitTunnel::removeForUninstall() {
+  if (!isInstalled()) {
+    return true;
+  }
+
+  auto driverManager =
+      WindowsServiceManager::open(QString::fromWCharArray(DRIVER_SERVICE_NAME));
+  if (driverManager == nullptr) {
+    logger.error() << "Unable to open split-tunnel service for uninstall";
+    return false;
+  }
+
+  const bool sharedDeviceOwnedByAmnezia = !detectConflict();
+  if (driverManager->isRunning() && sharedDeviceOwnedByAmnezia) {
+    HANDLE driverFile =
+        CreateFileW(DRIVER_SYMLINK, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                    OPEN_EXISTING, 0, nullptr);
+    if (driverFile != INVALID_HANDLE_VALUE) {
+      const DRIVER_STATE state = getState(driverFile);
+      if (state >= STATE_INITIALIZED && !resetDriver(driverFile)) {
+        logger.warning() << "Split-tunnel reset failed; forcing driver unload";
+      }
+      CloseHandle(driverFile);
+    }
+  }
+  if (!driverManager->stopService()) {
+    logger.error() << "Failed to unload split-tunnel driver during uninstall";
+    return false;
+  }
+
+  // Release the service handle before requesting deletion.
+  driverManager.reset();
+  return uninstallDriver();
+}
+
 std::unique_ptr<WindowsSplitTunnel> WindowsSplitTunnel::create(
     WindowsFirewall* fw) {
   if (fw == nullptr) {
@@ -275,8 +368,14 @@ WindowsSplitTunnel::WindowsSplitTunnel(HANDLE driverIO) : m_driver(driverIO) {
 }
 
 WindowsSplitTunnel::~WindowsSplitTunnel() {
-  CloseHandle(m_driver);
-  uninstallDriver();
+  if (m_driver != INVALID_HANDLE_VALUE) {
+    const DRIVER_STATE state = getState(m_driver);
+    if (state >= STATE_INITIALIZED && !resetDriver(m_driver)) {
+      logger.warning() << "Failed to reset split-tunnel driver during shutdown";
+    }
+    CloseHandle(m_driver);
+    m_driver = INVALID_HANDLE_VALUE;
+  }
 }
 
 bool WindowsSplitTunnel::excludeApps(const QStringList& appPaths) {
@@ -633,37 +732,62 @@ SC_HANDLE WindowsSplitTunnel::installDriver() {
 }
 // static
 bool WindowsSplitTunnel::uninstallDriver() {
-  auto scm_rights = SC_MANAGER_ALL_ACCESS;
-  auto serviceManager = OpenSCManager(NULL,  // local computer
-                                      NULL,  // servicesActive database
-                                      scm_rights);
-
-  auto servicehandle =
-      OpenService(serviceManager, DRIVER_SERVICE_NAME, GENERIC_READ);
-  auto result = DeleteService(servicehandle);
-  if (result) {
-    logger.debug() << "Split Tunnel Driver Removed";
+  SC_HANDLE serviceManager =
+      OpenSCManager(nullptr, nullptr, SC_MANAGER_CONNECT);
+  if (serviceManager == nullptr) {
+    WindowsUtils::windowsLog("OpenSCManager failed while removing driver");
+    return false;
   }
-  return result;
+  auto closeManager =
+      qScopeGuard([&] { CloseServiceHandle(serviceManager); });
+
+  SC_HANDLE serviceHandle =
+      OpenService(serviceManager, DRIVER_SERVICE_NAME, DELETE);
+  if (serviceHandle == nullptr) {
+    const DWORD error = GetLastError();
+    return error == ERROR_SERVICE_DOES_NOT_EXIST;
+  }
+  auto closeService =
+      qScopeGuard([&] { CloseServiceHandle(serviceHandle); });
+
+  if (DeleteService(serviceHandle)) {
+    logger.debug() << "Split Tunnel Driver Removed";
+    return true;
+  }
+  const DWORD error = GetLastError();
+  if (error == ERROR_SERVICE_MARKED_FOR_DELETE) {
+    return true;
+  }
+  WindowsUtils::windowsLog("DeleteService failed while removing driver");
+  return false;
 }
 // static
 bool WindowsSplitTunnel::isInstalled() {
-  // Check if the Drivers I/O File is present
-  auto symlink = QFileInfo(QString::fromWCharArray(DRIVER_SYMLINK));
-  if (symlink.exists()) {
+  // Driver ownership is established by our exact SCM service name. The device
+  // symlink is shared with Mullvad and must never be treated as proof that the
+  // Amnezia-owned driver is installed.
+  SC_HANDLE serviceManager =
+      OpenSCManager(nullptr, nullptr, SC_MANAGER_CONNECT);
+  if (serviceManager == nullptr) {
+    WindowsUtils::windowsLog("Unable to query split-tunnel driver service");
+    // Unknown must not be treated as safely absent by firewall migration or
+    // uninstall cleanup.
     return true;
   }
-  // If not check with SCM, if the kernel service exists
-  auto scm_rights = SC_MANAGER_ALL_ACCESS;
-  auto serviceManager = OpenSCManager(NULL,  // local computer
-                                      NULL,  // servicesActive database
-                                      scm_rights);
-  auto servicehandle =
-      OpenService(serviceManager, DRIVER_SERVICE_NAME, GENERIC_READ);
-  auto err = GetLastError();
-  CloseServiceHandle(serviceManager);
-  CloseServiceHandle(servicehandle);
-  return err != ERROR_SERVICE_DOES_NOT_EXIST;
+  auto closeManager =
+      qScopeGuard([&] { CloseServiceHandle(serviceManager); });
+  SC_HANDLE serviceHandle = OpenService(
+      serviceManager, DRIVER_SERVICE_NAME, SERVICE_QUERY_STATUS);
+  if (serviceHandle != nullptr) {
+    CloseServiceHandle(serviceHandle);
+    return true;
+  }
+  const DWORD error = GetLastError();
+  if (error != ERROR_SERVICE_DOES_NOT_EXIST) {
+    WindowsUtils::windowsLog("Unable to inspect split-tunnel driver service");
+    return true;
+  }
+  return false;
 }
 
 QString WindowsSplitTunnel::convertPath(const QString& path) {
@@ -699,35 +823,47 @@ QString WindowsSplitTunnel::convertPath(const QString& path) {
 
 // static
 bool WindowsSplitTunnel::detectConflict() {
-  auto scm_rights = SC_MANAGER_ENUMERATE_SERVICE;
-  auto serviceManager = OpenSCManager(NULL,  // local computer
-                                      NULL,  // servicesActive database
-                                      scm_rights);
+  auto serviceManager = OpenSCManager(nullptr, nullptr, SC_MANAGER_CONNECT);
+  if (serviceManager == nullptr) {
+    WindowsUtils::windowsLog("Unable to inspect split-tunnel services");
+    return true;
+  }
   auto cleanup = qScopeGuard([&] { CloseServiceHandle(serviceManager); });
   // Query for Mullvad Service.
-  auto servicehandle =
-      OpenService(serviceManager, MV_SERVICE_NAME, GENERIC_READ);
-  auto err = GetLastError();
-  CloseServiceHandle(servicehandle);
-  if (err != ERROR_SERVICE_DOES_NOT_EXIST) {
-    WindowsUtils::windowsLog("Mullvad Detected - Disabling SplitTunnel: ");
+  auto serviceHandle =
+      OpenService(serviceManager, MV_SERVICE_NAME, SERVICE_QUERY_STATUS);
+  if (serviceHandle != nullptr) {
+    CloseServiceHandle(serviceHandle);
+    logger.warning() << "Mullvad detected - disabling split tunnel";
     // Mullvad is installed, so we would certainly break things.
     return true;
   }
+  DWORD error = GetLastError();
+  if (error != ERROR_SERVICE_DOES_NOT_EXIST) {
+    WindowsUtils::windowsLog("Unable to inspect Mullvad service");
+    return true;
+  }
+
+  serviceHandle = OpenService(serviceManager, DRIVER_SERVICE_NAME,
+                              SERVICE_QUERY_STATUS);
+  if (serviceHandle != nullptr) {
+    CloseServiceHandle(serviceHandle);
+    return false;
+  }
+  error = GetLastError();
+  if (error != ERROR_SERVICE_DOES_NOT_EXIST) {
+    WindowsUtils::windowsLog("Unable to inspect Amnezia split-tunnel service");
+    return true;
+  }
+
   auto symlink = QFileInfo(QString::fromWCharArray(DRIVER_SYMLINK));
   if (!symlink.exists()) {
     // The driver is not loaded / installed.. MV is not installed, all good!
     logger.info() << "No Split-Tunnel Conflict detected, continue.";
     return false;
   }
-  // The driver exists, so let's check if it has been created by us.
-  // If our service is not present, it's has been created by
-  // someone else so we should not use that :)
-  servicehandle =
-      OpenService(serviceManager, DRIVER_SERVICE_NAME, GENERIC_READ);
-  err = GetLastError();
-  CloseServiceHandle(servicehandle);
-  return err == ERROR_SERVICE_DOES_NOT_EXIST;
+  // A live shared device without either known SCM service is foreign/unknown.
+  return true;
 }
 
 bool WindowsSplitTunnel::isRunning() { return getState() == STATE_RUNNING; }

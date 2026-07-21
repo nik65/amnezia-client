@@ -2,7 +2,12 @@
 #define IPCSERVERPROCESS_H
 
 #include "ipc.h"
+#include <QByteArray>
 #include <QObject>
+
+#include <memory>
+
+class QTemporaryFile;
 
 #ifndef Q_OS_IOS
 #include "rep_ipc_process_interface_source.h"
@@ -38,8 +43,20 @@ public:
 signals:
 
 private:
+    void rejectLaunchSpecification(const QString &reason);
+    bool stageInputFile(const QString &sourcePath, qint64 maximumSize, bool openVpnConfig,
+                        QString &stagedPath, QString &errorMessage);
+    void drainProcessChannel(QProcess::ProcessChannel channel);
+    QByteArray takeBufferedOutput(QByteArray &buffer);
+
     amnezia::PermittedProcess m_program = amnezia::PermittedProcess::Invalid;
     QSharedPointer<QProcess> m_process;
+    bool m_programConfigured = false;
+    bool m_argumentsConfigured = false;
+    bool m_configurationRejected = false;
+    std::unique_ptr<QTemporaryFile> m_stagedInput;
+    QByteArray m_standardOutput;
+    QByteArray m_standardError;
 };
 
 #else

@@ -14,8 +14,14 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
+import types
 import unittest
-from pathlib import Path
+import warnings
+from datetime import datetime, timedelta, timezone
+from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlparse
+from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
@@ -43,6 +49,18 @@ def find_sh() -> str | None:
         shutil.which("sh"),
         r"C:\Program Files\Git\bin\sh.exe",
         r"C:\Program Files\Git\usr\bin\sh.exe",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return str(candidate)
+    return None
+
+
+def find_bash() -> str | None:
+    candidates = [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        shutil.which("bash"),
     ]
     for candidate in candidates:
         if candidate and Path(candidate).is_file():
@@ -82,17 +100,38 @@ def find_git() -> str | None:
 
 def extract_client_logs_collector_script() -> str:
     export_controller = (REPO_ROOT / "client/core/controllers/selfhosted/exportController.cpp").read_text(encoding="utf-8")
-    match = re.search(r'QString script = QStringLiteral\(R"PY\(\n(.*?)\n\)PY"\);', export_controller, re.S)
-    if not match:
+    function_start = export_controller.find("QByteArray clientLogsCollectorScript()")
+    function_end = export_controller.find("QString clientLogsLegacyMapRefreshScript()", function_start)
+    if function_start < 0 or function_end < 0:
         raise AssertionError("client log collector script raw string was not found")
-    return (
-        match.group(1)
-        .replace("__MAX_UPLOAD_BYTES__", str(15 * 1024 * 1024))
+    function_body = export_controller[function_start:function_end]
+    chunks = re.findall(
+        r'(?:QString script =|script \+=)\s*QStringLiteral\(R"(PY\d*)\(\n(.*?)\n\)\1"\);',
+        function_body,
+        re.S,
+    )
+    if not chunks:
+        raise AssertionError("client log collector script raw string was not found")
+    script = "\n".join(body for _, body in chunks)
+    script = (
+        script.replace("__MAX_UPLOAD_BYTES__", str(15 * 1024 * 1024))
         .replace("__MAX_CLIENT_BYTES__", str(30 * 1024 * 1024))
         .replace("__PORT__", "17866")
         .replace("__UPLOAD_PATH__", "/logs")
         .replace("__BOOTSTRAP_PATH__", "/bootstrap")
     )
+    if re.search(r"__[A-Z0-9_]+__", script):
+        raise AssertionError("client log collector script contains unresolved placeholders")
+    return script
+
+
+def exec_client_logs_collector_script(namespace: dict[str, object]) -> None:
+    fake_fcntl = types.ModuleType("fcntl")
+    fake_fcntl.LOCK_EX = 1  # type: ignore[attr-defined]
+    fake_fcntl.LOCK_UN = 2  # type: ignore[attr-defined]
+    fake_fcntl.flock = lambda *_args: None  # type: ignore[attr-defined]
+    with mock.patch.dict(sys.modules, {"fcntl": fake_fcntl}):
+        exec(extract_client_logs_collector_script(), namespace)
 
 
 def extract_client_logs_legacy_map_refresh_script() -> str:
@@ -291,9 +330,15 @@ class ReleaseFreezeTests(unittest.TestCase):
 
 class SourceContractTests(unittest.TestCase):
     def test_manifest_url_validation_rejects_cidr_routes(self) -> None:
-        self.assertEqual(make_manifest.validate_release_version(" 4.8.16.0 "), "4.8.16.0")
+        self.assertEqual(make_manifest.validate_release_version("4.8.16.0"), "4.8.16.0")
         self.assertEqual(publish_release.validate_release_version("4.8.16.0"), "4.8.16.0")
-        for invalid_version in ("4.8.16", "4.8.16.0-beta", "release", "4.8.16.0\nnext"):
+        for invalid_version in (
+            " 4.8.16.0 ",
+            "4.8.16",
+            "4.8.16.0-beta",
+            "release",
+            "4.8.16.0\nnext",
+        ):
             with self.assertRaises(SystemExit):
                 make_manifest.validate_release_version(invalid_version)
             with self.assertRaises(SystemExit):
@@ -433,6 +478,7 @@ class SourceContractTests(unittest.TestCase):
         android_controller_h = (REPO_ROOT / "client/platforms/android/android_controller.h").read_text(encoding="utf-8")
         update_controller = (REPO_ROOT / "client/core/controllers/updateController.cpp").read_text(encoding="utf-8")
         update_controller_h = (REPO_ROOT / "client/core/controllers/updateController.h").read_text(encoding="utf-8")
+        update_policy = (REPO_ROOT / "client/core/utils/selfhostedUpdatePolicy.h").read_text(encoding="utf-8")
         signal_handlers = (REPO_ROOT / "client/core/controllers/coreSignalHandlers.cpp").read_text(encoding="utf-8")
         client_cmake = (REPO_ROOT / "client/CMakeLists.txt").read_text(encoding="utf-8")
         client_3rdparty_cmake = (REPO_ROOT / "client/cmake/3rdparty.cmake").read_text(encoding="utf-8")
@@ -446,14 +492,22 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("fun installApk(fileName: String): Int", activity)
         self.assertIn("private fun startApkInstaller(fileName: String, openSettingsIfBlocked: Boolean): Int", activity)
         self.assertIn("pendingInstallApkPath?.let { outState.putString(KEY_PENDING_INSTALL_APK_PATH, it) }", activity)
-        self.assertIn("pendingInstallApkPath != null && !installApkDeliveryScheduled && canRequestPackageInstall()", activity)
+        self.assertIn("pendingInstallApkPath != null && !installApkDeliveryScheduled", activity)
+        self.assertIn("qtInitialized.await()", activity)
+        self.assertIn('startApkInstaller(apkPath, openSettingsIfBlocked = false)', activity)
+        self.assertIn('failApkInstaller(fileName, "apk_install_permission_missing")', activity)
         self.assertIn("Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES", activity)
         self.assertIn("return APK_INSTALL_PERMISSION_SETTINGS_OPENED", activity)
         self.assertIn("QtAndroidController.onApkInstallerStarted(fileName)", activity)
         self.assertIn("external fun onApkInstallerStarted(fileName: String)", qt_android_controller)
+        self.assertIn("external fun authorizeApkInstallerLaunch(", qt_android_controller)
+        self.assertIn("packageName: String", qt_android_controller)
+        self.assertIn("versionName: String", qt_android_controller)
+        self.assertIn("versionCode: Long", qt_android_controller)
         self.assertIn("int installApk(const QString &fileName);", android_controller_h)
         self.assertIn("void apkInstallerStarted(QString fileName);", android_controller_h)
         self.assertIn('callActivityMethod<jint>("installApk", "(Ljava/lang/String;)I"', android_controller_cpp)
+        self.assertIn('(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Z', android_controller_cpp)
         self.assertIn('{"onApkInstallerStarted", "(Ljava/lang/String;)V"', android_controller_cpp)
         self.assertIn("emit AndroidController::instance()->apkInstallerStarted", android_controller_cpp)
         self.assertIn("InstallerHandoffResult", update_controller_h)
@@ -462,7 +516,12 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("kAndroidApkInstallPermissionSettingsOpened", update_controller)
         self.assertIn("InstallerHandoffResult::PendingPermission", update_controller)
         self.assertIn("void UpdateController::onAndroidApkInstallerStarted", update_controller)
-        self.assertIn("bool isSha256Hex(const QString &value)", update_controller)
+        self.assertIn("inline bool isCanonicalSha256(const QString &value)", update_policy)
+        self.assertIn("if (value.size() != 64)", update_policy)
+        self.assertIn("if (!decimal && !lowerHex)", update_policy)
+        self.assertIn("artifact.sha256 = normalizeSha256(", update_controller)
+        self.assertIn("!isCanonicalSha256(artifact.sha256)", update_controller)
+        self.assertIn("actualSha256 != normalizeSha256(m_selectedArtifact.sha256)", update_controller)
         self.assertIn("Self-hosted update artifact is missing or has invalid sha256", update_controller)
         self.assertIn("bool isHttpOrHttpsUrl(const QUrl &url)", update_controller)
         self.assertIn("Self-hosted update artifact URL must use http(s)", update_controller)
@@ -479,15 +538,22 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("bool decodeStrictBase64", update_controller)
         self.assertIn("Self-hosted external update URL has unsupported scheme", update_controller)
         self.assertIn("Update URL has unsupported external scheme", update_controller)
-        self.assertIn("constexpr int kInstallerTransferTimeoutMs = 30 * 60 * 1000;", update_controller)
-        self.assertIn('installerPath + QStringLiteral(".download")', update_controller)
+        self.assertIn("constexpr int kInstallerTransferTimeoutMs = 2 * 60 * 1000;", update_controller)
+        self.assertIn("constexpr int kInstallerTotalDeadlineMs = 25 * 60 * 1000;", update_controller)
+        self.assertIn(
+            "constexpr int kRollbackIntentLeaseSeconds = kInstallerTotalDeadlineMs / 1000 + 60;",
+            update_controller,
+        )
+        self.assertIn("totalDeadlineTimer->setInterval(kInstallerTotalDeadlineMs);", update_controller)
+        self.assertIn("auto *file = new QSaveFile(installerPath);", update_controller)
+        self.assertIn("file->setDirectWriteFallback(false);", update_controller)
         self.assertIn("&QIODevice::readyRead", update_controller)
         self.assertIn("hash->addData(chunk);", update_controller)
         self.assertIn("const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();", update_controller)
         self.assertIn("reply->error() != QNetworkReply::NoError || statusCode < 200 || statusCode >= 300", update_controller)
         self.assertIn("Self-hosted installer size differs from manifest", update_controller)
         self.assertIn("if (m_selectedArtifact.size >= 0 && *bytesWritten != m_selectedArtifact.size) {\n            logger.error()", update_controller)
-        self.assertIn("QFile::rename(partialPath, installerPath)", update_controller)
+        self.assertIn("if (!file->commit()) {", update_controller)
         self.assertNotIn("expectedSha256Matches", update_controller + update_controller_h)
         self.assertIn("startBackgroundUpdateChecks();", update_controller)
         self.assertIn("QTimer::singleShot(kInitialBackgroundUpdateCheckMs, this, &UpdateController::checkForUpdates);", update_controller)
@@ -551,12 +617,314 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("scheduleDesktopQuitAfterInstallerStart();", update_controller)
         self.assertIn("amnApp->forceQuit();", update_controller)
         self.assertIn("kDesktopQuitAfterInstallerStartMs", update_controller)
-        self.assertIn("if (runWindowsInstaller(installerPath) == 0) {\n                scheduleDesktopQuitAfterInstallerStart();", update_controller)
-        self.assertIn("if (runMacInstaller(installerPath) == 0) {\n                scheduleDesktopQuitAfterInstallerStart();", update_controller)
-        self.assertIn("if (runLinuxInstaller(installerPath) == 0) {\n                scheduleDesktopQuitAfterInstallerStart();", update_controller)
+        self.assertIn("runWindowsInstaller(installerPath, installerSha256, installerSize)", update_controller)
+        self.assertIn("runMacInstaller(installerPath, installerSha256, installerSize)", update_controller)
+        self.assertIn("runLinuxInstaller(installerPath, installerSha256, installerSize)", update_controller)
+        self.assertIn("FILE_SHARE_READ", update_controller)
+        self.assertIn("FILE_FLAG_OPEN_REPARSE_POINT", update_controller)
+        self.assertIn("QStandardPaths::AppLocalDataLocation", update_controller)
+        self.assertIn("D:P(A;OICI;FA;;;", update_controller)
+        self.assertIn("windowsInstallerDirectoryIsPrivate(directoryHandle)", update_controller)
+        self.assertIn("windowsDirectoryContainsOnlyInstaller(", update_controller)
+        self.assertIn("finalWindowsPathForHandle(installerHandle)", update_controller)
+        self.assertIn("finalWindowsPathForHandle(directoryHandle)", update_controller)
+        self.assertIn("PROC_THREAD_ATTRIBUTE_HANDLE_LIST", update_controller)
+        self.assertIn("startupInfo.lpAttributeList = attributeList;", update_controller)
+        self.assertIn("resolvedInstallerPath.utf16()", update_controller)
+        self.assertIn("EXTENDED_STARTUPINFO_PRESENT", update_controller)
+        self.assertIn("::fexecve(installerFd, arguments, environ);", update_controller)
+        self.assertIn("SYS_memfd_create", update_controller)
+        self.assertIn("MFD_ALLOW_SEALING", update_controller)
+        self.assertIn("F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL", update_controller)
+        self.assertIn("::fcntl(installerFd, F_GET_SEALS) != requiredSeals", update_controller)
+        self.assertLess(
+            update_controller.index("::fcntl(installerFd, F_GET_SEALS) != requiredSeals"),
+            update_controller.index("QCryptographicHash hash(QCryptographicHash::Sha256);", update_controller.index("SYS_memfd_create")),
+        )
+        self.assertLess(
+            update_controller.index("QCryptographicHash hash(QCryptographicHash::Sha256);", update_controller.index("SYS_memfd_create")),
+            update_controller.index("::fexecve(installerFd, arguments, environ);"),
+        )
+        self.assertIn("ClientScriptType::mac_installer", update_controller)
+        self.assertIn("QProcessEnvironment cleanEnvironment;", update_controller)
+        self.assertIn("process.setProcessEnvironment(cleanEnvironment);", update_controller)
+        self.assertIn('QStringLiteral("--noprofile")', update_controller)
+        self.assertIn('QStringLiteral("--norc")', update_controller)
+        self.assertNotIn("QProcessEnvironment::systemEnvironment()", update_controller)
+        mac_installer = (REPO_ROOT / "client/client_scripts/mac_installer.sh").read_text(encoding="utf-8")
+        self.assertIn('/usr/bin/install -o root -g wheel -m 0600 "$source_path" "$root_pkg"', mac_installer)
+        self.assertIn('/usr/sbin/pkgutil --check-signature "$root_pkg"', mac_installer)
+        self.assertIn('/usr/sbin/spctl --assess --type install "$root_pkg"', mac_installer)
+        self.assertIn('/usr/sbin/installer -pkg "$root_pkg" -target /', mac_installer)
+        self.assertNotIn("|| true", mac_installer)
+        confirmation_start = update_controller.index(
+            'if (rollbackState == QStringLiteral("confirmation_pending")) {'
+        )
+        confirmation_end = update_controller.index(
+            'if (rollbackState == QStringLiteral("leased")) {', confirmation_start
+        )
+        confirmation_branch = update_controller[confirmation_start:confirmation_end]
+        self.assertIn(
+            'if (!rollbackVersion.isEmpty() && runningVersion == rollbackVersion)',
+            confirmation_branch,
+        )
+        self.assertIn('QStringLiteral("rollback_readiness_timeout")', confirmation_branch)
+        self.assertIn('QStringLiteral("rollback_version_not_observed")', confirmation_branch)
+        self.assertIn('QStringLiteral("rollbackConfirmationFailureCount")', confirmation_branch)
+        self.assertIn('QStringLiteral("automaticRollbackTerminalAt")', confirmation_branch)
+        self.assertIn(
+            'receipt.take(QStringLiteral("rollbackSourceInstallerStartedAt"))',
+            confirmation_branch,
+        )
+        self.assertIn(
+            "setSelfHostedUpdatePendingHealthReceipt(receipt)", confirmation_branch
+        )
+        self.assertIn(
+            'restoredReceipt.value(QStringLiteral("rollbackSha256"))', confirmation_branch
+        )
+        self.assertIn("struct RollbackAttemptContext", update_controller_h)
+        self.assertIn("QString receiptId;", update_controller_h)
+        self.assertIn("QString leaseId;", update_controller_h)
+        self.assertIn(
+            "recordRollbackHandoffFailure(const RollbackAttemptContext &expectedAttempt,",
+            update_controller_h,
+        )
+        self.assertIn('QStringLiteral("rollbackHandoffLeaseId")', update_controller)
+        self.assertIn('!= expectedAttempt.receiptId', update_controller)
+        self.assertIn('!= expectedAttempt.intentId', update_controller)
+        self.assertIn('!= expectedAttempt.leaseId', update_controller)
+        self.assertIn("Ignoring stale rollback failure callback for a superseded lease", update_controller)
+        android_validator_start = update_controller.index(
+            "bool UpdateController::isAndroidApkInstallerAuthorizationValid("
+        )
+        android_validator_end = update_controller.index(
+            "bool UpdateController::verifiedAndroidApkMatchesAuthorization(",
+            android_validator_start,
+        )
+        android_validator = update_controller[android_validator_start:android_validator_end]
+        self.assertIn("isCanonicalAndroidInstallerStagingPath(", android_validator)
+        self.assertNotIn("localInstallerPath()", android_validator)
+        self.assertIn("normalizedPrivateInstallerStagingPath(", update_controller)
+        self.assertIn("bool requireLivePath = false", update_controller)
+        self.assertIn("m_localInstallerPath = persistedLocalPath;", update_controller)
+        self.assertIn("verifiedAndroidApkMatchesAuthorization(persistedLocalPath, authorization)", update_controller)
         self.assertIn("ConnectionController::connectionStateChanged", signal_handlers)
         self.assertIn("state != Vpn::ConnectionState::Connected", signal_handlers)
         self.assertIn("QTimer::singleShot(5000, m_coreController->m_updateController, &UpdateController::checkForUpdates);", signal_handlers)
+
+    def test_automatic_rollback_pre_handoff_failures_retry_with_backoff(self) -> None:
+        update_controller = (
+            REPO_ROOT / "client/core/controllers/updateController.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "constexpr int kMaximumAutomaticRollbackPreHandoffFailures = 3;",
+            update_controller,
+        )
+        self.assertIn(
+            "constexpr int kAutomaticRollbackInitialRetrySeconds = 15;",
+            update_controller,
+        )
+        self.assertIn(
+            'QStringLiteral("automaticRollbackPreHandoffFailureCount")',
+            update_controller,
+        )
+        self.assertIn(
+            'QStringLiteral("automaticRollbackNextAttemptAt")', update_controller
+        )
+
+        failure_start = update_controller.index(
+            "void UpdateController::recordRollbackHandoffFailure("
+        )
+        failure_end = update_controller.index(
+            "bool UpdateController::prepareSelfHostedInstallerHandoff()",
+            failure_start,
+        )
+        failure_body = update_controller[failure_start:failure_end]
+        self.assertIn(
+            'const bool automaticPreHandoff = origin == QStringLiteral("automatic");',
+            failure_body,
+        )
+        self.assertIn("previousPreHandoffFailures + 1", failure_body)
+        self.assertIn(
+            "preHandoffFailures < kMaximumAutomaticRollbackPreHandoffFailures",
+            failure_body,
+        )
+        self.assertIn("!permanentValidationFailure", failure_body)
+        self.assertIn("automaticRollbackRetryDelaySeconds(preHandoffFailures)", failure_body)
+        self.assertIn("scheduleAutomaticRollbackRetry(persistedReceipt)", failure_body)
+        self.assertLess(
+            failure_body.index("Ignoring stale rollback failure callback"),
+            failure_body.index("previousPreHandoffFailures + 1"),
+        )
+        self.assertIn(
+            'receipt.value(QStringLiteral("receiptId")).toString()\n                != expectedAttempt.receiptId',
+            failure_body,
+        )
+        self.assertIn(
+            'receipt.value(QStringLiteral("rollbackIntentId")).toString()\n                != expectedAttempt.intentId',
+            failure_body,
+        )
+        self.assertIn("activeLeaseId != expectedAttempt.leaseId", failure_body)
+
+        retry_start = update_controller.index(
+            "bool UpdateController::scheduleAutomaticRollbackRetry("
+        )
+        retry_end = update_controller.index(
+            "bool UpdateController::scheduleAutomaticRollbackIfEligible()",
+            retry_start,
+        )
+        retry_body = update_controller[retry_start:retry_end]
+        self.assertIn(
+            "[this, receiptId, failureCount, expectedRetryAt]()", retry_body
+        )
+        self.assertIn(
+            'current.value(QStringLiteral("receiptId")).toString() != receiptId',
+            retry_body,
+        )
+        self.assertIn(
+            '!current.value(QStringLiteral("rollbackState")).toString().isEmpty()',
+            retry_body,
+        )
+        self.assertIn("scheduleAutomaticRollbackIfEligible();", retry_body)
+
+        download_start = update_controller.index(
+            "bool UpdateController::startArtifactDownload()"
+        )
+        download_end = update_controller.index(
+            "UpdateController::InstallerHandoffResult "
+            "UpdateController::launchDownloadedArtifact",
+            download_start,
+        )
+        download_body = update_controller[download_start:download_end]
+        for marker in (
+            "Self-hosted installer download failed:",
+            "Self-hosted installer sha256 verification failed",
+            "Failed to atomically commit verified self-hosted installer:",
+        ):
+            marker_index = download_body.index(marker)
+            self.assertIn(
+                "finishSelfHostedInstallerAttempt(InstallerHandoffResult::Failed);",
+                download_body[marker_index : marker_index + 800],
+                marker,
+            )
+
+        run_start = update_controller.index(
+            "bool UpdateController::runPendingRollbackWithIntent("
+        )
+        run_end = update_controller.index(
+            "bool UpdateController::checkForUpdates()", run_start
+        )
+        run_body = update_controller[run_start:run_end]
+        self.assertIn("const bool exactLeaseOwned", run_body)
+        self.assertIn('QStringLiteral("rollbackLeaseExpiresAt")', run_body)
+        self.assertIn("refreshPendingUpdateHealth();", run_body)
+        self.assertIn(
+            "recordRollbackHandoffFailure(expectedAttempt, true);", run_body
+        )
+        self.assertLess(
+            run_body.index('QStringLiteral("rollbackLeaseExpiresAt")'),
+            run_body.index("m_selectedArtifact = rollbackArtifact;"),
+        )
+
+    @unittest.skipUnless(find_bash(), "bash is required for the hostile updater environment probe")
+    def test_macos_updater_helper_does_not_inherit_bash_env(self) -> None:
+        bash = find_bash()
+        assert bash is not None
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            marker = root / "sourced.txt"
+            bash_env = root / "hostile-env.sh"
+            bash_env.write_text(
+                'printf compromised > "$AMNEZIA_ENV_MARKER"\n', encoding="utf-8"
+            )
+            if os.name == "nt":
+                def shell_path(path: Path) -> str:
+                    converted = subprocess.run(
+                        [bash, "--noprofile", "--norc", "-c", 'cygpath -u "$1"',
+                         "amnezia-path", str(path)],
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    return converted.stdout.strip()
+            else:
+                def shell_path(path: Path) -> str:
+                    return str(path)
+
+            hostile_environment = os.environ.copy()
+            hostile_environment["BASH_ENV"] = shell_path(bash_env)
+            hostile_environment["AMNEZIA_ENV_MARKER"] = shell_path(marker)
+            subprocess.run(
+                [bash, "-c", "true"],
+                check=True,
+                env=hostile_environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertTrue(marker.is_file(), "probe must demonstrate inherited BASH_ENV")
+            marker.unlink()
+
+            clean_environment = {
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "LANG": "C",
+            }
+            subprocess.run(
+                [bash, "--noprofile", "--norc", "-c", "true"],
+                check=True,
+                env=clean_environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            self.assertFalse(marker.exists())
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux") or find_wsl(),
+        "Linux or WSL is required for the sealed memfd mutation probe",
+    )
+    def test_linux_sealed_memfd_rejects_post_verification_mutation(self) -> None:
+        probe = textwrap.dedent(
+            """
+            import errno
+            import fcntl
+            import os
+
+            required = 1 | 2 | 4 | 8
+            fd = os.memfd_create("amnezia-seal-test", os.MFD_ALLOW_SEALING)
+            os.write(fd, b"verified-installer")
+            fcntl.fcntl(fd, 1033, required)
+            assert fcntl.fcntl(fd, 1034) == required
+            try:
+                os.pwrite(fd, b"X", 0)
+            except OSError as error:
+                assert error.errno in (errno.EPERM, errno.EACCES)
+            else:
+                raise AssertionError("sealed memfd accepted a write")
+            try:
+                os.ftruncate(fd, 0)
+            except OSError as error:
+                assert error.errno in (errno.EPERM, errno.EACCES)
+            else:
+                raise AssertionError("sealed memfd accepted truncate")
+            print("sealed-memfd-ok")
+            """
+        )
+        command = (
+            [find_wsl(), "python3", "-c", probe]
+            if os.name == "nt"
+            else [sys.executable, "-c", probe]
+        )
+        result = subprocess.run(
+            command,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        self.assertIn("sealed-memfd-ok", result.stdout)
 
     def test_always_on_remote_logs_contract(self) -> None:
         remote_log_uploader = (REPO_ROOT / "client/core/controllers/remoteLogUploader.cpp").read_text(encoding="utf-8")
@@ -606,7 +974,11 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("clearRemoteLogToken(m_currentTarget.tokenCacheKey)", remote_log_uploader)
         self.assertIn("request.setTransferTimeout(uploadTimeoutMs);", remote_log_uploader)
         self.assertIn("m_logCursors.insert(payload.offsetKey, { payload.nextOffset, payload.fingerprint });", remote_log_uploader)
-        self.assertIn("fileFingerprint(file)", remote_log_uploader)
+        self.assertIn("fileFingerprint(file, fingerprintBytes)", remote_log_uploader)
+        self.assertIn("cursor.fingerprintBytes", remote_log_uploader)
+        self.assertIn("QString fileFingerprint(QFile &file, qint64 sampleBytes)", remote_log_uploader)
+        self.assertIn("fileAnchor(file, offset) == cursor.anchor", remote_log_uploader)
+        self.assertIn('request.setRawHeader("X-Amnezia-Batch-Id", batchIdForPayload(payload).toLatin1());', remote_log_uploader)
         self.assertIn("maxBootstrapResponseBytes = 4096", remote_log_uploader)
         self.assertIn("m_nextTokenRefreshAt = QDateTime::currentDateTimeUtc().addMSecs(uploadIntervalMs);", remote_log_uploader)
         self.assertIn("payloadFromFile(QStringLiteral(\"client\"), Logger::userLogsFilePath())", remote_log_uploader)
@@ -618,28 +990,57 @@ class SourceContractTests(unittest.TestCase):
 
         self.assertIn('private const val CLIENT_LOGS_TRUSTED_ENDPOINT = "http://172.29.172.251:17866/logs"', android_service)
         self.assertIn('private const val CLIENT_LOGS_BOOTSTRAP_ENDPOINT = "http://172.29.172.251:17866/bootstrap"', android_service)
-        self.assertIn("if (endpoint != CLIENT_LOGS_TRUSTED_ENDPOINT || clientId.isBlank() || (!bootstrap && token.isBlank()))", android_service)
-        self.assertIn("bootstrapRemoteLogTarget(target)", android_service)
+        self.assertIn(
+            "if (endpoint != CLIENT_LOGS_TRUSTED_ENDPOINT || !SHA256_HEX_PATTERN.matches(clientId) ||\n"
+            "            (!bootstrap && !isValidRemoteLogToken(token))",
+            android_service,
+        )
+        self.assertIn("bootstrapRemoteLogTarget(attempt)", android_service)
         self.assertIn("val tokenCacheKey = remoteLogTokenPrefsKey(config?.optString(\"hostName\").orEmpty(), clientId)", android_service)
         self.assertIn("Prefs.loadSecureString(tokenCacheKey)", android_service)
         self.assertIn("Prefs.saveSecureString(target.tokenCacheKey, token)", android_service)
         self.assertIn("Prefs.saveSecureString(target.tokenCacheKey, \"\")", android_service)
-        self.assertIn("DISCONNECTED -> {\n                        networkState.unbindNetworkListener()\n                        stopRemoteLogUploader()", android_service)
-        self.assertIn("CONNECTED -> {\n                        networkState.bindNetworkListener()\n                        configureRemoteLogUploader(parseConfigToJson(Prefs.load(PREFS_CONFIG_KEY)))", android_service)
-        self.assertIn("configureRemoteLogUploader(config)", android_service)
+        self.assertIn(
+            "DISCONNECTED -> {\n"
+            "                        if (this@AmneziaVpnService.protocolState.value != DISCONNECTED) return@collect\n"
+            "                        networkState.unbindNetworkListener()\n"
+            "                        stopRemoteLogUploader()",
+            android_service,
+        )
+        self.assertIn(
+            "CONNECTED -> {\n"
+            "                        if (this@AmneziaVpnService.protocolState.value != CONNECTED) return@collect\n"
+            "                        networkState.bindNetworkListener()\n"
+            "                        configureRemoteLogUploader(activeVpnConfig)",
+            android_service,
+        )
+        self.assertIn("configureRemoteLogUploader(activeVpnConfig)", android_service)
         self.assertIn("private fun stopRemoteLogUploader()", android_service)
-        self.assertIn("if (protocolState.value != CONNECTED) return", android_service)
+        self.assertIn(
+            "if (remoteLogPausedGeneration == generation || protocolState.value != CONNECTED)",
+            android_service,
+        )
         self.assertIn("Log.getAppLogs(CLIENT_LOGS_MAX_PAYLOAD_BYTES)", android_service)
-        self.assertIn("remoteLogOffsetBytes", android_service)
-        self.assertIn("logBytes.copyOfRange(startOffset, logBytes.size)", android_service)
+        self.assertIn("private data class RemoteLogCursor(", android_service)
+        self.assertIn("if (!saveRemoteLogCursorForAttempt(attempt, payload.cursorBeforeUpload))", android_service)
+        self.assertIn("if (!saveRemoteLogCursorForAttempt(attempt, payload.cursorAfterUpload))", android_service)
+        self.assertIn("logBytes.copyOfRange(offset, endOffset)", android_service)
         self.assertNotIn("lastRemoteLogUploadHash", android_service)
-        self.assertIn("try {\n            var target = remoteLogTarget ?: return", android_service)
-        self.assertIn("private fun uploadRemoteLogsOnce(allowTokenRefreshRetry: Boolean = true)", android_service)
-        self.assertIn("uploadRemoteLogsOnce(false)", android_service)
+        self.assertIn("val initialAttempt = currentRemoteLogAttempt()", android_service)
+        self.assertIn("var attempt = initialAttempt", android_service)
+        self.assertIn(
+            "private fun uploadRemoteLogsOnce(\n"
+            "        allowTokenRefreshRetry: Boolean = true,",
+            android_service,
+        )
+        self.assertIn("allowTokenRefreshRetry = false", android_service)
+        self.assertIn("requiredInitialAttempt = retryAttempt", android_service)
         self.assertIn("CLIENT_LOGS_MAX_BOOTSTRAP_RESPONSE_BYTES = 4096", android_service)
         self.assertIn("private fun readLimitedUtf8(stream: InputStream, maxBytes: Int): String?", android_service)
         self.assertIn('setRequestProperty("X-Amnezia-Installation-Id", remoteLogInstallationId())', android_service)
-        self.assertIn('setRequestProperty("X-Amnezia-Log-Kind", "android")', android_service)
+        self.assertIn('setRequestProperty("X-Amnezia-Log-Kind", CLIENT_LOGS_KIND_ANDROID)', android_service)
+        self.assertIn('setRequestProperty("X-Amnezia-Batch-Id", payload.batchId)', android_service)
+        self.assertIn("private fun remoteLogBatchId(", android_service)
         self.assertIn("fun getAppLogs(maxBytes: Int = DEFAULT_EXPORT_MAX_BYTES): String", android_log)
         self.assertIn("withLock {\n            if (logFile.length() > LOG_MAX_FILE_SIZE)", android_log)
         self.assertIn("fun saveSecureString(key: String, value: String?): Boolean", android_prefs)
@@ -668,8 +1069,10 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("withoutRemoteLogTokens", secure_qsettings)
         self.assertIn('clientLogs.remove(QStringLiteral("token"));', secure_qsettings)
         self.assertIn('clientLogs.insert(QStringLiteral("bootstrap"), true);', secure_qsettings)
-        self.assertIn("sanitizedBackupValue(key, value(key))", secure_qsettings)
-        self.assertIn("setValue(key, sanitizedBackupValue(key, cfg.value(key).toVariant()))", secure_qsettings)
+        self.assertIn("sanitizedBackupValue(key, value(storedKey), &sanitized)", secure_qsettings)
+        self.assertIn("QVariantMap sanitizedValues;", secure_qsettings)
+        self.assertIn("sanitizedValues.insert(key, sanitizedValue);", secure_qsettings)
+        self.assertIn("setValue(it.key(), it.value());", secure_qsettings)
 
         self.assertIn("SAFE_CLIENT_ID = re.compile", export_controller)
         self.assertIn("SAFE_INSTALLATION_ID = re.compile", export_controller)
@@ -686,7 +1089,14 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("if not ALLOW_BOOTSTRAP or CONTAINER_SCOPE not in legacy_scopes:", export_controller)
         self.assertIn("MAX_BOOTSTRAP_BYTES = 1024", export_controller)
         self.assertIn("content_length > MAX_BOOTSTRAP_BYTES", export_controller)
-        self.assertNotIn("def do_GET(self):", export_controller)
+        self.assertIn('HEALTH_PATH = "/healthz"', export_controller)
+        self.assertIn("def do_GET(self):", export_controller)
+        self.assertIn("if self.path != HEALTH_PATH:", export_controller)
+        self.assertIn('"collectorVersion": 3', export_controller)
+        self.assertIn('SAFE_BATCH_ID = re.compile(r"^[a-f0-9]{64}$")', export_controller)
+        self.assertIn("if not SAFE_BATCH_ID.fullmatch(batch_id):", export_controller)
+        self.assertIn("batch_receipt_exists(client_id, batch_id)", export_controller)
+        self.assertIn("self.send_no_content(batch_id=batch_id, replayed=True)", export_controller)
         self.assertIn("QByteArray adminClientLogsDownloadScript", export_controller)
         self.assertIn("ExportController::DownloadClientLogsResult ExportController::downloadClientLogs", export_controller)
         self.assertIn("adminClientLogsDownloadScript(clientLogsStorageId(container, clientId))", export_controller)
@@ -757,34 +1167,55 @@ class SourceContractTests(unittest.TestCase):
 
     def test_client_log_collector_prunes_oldest_files(self) -> None:
         namespace: dict[str, object] = {"__name__": "collector_test"}
-        exec(extract_client_logs_collector_script(), namespace)
+        exec_client_logs_collector_script(namespace)
         with tempfile.TemporaryDirectory() as tmp:
             client_dir = Path(tmp) / "client"
             client_dir.mkdir()
             old_file = client_dir / "old.log"
+            middle_file = client_dir / "middle.log"
             new_file = client_dir / "new.log"
+            ignored_file = client_dir / "keep.txt"
             old_file.write_bytes(b"old")
+            middle_file.write_bytes(b"mid!")
             new_file.write_bytes(b"newer")
+            ignored_file.write_bytes(b"not a log")
             os.utime(old_file, (1, 1))
-            os.utime(new_file, (2, 2))
+            os.utime(middle_file, (2, 2))
+            os.utime(new_file, (3, 3))
 
-            namespace["MAX_CLIENT_BYTES"] = new_file.stat().st_size
+            namespace["MAX_CLIENT_BYTES"] = middle_file.stat().st_size + new_file.stat().st_size
+            namespace["MAX_FILES_PER_CLIENT"] = 512
             namespace["prune_client_dir"](str(client_dir))  # type: ignore[index]
 
             self.assertFalse(old_file.exists())
+            self.assertTrue(middle_file.exists())
+            self.assertTrue(new_file.exists())
+            self.assertTrue(ignored_file.exists())
+
+            namespace["MAX_CLIENT_BYTES"] = 1024 * 1024
+            namespace["MAX_FILES_PER_CLIENT"] = 1
+            namespace["prune_client_dir"](str(client_dir))  # type: ignore[index]
+
+            self.assertFalse(middle_file.exists())
             self.assertTrue(new_file.exists())
             self.assertEqual(new_file.read_bytes(), b"newer")
+            self.assertEqual(ignored_file.read_bytes(), b"not a log")
 
     def test_client_log_collector_legacy_bootstrap_uses_source_ip_map(self) -> None:
         namespace: dict[str, object] = {"__name__": "collector_test"}
-        exec(extract_client_logs_collector_script(), namespace)
+        exec_client_logs_collector_script(namespace)
         client_id = "a" * 64
+        other_client_id = "b" * 64
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             legacy_root = root / "legacy"
             legacy_root.mkdir()
             (legacy_root / "amnezia-awg2.tsv").write_text(
-                f"10.8.1.14\t{client_id}\tpeer-public-key\n",
+                f"10.8.1.14\tunsafe/client-id\tbad-peer\n10.8.1.14\t{client_id}\tpeer-public-key\n",
+                encoding="utf-8",
+            )
+            (legacy_root / "amnezia-wg.tsv").write_text(
+                f"10.8.1.14\t{other_client_id}\tother-peer-public-key\n",
                 encoding="utf-8",
             )
 
@@ -802,6 +1233,10 @@ class SourceContractTests(unittest.TestCase):
             self.assertEqual(namespace["resolve_legacy_client_id"]("10.8.1.14"), client_id)
             self.assertEqual(namespace["resolve_legacy_client_id"]("10.8.1.99"), "")
 
+            namespace["CONTAINER_SCOPE"] = "amnezia-wg"
+            self.assertEqual(namespace["resolve_legacy_client_id"]("10.8.1.14"), other_client_id)
+            namespace["CONTAINER_SCOPE"] = "amnezia-awg2"
+
             token = namespace["ensure_legacy_token"](client_id)
             self.assertTrue(token)
             self.assertEqual(namespace["ensure_legacy_token"](client_id), token)
@@ -809,7 +1244,10 @@ class SourceContractTests(unittest.TestCase):
             self.assertIn((client_id, token, "amnezia-awg2"), namespace["load_legacy_tokens"]())
             self.assertEqual(namespace["is_legacy_token"](client_id, token), ["amnezia-awg2"])
 
+            namespace["CONTAINER_SCOPE"] = "amnezia-wg"
+            self.assertNotIn("amnezia-wg", namespace["is_legacy_token"](client_id, token))
             namespace["CONTAINER_SCOPE"] = ""
+            self.assertEqual(namespace["resolve_legacy_client_id"]("10.8.1.14"), "")
             self.assertEqual(namespace["is_legacy_token"](client_id, token), ["amnezia-awg2"])
 
     @unittest.skipUnless(find_sh(), "sh is required to exercise the legacy client map refresh")
@@ -1292,7 +1730,11 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("minPublicBypassPrefixLength = 16", vpn_connection)
         self.assertIn("minLocalBypassPrefixLength = 24", vpn_connection)
         self.assertIn("splitRoutesKeepingHostsInVpn(ips, protectedHosts)", vpn_connection)
-        self.assertIn("if (!reply.waitForFinished() || !reply.returnValue())", vpn_connection)
+        self.assertIn("if (!reply.waitForFinished(1000) || !reply.returnValue())", vpn_connection)
+        self.assertIn("constexpr int incrementalManagedRouteIpcTimeoutMs = 5000", vpn_connection)
+        self.assertIn("auto addReply = iface->routeAddTrustedList(gateway, addedRoutes);", vpn_connection)
+        self.assertIn("!addReply.waitForFinished(incrementalManagedRouteIpcTimeoutMs)", vpn_connection)
+        self.assertIn("addReply.returnValue() != addedRoutes.size()", vpn_connection)
 
     def test_windows_dns_prefers_vpn_interface_metric(self) -> None:
         dns_utils = (REPO_ROOT / "client/platforms/windows/daemon/dnsutilswindows.cpp").read_text(encoding="utf-8")
@@ -1364,11 +1806,11 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('logger.error() << JSON_ALLOWEDIPADDRESSRANGES << "must not be empty"', daemon)
         self.assertIn("auto peer_cleanup_guard = qScopeGuard", daemon)
         self.assertIn("peer_cleanup_guard.dismiss()", daemon)
-        self.assertIn("QSet<QString> m_ipv6BlockPeers", firewall_h)
+        self.assertIn("QMultiMap<QString, quint64> m_ipv6BlockRules", firewall_h)
         self.assertIn("blockIpv6TrafficForPeer", firewall_h)
-        self.assertIn("m_ipv6BlockPeers.contains(peer)", firewall)
-        self.assertIn("m_ipv6BlockPeers.insert(peer)", firewall)
-        self.assertIn("m_ipv6BlockPeers.remove(pubkey)", firewall)
+        self.assertIn("m_ipv6BlockRules.contains(peer)", firewall)
+        self.assertIn("m_ipv6BlockRules.insert(peer, filterId)", firewall)
+        self.assertIn("m_ipv6BlockRules.remove(pubkey)", firewall)
         self.assertIn('blockTrafficTo(IPAddress("::/0"), LOW_WEIGHT', firewall)
         self.assertIn("m_firewall->blockIpv6TrafficForPeer(config.m_serverPublicKey)", wg_windows)
         self.assertIn("Failed to block unavailable IPv6 traffic", wg_windows)
@@ -1412,7 +1854,20 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("enum class SplitTunnelRouteSource", vpn_connection)
         self.assertIn("SplitTunnelRouteSource::Client && !isRoutableSplitTunnelRoute(route)", vpn_connection)
         self.assertIn("SplitTunnelRouteSource::ServerManaged", vpn_connection)
-        self.assertIn("iface->routeAddTrustedList(gw, managedIps)", vpn_connection)
+        self.assertIn("auto activeClientRoutes = QSharedPointer<QSet<QString>>::create()", vpn_connection)
+        self.assertGreaterEqual(
+            len(
+                re.findall(
+                    r"if\s*\(\s*!activeClientRoutes->contains\(route\)\s*&&\s*"
+                    r"!activeManagedRoutes->contains\(route\)\s*\)",
+                    vpn_connection,
+                )
+            ),
+            2,
+        )
+        self.assertGreaterEqual(vpn_connection.count("iface->routeAddTrustedList(gw, managedOnlyRoutes)"), 2)
+        self.assertIn("iface->routeAddList(gw, newClientRoutes)", vpn_connection)
+        self.assertNotIn("iface->routeAddTrustedList(gw, managedIps)", vpn_connection)
         self.assertIn("managedVpnSitesForRouting(activeServerIndex, mode)", vpn_connection)
         self.assertIn("managedVpnSitesForRouting(activeServerIndex, routeMode)", vpn_connection)
 
@@ -1421,7 +1876,7 @@ class SourceContractTests(unittest.TestCase):
         router = (REPO_ROOT / "service/server/router.cpp").read_text(encoding="utf-8")
         self.assertIn("routeAddTrustedList", ipc_interface)
         self.assertIn("Router::routeAddTrustedList", ipc_server)
-        self.assertIn("RouterWin::Instance().routeAddTrustedList(gw, ips)", router)
+        self.assertIn("RouterWin::Instance().routeAddTrustedList(gw, managedRoutes)", router)
         self.assertIn("validateRoutes && !isRouteAddCandidate(ipWithMask)", router_win)
         self.assertIn("skipping invalid trusted split route", router_win)
 
@@ -1451,9 +1906,9 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("win-split-tunnel v1.2.5.0 uses this hardcoded DNS sublayer key", firewall)
         self.assertIn("0x60090787, 0xcca1, 0x4937", firewall)
         self.assertIn("Amnezia-SplitTunnel-DNS-Sublayer", firewall)
-        self.assertIn("L\"Filters that enforce DNS handling\", 0xFFFE", firewall)
+        self.assertIn("Persistent DNS filters shared with the split-tunnel driver", firewall)
         self.assertIn("FwpmEngineClose0(engineHandle)", firewall)
-        self.assertIn("blockTrafficOnPort(53, MED_WEIGHT, \"Block all DNS\",\n                           ST_FW_WINFW_DNS_SUBLAYER_KEY)", firewall)
+        self.assertIn("blockTrafficOnPort(53, MED_WEIGHT, \"Block all DNS\",\n                          ST_DRIVER_DNS_SUBLAYER_KEY", firewall)
         self.assertIn("FWP_E_SUBLAYER_NOT_FOUND", firewall)
         self.assertIn("baselineExists && dnsExists", firewall)
         self.assertIn("IOCTL_INITIALIZE CTL_CODE(0x8000, 1, METHOD_NEITHER", split_tunnel)
@@ -1501,6 +1956,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("if-no-files-found: error", tag_block)
 
     def test_publish_upload_switches_manifest_last(self) -> None:
+        candidate_sha = "b" * 64
         files_command = publish_release.publish_files_remote_command(
             "/opt/amnezia/client-updates",
             "/tmp/amnezia-client-updates-9.9.9.9-123",
@@ -1508,26 +1964,89 @@ class SourceContractTests(unittest.TestCase):
         manifest_command = publish_release.publish_manifest_remote_command(
             "/opt/amnezia/client-updates",
             "/tmp/amnezia-client-updates-9.9.9.9-123",
+            None,
+            candidate_sha,
         )
         self.assertNotIn("rm -rf '/opt/amnezia/client-updates/files'", files_command)
-        self.assertIn('"$name.tmp"', files_command)
-        self.assertNotIn("manifest.json", files_command)
-        manifest_copy = "sudo cp -a '/tmp/amnezia-client-updates-9.9.9.9-123/manifest.json' '/opt/amnezia/client-updates/manifest.json.tmp'"
-        manifest_switch = "sudo mv -f '/opt/amnezia/client-updates/manifest.json.tmp' '/opt/amnezia/client-updates/manifest.json'"
-        self.assertIn(manifest_copy, manifest_command)
-        self.assertIn(manifest_switch, manifest_command)
-        self.assertLess(manifest_command.index(manifest_copy), manifest_command.index(manifest_switch))
+        self.assertIn("publish_immutable_tree", files_command)
+        self.assertIn("ensure_real_directory", files_command)
+        self.assertIn("files/artifacts", files_command)
+        self.assertIn('actual_digest=$(sha256sum -- "$artifact"', files_command)
+        self.assertIn('stage_root=$(sudo mktemp -d', files_command)
+        self.assertIn('quarantine=$stage_root/source', files_command)
+        self.assertIn("seal_signed_tree", files_command)
+        self.assertNotIn('sudo cp -a -- "$quarantine"/.', files_command)
+        self.assertIn('sudo mv -T -n -- "$stage" "$target"', files_command)
+        self.assertIn('cp -a -- "$source"/. "$snapshot"/', files_command)
+        self.assertNotIn('sudo cp -a -- "$source"/.', files_command)
+        self.assertIn('sudo mv -T -- "$snapshot" "$quarantine"', files_command)
+        self.assertIn('immutable release tree already exists with different content', files_command)
+        self.assertIn('rollback-$generation', files_command)
+        self.assertIn(publish_release.CHANNEL_MARKER_NAME, files_command)
+        self.assertIn("without a verified manifest", files_command)
+        self.assertIn("{ stage_cleanup=; source_snapshot_cleanup=; marker_cleanup=; trap", files_command)
+        self.assertIn("verify_signed_rollback_tree", files_command)
+        self.assertIn("flock -x -w 60 9", files_command)
+        self.assertIn("trap - EXIT HUP INT TERM", files_command)
+        self.assertNotIn('mv -fT -- "$manifest_tmp"', files_command)
+        self.assertIn("/tmp/amnezia-client-updates-9.9.9.9-123/manifest.json", manifest_command)
+        self.assertIn(candidate_sha, manifest_command)
+        self.assertIn("candidate_size=$(stat -c %s", manifest_command)
+        self.assertIn(str(publish_release.MAX_MANIFEST_RESPONSE_BYTES), manifest_command)
+        self.assertIn("uploaded candidate manifest sha256 does not match", manifest_command)
+        self.assertIn("mv -f", manifest_command)
+        self.assertIn("/opt/amnezia/client-updates/manifest.json", manifest_command)
+        self.assertIn("flock -x -w 60", manifest_command)
+        self.assertIn("refusing an unchecked overwrite", manifest_command)
+        self.assertLess(manifest_command.index("candidate_sha="), manifest_command.index("mv -f"))
+
+        expected_sha = "a" * 64
+        cas_command = publish_release.publish_manifest_remote_command(
+            "/opt/amnezia/client-updates",
+            "/tmp/amnezia-client-updates-9.9.9.9-123",
+            expected_sha,
+            candidate_sha,
+        )
+        self.assertIn("sha256sum", cas_command)
+        self.assertIn(expected_sha, cas_command)
+        self.assertIn(candidate_sha, cas_command)
+        self.assertIn("refusing a stale overwrite", cas_command)
+
+    def test_publish_rejects_unsafe_server_directories_before_remote_writes(self) -> None:
+        self.assertEqual(
+            publish_release.validate_server_dir("/opt/amnezia/client-updates"),
+            "/opt/amnezia/client-updates",
+        )
+        for unsafe in ("/", "/.", "/opt/..", "/opt//updates", "//opt/updates", "opt/updates", "/opt/updates/"):
+            with self.subTest(server_dir=unsafe), self.assertRaises(SystemExit):
+                publish_release.validate_server_dir(unsafe)
+
+        validation_command = publish_release.remote_server_dir_validation_command(
+            "/opt/amnezia/client-updates"
+        )
+        self.assertIn("readlink -m", validation_command)
+        self.assertIn('"$resolved" != /', validation_command)
+        self.assertIn("resolves through a symlink or to filesystem root", validation_command)
+        self.assertIn("stat -Lc", validation_command)
+        self.assertIn("filesystem root", validation_command)
+        self.assertIn(publish_release.CHANNEL_MARKER_NAME, validation_command)
+        self.assertIn("not a dedicated update channel", validation_command)
+        self.assertIn(publish_release.CHANNEL_MARKER_SHA256, validation_command)
 
     def test_publish_upload_validates_host_before_manifest_switch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "out"
             (out_dir / "files").mkdir(parents=True)
             (out_dir / "manifest.json").write_text("{}", encoding="utf-8")
-            calls: list[tuple[list[str], Path | None]] = []
+            calls: list[tuple[list[str], Path | None, bytes | None]] = []
 
             original_run = publish_release.run
             try:
-                publish_release.run = lambda command, stdin_path=None: calls.append((command, stdin_path))  # type: ignore[assignment]
+                publish_release.run = (  # type: ignore[assignment]
+                    lambda command, stdin_path=None, stdin_data=None: calls.append(
+                        (command, stdin_path, stdin_data)
+                    )
+                )
                 args = type(
                     "Args",
                     (),
@@ -1540,16 +2059,100 @@ class SourceContractTests(unittest.TestCase):
                         "no_install_host": False,
                     },
                 )()
-                publish_release.upload_release(args, out_dir)
+                with mock.patch.object(publish_release, "verify_staged_release_files"), mock.patch.object(
+                    publish_release,
+                    "signed_local_file_expectations",
+                    return_value={},
+                ):
+                    publish_release.upload_release(args, out_dir, None)
             finally:
                 publish_release.run = original_run
 
-            rendered = [" ".join(command) for command, _stdin_path in calls]
+            rendered = [
+                " ".join(command) + (" " + stdin_data.decode("utf-8") if stdin_data else "")
+                for command, _stdin_path, stdin_data in calls
+            ]
+            validation_call = next(index for index, command in enumerate(rendered) if "readlink -m" in command)
+            staging_call = next(index for index, command in enumerate(rendered) if "mkdir -m 0700" in command)
             files_call = next(index for index, command in enumerate(rendered) if "for f in" in command)
-            install_host_call = next(index for index, (command, stdin_path) in enumerate(calls) if stdin_path == publish_release.INSTALL_HOST)
-            manifest_call = next(index for index, command in enumerate(rendered) if "manifest.json.tmp" in command)
+            install_host_call = next(
+                index
+                for index, (_command, stdin_path, _stdin_data) in enumerate(calls)
+                if stdin_path == publish_release.INSTALL_HOST
+            )
+            manifest_call = next(
+                index
+                for index, command in enumerate(rendered)
+                if "uploaded candidate manifest sha256 does not match" in command
+            )
+            self.assertLess(validation_call, staging_call)
+            self.assertLess(staging_call, files_call)
             self.assertLess(files_call, install_host_call)
             self.assertLess(install_host_call, manifest_call)
+            self.assertRegex(rendered[staging_call], r"/tmp/amnezia-client-updates-[0-9a-f]{48}")
+            self.assertNotIn("rm -rf", rendered[staging_call])
+            self.assertIn(hashlib.sha256(b"{}").hexdigest(), rendered[manifest_call])
+            self.assertEqual(calls[files_call][0][-1], "sh -s")
+            self.assertEqual(calls[manifest_call][0][-1], "sh -s")
+            self.assertNotIn("for f in", " ".join(calls[files_call][0]))
+
+    def test_publish_attempts_random_stage_cleanup_when_mkdir_connection_drops(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "out"
+            (out_dir / "files").mkdir(parents=True)
+            (out_dir / "manifest.json").write_text("{}", encoding="utf-8")
+            run_calls: list[list[str]] = []
+            cleanup_calls: list[list[str]] = []
+
+            def flaky_run(command, stdin_path=None, stdin_data=None):
+                run_calls.append(command)
+                if "mkdir -m 0700" in " ".join(command):
+                    raise RuntimeError("connection dropped after remote mkdir")
+
+            args = type(
+                "Args",
+                (),
+                {
+                    "version": "9.9.9.9",
+                    "server": "root@example.invalid",
+                    "server_dir": "/opt/amnezia/client-updates",
+                    "ssh": "ssh -i key",
+                    "scp": "scp -i key",
+                    "no_install_host": True,
+                },
+            )()
+            with mock.patch.object(publish_release, "run", side_effect=flaky_run), mock.patch.object(
+                publish_release,
+                "verify_staged_release_files",
+            ), mock.patch.object(
+                publish_release,
+                "signed_local_file_expectations",
+                return_value={},
+            ):
+                with mock.patch.object(
+                    publish_release.subprocess,
+                    "run",
+                    side_effect=lambda command, **_kwargs: cleanup_calls.append(command),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "connection dropped"):
+                        publish_release.upload_release(args, out_dir, None)
+
+            self.assertTrue(any("mkdir -m 0700" in " ".join(command) for command in run_calls))
+            self.assertEqual(len(cleanup_calls), 1)
+            cleanup_command = " ".join(cleanup_calls[0])
+            self.assertIn("rm -rf --", cleanup_command)
+            self.assertRegex(cleanup_command, r"/tmp/amnezia-client-updates-[0-9a-f]{48}")
+
+    def test_local_publish_lock_spans_remote_commit_and_local_switch(self) -> None:
+        publisher_source = (SCRIPT_DIR / "publish_release.py").read_text(encoding="utf-8")
+        main_source = publisher_source[publisher_source.index("def main() -> int:"):]
+        lock_index = main_source.index("with local_publish_lock(lock_path):")
+        prepare_index = main_source.index("prepare_release_output_locked(", lock_index)
+        remote_index = main_source.index("upload_release(", prepare_index)
+        commit_index = main_source.index("commit_release_output_locked(", remote_index)
+        self.assertLess(lock_index, prepare_index)
+        self.assertLess(prepare_index, remote_index)
+        self.assertLess(remote_index, commit_index)
 
     def test_update_host_setup_rejects_route_values_for_bridge_host(self) -> None:
         script = (REPO_ROOT / "deploy/selfhosted_updates/install_server_update_host.sh").read_text(encoding="utf-8")
@@ -1717,6 +2320,195 @@ class SourceContractTests(unittest.TestCase):
             self.assertIn("exec amnezia-client-updates-vpn-amnezia-awg sh -c", docker_log)
 
 
+class ManifestReleasePolicyTests(unittest.TestCase):
+    def policy(self) -> dict[str, object]:
+        generated_at = datetime.now(timezone.utc).replace(microsecond=0)
+        expires_at = generated_at + timedelta(days=7)
+        return {
+            "schema": 2,
+            "generation": 42,
+            "generatedAt": generated_at.isoformat().replace("+00:00", "Z"),
+            "expiresAt": expires_at.isoformat().replace("+00:00", "Z"),
+            "channel": "canary",
+            "rollout": {
+                "percentage": 10,
+                "cohortSaltId": "fleet-v1",
+            },
+            "eligibility": {
+                "minimumVersion": "4.9.0.1",
+                "maximumVersion": "4.9.0.10",
+            },
+            "healthDeadlineSeconds": 600,
+        }
+
+    def test_cohort_bucket_has_stable_cross_client_vectors(self) -> None:
+        self.assertEqual(
+            make_manifest.cohort_bucket("00000000-0000-0000-0000-000000000000", "fleet-v1"),
+            8765,
+        )
+        self.assertEqual(
+            make_manifest.cohort_bucket("123e4567-e89b-12d3-a456-426614174000", "fleet-v1"),
+            4110,
+        )
+        self.assertEqual(
+            make_manifest.cohort_bucket("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF", "fleet-v1"),
+            5782,
+        )
+        self.assertEqual(
+            make_manifest.cohort_bucket(" 123E4567-E89B-12D3-A456-426614174000 ", "fleet-v1"),
+            4110,
+        )
+        self.assertFalse(
+            make_manifest.client_is_in_rollout("123e4567-e89b-12d3-a456-426614174000", "fleet-v1", 0)
+        )
+        self.assertTrue(
+            make_manifest.client_is_in_rollout("123e4567-e89b-12d3-a456-426614174000", "fleet-v1", 100)
+        )
+
+        for invalid_percentage in (-1, 101, True, 10.5, "10"):
+            with self.subTest(invalid_percentage=invalid_percentage), self.assertRaises(SystemExit):
+                make_manifest.validate_rollout_percentage(invalid_percentage)
+        for invalid_salt in ("", "contains space", "secret/value", "x" * 65):
+            with self.subTest(invalid_salt=invalid_salt), self.assertRaises(SystemExit):
+                make_manifest.validate_cohort_salt_id(invalid_salt)
+
+    def test_release_policy_validation_is_strict(self) -> None:
+        make_manifest.validate_release_policy(self.policy())
+
+        invalid_policies: list[tuple[str, object, str]] = []
+        policy = self.policy()
+        policy["unknown"] = True
+        invalid_policies.append(("unknown field", policy, "invalid fields"))
+        policy = self.policy()
+        policy["schema"] = True
+        invalid_policies.append(("boolean schema", policy, "schema must be integer 2"))
+        policy = self.policy()
+        policy["schema"] = 2.0
+        invalid_policies.append(("float schema", policy, "schema must be integer 2"))
+        policy = self.policy()
+        policy["generation"] = 0
+        invalid_policies.append(("zero generation", policy, "generation must be an integer"))
+        policy = self.policy()
+        policy["generation"] = 9007199254740992
+        invalid_policies.append(("generation outside JSON-safe integer range", policy, "9007199254740991"))
+        policy = self.policy()
+        policy["channel"] = "preview"
+        invalid_policies.append(("unknown channel", policy, "stable, canary, or emergency"))
+        policy = self.policy()
+        policy["rollout"] = {"percentage": True, "cohortSaltId": "fleet-v1"}
+        invalid_policies.append(("boolean percentage", policy, "rollout percentage"))
+        policy = self.policy()
+        policy["rollout"] = {"percentage": 10, "cohortSaltId": "fleet-v1", "extra": 1}
+        invalid_policies.append(("rollout extra field", policy, "must contain exactly"))
+        policy = self.policy()
+        policy["eligibility"] = {"minimumVersion": "4.9.0.10", "maximumVersion": "4.9.0.1"}
+        invalid_policies.append(("inverted versions", policy, "must not be newer"))
+        policy = self.policy()
+        policy["eligibility"] = {"minimumVersion": None}
+        invalid_policies.append(("null minimum version", policy, "must be a release version"))
+        policy = self.policy()
+        policy["eligibility"] = {"minimumVersion": " 4.9.0.1 "}
+        invalid_policies.append(("whitespace minimum version", policy, "without leading-zero components"))
+        policy = self.policy()
+        policy["eligibility"] = {"maximumVersion": None}
+        invalid_policies.append(("null maximum version", policy, "must be a release version"))
+        policy = self.policy()
+        policy["healthDeadlineSeconds"] = False
+        invalid_policies.append(("boolean deadline", policy, "healthDeadlineSeconds"))
+        policy = self.policy()
+        policy["healthDeadlineSeconds"] = 59
+        invalid_policies.append(("deadline before readiness margin", policy, "integer from 60"))
+        policy = self.policy()
+        policy["generatedAt"] = "2026-07-20T10:00:00"
+        invalid_policies.append(("missing timezone", policy, "canonical UTC"))
+        policy = self.policy()
+        policy["expiresAt"] = policy["generatedAt"]
+        invalid_policies.append(("non-increasing expiry", policy, "must be later"))
+        policy = self.policy()
+        policy["previousVersion"] = None
+        invalid_policies.append(("null previous version", policy, "must be a release version"))
+        policy = self.policy()
+        policy["rollback"] = None
+        invalid_policies.append(("null rollback", policy, "requires previousVersion"))
+
+        for name, invalid_policy, expected_error in invalid_policies:
+            with self.subTest(name=name), self.assertRaises(SystemExit) as error:
+                make_manifest.validate_release_policy(invalid_policy)
+            self.assertIn(expected_error, str(error.exception))
+
+    def test_release_policy_validates_rollback_artifact_schema(self) -> None:
+        policy = self.policy()
+        policy["previousVersion"] = "4.9.0.9"
+        policy["rollback"] = {
+            "version": "4.9.0.9",
+            "platforms": {
+                "windows-x64": {
+                    "url": "files/rollback/42/4.9.0.9/AmneziaVPN.exe",
+                    "sha256": "a" * 64,
+                    "size": 123,
+                    "autoInstall": True,
+                }
+            },
+        }
+        make_manifest.validate_release_policy(policy)
+
+        invalid_policy = json.loads(json.dumps(policy))
+        invalid_policy["rollback"]["platforms"]["windows-x64"]["url"] = "https://example.invalid/AmneziaVPN.exe"
+        with self.assertRaises(SystemExit) as external_url:
+            make_manifest.validate_release_policy(invalid_policy)
+        self.assertIn("relative and stay under files/", str(external_url.exception))
+
+        invalid_policy = json.loads(json.dumps(policy))
+        invalid_policy["rollback"]["platforms"]["windows-x64"]["url"] = "files/%2e%2e/AmneziaVPN.exe"
+        with self.assertRaises(SystemExit) as encoded_traversal:
+            make_manifest.validate_release_policy(invalid_policy)
+        self.assertIn("relative and stay under files/", str(encoded_traversal.exception))
+
+        invalid_policy = json.loads(json.dumps(policy))
+        invalid_policy["rollback"]["platforms"]["windows-x64"]["size"] = True
+        with self.assertRaises(SystemExit) as boolean_size:
+            make_manifest.validate_release_policy(invalid_policy)
+        self.assertIn("positive integer size", str(boolean_size.exception))
+
+        invalid_policy = json.loads(json.dumps(policy))
+        invalid_policy["rollback"]["version"] = "4.9.0.8"
+        with self.assertRaises(SystemExit) as wrong_version:
+            make_manifest.validate_release_policy(invalid_policy)
+        self.assertIn("must equal previousVersion", str(wrong_version.exception))
+
+    def test_release_wrappers_expose_safe_fleet_policy_controls(self) -> None:
+        expected_options = (
+            "PayloadSchema",
+            "Channel",
+            "RolloutPercentage",
+            "CohortSaltId",
+            "MinimumEligibleVersion",
+            "MaximumEligibleVersion",
+            "HealthDeadlineSeconds",
+            "PolicyGeneration",
+            "GeneratedAt",
+            "ExpiresAt",
+            "PolicyValidForHours",
+            "PreviousVersion",
+            "RollbackArtifact",
+        )
+        for script_name in (
+            "local_release.ps1",
+            "rebuild_clients.ps1",
+            "setup_release_workstation.ps1",
+        ):
+            script = (SCRIPT_DIR / script_name).read_text(encoding="utf-8")
+            with self.subTest(script=script_name):
+                for option in expected_options:
+                    self.assertIn(f"${option}", script)
+                self.assertIn("ValidateRange(60, 86400)", script)
+                self.assertIn("ValidateRange(0, 9007199254740991)", script)
+                if script_name == "rebuild_clients.ps1":
+                    self.assertIn('ContainsKey("PayloadSchema")', script)
+                else:
+                    self.assertIn("PayloadSchema -eq 1", script)
+
+
 @unittest.skipUnless(find_openssl(), "openssl is required for signed manifest tests")
 class ManifestPublisherTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -1743,6 +2535,1221 @@ class ManifestPublisherTests(unittest.TestCase):
         artifact = artifact_dir / name
         artifact.write_bytes(contents)
         return artifact
+
+    def build_test_manifest(
+        self,
+        name: str,
+        version: str,
+        *,
+        schema: int = 1,
+        generation: int | None = None,
+        artifact_seed: str | None = None,
+        policy_valid_for_hours: int | None = None,
+    ) -> bytes:
+        artifact_seed = artifact_seed or name
+        artifact = self.write_artifact(
+            f"{artifact_seed}-{version}.exe",
+            artifact_seed.encode("utf-8"),
+        )
+        out_dir = self.root / name
+        command = [
+            sys.executable,
+            str(SCRIPT_DIR / "make_manifest.py"),
+            "--version",
+            version,
+            "--base-url",
+            "https://updates.example.invalid",
+            "--private-key",
+            str(self.private_key),
+            "--out-dir",
+            str(out_dir),
+            "--artifact",
+            f"windows-x64={artifact}",
+            "--payload-schema",
+            str(schema),
+        ]
+        if generation is not None:
+            command += ["--policy-generation", str(generation)]
+        if policy_valid_for_hours is not None:
+            command += ["--policy-valid-for-hours", str(policy_valid_for_hours)]
+        subprocess.run(command, check=True, capture_output=True, text=True, env=self.env)
+        return (out_dir / "manifest.json").read_bytes()
+
+    def test_publish_transition_rejects_schema_downgrade_and_generation_rebinding(self) -> None:
+        published = self.build_test_manifest("published", "9.9.9.8", schema=2, generation=42)
+        same_generation = self.build_test_manifest("same-generation", "9.9.9.9", schema=2, generation=42)
+        stale_generation = self.build_test_manifest("stale-generation", "9.9.9.9", schema=2, generation=41)
+        next_generation = self.build_test_manifest("next-generation", "9.9.9.9", schema=2, generation=43)
+        lower_version = self.build_test_manifest("lower-version", "9.9.9.7", schema=2, generation=43)
+        same_version_next_generation = self.build_test_manifest(
+            "same-version-next-generation",
+            "9.9.9.8",
+            schema=2,
+            generation=43,
+            artifact_seed="published",
+        )
+        same_version_rebuild = self.build_test_manifest(
+            "same-version-rebuild",
+            "9.9.9.8",
+            schema=2,
+            generation=43,
+        )
+        legacy_same_version = self.build_test_manifest(
+            "legacy-same-version",
+            "9.9.9.6",
+            artifact_seed="schema-migration",
+        )
+        migrated_same_version = self.build_test_manifest(
+            "migrated-same-version",
+            "9.9.9.6",
+            schema=2,
+            generation=1,
+            artifact_seed="schema-migration",
+        )
+        legacy = self.build_test_manifest("legacy", "9.9.9.9")
+
+        self.assertEqual(
+            publish_release.validate_publish_transition(published, published, self.private_key),
+            hashlib.sha256(published).hexdigest(),
+        )
+        with self.assertRaises(SystemExit) as rebound:
+            publish_release.validate_publish_transition(published, same_generation, self.private_key)
+        self.assertIn("permanently bound to one payload hash", str(rebound.exception))
+        with self.assertRaises(SystemExit) as stale:
+            publish_release.validate_publish_transition(published, stale_generation, self.private_key)
+        self.assertIn("Refusing stale policy generation 41", str(stale.exception))
+        with self.assertRaises(SystemExit) as downgrade:
+            publish_release.validate_publish_transition(published, legacy, self.private_key)
+        self.assertIn("Refusing to downgrade", str(downgrade.exception))
+        with self.assertRaises(SystemExit) as lower_release:
+            publish_release.validate_publish_transition(published, lower_version, self.private_key)
+        self.assertIn("release version", str(lower_release.exception).lower())
+        self.assertEqual(
+            publish_release.validate_publish_transition(published, same_version_next_generation, self.private_key),
+            hashlib.sha256(published).hexdigest(),
+        )
+        with self.assertRaises(SystemExit) as rebound_release:
+            publish_release.validate_publish_transition(published, same_version_rebuild, self.private_key)
+        self.assertIn("release content", str(rebound_release.exception).lower())
+        self.assertEqual(
+            publish_release.validate_publish_transition(
+                legacy_same_version,
+                migrated_same_version,
+                self.private_key,
+            ),
+            hashlib.sha256(legacy_same_version).hexdigest(),
+        )
+        self.assertEqual(
+            publish_release.validate_publish_transition(published, next_generation, self.private_key),
+            hashlib.sha256(published).hexdigest(),
+        )
+
+    def test_manifest_tools_reject_noncanonical_leading_zero_versions(self) -> None:
+        for value in (
+            "04.9.0.11",
+            "4.09.0.11",
+            "4.9.00.11",
+            "4.9.0.011",
+            " 4.9.0.11 ",
+            "2147483648.9.0.11",
+        ):
+            with self.subTest(value=value):
+                with self.assertRaises(SystemExit):
+                    make_manifest.validate_release_version(value)
+                with self.assertRaises(SystemExit):
+                    publish_release.validate_release_version(value)
+
+        self.assertEqual(make_manifest.validate_release_version("4.9.0.11"), "4.9.0.11")
+        self.assertEqual(publish_release.validate_release_version("4.9.0.11"), "4.9.0.11")
+
+    def test_local_publisher_rejects_downgrade_without_replacing_channel_output(self) -> None:
+        current_version = "9.9.9.8"
+        candidate_version = "9.9.9.9"
+        current_artifact = self.write_artifact(f"AmneziaVPN_{current_version}_windows_x64.exe", b"current")
+        candidate_artifact = self.write_artifact(f"AmneziaVPN_{candidate_version}_windows_x64.exe", b"candidate")
+        out_dir = self.root / "local-channel"
+        common = [
+            sys.executable,
+            str(SCRIPT_DIR / "publish_release.py"),
+            "--private-key",
+            str(self.private_key),
+            "--out-dir",
+            str(out_dir),
+            "--include-platform",
+            "windows-x64",
+            "--require-platform",
+            "windows-x64",
+        ]
+        subprocess.run(
+            common + [
+                "--version",
+                current_version,
+                "--artifact",
+                f"windows-x64={current_artifact}",
+                "--payload-schema",
+                "2",
+                "--policy-generation",
+                "42",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+        published_manifest = (out_dir / "manifest.json").read_bytes()
+        published_files = sorted(path.relative_to(out_dir).as_posix() for path in out_dir.rglob("*") if path.is_file())
+
+        downgrade = subprocess.run(
+            common + [
+                "--version",
+                candidate_version,
+                "--artifact",
+                f"windows-x64={candidate_artifact}",
+            ],
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+        self.assertNotEqual(downgrade.returncode, 0)
+        self.assertIn("Refusing to downgrade", downgrade.stderr + downgrade.stdout)
+        self.assertEqual((out_dir / "manifest.json").read_bytes(), published_manifest)
+        self.assertEqual(
+            sorted(path.relative_to(out_dir).as_posix() for path in out_dir.rglob("*") if path.is_file()),
+            published_files,
+        )
+
+    def test_local_output_cas_rejects_concurrent_channel_change(self) -> None:
+        out_dir = self.root / "local-cas-channel"
+        staged_out_dir = self.root / "local-cas-candidate"
+        out_dir.mkdir()
+        staged_out_dir.mkdir()
+        original_manifest = b"original manifest envelope"
+        raced_manifest = b"concurrent manifest envelope"
+        candidate_manifest = b"candidate manifest envelope"
+        (out_dir / "manifest.json").write_bytes(original_manifest)
+        (staged_out_dir / "manifest.json").write_bytes(candidate_manifest)
+        expected_sha = hashlib.sha256(original_manifest).hexdigest()
+
+        (out_dir / "manifest.json").write_bytes(raced_manifest)
+        with self.assertRaises(SystemExit) as stale:
+            publish_release.replace_release_output(staged_out_dir, out_dir, expected_sha)
+
+        self.assertIn("changed during publication", str(stale.exception))
+        self.assertEqual((out_dir / "manifest.json").read_bytes(), raced_manifest)
+        self.assertEqual((staged_out_dir / "manifest.json").read_bytes(), candidate_manifest)
+
+    def test_local_publisher_switch_reports_success_after_backup_cleanup_edge_cases(self) -> None:
+        file_out = self.root / "publisher-output-was-file"
+        file_out.write_bytes(b"old file")
+        staged_file_replacement = self.root / "publisher-staged-file-replacement"
+        staged_file_replacement.mkdir()
+        (staged_file_replacement / "manifest.json").write_bytes(b"new tree")
+
+        publish_release.replace_release_output(staged_file_replacement, file_out, None)
+
+        self.assertEqual((file_out / "manifest.json").read_bytes(), b"new tree")
+        self.assertEqual(list(self.root.glob(".publisher-output-was-file.previous-*")), [])
+
+        directory_out = self.root / "publisher-output-with-readonly-file"
+        directory_out.mkdir()
+        current_manifest = directory_out / "manifest.json"
+        current_manifest.write_bytes(b"old tree")
+        expected_sha = hashlib.sha256(current_manifest.read_bytes()).hexdigest()
+        os.chmod(current_manifest, 0o444)
+        staged_directory_replacement = self.root / "publisher-staged-directory-replacement"
+        staged_directory_replacement.mkdir()
+        (staged_directory_replacement / "manifest.json").write_bytes(b"newer tree")
+
+        with mock.patch.object(publish_release, "verify_staged_release_files"):
+            publish_release.replace_release_output(
+                staged_directory_replacement,
+                directory_out,
+                expected_sha,
+            )
+
+        self.assertEqual((directory_out / "manifest.json").read_bytes(), b"newer tree")
+        self.assertEqual(list(self.root.glob(".publisher-output-with-readonly-file.previous-*")), [])
+
+    def test_local_directory_publish_keeps_old_manifest_on_interrupted_manifest_switch(self) -> None:
+        out_dir = self.root / "crash-safe-local-channel"
+        out_dir.mkdir()
+        old_manifest = b"old signed envelope"
+        (out_dir / "manifest.json").write_bytes(old_manifest)
+        expected_sha = hashlib.sha256(old_manifest).hexdigest()
+
+        staged_out_dir = self.root / "crash-safe-candidate"
+        artifact = staged_out_dir / "files" / "artifacts" / ("a" * 64) / "client.exe"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_bytes(b"candidate artifact")
+        (staged_out_dir / "manifest.json").write_bytes(b"new signed envelope")
+
+        original_replace = publish_release.os.replace
+
+        def interrupt_manifest_switch(source, target):
+            if Path(target) == out_dir / "manifest.json":
+                raise RuntimeError("simulated termination boundary")
+            return original_replace(source, target)
+
+        with mock.patch.object(publish_release, "verify_staged_release_files"), mock.patch.object(
+            publish_release,
+            "signed_local_file_expectations",
+            return_value=None,
+        ):
+            with mock.patch.object(publish_release.os, "replace", side_effect=interrupt_manifest_switch):
+                with self.assertRaisesRegex(RuntimeError, "termination boundary"):
+                    publish_release.replace_release_output(staged_out_dir, out_dir, expected_sha)
+
+        self.assertTrue(out_dir.is_dir())
+        self.assertEqual((out_dir / "manifest.json").read_bytes(), old_manifest)
+        self.assertEqual((out_dir / artifact.relative_to(staged_out_dir)).read_bytes(), b"candidate artifact")
+
+        with mock.patch.object(publish_release, "verify_staged_release_files"), mock.patch.object(
+            publish_release,
+            "signed_local_file_expectations",
+            return_value=None,
+        ):
+            publish_release.replace_release_output(staged_out_dir, out_dir, expected_sha)
+        self.assertEqual((out_dir / "manifest.json").read_bytes(), b"new signed envelope")
+
+    def test_local_commit_rehashes_prepared_manifest_before_switch(self) -> None:
+        out_dir = self.root / "prepared-manifest-binding"
+        out_dir.mkdir()
+        old_manifest = b"old envelope"
+        (out_dir / "manifest.json").write_bytes(old_manifest)
+        staged_out_dir = self.root / "prepared-manifest-candidate"
+        staged_out_dir.mkdir()
+        candidate_manifest = b"verified candidate envelope"
+        (staged_out_dir / "manifest.json").write_bytes(candidate_manifest)
+        old_sha = hashlib.sha256(old_manifest).hexdigest()
+        candidate_sha = hashlib.sha256(candidate_manifest).hexdigest()
+
+        with mock.patch.object(publish_release, "verify_staged_release_files"):
+            prepared_manifest = publish_release.prepare_release_output_locked(
+                staged_out_dir,
+                out_dir,
+                old_sha,
+                candidate_sha,
+            )
+            prepared_manifest.write_bytes(b"tampered after prepare")
+            with self.assertRaisesRegex(SystemExit, "changed after verification"):
+                publish_release.commit_release_output_locked(
+                    prepared_manifest,
+                    out_dir,
+                    old_sha,
+                    candidate_sha,
+                )
+        self.assertEqual((out_dir / "manifest.json").read_bytes(), old_manifest)
+
+    def test_retry_reconciles_exact_remote_envelope_after_interrupted_local_commit(self) -> None:
+        old_manifest = self.build_test_manifest(
+            "recovery-old",
+            "9.9.9.7",
+            schema=2,
+            generation=40,
+            artifact_seed="recovery-old",
+        )
+        remote_manifest = self.build_test_manifest(
+            "recovery-remote",
+            "9.9.9.8",
+            schema=2,
+            generation=41,
+            artifact_seed="recovery-new",
+        )
+        out_dir = self.root / "recovery-local-channel"
+        shutil.copytree(self.root / "recovery-old", out_dir)
+        old_sha = hashlib.sha256(old_manifest).hexdigest()
+        remote_sha = hashlib.sha256(remote_manifest).hexdigest()
+        prepared_manifest = publish_release.prepare_release_output_locked(
+            self.root / "recovery-remote",
+            out_dir,
+            old_sha,
+            remote_sha,
+        )
+        self.assertTrue(prepared_manifest.is_file())
+
+        time.sleep(1.1)
+        regenerated_manifest = self.build_test_manifest(
+            "recovery-regenerated",
+            "9.9.9.8",
+            schema=2,
+            generation=41,
+            artifact_seed="recovery-new",
+        )
+        self.assertNotEqual(remote_manifest, regenerated_manifest)
+        self.assertEqual(
+            publish_release.retry_intent_projection(
+                remote_manifest,
+                self.private_key,
+                ignore_generated_clock=True,
+            ),
+            publish_release.retry_intent_projection(
+                regenerated_manifest,
+                self.private_key,
+                ignore_generated_clock=True,
+            ),
+        )
+
+        self.assertTrue(
+            publish_release.reconcile_prepared_remote_manifest(
+                out_dir,
+                old_manifest,
+                remote_manifest,
+                self.private_key,
+            )
+        )
+        self.assertEqual((out_dir / "manifest.json").read_bytes(), remote_manifest)
+        self.assertFalse(prepared_manifest.exists())
+        with self.assertRaisesRegex(SystemExit, "permanently bound"):
+            publish_release.validate_publish_transition(
+                remote_manifest,
+                regenerated_manifest,
+                self.private_key,
+            )
+
+    def test_staged_file_bytes_are_bound_before_local_or_remote_publish(self) -> None:
+        manifest = self.build_test_manifest("staged-binding", "9.9.9.9")
+        out_dir = self.root / "staged-binding"
+        relative_path = next(iter(publish_release.signed_local_file_expectations(manifest)))
+        bound_file = out_dir.joinpath(*PurePosixPath(relative_path).parts)
+        bound_file.write_bytes(b"tampered after manifest verification")
+
+        with self.assertRaisesRegex(SystemExit, "signed size/sha256|digest path"):
+            publish_release.verify_staged_release_files(out_dir, manifest)
+
+    def test_candidate_only_recovery_ignores_unreferenced_history_after_full_preflight(self) -> None:
+        manifest = self.build_test_manifest("candidate-only-recovery", "9.9.9.9")
+        out_dir = self.root / "candidate-only-recovery"
+        stale_dir = out_dir / "files" / "artifacts" / ("f" * 64)
+        stale_dir.mkdir(parents=True)
+
+        with self.assertRaisesRegex(SystemExit, "Empty staged artifact digest directory"):
+            publish_release.verify_staged_release_files(out_dir, manifest)
+        publish_release.verify_staged_release_files(out_dir, manifest, candidate_only=True)
+
+    def test_retry_projection_preserves_requested_policy_validity_duration(self) -> None:
+        long_policy = self.build_test_manifest(
+            "retry-validity-long",
+            "9.9.9.9",
+            schema=2,
+            generation=51,
+            artifact_seed="retry-validity",
+            policy_valid_for_hours=168,
+        )
+        short_policy = self.build_test_manifest(
+            "retry-validity-short",
+            "9.9.9.9",
+            schema=2,
+            generation=51,
+            artifact_seed="retry-validity",
+            policy_valid_for_hours=1,
+        )
+        self.assertNotEqual(
+            publish_release.retry_intent_projection(
+                long_policy,
+                self.private_key,
+                ignore_generated_clock=True,
+            ),
+            publish_release.retry_intent_projection(
+                short_policy,
+                self.private_key,
+                ignore_generated_clock=True,
+            ),
+        )
+
+    def test_windows_path_guards_reject_absent_83_aliases_and_fail_closed(self) -> None:
+        publish_release.reject_absent_windows_short_name_components(["normal-channel"])
+        with self.assertRaisesRegex(SystemExit, "8.3 alias"):
+            publish_release.reject_absent_windows_short_name_components(["FOOBAR~1"])
+
+        inspected_path = self.root / "uninspectable-reparse-point"
+        with mock.patch.object(publish_release.os, "name", "nt"), mock.patch.object(
+            publish_release.os,
+            "lstat",
+            side_effect=PermissionError("access denied"),
+        ):
+            with self.assertRaisesRegex(SystemExit, "reparse point"):
+                publish_release.is_link_or_junction(inspected_path)
+
+    def test_upload_rejects_candidate_manifest_sha_rebinding_before_remote_calls(self) -> None:
+        manifest = self.build_test_manifest("candidate-sha-binding", "9.9.9.9")
+        args = type(
+            "Args",
+            (),
+            {
+                "server": "root@example.invalid",
+                "server_dir": "/opt/amnezia/client-updates",
+                "ssh": "ssh",
+                "scp": "scp",
+                "no_install_host": True,
+            },
+        )()
+        with mock.patch.object(publish_release, "run") as remote_run:
+            with self.assertRaisesRegex(SystemExit, "changed after signature"):
+                publish_release.upload_release(
+                    args,
+                    self.root / "candidate-sha-binding",
+                    None,
+                    "0" * 64,
+                )
+        remote_run.assert_not_called()
+        self.assertNotEqual(hashlib.sha256(manifest).hexdigest(), "0" * 64)
+
+    def test_local_publish_lock_rejects_symlink_without_touching_target(self) -> None:
+        victim = self.root / "lock-victim"
+        victim.write_bytes(b"")
+        lock_path = self.root / ".channel.publish.lock"
+        try:
+            os.symlink(victim, lock_path)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"file symlinks are unavailable: {error}")
+        with self.assertRaisesRegex(SystemExit, "lock|symlink"):
+            with publish_release.local_publish_lock(lock_path):
+                self.fail("linked lock must never be acquired")
+        self.assertEqual(victim.read_bytes(), b"")
+
+    def test_local_publisher_rejects_symlink_output_without_replacing_target(self) -> None:
+        version = "9.9.9.9"
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"windows")
+        target_dir = self.root / "symlink-target"
+        target_dir.mkdir()
+        sentinel = target_dir / "keep.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+        link_dir = self.root / "symlink-channel"
+        try:
+            os.symlink(target_dir, link_dir, target_is_directory=True)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"directory symlinks are unavailable: {error}")
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "publish_release.py"),
+                "--version",
+                version,
+                "--private-key",
+                str(self.private_key),
+                "--artifact",
+                f"windows-x64={artifact}",
+                "--include-platform",
+                "windows-x64",
+                "--require-platform",
+                "windows-x64",
+                "--out-dir",
+                str(link_dir),
+            ],
+            text=True,
+            capture_output=True,
+            env=self.env,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertRegex((result.stderr + result.stdout).lower(), r"symlink|junction")
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        self.assertFalse((target_dir / "manifest.json").exists())
+
+    def test_manifest_tools_reject_non_ed25519_keys(self) -> None:
+        rsa_private_key = self.root / "rsa-private.pem"
+        rsa_public_key = self.root / "rsa-public.pem"
+        subprocess.run(
+            [self.openssl, "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", str(rsa_private_key)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [self.openssl, "pkey", "-in", str(rsa_private_key), "-pubout", "-out", str(rsa_public_key)],
+            check=True,
+            capture_output=True,
+        )
+        with self.assertRaises(SystemExit) as private_key_error:
+            make_manifest.require_ed25519_private_key(rsa_private_key)
+        self.assertIn("must contain an Ed25519 key", str(private_key_error.exception))
+        with self.assertRaises(SystemExit) as key_pair_error:
+            publish_release.verify_public_key_matches_private(
+                base64.b64encode(rsa_public_key.read_bytes()).decode("ascii"),
+                rsa_private_key,
+            )
+        self.assertIn("must contain an Ed25519", str(key_pair_error.exception))
+
+    def test_local_artifact_urls_are_content_addressed(self) -> None:
+        version = "9.9.9.9"
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"first build")
+        first_out = self.root / "content-addressed-first"
+        second_out = self.root / "content-addressed-second"
+
+        base_command = [
+            sys.executable,
+            str(SCRIPT_DIR / "make_manifest.py"),
+            "--version",
+            version,
+            "--base-url",
+            "https://updates.example.invalid",
+            "--private-key",
+            str(self.private_key),
+            "--artifact",
+            f"windows-x64={artifact}",
+        ]
+        subprocess.run([*base_command, "--out-dir", str(first_out)], check=True, env=self.env)
+        first_platform = manifest_payload(first_out / "manifest.json")["platforms"]["windows-x64"]
+
+        artifact.write_bytes(b"second build")
+        subprocess.run([*base_command, "--out-dir", str(second_out)], check=True, env=self.env)
+        second_platform = manifest_payload(second_out / "manifest.json")["platforms"]["windows-x64"]
+
+        self.assertNotEqual(first_platform["sha256"], second_platform["sha256"])
+        self.assertNotEqual(first_platform["url"], second_platform["url"])
+        for out_dir, platform in ((first_out, first_platform), (second_out, second_platform)):
+            self.assertRegex(platform["url"], rf"^files/artifacts/{platform['sha256']}/")
+            self.assertTrue((out_dir / unquote(platform["url"])).is_file())
+
+    def test_manifest_rejects_case_insensitive_artifact_basename_collisions(self) -> None:
+        first_dir = self.root / "case-first"
+        second_dir = self.root / "case-second"
+        first_dir.mkdir()
+        second_dir.mkdir()
+        first = first_dir / "Client.bin"
+        second = second_dir / "client.BIN"
+        first.write_bytes(b"first")
+        second.write_bytes(b"second")
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "make_manifest.py"),
+                "--version",
+                "9.9.9.9",
+                "--base-url",
+                "https://updates.example.invalid",
+                "--private-key",
+                str(self.private_key),
+                "--out-dir",
+                str(self.root / "case-collision-out"),
+                "--artifact",
+                f"windows-x64={first}",
+                "--artifact",
+                f"linux-x64={second}",
+            ],
+            text=True,
+            capture_output=True,
+            env=self.env,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("duplicate artifact output filename", result.stderr + result.stdout)
+
+    def test_manifest_rejects_case_insensitive_rollback_basename_collisions(self) -> None:
+        version = "9.9.9.9"
+        previous_version = "9.9.9.8"
+        current_windows = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"current-windows")
+        current_linux = self.write_artifact(f"AmneziaVPN_{version}_linux_x64.run", b"current-linux")
+        first_dir = self.root / "rollback-case-first"
+        second_dir = self.root / "rollback-case-second"
+        first_dir.mkdir()
+        second_dir.mkdir()
+        first = first_dir / "Rollback.bin"
+        second = second_dir / "rollback.BIN"
+        first.write_bytes(b"first")
+        second.write_bytes(b"second")
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "make_manifest.py"),
+                "--version",
+                version,
+                "--payload-schema",
+                "2",
+                "--policy-generation",
+                "42",
+                "--previous-version",
+                previous_version,
+                "--base-url",
+                "https://updates.example.invalid",
+                "--private-key",
+                str(self.private_key),
+                "--out-dir",
+                str(self.root / "rollback-case-collision-out"),
+                "--artifact",
+                f"windows-x64={current_windows}",
+                "--artifact",
+                f"linux-x64={current_linux}",
+                "--rollback-artifact",
+                f"windows-x64={first}",
+                "--rollback-artifact",
+                f"linux-x64={second}",
+            ],
+            text=True,
+            capture_output=True,
+            env=self.env,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("duplicate rollback artifact output filename", result.stderr + result.stdout)
+
+    def test_manifest_generator_rejects_response_larger_than_client_cap(self) -> None:
+        version = "9.9.9.9"
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"windows")
+        changelog = self.root / "oversized-changelog.txt"
+        changelog.write_text("x" * (800 * 1024), encoding="utf-8")
+        out_dir = self.root / "oversized-manifest"
+        (out_dir / "files").mkdir(parents=True)
+        previous_manifest = b"previous signed channel placeholder"
+        previous_artifact = b"previous artifact"
+        (out_dir / "manifest.json").write_bytes(previous_manifest)
+        (out_dir / "files" / artifact.name).write_bytes(previous_artifact)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "make_manifest.py"),
+                "--version",
+                version,
+                "--base-url",
+                "https://updates.example.invalid",
+                "--private-key",
+                str(self.private_key),
+                "--out-dir",
+                str(out_dir),
+                "--artifact",
+                f"windows-x64={artifact}",
+                "--changelog-file",
+                str(changelog),
+            ],
+            text=True,
+            capture_output=True,
+            env=self.env,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("client-compatible 1 MiB response limit", result.stderr + result.stdout)
+        self.assertEqual((out_dir / "manifest.json").read_bytes(), previous_manifest)
+        self.assertEqual((out_dir / "files" / artifact.name).read_bytes(), previous_artifact)
+
+    def test_manifest_output_switch_reports_success_after_backup_cleanup_edge_cases(self) -> None:
+        file_out = self.root / "output-was-file"
+        file_out.write_bytes(b"old file")
+        staged_file_replacement = self.root / "staged-file-replacement"
+        staged_file_replacement.mkdir()
+        (staged_file_replacement / "manifest.json").write_bytes(b"new tree")
+
+        make_manifest.replace_output_tree(staged_file_replacement, file_out)
+
+        self.assertEqual((file_out / "manifest.json").read_bytes(), b"new tree")
+        self.assertEqual(list(self.root.glob(".output-was-file.previous-*")), [])
+
+        directory_out = self.root / "output-with-readonly-file"
+        directory_out.mkdir()
+        readonly = directory_out / "readonly.bin"
+        readonly.write_bytes(b"old tree")
+        os.chmod(readonly, 0o444)
+        staged_directory_replacement = self.root / "staged-directory-replacement"
+        staged_directory_replacement.mkdir()
+        (staged_directory_replacement / "manifest.json").write_bytes(b"newer tree")
+
+        make_manifest.replace_output_tree(staged_directory_replacement, directory_out)
+
+        self.assertEqual((directory_out / "manifest.json").read_bytes(), b"newer tree")
+        self.assertEqual(list(self.root.glob(".output-with-readonly-file.previous-*")), [])
+
+    def signature_verifies(self, payload_bytes: bytes, signature_base64: str) -> bool:
+        with tempfile.TemporaryDirectory(dir=self.root) as tmp:
+            tmp_path = Path(tmp)
+            payload_path = tmp_path / "payload.json"
+            signature_path = tmp_path / "payload.sig"
+            payload_path.write_bytes(payload_bytes)
+            signature_path.write_bytes(base64.b64decode(signature_base64))
+            result = subprocess.run(
+                [
+                    self.openssl,
+                    "pkeyutl",
+                    "-verify",
+                    "-rawin",
+                    "-pubin",
+                    "-inkey",
+                    str(self.public_key),
+                    "-in",
+                    str(payload_path),
+                    "-sigfile",
+                    str(signature_path),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            return result.returncode == 0
+
+    def test_manifest_schema_one_stays_compatible_and_rejects_restrictive_policy(self) -> None:
+        version = "9.9.9.9"
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"windows-v1")
+        out_dir = self.root / "schema-one"
+        base_command = [
+            sys.executable,
+            str(SCRIPT_DIR / "make_manifest.py"),
+            "--version",
+            version,
+            "--base-url",
+            "http://172.29.172.252:17865",
+            "--private-key",
+            str(self.private_key),
+            "--artifact",
+            f"windows-x64={artifact}",
+        ]
+        result = subprocess.run(
+            [*base_command, "--out-dir", str(out_dir)],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        payload = manifest_payload(out_dir / "manifest.json")
+        self.assertEqual(payload["schema"], 1)
+        self.assertNotIn("releasePolicy", payload)
+
+        restrictive_cases = {
+            "channel": ["--channel", "canary"],
+            "percentage": ["--rollout-percentage", "99"],
+            "salt": ["--cohort-salt-id", "canary-v1"],
+            "minimum": ["--minimum-eligible-version", "4.9.0.1"],
+            "maximum": ["--maximum-eligible-version", "9.9.9.8"],
+            "health": ["--health-deadline-seconds", "601"],
+            "generation": ["--policy-generation", "42"],
+            "generated-at": ["--generated-at", "2026-07-20T10:00:00Z"],
+            "expires-at": ["--expires-at", "2026-07-27T10:00:00Z"],
+            "validity": ["--policy-valid-for-hours", "169"],
+            "previous": ["--previous-version", "9.9.9.8"],
+            "rollback-artifact": ["--rollback-artifact", f"windows-x64={artifact}"],
+        }
+        for name, flags in restrictive_cases.items():
+            with self.subTest(name=name):
+                restrictive_out_dir = self.root / f"schema-one-restrictive-{name}"
+                restrictive = subprocess.run(
+                    [*base_command, "--out-dir", str(restrictive_out_dir), *flags],
+                    env=self.env,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertNotEqual(restrictive.returncode, 0)
+                self.assertIn("requires --payload-schema 2", restrictive.stderr + restrictive.stdout)
+                self.assertFalse((restrictive_out_dir / "manifest.json").exists())
+
+        missing_generation_out_dir = self.root / "schema-two-missing-generation"
+        missing_generation = subprocess.run(
+            [
+                *base_command,
+                "--out-dir",
+                str(missing_generation_out_dir),
+                "--payload-schema",
+                "2",
+            ],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(missing_generation.returncode, 0)
+        self.assertIn("--policy-generation is required", missing_generation.stderr + missing_generation.stdout)
+        self.assertFalse((missing_generation_out_dir / "manifest.json").exists())
+
+        short_deadline_out_dir = self.root / "schema-two-short-health-deadline"
+        short_deadline = subprocess.run(
+            [
+                *base_command,
+                "--out-dir",
+                str(short_deadline_out_dir),
+                "--payload-schema",
+                "2",
+                "--policy-generation",
+                "1",
+                "--health-deadline-seconds",
+                "59",
+            ],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(short_deadline.returncode, 0)
+        self.assertIn("integer from 60", short_deadline.stderr + short_deadline.stdout)
+        self.assertFalse((short_deadline_out_dir / "manifest.json").exists())
+
+        unsafe_generation_out_dir = self.root / "schema-two-unsafe-generation"
+        unsafe_generation = subprocess.run(
+            [
+                *base_command,
+                "--out-dir",
+                str(unsafe_generation_out_dir),
+                "--payload-schema",
+                "2",
+                "--policy-generation",
+                "9007199254740992",
+            ],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(unsafe_generation.returncode, 0)
+        self.assertIn("9007199254740991", unsafe_generation.stderr + unsafe_generation.stdout)
+        self.assertFalse((unsafe_generation_out_dir / "manifest.json").exists())
+
+    def test_manifest_schema_two_signs_canary_eligibility_expiry_and_rollback(self) -> None:
+        version = "9.9.9.9"
+        previous_version = "9.9.9.8"
+        generated_at = datetime.now(timezone.utc).replace(microsecond=0)
+        expires_at = generated_at + timedelta(days=7)
+        generated_at_z = generated_at.isoformat().replace("+00:00", "Z")
+        expires_at_z = expires_at.isoformat().replace("+00:00", "Z")
+        generated_at_plus_three = generated_at.astimezone(timezone(timedelta(hours=3))).isoformat()
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"windows-current")
+        rollback_artifact = self.write_artifact(
+            f"AmneziaVPN_{previous_version}_windows_x64.exe",
+            b"windows-rollback",
+        )
+        out_dir = self.root / "schema-two"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "make_manifest.py"),
+                "--version",
+                version,
+                "--payload-schema",
+                "2",
+                "--channel",
+                "canary",
+                "--rollout-percentage",
+                "10",
+                "--cohort-salt-id",
+                "canary-2026q3",
+                "--minimum-eligible-version",
+                "4.9.0.1",
+                "--maximum-eligible-version",
+                "9.9.9.8",
+                "--health-deadline-seconds",
+                "900",
+                "--policy-generation",
+                "42",
+                "--generated-at",
+                generated_at_plus_three,
+                "--expires-at",
+                expires_at_z,
+                "--previous-version",
+                previous_version,
+                "--rollback-artifact",
+                f"windows-x64={rollback_artifact}",
+                "--base-url",
+                "http://172.29.172.252:17865",
+                "--private-key",
+                str(self.private_key),
+                "--public-key-base64",
+                self.public_key_base64,
+                "--out-dir",
+                str(out_dir),
+                "--artifact",
+                f"windows-x64={artifact}",
+                "--auto-install",
+            ],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("Verified schema-2 manifest signature", result.stdout)
+
+        manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["schema"], "amnezia-selfhosted-update-v1")
+        payload_bytes = base64.urlsafe_b64decode(manifest["payload"] + "=" * (-len(manifest["payload"]) % 4))
+        self.assertTrue(self.signature_verifies(payload_bytes, manifest["signature"]))
+        payload = json.loads(payload_bytes.decode("utf-8"))
+        self.assertEqual(payload["schema"], 2)
+        policy = payload["releasePolicy"]
+        self.assertEqual(policy["schema"], 2)
+        self.assertEqual(policy["generation"], 42)
+        self.assertEqual(policy["generatedAt"], generated_at_z)
+        self.assertEqual(policy["expiresAt"], expires_at_z)
+        self.assertEqual(policy["channel"], "canary")
+        self.assertEqual(policy["rollout"], {"percentage": 10, "cohortSaltId": "canary-2026q3"})
+        self.assertEqual(
+            policy["eligibility"],
+            {"minimumVersion": "4.9.0.1", "maximumVersion": "9.9.9.8"},
+        )
+        self.assertEqual(policy["healthDeadlineSeconds"], 900)
+        self.assertEqual(policy["previousVersion"], previous_version)
+        rollback_metadata = policy["rollback"]["platforms"]["windows-x64"]
+        self.assertEqual(
+            rollback_metadata["url"],
+            f"files/rollback/42/{previous_version}/{rollback_artifact.name}",
+        )
+        self.assertEqual(rollback_metadata["sha256"], hashlib.sha256(b"windows-rollback").hexdigest())
+        self.assertEqual(rollback_metadata["size"], len(b"windows-rollback"))
+        self.assertTrue(rollback_metadata["autoInstall"])
+        self.assertEqual(
+            (out_dir / rollback_metadata["url"]).read_bytes(),
+            b"windows-rollback",
+        )
+        make_manifest.validate_release_policy(policy)
+
+        payload["releasePolicy"]["rollout"]["percentage"] = 11
+        tampered_payload_bytes = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.assertFalse(self.signature_verifies(tampered_payload_bytes, manifest["signature"]))
+
+    def test_manifest_schema_two_rejects_expired_future_and_overlong_time_policy(self) -> None:
+        version = "9.9.9.9"
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"windows-current")
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+
+        def utc(value: datetime) -> str:
+            return value.isoformat().replace("+00:00", "Z")
+
+        base_command = [
+            sys.executable,
+            str(SCRIPT_DIR / "make_manifest.py"),
+            "--version",
+            version,
+            "--payload-schema",
+            "2",
+            "--policy-generation",
+            "42",
+            "--base-url",
+            "https://updates.example.invalid",
+            "--private-key",
+            str(self.private_key),
+            "--artifact",
+            f"windows-x64={artifact}",
+        ]
+        cases = {
+            "expired": (
+                utc(now - timedelta(hours=2)),
+                utc(now - timedelta(hours=1)),
+                "expired",
+            ),
+            "future": (
+                utc(now + timedelta(days=1)),
+                utc(now + timedelta(days=2)),
+                "future",
+            ),
+            "overlong": (
+                utc(now),
+                utc(now + timedelta(hours=make_manifest.MAX_POLICY_VALIDITY_HOURS + 1)),
+                "validity",
+            ),
+        }
+        for name, (generated_at, expires_at, expected_error) in cases.items():
+            with self.subTest(name=name):
+                result = subprocess.run(
+                    [
+                        *base_command,
+                        "--out-dir",
+                        str(self.root / f"invalid-time-{name}"),
+                        "--generated-at",
+                        generated_at,
+                        "--expires-at",
+                        expires_at,
+                    ],
+                    text=True,
+                    capture_output=True,
+                    env=self.env,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_error, (result.stderr + result.stdout).lower())
+
+    def test_manifest_revalidates_expiry_after_artifact_staging(self) -> None:
+        version = "9.9.9.9"
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"windows-current")
+        start = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+        class AdvancingDateTime(datetime):
+            calls = 0
+
+            @classmethod
+            def now(cls, tz=None):
+                cls.calls += 1
+                value = start if cls.calls <= 2 else start + timedelta(seconds=2)
+                return value if tz is not None else value.replace(tzinfo=None)
+
+        old_argv = sys.argv
+        try:
+            sys.argv = [
+                str(SCRIPT_DIR / "make_manifest.py"),
+                "--version",
+                version,
+                "--payload-schema",
+                "2",
+                "--policy-generation",
+                "42",
+                "--generated-at",
+                start.isoformat().replace("+00:00", "Z"),
+                "--expires-at",
+                (start + timedelta(seconds=1)).isoformat().replace("+00:00", "Z"),
+                "--base-url",
+                "https://updates.example.invalid",
+                "--private-key",
+                str(self.private_key),
+                "--out-dir",
+                str(self.root / "expires-during-staging"),
+                "--artifact",
+                f"windows-x64={artifact}",
+            ]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", ResourceWarning)
+                with mock.patch.object(make_manifest, "datetime", AdvancingDateTime):
+                    with self.assertRaises(SystemExit) as expired:
+                        make_manifest.main()
+        finally:
+            sys.argv = old_argv
+
+        self.assertIn("already expired", str(expired.exception))
+        self.assertFalse((self.root / "expires-during-staging" / "manifest.json").exists())
+
+    def test_manifest_refuses_macos_rollback_until_all_macos_clients_can_apply_it(self) -> None:
+        version = "9.9.9.9"
+        previous_version = "9.9.9.8"
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_macos_x64.pkg", b"macos-current")
+        rollback_artifact = self.write_artifact(
+            f"AmneziaVPN_{previous_version}_macos_x64.pkg",
+            b"macos-rollback",
+        )
+        for platform in ("macos-x64", "macos-arm64", "macos"):
+            with self.subTest(platform=platform):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPT_DIR / "make_manifest.py"),
+                        "--version",
+                        version,
+                        "--payload-schema",
+                        "2",
+                        "--policy-generation",
+                        "42",
+                        "--previous-version",
+                        previous_version,
+                        "--rollback-artifact",
+                        f"{platform}={rollback_artifact}",
+                        "--base-url",
+                        "https://updates.example.invalid",
+                        "--private-key",
+                        str(self.private_key),
+                        "--out-dir",
+                        str(self.root / f"macos-rollback-incompatible-{platform}"),
+                        "--artifact",
+                        f"{platform}={artifact}",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    env=self.env,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("macos", (result.stderr + result.stdout).lower())
+                self.assertIn("rollback", (result.stderr + result.stdout).lower())
+
+    def test_publish_release_forwards_schema_two_policy_and_rollback(self) -> None:
+        version = "9.9.9.9"
+        previous_version = "9.9.9.8"
+        generated_at = datetime.now(timezone.utc).replace(microsecond=0)
+        expires_at = generated_at + timedelta(days=7)
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"publish-current")
+        rollback_artifact = self.write_artifact(
+            f"AmneziaVPN_{previous_version}_windows_x64.exe",
+            b"publish-rollback",
+        )
+        out_dir = self.root / "publish-schema-two"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "publish_release.py"),
+                "--version",
+                version,
+                "--payload-schema",
+                "2",
+                "--channel",
+                "canary",
+                "--rollout-percentage",
+                "25",
+                "--cohort-salt-id",
+                "publish-canary-v1",
+                "--minimum-eligible-version",
+                "4.9.0.1",
+                "--maximum-eligible-version",
+                previous_version,
+                "--health-deadline-seconds",
+                "1200",
+                "--policy-generation",
+                "43",
+                "--generated-at",
+                generated_at.isoformat().replace("+00:00", "Z"),
+                "--expires-at",
+                expires_at.isoformat().replace("+00:00", "Z"),
+                "--previous-version",
+                previous_version,
+                "--rollback-artifact",
+                f"windows-x64={rollback_artifact}",
+                "--private-key",
+                str(self.private_key),
+                "--public-key-base64",
+                self.public_key_base64,
+                "--artifact",
+                f"windows-x64={artifact}",
+                "--include-platform",
+                "windows-x64",
+                "--require-platform",
+                "windows-x64",
+                "--out-dir",
+                str(out_dir),
+                "--base-url",
+                "http://172.29.172.252:17865",
+                "--auto-install",
+            ],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        payload = manifest_payload(out_dir / "manifest.json")
+        self.assertEqual(payload["schema"], 2)
+        policy = payload["releasePolicy"]
+        self.assertEqual(policy["generation"], 43)
+        self.assertEqual(policy["channel"], "canary")
+        self.assertEqual(policy["rollout"], {"percentage": 25, "cohortSaltId": "publish-canary-v1"})
+        self.assertEqual(
+            policy["eligibility"],
+            {"minimumVersion": "4.9.0.1", "maximumVersion": previous_version},
+        )
+        self.assertEqual(policy["healthDeadlineSeconds"], 1200)
+        rollback = policy["rollback"]["platforms"]["windows-x64"]
+        self.assertEqual(rollback["sha256"], hashlib.sha256(b"publish-rollback").hexdigest())
+        self.assertTrue((out_dir / rollback["url"]).is_file())
+        publish_release.verify_manifest(
+            out_dir / "manifest.json",
+            self.private_key,
+            version,
+            {"windows-x64"},
+            True,
+            2,
+            43,
+        )
+
+    def test_publish_release_restrictive_policy_requires_explicit_schema_two(self) -> None:
+        version = "9.9.9.9"
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"publish-current")
+        out_dir = self.root / "publish-schema-one-sentinel"
+        out_dir.mkdir()
+        sentinel = out_dir / "keep.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "publish_release.py"),
+                "--version",
+                version,
+                "--channel",
+                "canary",
+                "--private-key",
+                str(self.private_key),
+                "--artifact",
+                f"windows-x64={artifact}",
+                "--out-dir",
+                str(out_dir),
+            ],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires explicit --payload-schema 2", result.stderr + result.stdout)
+        self.assertTrue(sentinel.is_file())
 
     def test_publish_rejects_mismatched_public_key(self) -> None:
         version = "9.9.9.9"
@@ -1910,6 +3917,67 @@ class ManifestPublisherTests(unittest.TestCase):
             f"AmneziaVPN_{version}_android9+_x86_64.apk",
         ):
             self.assertFalse((self.root / "artifacts" / stale_name).exists())
+
+    @unittest.skipUnless(find_powershell(), "PowerShell is required for the schema-2 local release smoke test")
+    def test_local_release_wrapper_forwards_schema_two_policy(self) -> None:
+        powershell = find_powershell()
+        assert powershell
+        version = "9.9.9.9"
+        previous_version = "9.9.9.8"
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"local-current")
+        rollback_artifact = self.write_artifact(
+            f"AmneziaVPN_{previous_version}_windows_x64.exe",
+            b"local-rollback",
+        )
+        out_dir = self.root / "local-schema-two"
+        result = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(SCRIPT_DIR / "local_release.ps1"),
+                "-Version",
+                version,
+                "-SkipBuild",
+                "-NoBundleUpdatesInWindowsClient",
+                "-BuildPlatform",
+                "windows",
+                "-RequirePlatform",
+                "windows-x64",
+                "-ArtifactDir",
+                str(artifact.parent),
+                "-OutDir",
+                str(out_dir),
+                "-BaseUrl",
+                "http://172.29.172.252:17865",
+                "-PrivateKey",
+                str(self.private_key),
+                "-PublicKeyBase64",
+                self.public_key_base64,
+                "-PayloadSchema",
+                "2",
+                "-Channel",
+                "canary",
+                "-RolloutPercentage",
+                "50",
+                "-PolicyGeneration",
+                "44",
+                "-PreviousVersion",
+                previous_version,
+                "-RollbackArtifact",
+                f"windows-x64={rollback_artifact}",
+            ],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        payload = manifest_payload(out_dir / "manifest.json")
+        self.assertEqual(payload["schema"], 2)
+        self.assertEqual(payload["releasePolicy"]["generation"], 44)
+        self.assertEqual(payload["releasePolicy"]["rollout"]["percentage"], 50)
 
     def test_publish_include_platform_filters_stale_autodiscovered_artifacts(self) -> None:
         version = "9.9.9.9"
@@ -2179,6 +4247,12 @@ class ManifestPublisherTests(unittest.TestCase):
         self.assertIn("SELFHOSTED_UPDATE_PRIVATE_KEY_PATH", env_text)
         self.assertIn("SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64", env_text)
         self.assertIn("SELFHOSTED_UPDATE_SYNC_HOST = '10.8.1.0'", env_text)
+        self.assertIn("SELFHOSTED_UPDATE_PAYLOAD_SCHEMA = '1'", env_text)
+        self.assertIn("SELFHOSTED_UPDATE_CHANNEL = 'stable'", env_text)
+        self.assertIn("SELFHOSTED_UPDATE_ROLLOUT_PERCENTAGE = '100'", env_text)
+        self.assertIn("SELFHOSTED_UPDATE_HEALTH_DEADLINE_SECONDS = '600'", env_text)
+        self.assertIn("SELFHOSTED_UPDATE_POLICY_GENERATION = '0'", env_text)
+        self.assertIn("SELFHOSTED_UPDATE_ROLLBACK_ARTIFACTS = ''", env_text)
         self.assertIn("QT_ANDROID_KEYSTORE_PATH", env_text)
         self.assertNotIn("keytool -genkeypair", result.stdout + result.stderr + env_text)
 
@@ -2229,7 +4303,8 @@ class ManifestPublisherTests(unittest.TestCase):
         self.assertTrue(platforms["ios"]["openExternal"])
         self.assertTrue(platforms["ios"]["autoInstall"])
         self.assertTrue(platforms["ios"]["url"].startswith("itms-services://"))
-        plist_path = out_dir / "files" / f"AmneziaVPN_{version}_ios.plist"
+        plist_url = platforms["ios"]["plistUrl"]
+        plist_path = out_dir / unquote(urlparse(plist_url).path.lstrip("/"))
         self.assertTrue(plist_path.is_file())
         plist_payload = plistlib.loads(plist_path.read_bytes())
         self.assertEqual(
@@ -2445,7 +4520,7 @@ class ManifestPublisherTests(unittest.TestCase):
             self.assertTrue(payload["platforms"][platform]["url"].startswith("files/"))
             self.assertEqual(payload["platforms"][platform]["sha256"], sha256_hex_for_text(platform))
             self.assertGreater(payload["platforms"][platform]["size"], 0)
-            self.assertTrue((out_dir / "files" / publish_release.KNOWN_PATTERNS[platform].format(version=version)).is_file())
+            self.assertTrue((out_dir / unquote(payload["platforms"][platform]["url"])).is_file())
         self.assertTrue(payload["platforms"]["ios"]["openExternal"])
         self.assertTrue(payload["platforms"]["ios"]["autoInstall"])
         publish_release.verify_manifest(out_dir / "manifest.json", self.private_key, version, required_platforms, True)
@@ -2506,6 +4581,551 @@ class ManifestPublisherTests(unittest.TestCase):
         )
 
         self.assertEqual(required, {"windows-x64"})
+
+
+class ManagedRoutesSourceContractTests(unittest.TestCase):
+    """Guard the trust, resource, identity, and privacy boundaries of Living Routes."""
+
+    @staticmethod
+    def function_body(source: str, signature: str) -> str:
+        start = source.find(signature)
+        if start < 0:
+            raise AssertionError(f"missing C++ function: {signature}")
+        opening_brace = source.find("{", start)
+        if opening_brace < 0:
+            raise AssertionError(f"missing C++ function body: {signature}")
+
+        depth = 0
+        for offset in range(opening_brace, len(source)):
+            character = source[offset]
+            if character == "{":
+                depth += 1
+            elif character == "}":
+                depth -= 1
+                if depth == 0:
+                    return source[opening_brace : offset + 1]
+        raise AssertionError(f"unterminated C++ function: {signature}")
+
+    def test_effective_managed_policy_requires_matching_declared_content_and_caps_sites(self) -> None:
+        managed_policy = (
+            REPO_ROOT / "client/core/utils/managedRoutePolicy.h"
+        ).read_text(encoding="utf-8")
+        connection_controller = (
+            REPO_ROOT / "client/core/controllers/connectionController.cpp"
+        ).read_text(encoding="utf-8")
+        is_effective = self.function_body(managed_policy, "inline bool isEffective(")
+
+        self.assertIn("metadataForEffectiveContent", is_effective)
+        self.assertIn("contentMatchesDeclaration", is_effective)
+        self.assertIn("isExpired(now)", is_effective)
+
+        site_cap = re.search(r"maximumSiteCount\s*=\s*(\d+)", managed_policy)
+        self.assertIsNotNone(site_cap, "managed route policy must expose a shared site-count cap")
+        assert site_cap
+        self.assertGreater(int(site_cap.group(1)), 0)
+        self.assertLessEqual(int(site_cap.group(1)), 2048)
+        self.assertIn("managedRoutePolicy::canonicalSourceSites(value, &valid)", connection_controller)
+
+    def test_managed_policy_http_sync_streams_into_a_bounded_buffer_with_deadline(self) -> None:
+        connection_controller = (
+            REPO_ROOT / "client/core/controllers/connectionController.cpp"
+        ).read_text(encoding="utf-8")
+        sync_body = self.function_body(
+            connection_controller,
+            "void ConnectionController::syncServerRoutingRulesFromUrls(",
+        )
+
+        self.assertRegex(sync_body, r"&Q(?:IODevice|NetworkReply)::readyRead")
+        self.assertIn("setReadBufferSize(", sync_body)
+        self.assertIn("QTimer", sync_body)
+        self.assertIn("->abort()", sync_body)
+        self.assertNotIn("readAll()", sync_body)
+        self.assertRegex(
+            connection_controller,
+            r"constexpr\s+int\s+serverRoutingRules\w*(?:Deadline|Timeout)\w*Ms\s*=\s*[1-9]\d*",
+        )
+
+    def test_admin_publish_uses_raw_draft_managed_policy_getters(self) -> None:
+        repository_h = (
+            REPO_ROOT / "client/core/repositories/secureServersRepository.h"
+        ).read_text(encoding="utf-8")
+        repository_cpp = (
+            REPO_ROOT / "client/core/repositories/secureServersRepository.cpp"
+        ).read_text(encoding="utf-8")
+        sites_controller = (
+            REPO_ROOT / "client/ui/controllers/sitesController.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("rawManagedVpnSites", repository_h)
+        self.assertIn("rawManagedSplitTunnelingForceEnabled", repository_h)
+        self.assertIn("SecureServersRepository::rawManagedVpnSites", repository_cpp)
+        self.assertIn("SecureServersRepository::rawManagedSplitTunnelingForceEnabled", repository_cpp)
+        self.assertGreaterEqual(sites_controller.count("rawManagedVpnSites("), 2)
+        self.assertIn("rawManagedSplitTunnelingForceEnabled(", sites_controller)
+
+    def test_vpn_connection_tracks_stable_server_identity(self) -> None:
+        vpn_connection_h = (REPO_ROOT / "client/vpnConnection.h").read_text(encoding="utf-8")
+        vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
+        connection_controller = (
+            REPO_ROOT / "client/core/controllers/connectionController.cpp"
+        ).read_text(encoding="utf-8")
+        server_index = self.function_body(vpn_connection, "int VpnConnection::serverIndex() const")
+        connect_to_vpn = self.function_body(vpn_connection, "void VpnConnection::connectToVpn(")
+
+        self.assertRegex(vpn_connection_h, r"\bQString\s+serverId\(\)\s+const;")
+        self.assertIn("QString m_serverId", vpn_connection_h)
+        self.assertIn("indexOfServerId(m_serverId)", server_index)
+        self.assertIn("m_serverId = serverId", connect_to_vpn)
+        self.assertIn("currentConnectionServerId", connection_controller)
+        self.assertIn("isCurrentConnectionServerId(serverId)", connection_controller)
+        self.assertIn("indexOfServerId(serverId)", connection_controller)
+
+    def test_managed_dns_resolution_has_a_small_concurrency_cap(self) -> None:
+        vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
+        concurrency_cap = re.search(
+            r"maxConcurrentManagedRouteLookups\s*=\s*(\d+)",
+            vpn_connection,
+        )
+        self.assertIsNotNone(concurrency_cap, "managed DNS resolution must have an explicit concurrency cap")
+        assert concurrency_cap
+        self.assertGreater(int(concurrency_cap.group(1)), 0)
+        self.assertLessEqual(int(concurrency_cap.group(1)), 8)
+        self.assertRegex(
+            vpn_connection,
+            r"while\s*\([^)]*<\s*maxConcurrentManagedRouteLookups",
+        )
+        self.assertIn("QHostInfo::lookupHost", vpn_connection)
+
+    def test_route_dns_logs_do_not_disclose_site_hostnames(self) -> None:
+        vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
+        dns_route_logs = [
+            statement
+            for statement in re.findall(
+                r"q(?:Info|Warning|Critical)\(\)\s*<<.*?;",
+                vpn_connection,
+                re.S,
+            )
+            if "DNS" in statement and "route" in statement
+        ]
+
+        self.assertTrue(dns_route_logs, "expected at least one route-DNS diagnostic")
+        for statement in dns_route_logs:
+            self.assertNotRegex(statement, r"<<\s*(?:site|domain)\b")
+            self.assertNotIn("hostInfo.hostName()", statement)
+
+    def test_service_readiness_probes_ipc_reachability_not_process_name(self) -> None:
+        connection_controller = (
+            REPO_ROOT / "client/core/controllers/connectionController.cpp"
+        ).read_text(encoding="utf-8")
+        is_service_ready = self.function_body(
+            connection_controller,
+            "bool ConnectionController::isServiceReady() const",
+        )
+
+        self.assertIn("IpcClient::withInterface", is_service_ready)
+        self.assertNotIn("Utils::processIsRunning", is_service_ready)
+
+    def test_vpn_connection_exposes_applied_site_route_mode(self) -> None:
+        vpn_connection_h = (REPO_ROOT / "client/vpnConnection.h").read_text(encoding="utf-8")
+        vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
+        applied_mode = self.function_body(
+            vpn_connection,
+            "RouteMode VpnConnection::appliedSiteRouteMode() const",
+        )
+
+        self.assertRegex(vpn_connection_h, r"(?:amnezia::)?RouteMode\s+appliedSiteRouteMode\(\)\s+const;")
+        self.assertIn("configKey::splitTunnelType", applied_mode)
+        self.assertIn("RouteMode::VpnAllSites", applied_mode)
+
+    def test_managed_routes_are_bounded_and_guarded_on_both_sides_of_ipc(self) -> None:
+        managed_policy = (
+            REPO_ROOT / "client/core/utils/managedRoutePolicy.h"
+        ).read_text(encoding="utf-8")
+        vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(
+            encoding="utf-8"
+        )
+        repository = (
+            REPO_ROOT / "client/core/repositories/secureServersRepository.cpp"
+        ).read_text(encoding="utf-8")
+        connection_controller = (
+            REPO_ROOT / "client/core/controllers/connectionController.cpp"
+        ).read_text(encoding="utf-8")
+        ipc_server = (REPO_ROOT / "ipc/ipcserver.cpp").read_text(encoding="utf-8")
+        router = (REPO_ROOT / "service/server/router.cpp").read_text(encoding="utf-8")
+        router_win = (REPO_ROOT / "service/server/router_win.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("maximumRoutesPerSite = 64", managed_policy)
+        self.assertIn("maximumTotalRouteCount = 4096", managed_policy)
+        self.assertIn("maximumStoredRouteValueLength = 4096", managed_policy)
+        self.assertIn("canonicalManagedIpv4Route", managed_policy)
+        self.assertIn("!directRoute.isEmpty() && !routes.isEmpty()", managed_policy)
+        self.assertIn("isAllowedManagedIpv4Route", managed_policy)
+        self.assertIn("prefixLength == 0", managed_policy)
+        self.assertIn("0x64400000u, 10", managed_policy)
+        self.assertIn("0xa9fe0000u, 16", managed_policy)
+        self.assertIn("ipv4RouteIsWithinRange(address, prefixLength, 0x0a000000u, 8)", managed_policy)
+        self.assertIn("validatedManagedRoutes(managedIps", vpn_connection)
+        self.assertIn("maximumTotalRouteCount", vpn_connection)
+        self.assertIn("mobile managed route snapshot failed its safety boundary", vpn_connection)
+        self.assertIn("managed DNS cache reached its safety boundary", connection_controller)
+        self.assertIn("canonicalMergedSites", repository)
+        self.assertIn("validatedManagedRoutes(ips", ipc_server)
+        self.assertIn("m_trustedManagedRoutes", ipc_server)
+        self.assertIn("validatedManagedRoutes(ips", router)
+        self.assertIn("validatedManagedRoutes(ips", router_win)
+
+    def test_versioned_lkg_requires_canonical_hash_and_lifecycle(self) -> None:
+        managed_policy = (
+            REPO_ROOT / "client/core/utils/managedRoutePolicy.h"
+        ).read_text(encoding="utf-8")
+        metadata_from_json = self.function_body(
+            managed_policy, "inline std::optional<ManagedRoutePolicyMetadata> metadataFromJson("
+        )
+        is_effective = self.function_body(managed_policy, "inline bool isEffective(")
+
+        self.assertIn("metadata.contentHash.isEmpty()", metadata_from_json)
+        self.assertIn("metadata.declaredContentHash.isEmpty()", metadata_from_json)
+        self.assertIn('policyType == QStringLiteral("legacy") && numericRevision', metadata_from_json)
+        self.assertIn("contentMatchesDeclaration", metadata_from_json)
+        self.assertIn("!metadata.issuedAt.isValid()", metadata_from_json)
+        self.assertIn("!metadata.expiresAt.isValid()", metadata_from_json)
+        self.assertIn("metadata.expiresAt <= metadata.issuedAt", metadata_from_json)
+        self.assertIn("stateValue.isUndefined()", is_effective)
+        self.assertIn("!retainedValue.isObject()", is_effective)
+
+    def test_route_inspector_reports_policy_trust_and_ineffective_reason(self) -> None:
+        inspector = (
+            REPO_ROOT / "client/core/controllers/routeInspectorController.cpp"
+        ).read_text(encoding="utf-8")
+        qml = (
+            REPO_ROOT / "client/ui/qml/Pages2/PageRouteInspector.qml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('QStringLiteral("trustState")', inspector)
+        self.assertIn('QStringLiteral("contentMatchesDeclaration")', inspector)
+        self.assertIn('QStringLiteral("policyIneffectiveReason")', inspector)
+        self.assertIn('QStringLiteral("managed_policy_unsigned")', inspector)
+        self.assertIn("Managed policy trust: unsigned", qml)
+        self.assertIn("lifecycle metadata is invalid", qml)
+        self.assertIn("failed current safety limits", qml)
+
+
+class WindowsFirewallSourceContractTests(unittest.TestCase):
+    """Guard the Windows kill-switch fail-closed and transaction boundaries."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = (
+            REPO_ROOT / "client/platforms/windows/daemon/windowsfirewall.cpp"
+        ).read_text(encoding="utf-8")
+        cls.killswitch = (REPO_ROOT / "service/server/killswitch.cpp").read_text(
+            encoding="utf-8"
+        )
+        cls.wireguard = (
+            REPO_ROOT
+            / "client/platforms/windows/daemon/wireguardutilswindows.cpp"
+        ).read_text(encoding="utf-8")
+        cls.openvpn = (
+            REPO_ROOT / "client/core/protocols/openVpnProtocol.cpp"
+        ).read_text(encoding="utf-8")
+        cls.localserver = (
+            REPO_ROOT / "service/server/localserver.cpp"
+        ).read_text(encoding="utf-8")
+        cls.windowsdaemon = (
+            REPO_ROOT / "client/platforms/windows/daemon/windowsdaemon.cpp"
+        ).read_text(encoding="utf-8")
+        cls.split_tunnel = (
+            REPO_ROOT / "client/platforms/windows/daemon/windowssplittunnel.cpp"
+        ).read_text(encoding="utf-8")
+        cls.service_main = (REPO_ROOT / "service/server/main.cpp").read_text(
+            encoding="utf-8"
+        )
+        cls.post_uninstall = (
+            REPO_ROOT / "deploy/data/windows/post_uninstall.cmd"
+        ).read_text(encoding="utf-8")
+        cls.qif_component_script = (
+            REPO_ROOT / "deploy/installer/qif/componentscript.js"
+        ).read_text(encoding="utf-8")
+        cls.qif_control_script = (
+            REPO_ROOT / "deploy/installer/qif/controlscript.js"
+        ).read_text(encoding="utf-8")
+        cls.wix_service_patch = (
+            REPO_ROOT / "deploy/installer/wix/service_install_patch.xml"
+        ).read_text(encoding="utf-8")
+        cls.wix_close_patch = (
+            REPO_ROOT / "deploy/installer/wix/close_client_patch.xml"
+        ).read_text(encoding="utf-8")
+
+    def function_body(self, signature: str, source: str | None = None) -> str:
+        source = self.source if source is None else source
+        start = source.find(signature)
+        self.assertNotEqual(start, -1, f"missing WindowsFirewall function: {signature}")
+        opening_brace = source.find("{", start)
+        self.assertNotEqual(opening_brace, -1, f"missing function body: {signature}")
+
+        depth = 0
+        for offset in range(opening_brace, len(source)):
+            character = source[offset]
+            if character == "{":
+                depth += 1
+            elif character == "}":
+                depth -= 1
+                if depth == 0:
+                    return source[opening_brace : offset + 1]
+        self.fail(f"unterminated function body: {signature}")
+
+    def assert_separate_udp_tcp_filters(self, body: str, condition_count: int) -> None:
+        # WFP ANDs all conditions in a filter. A single protocol condition is
+        # mutated before each enableFilter call, producing distinct UDP/TCP
+        # filters instead of an impossible "UDP AND TCP" filter.
+        self.assertEqual(body.count("FWPM_CONDITION_IP_PROTOCOL"), 1)
+        self.assertIn(f"filter.numFilterConditions = {condition_count};", body)
+        self.assertIn("const auto enableProtocolFilters =", body)
+        self.assertEqual(body.count("enableProtocolFilters(IPPROTO_UDP"), 1)
+        self.assertEqual(body.count("enableProtocolFilters(IPPROTO_TCP"), 1)
+        self.assertIn("conds[0].conditionValue.uint8 = protocol;", body)
+
+    def test_dns_permit_is_outbound_only_and_bound_to_vpn_luid(self) -> None:
+        body = self.function_body(
+            "bool WindowsFirewall::allowDnsTrafficTo(const QHostAddress& targetIP"
+        )
+
+        self.assert_separate_udp_tcp_filters(body, condition_count=4)
+        self.assertIn("filter.layerKey = layerOut;", body)
+        self.assertIn("FWPM_CONDITION_IP_LOCAL_INTERFACE", body)
+        self.assertIn("conditionValue.type = FWP_UINT64", body)
+        self.assertIn("ST_DRIVER_DNS_SUBLAYER_KEY", body)
+        self.assertNotIn("FWPM_LAYER_ALE_AUTH_RECV_ACCEPT", body)
+        self.assertNotIn("FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT", body)
+
+    def test_block_traffic_on_port_uses_distinct_udp_and_tcp_filters(self) -> None:
+        body = self.function_body(
+            "bool WindowsFirewall::blockTrafficOnPort(uint port, uint8_t weight"
+        )
+
+        self.assert_separate_udp_tcp_filters(body, condition_count=2)
+        for layer in (
+            "FWPM_LAYER_ALE_AUTH_CONNECT_V4",
+            "FWPM_LAYER_ALE_AUTH_CONNECT_V6",
+            "FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4",
+            "FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6",
+        ):
+            self.assertEqual(body.count(layer), 1)
+
+    def test_filters_are_persistent_provider_owned_and_reconciled_on_startup(self) -> None:
+        create = self.function_body("WindowsFirewall* WindowsFirewall::create(")
+        init_sublayer = self.function_body("bool WindowsFirewall::initSublayer()")
+        enable_filter = self.function_body("bool WindowsFirewall::enableFilter(")
+        load_filters = self.function_body("bool WindowsFirewall::loadProviderFilters()")
+        enumerate_filters = self.function_body(
+            "bool WindowsFirewall::enumerateProviderFilters("
+        )
+        enable_interface = self.function_body("bool WindowsFirewall::enableInterface(")
+
+        self.assertNotIn("FWPM_SESSION_FLAG_DYNAMIC", create)
+        self.assertIn("loadProviderFilters()", create)
+        self.assertIn("FWPM_PROVIDER_FLAG_PERSISTENT", init_sublayer)
+        self.assertIn("provider.serviceName", init_sublayer)
+        self.assertIn('L"AmneziaVPN-service"', self.source)
+        self.assertIn("FWPM_SUBLAYER_FLAG_PERSISTENT", init_sublayer)
+        self.assertIn("filter->providerKey", enable_filter)
+        self.assertIn("FWPM_FILTER_FLAG_PERSISTENT", enable_filter)
+        self.assertIn("target.append(filterID)", enable_filter)
+        self.assertIn("enumerateProviderFilters(m_orphanedRules)", load_filters)
+        self.assertIn("FwpmFilterEnum0", enumerate_filters)
+        self.assertIn("FWP_FILTER_ENUM_FULLY_CONTAINED", enumerate_filters)
+        self.assertIn("FWP_FILTER_ENUM_FLAG_INCLUDE_BOOTTIME", enumerate_filters)
+        self.assertIn("FWP_FILTER_ENUM_FLAG_INCLUDE_DISABLED", enumerate_filters)
+        self.assertIn("enumTemplate.actionMask = 0xFFFFFFFFu", enumerate_filters)
+        self.assertIn("enumerateProviderFilters(liveProviderRules)", enable_interface)
+        self.assertIn("deleteFilters(liveProviderRules)", enable_interface)
+        self.assertNotIn("0xe2c114ee", self.source)
+        self.assertIn("ST_DRIVER_BASELINE_SUBLAYER_KEY", init_sublayer)
+        self.assertNotIn("ST_FW_WINFW_BASELINE_SUBLAYER_KEY", self.source)
+        self.assertIn("subLayer.providerKey = nullptr", init_sublayer)
+
+        reset_call = self.windowsdaemon.find(
+            "WindowsSplitTunnel::resetForFirewallMigration()"
+        )
+        conflict_check = self.windowsdaemon.find(
+            "WindowsSplitTunnel::detectConflict()"
+        )
+        firewall_create = self.windowsdaemon.find("WindowsFirewall::create(this)")
+        self.assertGreaterEqual(conflict_check, 0)
+        self.assertGreater(reset_call, conflict_check)
+        self.assertGreaterEqual(reset_call, 0)
+        self.assertGreater(firewall_create, reset_call)
+
+        init = self.function_body("bool KillSwitch::init()", self.killswitch)
+        startup = self.function_body("LocalServer::LocalServer(", self.localserver)
+        self.assertIn("return disableKillSwitch();", init)
+        self.assertIn("if (!KillSwitch::instance()->init())", startup)
+        self.assertIn("failStartup", startup)
+
+    def test_uninstall_removes_persistent_policy_before_binary_removal(self) -> None:
+        cleanup = self.function_body(
+            "bool WindowsFirewall::removePersistentPolicy()"
+        )
+
+        self.assertIn("loadProviderFilters()", cleanup)
+        self.assertIn("enumerateProviderFilters(liveProviderRules)", cleanup)
+        self.assertIn("deleteFilters(liveProviderRules)", cleanup)
+        self.assertNotIn("allowAllTraffic()", cleanup)
+        self.assertNotIn("FwpmSubLayerDeleteByKey0", cleanup)
+        self.assertIn("FwpmProviderDeleteByKey0", cleanup)
+        self.assertIn('QStringLiteral("cleanup-firewall")', self.service_main)
+        self.assertIn("WindowsSplitTunnel::removeForUninstall()", self.service_main)
+        self.assertIn("CleanupServiceState cleanupServiceState()", self.service_main)
+        self.assertIn("QueryServiceStatusEx", self.service_main)
+        self.assertIn("status.dwCurrentState != SERVICE_STOPPED", self.service_main)
+        self.assertIn("ERROR_SERVICE_DOES_NOT_EXIST", self.service_main)
+        self.assertIn("CleanupServiceActiveExitCode", self.service_main)
+        remove_driver = self.function_body(
+            "bool WindowsSplitTunnel::removeForUninstall()", self.split_tunnel
+        )
+        self.assertIn("resetDriver(driverFile)", remove_driver)
+        self.assertIn("driverManager->stopService()", remove_driver)
+        self.assertIn("uninstallDriver()", remove_driver)
+        self.assertIn("cleanup-firewall", self.post_uninstall)
+        self.assertIn("setlocal EnableExtensions DisableDelayedExpansion", self.post_uninstall)
+        self.assertIn('set "AmneziaPath=%~dp0"', self.post_uninstall)
+        self.assertNotIn("echo %AmneziaPath%", self.post_uninstall)
+        self.assertIn(":cleanup_firewall", self.post_uninstall)
+        self.assertIn("goto cleanup_firewall", self.post_uninstall)
+        self.assertIn("sc config AmneziaVPN-service start= disabled", self.post_uninstall)
+        self.assertIn("sc config AmneziaVPN-service start= auto", self.post_uninstall)
+        self.assertIn(":wait_before_retry", self.post_uninstall)
+        self.assertIn(":wait_for_service_stop", self.post_uninstall)
+        self.assertIn('"%SystemRoot%\\System32\\ping.exe" -n 6 127.0.0.1',
+                      self.post_uninstall)
+        self.assertNotIn("timeout /t", self.post_uninstall)
+        self.assertNotRegex(
+            self.post_uninstall,
+            r'cleanup-firewall\s*\r?\n\s*if errorlevel 1 exit /b 1',
+        )
+        self.assertIn('"UNDOEXECUTE", "cmd", "/c", pu_path + "post_uninstall.cmd"',
+                      self.qif_component_script)
+        self.assertIn("returns only after", self.qif_component_script)
+        self.assertIn(
+            'installer.setMessageBoxAutomaticAnswer("installationErrorWithIgnore", QMessageBox.Retry)',
+            self.qif_control_script,
+        )
+        shortcut_operation = self.qif_component_script.find(
+            'component.addOperation("CreateShortcut"'
+        )
+        cleanup_undo = self.qif_component_script.find(
+            '"UNDOEXECUTE", "cmd", "/c"'
+        )
+        self.assertGreaterEqual(shortcut_operation, 0)
+        self.assertGreaterEqual(cleanup_undo, 0)
+        # IFW undoes operations in reverse order. Keeping a reversible shortcut
+        # operation before cleanup guarantees that canceling the cleanup is
+        # observed at the start of another undo operation, before TargetDir is
+        # handed to deleteMaintenanceTool().
+        self.assertLess(shortcut_operation, cleanup_undo)
+        self.assertNotIn("CleanupAmneziaPersistentFirewall", self.wix_service_patch)
+        self.assertIn("CleanupAmneziaPersistentFirewall", self.wix_close_patch)
+        self.assertIn('FileRef="CM_FP_AmneziaVPN.AmneziaVPN_service.exe"', self.wix_close_patch)
+        self.assertIn('Return="check"', self.wix_close_patch)
+        self.assertIn('After="StopServices"', self.wix_close_patch)
+        self.assertIn('Condition="REMOVE=&quot;ALL&quot;"', self.wix_close_patch)
+        self.assertLess(
+            self.post_uninstall.find("cleanup-firewall"),
+            self.post_uninstall.find("sc delete AmneziaVPN-service"),
+        )
+        disable = self.post_uninstall.find(
+            "sc config AmneziaVPN-service start= disabled"
+        )
+        stop = self.post_uninstall.find("sc stop AmneziaVPN-service")
+        force_stop = self.post_uninstall.find(
+            'taskkill /IM "AmneziaVPN-service.exe" /F'
+        )
+        cleanup_call = self.post_uninstall.find(
+            '"%AmneziaPath%AmneziaVPN-service.exe" cleanup-firewall'
+        )
+        self.assertGreaterEqual(disable, 0)
+        self.assertGreater(stop, disable)
+        self.assertGreater(force_stop, stop)
+        self.assertGreater(cleanup_call, force_stop)
+
+    def test_strict_transition_removes_all_bypass_buckets_atomically(self) -> None:
+        body = self.function_body("bool WindowsFirewall::enableInterface(")
+
+        self.assertIn("enumerateProviderFilters(liveProviderRules)", body)
+        self.assertIn("deleteFilters(liveProviderRules)", body)
+        self.assertIn('IPAddress("0.0.0.0/0")', body)
+        self.assertIn('IPAddress("::/0")', body)
+        self.assertIn("m_vpnInterfaceLuid = 0", body)
+        self.assertLess(
+            body.find("FwpmTransactionCommit0"),
+            body.find("m_orphanedRules.clear()"),
+        )
+        self.assertNotIn("disableKillSwitch()", body)
+        self.assertIn("pendingActivationFenceRules", body)
+
+        peer = self.function_body("bool WindowsFirewall::enablePeerTraffic(")
+        self.assertIn("deleteFilters(m_activationFenceRules)", peer)
+        self.assertLess(
+            peer.find("FwpmTransactionCommit0"),
+            peer.find("m_activationFenceRules.clear()"),
+        )
+
+    def test_filter_bookkeeping_changes_only_after_successful_commit(self) -> None:
+        delete_filters = self.function_body("bool WindowsFirewall::deleteFilters(")
+        allow_all = self.function_body("bool WindowsFirewall::allowAllTraffic()")
+        peer = self.function_body("bool WindowsFirewall::enablePeerTraffic(")
+
+        self.assertIn("FwpmFilterDeleteById0", delete_filters)
+        self.assertIn("FWP_E_FILTER_NOT_FOUND", delete_filters)
+        self.assertIn("return false", delete_filters)
+        self.assertLess(
+            allow_all.find("FwpmTransactionCommit0"),
+            allow_all.find("m_baseRules.clear()"),
+        )
+        self.assertLess(
+            peer.find("FwpmTransactionCommit0"),
+            peer.find("m_peerRules.remove(config.m_serverPublicKey)"),
+        )
+        self.assertNotIn("disableKillSwitch()", peer)
+
+    def test_wfp_engine_and_callers_propagate_failures(self) -> None:
+        destructor = self.function_body("WindowsFirewall::~WindowsFirewall()")
+        enable_kill_switch = self.function_body(
+            "bool KillSwitch::enableKillSwitch(", self.killswitch
+        )
+        reset_ranges = self.function_body(
+            "bool KillSwitch::resetAllowedRange(", self.killswitch
+        )
+        add_interface = self.function_body(
+            "bool WireguardUtilsWindows::addInterface(", self.wireguard
+        )
+        update_peer = self.function_body(
+            "bool WireguardUtilsWindows::updatePeer(", self.wireguard
+        )
+        update_gateway = self.function_body(
+            "void OpenVpnProtocol::updateVpnGateway(", self.openvpn
+        )
+
+        self.assertIn("FwpmEngineClose0", destructor)
+        self.assertNotIn("CloseHandle", destructor)
+        self.assertNotIn("allowAllTraffic()", enable_kill_switch)
+        self.assertIn("!firewall->enableInterface", enable_kill_switch)
+        self.assertNotIn("enableInterface(-1)", reset_ranges)
+        self.assertIn("!firewall->allowTrafficRange", reset_ranges)
+        self.assertNotIn("allowAllTraffic()", add_interface)
+        self.assertIn("!m_firewall->enableInterface", add_interface)
+        self.assertIn("!m_firewall->enablePeerTraffic", update_peer)
+        delete_peer = self.function_body(
+            "bool WireguardUtilsWindows::deletePeer(", self.wireguard
+        )
+        self.assertIn("deferFirewallRemoval", delete_peer)
+        self.assertIn("m_configuredPeers.size() <= 1", delete_peer)
+        self.assertIn("enableKillSwitch.waitForFinished(1000)", update_gateway)
+        self.assertIn("enablePeerTraffic.waitForFinished(1000)", update_gateway)
+        self.assertIn("emit protocolError", update_gateway)
+        self.assertIn("stop();", update_gateway)
 
 
 if __name__ == "__main__":

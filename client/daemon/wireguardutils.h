@@ -5,7 +5,9 @@
 #ifndef WIREGUARDUTILS_H
 #define WIREGUARDUTILS_H
 
+#ifndef _WINSOCKAPI_
 #define _WINSOCKAPI_
+#endif
 
 #include <QCoreApplication>
 #include <QHostAddress>

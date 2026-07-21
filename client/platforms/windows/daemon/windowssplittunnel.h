@@ -32,6 +32,18 @@ class WindowsSplitTunnel final {
   static std::unique_ptr<WindowsSplitTunnel> create(WindowsFirewall* fw);
 
   /**
+   * @brief Releases any WFP objects owned by a surviving driver session.
+   *
+   * The split-tunnel driver and the kill switch intentionally share WFP
+   * sublayers. This must run before the firewall migrates those sublayers to
+   * persistent storage after an upgrade or daemon crash.
+   */
+  static bool resetForFirewallMigration();
+
+  /** Stops, unloads, and removes the split-tunnel driver service. */
+  static bool removeForUninstall();
+
+  /**
    * @brief Construct a new Windows Split Tunnel object
    *
    * @param driverIO - The Handle to the Driver's IO file, it assumes the driver

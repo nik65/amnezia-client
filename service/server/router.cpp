@@ -1,5 +1,9 @@
 #include "router.h"
 
+#include <QDebug>
+
+#include "core/utils/managedRoutePolicy.h"
+
 #ifdef Q_OS_WIN
 #include "router_win.h"
 #elif defined (Q_OS_MAC)
@@ -22,12 +26,18 @@ int Router::routeAddList(const QString &gw, const QStringList &ips)
 
 int Router::routeAddTrustedList(const QString &gw, const QStringList &ips)
 {
+    bool valid = false;
+    const QStringList managedRoutes = amnezia::managedRoutePolicy::validatedManagedRoutes(ips, &valid);
+    if (!valid) {
+        qWarning() << "Router::routeAddTrustedList rejected an unsafe or oversized managed route batch";
+        return 0;
+    }
 #ifdef Q_OS_WIN
-    return RouterWin::Instance().routeAddTrustedList(gw, ips);
+    return RouterWin::Instance().routeAddTrustedList(gw, managedRoutes);
 #elif defined (Q_OS_MAC)
-    return RouterMac::Instance().routeAddList(gw, ips);
+    return RouterMac::Instance().routeAddList(gw, managedRoutes);
 #elif defined Q_OS_LINUX
-    return RouterLinux::Instance().routeAddList(gw, ips);
+    return RouterLinux::Instance().routeAddList(gw, managedRoutes);
 #endif
 }
 
