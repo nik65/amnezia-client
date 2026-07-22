@@ -1884,8 +1884,8 @@ class SourceContractTests(unittest.TestCase):
         cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         readme = (REPO_ROOT / "deploy/selfhosted_updates/README.md").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.0.11)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2132)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.0.12)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2133)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
 
