@@ -160,7 +160,7 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.0.12` with Android
+The current self-hosted release line is `4.9.1.0` with Android
 `versionCode` `2133`, following the `4.9.0.11` / `2132` artifact set.
 
 `local_release.ps1` parallelizes platform builds with the logical processor
@@ -212,14 +212,14 @@ Example:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.0.12 \
+  --version 4.9.1.0 \
   --release-date 2026-07-22 \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.0.12_windows_x64.exe \
-  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.0.12_linux_x64.run \
-  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.0.12_android9+_arm64-v8a.apk \
+  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.1.0_windows_x64.exe \
+  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.1.0_linux_x64.run \
+  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.1.0_android9+_arm64-v8a.apk \
   --android-version-code 2133 \
   --auto-install
 ```
@@ -294,7 +294,7 @@ artifact available for rollback:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.0.12 \
+  --version 4.9.1.0 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \
@@ -310,7 +310,7 @@ python deploy/selfhosted_updates/make_manifest.py \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=dist/current/AmneziaVPN_4.9.0.12_windows_x64.exe \
+  --artifact windows-x64=dist/current/AmneziaVPN_4.9.1.0_windows_x64.exe \
   --auto-install
 ```
 
@@ -319,7 +319,7 @@ rollback artifacts:
 
 ```bash
 python deploy/selfhosted_updates/publish_release.py \
-  --version 4.9.0.12 \
+  --version 4.9.1.0 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \

@@ -1883,11 +1883,19 @@ class SourceContractTests(unittest.TestCase):
     def test_selfhosted_release_documents_own_monotonic_versioning(self) -> None:
         cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         readme = (REPO_ROOT / "deploy/selfhosted_updates/README.md").read_text(encoding="utf-8")
+        client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
+        service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.0.12)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.1.0)", cmake)
         self.assertIn("set(APP_ANDROID_VERSION_CODE 2133)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
+        product_version = (
+            "PRODUCTVERSION  @CMAKE_PROJECT_VERSION_MAJOR@,@CMAKE_PROJECT_VERSION_MINOR@,"
+            "@CMAKE_PROJECT_VERSION_PATCH@,@CMAKE_PROJECT_VERSION_TWEAK@"
+        )
+        self.assertIn(product_version, client_rc)
+        self.assertIn(product_version, service_rc)
 
     def test_selfhosted_release_has_one_command_rebuild_wrapper(self) -> None:
         readme = (REPO_ROOT / "deploy/selfhosted_updates/README.md").read_text(encoding="utf-8")
