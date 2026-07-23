@@ -1546,6 +1546,19 @@ void ConnectionController::finishClientManagedSitesResolve()
         m_clientManagedSitesResolveHadFailure = true;
     }
 
+    if (m_clientManagedSitesResolveHadFailure) {
+        // A partial DNS pass is not a new authoritative route snapshot. Keep
+        // both the persisted last-known-good cache and the routes currently
+        // installed by the tunnel, then retry with the existing bounded
+        // backoff. Persisting successful answers from an incomplete pass can
+        // otherwise create a route delta; AWG/WireGuard conservatively apply
+        // that delta through a full reconnect, which resets the retry backoff
+        // and turns a single unresolved domain into a reconnect loop.
+        qInfo() << "ConnectionController: managed DNS resolve incomplete; preserving last-known-good routes";
+        scheduleClientManagedSitesResolveRetry(serverIndex);
+        return;
+    }
+
     bool changed = false;
     if (serverConfig.value(configKey::managedSplitTunnelClientResolvedExceptSites).toObject() != resolvedCache) {
         if (resolvedCache.isEmpty()) {
@@ -1556,25 +1569,16 @@ void ConnectionController::finishClientManagedSitesResolve()
         changed = true;
     }
 
-    if (!m_clientManagedSitesResolveHadFailure) {
-        const QString resolvedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-        if (serverConfig.value(configKey::managedSplitTunnelClientResolvedAt).toString() != resolvedAt) {
-            serverConfig.insert(configKey::managedSplitTunnelClientResolvedAt, resolvedAt);
-            changed = true;
-        }
-        m_clientManagedSitesResolveRetryCount = 0;
+    const QString resolvedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    if (serverConfig.value(configKey::managedSplitTunnelClientResolvedAt).toString() != resolvedAt) {
+        serverConfig.insert(configKey::managedSplitTunnelClientResolvedAt, resolvedAt);
+        changed = true;
     }
+    m_clientManagedSitesResolveRetryCount = 0;
 
     if (changed) {
         m_serversRepository->editServerJson(serverIndex, serverConfig);
         emit serverRoutingRulesChanged(serverIndex);
-    }
-
-    if (m_clientManagedSitesResolveHadFailure) {
-        // Retain both the previous per-domain values and the old freshness
-        // marker. A bounded retry is scheduled independently of the 24-hour
-        // policy refresh cadence.
-        scheduleClientManagedSitesResolveRetry(serverIndex);
     }
 
     const bool currentLocalSplitEnabled = m_appSettingsRepository->isSitesSplitTunnelingEnabled();

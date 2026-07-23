@@ -44,7 +44,7 @@ int main(int argc, char *argv[])
     TestRunner runner;
 
     const QString digest(64, QLatin1Char('a'));
-    const QString contentAddressedPath = QStringLiteral("files/artifacts/%1/AmneziaVPN_4.9.2.0_windows_x64.exe")
+    const QString contentAddressedPath = QStringLiteral("files/artifacts/%1/AmneziaVPN_4.9.2.1_windows_x64.exe")
             .arg(digest);
     QString relativePath;
 

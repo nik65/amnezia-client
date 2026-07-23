@@ -161,8 +161,13 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.0` with Android
-`versionCode` `2134`, following the `4.9.1.0` / `2133` artifact set.
+The current self-hosted release line is `4.9.2.1` with Android
+`versionCode` `2135`, following the `4.9.2.0` / `2134` artifact set.
+
+Release notes for `4.9.2.1`: an incomplete client-side managed-DNS pass now
+keeps the persisted last-known-good route cache and the currently installed
+routes unchanged. The client retries with bounded exponential backoff instead
+of turning partial DNS answer changes into repeated AWG/WireGuard reconnects.
 
 `local_release.ps1` parallelizes platform builds with the logical processor
 count by default. Override it when you want to leave CPU/RAM for other work:
@@ -242,15 +247,15 @@ Example:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.2.0 \
-  --release-date 2026-07-22 \
+  --version 4.9.2.1 \
+  --release-date 2026-07-23 \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.2.0_windows_x64.exe \
-  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.2.0_linux_x64.run \
-  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.2.0_android9+_arm64-v8a.apk \
-  --android-version-code 2134 \
+  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.2.1_windows_x64.exe \
+  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.2.1_linux_x64.run \
+  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.2.1_android9+_arm64-v8a.apk \
+  --android-version-code 2135 \
   --auto-install
 ```
 
@@ -324,7 +329,7 @@ artifact available for rollback:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.2.0 \
+  --version 4.9.2.1 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \
@@ -335,12 +340,12 @@ python deploy/selfhosted_updates/make_manifest.py \
   --policy-generation 1721470000 \
   --generated-at 2026-07-20T10:00:00Z \
   --expires-at 2026-07-27T10:00:00Z \
-  --previous-version 4.9.0.11 \
-  --rollback-artifact windows-x64=dist/previous/AmneziaVPN_4.9.0.11_windows_x64.exe \
+  --previous-version 4.9.2.0 \
+  --rollback-artifact windows-x64=dist/previous/AmneziaVPN_4.9.2.0_windows_x64.exe \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.0_windows_x64.exe \
+  --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.1_windows_x64.exe \
   --auto-install
 ```
 
@@ -349,15 +354,15 @@ rollback artifacts:
 
 ```bash
 python deploy/selfhosted_updates/publish_release.py \
-  --version 4.9.2.0 \
+  --version 4.9.2.1 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \
   --cohort-salt-id canary-2026q3 \
   --policy-generation 1721470000 \
   --expires-at 2026-07-27T10:00:00Z \
-  --previous-version 4.9.0.11 \
-  --rollback-artifact windows-x64=dist/previous/AmneziaVPN_4.9.0.11_windows_x64.exe \
+  --previous-version 4.9.2.0 \
+  --rollback-artifact windows-x64=dist/previous/AmneziaVPN_4.9.2.0_windows_x64.exe \
   --private-key selfhosted-update-private.pem \
   --artifact-dir dist/current \
   --base-url http://172.29.172.252:17865 \

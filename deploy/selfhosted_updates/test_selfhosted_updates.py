@@ -1909,8 +1909,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.0)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2134)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.1)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2135)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -4726,6 +4726,46 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
             r"while\s*\([^)]*<\s*maxConcurrentManagedRouteLookups",
         )
         self.assertIn("QHostInfo::lookupHost", vpn_connection)
+
+    def test_incomplete_managed_dns_preserves_lkg_before_runtime_reconcile(self) -> None:
+        connection_controller = (
+            REPO_ROOT / "client/core/controllers/connectionController.cpp"
+        ).read_text(encoding="utf-8")
+        finish_resolve = self.function_body(
+            connection_controller,
+            "void ConnectionController::finishClientManagedSitesResolve()",
+        )
+
+        failure_gate = finish_resolve.index("if (m_clientManagedSitesResolveHadFailure)")
+        retry = finish_resolve.index(
+            "scheduleClientManagedSitesResolveRetry(serverIndex)", failure_gate
+        )
+        early_return = finish_resolve.index("return;", retry)
+        cache_write = finish_resolve.index(
+            "configKey::managedSplitTunnelClientResolvedExceptSites"
+        )
+        freshness_write = finish_resolve.index(
+            "configKey::managedSplitTunnelClientResolvedAt"
+        )
+        persist = finish_resolve.index("m_serversRepository->editServerJson")
+        publish = finish_resolve.index("emit serverRoutingRulesChanged")
+        runtime_reconcile = finish_resolve.index("updateManagedSplitTunnelRoutes")
+        reconnect = finish_resolve.index("&VpnConnection::reconnectToVpn")
+        failure_block = finish_resolve[failure_gate : early_return + len("return;")]
+
+        self.assertLess(early_return, cache_write)
+        self.assertLess(early_return, freshness_write)
+        self.assertLess(failure_gate, persist)
+        self.assertLess(early_return, persist)
+        self.assertLess(early_return, publish)
+        self.assertLess(early_return, runtime_reconcile)
+        self.assertLess(early_return, reconnect)
+        self.assertEqual(failure_block.count("scheduleClientManagedSitesResolveRetry(serverIndex)"), 1)
+        self.assertEqual(failure_block.count("return;"), 1)
+        self.assertIn("preserving last-known-good routes", failure_block)
+        self.assertNotIn("m_clientManagedSitesResolveRetryCount", failure_block)
+        self.assertNotIn("editServerJson", failure_block)
+        self.assertNotIn("reconnectToVpn", failure_block)
 
     def test_route_dns_logs_do_not_disclose_site_hostnames(self) -> None:
         vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
