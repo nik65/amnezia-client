@@ -69,6 +69,7 @@ if(WIN32)
     install(FILES
         ${CMAKE_SOURCE_DIR}/deploy/data/windows/post_install.cmd
         ${CMAKE_SOURCE_DIR}/deploy/data/windows/post_uninstall.cmd
+        ${CMAKE_SOURCE_DIR}/deploy/data/windows/run_batch_file.ps1
         DESTINATION "."
         COMPONENT AmneziaVPN
     )

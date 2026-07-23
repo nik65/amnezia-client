@@ -833,6 +833,66 @@ class PrivilegedIpcSecuritySourceContracts(unittest.TestCase):
         self.assertIn("executablePathsMatch", authorization)
         self.assertIn("installProtectedFromWindowsPeer", authorization)
 
+    def test_windows_privileged_server_is_authenticated_by_kernel_pid_and_scm(self) -> None:
+        source = read_source("ipc/localpeerauthentication.cpp")
+        authorization = compact(
+            braced_block(source, r"bool\s+authorizePrivilegedServer\s*\(")
+        )
+        self.assertIn("namedPipeServerProcessId", authorization)
+        self.assertIn("windowsServiceMatchesExpectedServer", authorization)
+        # A normal desktop user cannot inspect the LocalSystem service process.
+        windows_runtime = authorization.split("qint64 serverProcessId", 1)[1].split(
+            "#elif defined(Q_OS_LINUX)", 1
+        )[0]
+        self.assertNotIn("queryLocalServerIdentity", windows_runtime)
+        self.assertIn("installProtectedFromWindowsPeer", authorization)
+
+        # The Windows-only replacement must not remove the existing peer
+        # identity and executable checks used on Unix-domain sockets.
+        self.assertRegex(
+            authorization,
+            r"#ifndef Q_OS_WIN.*?queryLocalServerIdentity.*?"
+            r"executablePathsMatch\(resolved\.executablePath, expected\).*?#endif.*?"
+            r"#ifdef Q_OS_WIN.*?qint64 serverProcessId",
+        )
+
+        kernel_pid = compact(
+            braced_block(source, r"bool\s+namedPipeServerProcessId\s*\(")
+        )
+        self.assertIn("GetNamedPipeServerProcessId", kernel_pid)
+
+        scm_identity = compact(
+            braced_block(source, r"bool\s+windowsServiceMatchesExpectedServer\s*\(")
+        )
+        self.assertIn("SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG", scm_identity)
+        self.assertIn("QueryServiceStatusEx", scm_identity)
+        self.assertIn("QueryServiceConfigW", scm_identity)
+        self.assertIn("config->dwServiceType == SERVICE_WIN32_OWN_PROCESS", scm_identity)
+        self.assertIn('QStringLiteral("LocalSystem")', scm_identity)
+        self.assertIn("serviceExecutablePathFromCommandLine", scm_identity)
+        self.assertIn("executablePathsMatch", scm_identity)
+        self.assertIn("statusBefore", scm_identity)
+        self.assertIn("statusAfter", scm_identity)
+        self.assertIn(
+            "statusBefore.dwServiceType != SERVICE_WIN32_OWN_PROCESS", scm_identity
+        )
+        self.assertIn(
+            "statusAfter.dwServiceType != SERVICE_WIN32_OWN_PROCESS", scm_identity
+        )
+        self.assertIn("statusBefore.dwProcessId != statusAfter.dwProcessId", scm_identity)
+
+        command_line = compact(
+            braced_block(source, r"bool\s+serviceExecutablePathFromCommandLine\s*\(")
+        )
+        # A quoted path must consume the whole service command line, and an
+        # old unquoted registration is accepted only when the full string
+        # matches the expected executable.  Splitting at whitespace would
+        # turn a service argument into an invisible authentication bypass.
+        self.assertIn("closingQuote != trimmed.size() - 1", command_line)
+        self.assertIn("path = trimmed", command_line)
+        self.assertNotIn("firstWhitespace", command_line)
+        self.assertIn("!executablePathsMatch(path, expectedPath)", command_line)
+
     def test_all_privileged_endpoints_use_native_windows_wiring(self) -> None:
         server_pairs = {
             "service": ("service/server/localserver.h", "service/server/localserver.cpp"),

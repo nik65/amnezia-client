@@ -140,11 +140,19 @@ bool WindowsServiceManager::stopService() {
     return false;
   }
 
-  bool ok = ControlService(m_service, SERVICE_CONTROL_STOP, NULL);
+  SERVICE_STATUS status = {};
+  const bool ok =
+      ControlService(m_service, SERVICE_CONTROL_STOP, &status) != FALSE;
   if (ok) {
     logger.debug() << ("Service stop requested");
     return startPolling(SERVICE_STOPPED, 10);
   } else {
+    const DWORD error = GetLastError();
+    if (error == ERROR_SERVICE_NOT_ACTIVE) {
+      emit serviceStopped();
+      return true;
+    }
+    SetLastError(error);
     WindowsUtils::windowsLog("StopService failed");
   }
   return false;

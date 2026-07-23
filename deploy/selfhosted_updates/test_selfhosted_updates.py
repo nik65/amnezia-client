@@ -1450,6 +1450,10 @@ class SourceContractTests(unittest.TestCase):
         self.assertNotIn('set -eu\\n"\n                                                                   "remote_tmp=', bootstrapper)
         self.assertIn("[ValidateSet(\"windows\", \"linux\", \"android\")]", local_release)
         self.assertIn('"windows-x64"', local_release)
+        self.assertIn(
+            "Bundled Windows update publisher requires the windows-x64 manifest artifact",
+            local_release,
+        )
         self.assertIn('"linux-x64"', local_release)
         self.assertIn('"android-arm64-v8a"', local_release)
         self.assertNotIn('"android-armeabi-v7a"', local_release)
@@ -1605,7 +1609,8 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("verifyRemoteUpdateHost", bootstrapper)
         self.assertIn("Remote self-hosted update host verified", bootstrapper)
         self.assertIn("verifyManifestSignature", bootstrapper)
-        self.assertIn("fileSha256ByName", bootstrapper_h)
+        self.assertIn("PayloadFile", bootstrapper_h)
+        self.assertIn("relativePath", bootstrapper_h)
         self.assertIn("mktemp -d /tmp/amnezia-client-updates.XXXXXX", bootstrapper)
         self.assertIn("sudo docker exec amnezia-client-updates", bootstrapper)
         self.assertIn("container_manifest_sha256", bootstrapper)
@@ -1617,7 +1622,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertNotIn("remoteManifestHash", bootstrapper)
         self.assertNotIn("readRemoteHash", bootstrapper)
         self.assertLess(
-            bootstrapper.index("uploadLocalFileToHost(credentials, filePath, remotePath)"),
+            bootstrapper.index("uploadLocalFileToHost(credentials, file.localPath, remotePath)"),
             bootstrapper.index("Bundled self-hosted update payload published"),
         )
         self.assertIn("publish-bundled-updates-once", app_cpp)
@@ -1632,17 +1637,35 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("ssh_channel_get_exit_status", ssh_client_cpp)
         self.assertIn("ErrorCode::ServerCheckFailed", ssh_client_cpp)
         self.assertIn("update_host/install_server_update_host.sh", server_scripts_qrc)
-        self.assertIn('QStringLiteral("windows-x64")', bootstrapper)
-        self.assertIn('QStringLiteral("linux-x64")', bootstrapper)
-        self.assertIn('QStringLiteral("android-arm64-v8a")', bootstrapper)
+        self.assertIn("bundledArtifactRelativePath", bootstrapper)
+        self.assertIn("bundledRollbackArtifactRelativePath", bootstrapper)
+        self.assertIn("unsafe artifact URL", bootstrapper)
+        self.assertIn('QStringLiteral("/files/.")', bootstrapper)
+        self.assertIn("mkdir -p %1", bootstrapper)
+        self.assertIn("hasSymlinkOrReparsePoint", bootstrapper)
+        self.assertIn("relativeUrlPath", bootstrapper_h)
+        self.assertIn("kWindowsPlatform", bootstrapper)
+        self.assertIn("platforms.value(QString::fromLatin1(kWindowsPlatform))", bootstrapper)
+        self.assertIn("for (auto iterator = platforms.constBegin()", bootstrapper)
+        self.assertIn("rollbackPlatforms.constBegin()", bootstrapper)
+        self.assertIn("releasePolicy.contains(QStringLiteral(\"rollback\"))", bootstrapper)
+        self.assertIn("canonicalPolicyGeneration", bootstrapper)
+        self.assertIn("rollbackGeneration", bootstrapper)
+        self.assertIn("rollbackVersion", bootstrapper)
+        self.assertIn("platformObject.value(QStringLiteral(\"openExternal\")).toBool()", bootstrapper)
+        self.assertIn("expectedSize <= 0", bootstrapper)
+        self.assertIn("busybox wget -q -O - %1", bootstrapper)
+        self.assertIn("file.relativePath.left(file.relativePath.lastIndexOf(u'/'))", bootstrapper)
+        self.assertIn("sudo cp -a %3 %2/", bootstrapper)
+        self.assertNotIn("for f in %3/*", bootstrapper)
         self.assertIn("SELFHOSTED_BUNDLED_UPDATE_PAYLOAD_DIR", bootstrapper)
         self.assertIn("QCoreApplication::applicationDirPath()", bootstrapper)
         self.assertIn("selfhosted_updates", bootstrapper)
-        self.assertIn("QUrl::FullyDecoded", bootstrapper)
+        self.assertIn("QUrl::FullyDecoded", bootstrapper_h)
         self.assertIn("Bundled update artifact size mismatch", bootstrapper)
         self.assertIn("Bundled update artifact sha256 mismatch", bootstrapper)
-        self.assertIn("isSha256Hex", bootstrapper)
-        self.assertIn("uploadLocalFileToHost(credentials, filePath, remotePath)", bootstrapper)
+        self.assertIn("isCanonicalSha256", bootstrapper_h)
+        self.assertIn("uploadLocalFileToHost(credentials, file.localPath, remotePath)", bootstrapper)
         self.assertIn("manifest.json.tmp", bootstrapper)
         self.assertIn("sha256sum", bootstrapper)
         self.assertIn("hostDirectory", bootstrapper)
@@ -1886,8 +1909,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.1.0)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2133)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.0)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2134)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -4847,12 +4870,19 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         cls.split_tunnel = (
             REPO_ROOT / "client/platforms/windows/daemon/windowssplittunnel.cpp"
         ).read_text(encoding="utf-8")
+        cls.service_manager = (
+            REPO_ROOT / "client/platforms/windows/windowsservicemanager.cpp"
+        ).read_text(encoding="utf-8")
         cls.service_main = (REPO_ROOT / "service/server/main.cpp").read_text(
             encoding="utf-8"
         )
         cls.post_uninstall = (
             REPO_ROOT / "deploy/data/windows/post_uninstall.cmd"
         ).read_text(encoding="utf-8")
+        cls.batch_runner = (
+            REPO_ROOT / "deploy/data/windows/run_batch_file.ps1"
+        ).read_text(encoding="utf-8")
+        cls.cpack = (REPO_ROOT / "cmake/CPack.cmake").read_text(encoding="utf-8")
         cls.qif_component_script = (
             REPO_ROOT / "deploy/installer/qif/componentscript.js"
         ).read_text(encoding="utf-8")
@@ -4996,42 +5026,142 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertIn("resetDriver(driverFile)", remove_driver)
         self.assertIn("driverManager->stopService()", remove_driver)
         self.assertIn("uninstallDriver()", remove_driver)
+        stop_service = self.function_body(
+            "bool WindowsServiceManager::stopService()", self.service_manager
+        )
+        self.assertIn("SERVICE_STATUS status = {};", stop_service)
+        self.assertIn(
+            "ControlService(m_service, SERVICE_CONTROL_STOP, &status)",
+            stop_service,
+        )
+        self.assertNotIn(
+            "ControlService(m_service, SERVICE_CONTROL_STOP, NULL)",
+            stop_service,
+        )
         self.assertIn("cleanup-firewall", self.post_uninstall)
         self.assertIn("setlocal EnableExtensions DisableDelayedExpansion", self.post_uninstall)
         self.assertIn('set "AmneziaPath=%~dp0"', self.post_uninstall)
+        self.assertIn('set "MaxCleanupAttempts=6"', self.post_uninstall)
+        self.assertIn('set "MaxDeleteAttempts=6"', self.post_uninstall)
+        self.assertIn('set "MaxDriverDeleteAttempts=6"', self.post_uninstall)
+        self.assertIn(
+            'set "FAILURE_RECEIPT=%RECOVERY_ROOT%\\uninstall-cleanup-failed.txt"',
+            self.post_uninstall,
+        )
+        self.assertIn(
+            'set "RECOVERY_ROOT=%ProgramFiles%\\AmneziaVPN-Recovery"',
+            self.post_uninstall,
+        )
+        self.assertIn(
+            'set "RECOVERY_DIR=%RECOVERY_ROOT%\\uninstall-recovery"',
+            self.post_uninstall,
+        )
+        self.assertNotIn('set "RECOVERY_DIR=%SYS_APP_DIR%', self.post_uninstall)
+        self.assertIn(
+            'set "EMERGENCY_MARKER=%RECOVERY_ROOT%\\uninstall-recovery-required.txt"',
+            self.post_uninstall,
+        )
+        self.assertNotIn('set "FAILURE_RECEIPT=%SYS_APP_DIR%', self.post_uninstall)
+        self.assertNotIn('set "EMERGENCY_MARKER=%SYS_APP_DIR%', self.post_uninstall)
+        self.assertNotIn("EMERGENCY_FALLBACK_MARKER", self.post_uninstall)
+        self.assertNotIn("echo script=%~f0", self.post_uninstall)
         self.assertNotIn("echo %AmneziaPath%", self.post_uninstall)
         self.assertIn(":cleanup_firewall", self.post_uninstall)
         self.assertIn("goto cleanup_firewall", self.post_uninstall)
+        self.assertIn(":cleanup_failed", self.post_uninstall)
+        self.assertIn(":cleanup_failure_cleanup", self.post_uninstall)
+        self.assertIn(":create_recovery_bundle", self.post_uninstall)
+        self.assertIn(":copy_recovery_tree", self.post_uninstall)
+        self.assertIn(":mirror_recovery_tree", self.post_uninstall)
+        self.assertIn(":prepare_recovery_root", self.post_uninstall)
+        self.assertIn(":verify_recovery_acl", self.post_uninstall)
+        self.assertIn(":reject_reparse_point", self.post_uninstall)
+        self.assertIn("reparsepoint query", self.post_uninstall)
+        self.assertIn("/inheritance:r", self.post_uninstall)
+        self.assertIn('"*S-1-5-18:(OI)(CI)F"', self.post_uninstall)
+        self.assertIn('"*S-1-5-32-544:(OI)(CI)F"', self.post_uninstall)
+        self.assertIn("AreAccessRulesProtected", self.post_uninstall)
+        self.assertIn("recovery_acl_status=%RecoveryAclStatus%", self.post_uninstall)
+        self.assertIn(":write_emergency_marker", self.post_uninstall)
+        self.assertIn(":write_failure_receipt", self.post_uninstall)
+        self.assertIn(":write_failure_event", self.post_uninstall)
+        self.assertIn('call :reject_reparse_point "%RECOVERY_ROOT%"', self.post_uninstall)
+        self.assertIn('call :reject_reparse_point "%FAILURE_RECEIPT%"', self.post_uninstall)
+        self.assertIn('call :reject_reparse_point "%EMERGENCY_MARKER%"', self.post_uninstall)
+        self.assertIn("FailureReceiptStatus=protected-recovery-root", self.post_uninstall)
+        self.assertIn("/E /COPY:DAT /DCOPY:DAT /R:1 /W:1", self.post_uninstall)
+        self.assertIn("/MIR /COPY:DAT /DCOPY:DAT /R:1 /W:1", self.post_uninstall)
+        self.assertIn(
+            'if not exist "%RECOVERY_DIR%\\AmneziaVPN-service.exe"',
+            self.post_uninstall,
+        )
+        self.assertIn(
+            'if not exist "%RECOVERY_DIR%\\post_uninstall.cmd"',
+            self.post_uninstall,
+        )
+        self.assertIn("recovery_validated=%RecoveryValidated%", self.post_uninstall)
+        self.assertIn("recovery_status=%RecoveryStatus%", self.post_uninstall)
+        self.assertIn("reinstall a fixed AmneziaVPN package", self.post_uninstall)
+        self.assertIn("call :write_failure_receipt", self.post_uninstall)
+        self.assertIn(":verify_split_tunnel_driver_deleted", self.post_uninstall)
+        self.assertIn("sc stop AmneziaVPNSplitTunnel", self.post_uninstall)
+        self.assertIn("sc delete AmneziaVPNSplitTunnel", self.post_uninstall)
+        self.assertIn("sc delete AmneziaVPN-service", self.post_uninstall)
+        self.assertIn("sc delete AmneziaWGTunnel$AmneziaVPN", self.post_uninstall)
         self.assertIn("sc config AmneziaVPN-service start= disabled", self.post_uninstall)
-        self.assertIn("sc config AmneziaVPN-service start= auto", self.post_uninstall)
+        self.assertNotIn("sc config AmneziaVPN-service start= auto", self.post_uninstall)
+        self.assertNotIn("sc start AmneziaVPN-service", self.post_uninstall)
         self.assertIn(":wait_before_retry", self.post_uninstall)
         self.assertIn(":wait_for_service_stop", self.post_uninstall)
         self.assertIn('"%SystemRoot%\\System32\\ping.exe" -n 6 127.0.0.1',
                       self.post_uninstall)
         self.assertNotIn("timeout /t", self.post_uninstall)
-        self.assertNotRegex(
-            self.post_uninstall,
-            r'cleanup-firewall\s*\r?\n\s*if errorlevel 1 exit /b 1',
-        )
-        self.assertIn('"UNDOEXECUTE", "cmd", "/c", pu_path + "post_uninstall.cmd"',
+        self.assertIn("exit /b 1", self.post_uninstall)
+        self.assertIn('"UNDOEXECUTE", windowsPowerShell, "-NoLogo", "-NoProfile"',
                       self.qif_component_script)
-        self.assertIn("returns only after", self.qif_component_script)
+        self.assertIn('let batchRunner = pu_path + "run_batch_file.ps1"',
+                      self.qif_component_script)
+        self.assertIn('let postUninstallScript = pu_path + "post_uninstall.cmd"',
+                      self.qif_component_script)
+        self.assertNotIn('"UNDOEXECUTE", "cmd"', self.qif_component_script)
+        self.assertIn("& $resolvedBatchPath", self.batch_runner)
+        self.assertIn("[Environment+SpecialFolder]::ProgramFiles", self.batch_runner)
+        self.assertIn("[Environment+SpecialFolder]::CommonApplicationData", self.batch_runner)
+        self.assertIn("[IO.FileAttributes]::ReparsePoint", self.batch_runner)
+        self.assertIn("Install directory owner is not trusted", self.batch_runner)
+        self.assertIn("Install directory is writable by an untrusted principal", self.batch_runner)
+        self.assertIn("deploy/data/windows/run_batch_file.ps1", self.cpack)
+        self.assertNotIn('installer.value("ApplicationsDirX64")', self.qif_component_script)
+        self.assertNotIn('installer.value("RootDir")', self.qif_component_script)
+        self.assertIn('let protectedTargetDir = "C:\\\\Program Files\\\\AmneziaVPN"', self.qif_component_script)
+        self.assertIn('let systemSc = "C:\\\\Windows\\\\System32\\\\sc.exe"', self.qif_component_script)
+        self.assertNotIn('installer.environmentVariable("SystemRoot")', self.qif_component_script)
+        self.assertIn('installer.setValue("TargetDir", "C:\\\\Program Files\\\\AmneziaVPN")', self.qif_control_script)
+        self.assertNotIn('installer.value("ApplicationsDirX64")', self.qif_control_script)
+        self.assertNotIn('installer.value("RootDir")', self.qif_control_script)
+        self.assertIn('appInstalledUninstallerPath = "C:/Program Files/AmneziaVPN/maintenancetool.exe"', self.qif_control_script)
+        self.assertIn('$env:ComSpec = [IO.Path]::Combine($windowsDirectory, "System32", "cmd.exe")', self.batch_runner)
+        self.assertIn('$env:Path = [IO.Path]::Combine($windowsDirectory, "System32")', self.batch_runner)
+        self.assertIn('Push-Location -LiteralPath $trustedWorkingDirectory', self.batch_runner)
+        self.assertIn("bounded retry budget", self.qif_component_script)
         self.assertIn(
-            'installer.setMessageBoxAutomaticAnswer("installationErrorWithIgnore", QMessageBox.Retry)',
+            'installer.setMessageBoxAutomaticAnswer("installationErrorWithIgnore", QMessageBox.Ignore)',
+            self.qif_control_script,
+        )
+        self.assertNotIn(
+            'installer.setMessageBoxAutomaticAnswer("installationErrorWithRetry"',
             self.qif_control_script,
         )
         shortcut_operation = self.qif_component_script.find(
             'component.addOperation("CreateShortcut"'
         )
         cleanup_undo = self.qif_component_script.find(
-            '"UNDOEXECUTE", "cmd", "/c"'
+            '"UNDOEXECUTE", windowsPowerShell'
         )
         self.assertGreaterEqual(shortcut_operation, 0)
         self.assertGreaterEqual(cleanup_undo, 0)
-        # IFW undoes operations in reverse order. Keeping a reversible shortcut
-        # operation before cleanup guarantees that canceling the cleanup is
-        # observed at the start of another undo operation, before TargetDir is
-        # handed to deleteMaintenanceTool().
+        # IFW undoes operations in reverse order, so bounded service cleanup
+        # runs before ordinary shortcut removal while its helper is available.
         self.assertLess(shortcut_operation, cleanup_undo)
         self.assertNotIn("CleanupAmneziaPersistentFirewall", self.wix_service_patch)
         self.assertIn("CleanupAmneziaPersistentFirewall", self.wix_close_patch)
@@ -5057,6 +5187,176 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertGreater(stop, disable)
         self.assertGreater(force_stop, stop)
         self.assertGreater(cleanup_call, force_stop)
+        failure_path = self.post_uninstall.find(":cleanup_failure_cleanup")
+        recovery_bundle = self.post_uninstall.find("call :create_recovery_bundle", failure_path)
+        receipt = self.post_uninstall.find("call :write_failure_receipt", failure_path)
+        deregister = self.post_uninstall.find("sc delete AmneziaVPN-service", failure_path)
+        self.assertGreater(recovery_bundle, failure_path)
+        self.assertGreater(receipt, recovery_bundle)
+        self.assertGreater(deregister, receipt)
+        recovery_root = self.post_uninstall.find("call :prepare_recovery_root")
+        first_copy = self.post_uninstall.find("call :copy_recovery_tree")
+        self.assertGreaterEqual(recovery_root, 0)
+        self.assertGreater(first_copy, recovery_root)
+        prepare_definition = self.post_uninstall.find("\n:prepare_recovery_root\n")
+        acl_verify = self.post_uninstall.find(
+            "call :verify_recovery_acl", prepare_definition
+        )
+        prepare_return = self.post_uninstall.find("exit /b 0", acl_verify)
+        self.assertGreater(prepare_definition, first_copy)
+        self.assertGreater(acl_verify, prepare_definition)
+        self.assertGreater(prepare_return, acl_verify)
+        self.assertNotIn("/COPYALL", self.post_uninstall)
+        self.assertNotIn(" /SEC", self.post_uninstall)
+
+    def test_qif_cli_install_starts_service_before_reporting_success(self) -> None:
+        create_body = self.function_body(
+            "Component.prototype.createOperations",
+            self.qif_component_script,
+        )
+        finish_body = self.function_body(
+            "Component.prototype.installationFinished",
+            self.qif_component_script,
+        )
+
+        post_install = create_body.find(
+            'component.addElevatedOperation("Execute", windowsPowerShell, '
+            '"-NoLogo", "-NoProfile"'
+        )
+        service_create = create_body.find('[systemSc, "create", serviceName()')
+        service_delete_undo = create_body.find(
+            '"UNDOEXECUTE", "{0,1060,1072}", systemSc, "delete", serviceName()'
+        )
+        cleanup_undo = create_body.find(
+            '"UNDOEXECUTE", windowsPowerShell, "-NoLogo", "-NoProfile"'
+        )
+        configure_recovery = create_body.find(
+            'component.addElevatedOperation("Execute", systemSc, "failure", '
+            "serviceName()"
+        )
+        start_service = create_body.find(
+            'component.addElevatedOperation("Execute", "{0,1056}", systemSc, '
+            '"start", serviceName())'
+        )
+
+        self.assertGreaterEqual(service_create, 0)
+        self.assertGreater(service_delete_undo, service_create)
+        self.assertGreater(cleanup_undo, service_delete_undo)
+        self.assertGreaterEqual(post_install, 0)
+        self.assertLess(service_create, post_install)
+        self.assertGreater(configure_recovery, post_install)
+        self.assertGreater(start_service, configure_recovery)
+        self.assertIn(
+            '"reset=", "100", "actions=",\n'
+            '                                       "restart/2000/restart/2000/restart/2000"',
+            create_body,
+        )
+        self.assertNotIn("UNDOEXECUTE", create_body[post_install:start_service])
+        self.assertNotIn('installer.execute("net", ["start"', finish_body)
+        self.assertNotIn('installer.execute("sc", ["failure"', finish_body)
+
+    @unittest.skipUnless(os.name == "nt", "Windows PowerShell runner test")
+    def test_qif_batch_runner_rejects_untrusted_install_directory(self) -> None:
+        source_runner = REPO_ROOT / "deploy/data/windows/run_batch_file.ps1"
+        powershell = (
+            Path(os.environ.get("SystemRoot", r"C:\Windows"))
+            / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        )
+        self.assertTrue(powershell.is_file())
+
+        with tempfile.TemporaryDirectory(prefix="Amnezia & (safe) ") as tmp:
+            install_dir = Path(tmp) / "custom & (target)"
+            install_dir.mkdir()
+            runner = install_dir / "run_batch_file.ps1"
+            batch = install_dir / "post install & (probe).cmd"
+            marker = install_dir / "probe-result.txt"
+            shutil.copy2(source_runner, runner)
+            batch.write_text(
+                '@echo off\r\n> "%~dp0probe-result.txt" echo safe\r\n',
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    str(powershell),
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(runner),
+                    str(batch),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Install directory owner is not trusted", result.stderr)
+            self.assertFalse(marker.exists())
+
+            outside_batch = Path(tmp) / "outside.cmd"
+            outside_batch.write_text("@exit /b 0\r\n", encoding="utf-8")
+            rejected = subprocess.run(
+                [
+                    str(powershell),
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(runner),
+                    str(outside_batch),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("must be located beside the trusted runner", rejected.stderr)
+
+            rejected_install_dir = Path(tmp) / "custom %PATH%"
+            rejected_install_dir.mkdir()
+            rejected_runner = rejected_install_dir / "run_batch_file.ps1"
+            rejected_batch = rejected_install_dir / "post_install.cmd"
+            shutil.copy2(source_runner, rejected_runner)
+            rejected_batch.write_text("@exit /b 0\r\n", encoding="utf-8")
+            expansion_path = subprocess.run(
+                [
+                    str(powershell),
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(rejected_runner),
+                    str(rejected_batch),
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(expansion_path.returncode, 0)
+            self.assertIn("must not contain shell expansion characters", expansion_path.stderr)
+
+    def test_qif_quotes_windows_service_image_path(self) -> None:
+        create_body = self.function_body(
+            "Component.prototype.createOperations",
+            self.qif_component_script,
+        )
+
+        self.assertIn(
+            'let serviceImagePath = "\\\"" + pu_path + serviceName() + ".exe\\\""',
+            create_body,
+        )
+        self.assertIn(
+            '[systemSc, "create", serviceName(), "binpath=", serviceImagePath,',
+            create_body,
+        )
+        self.assertNotIn(
+            '"binpath=", pu_path + serviceName() + ".exe"',
+            create_body,
+        )
 
     def test_strict_transition_removes_all_bypass_buckets_atomically(self) -> None:
         body = self.function_body("bool WindowsFirewall::enableInterface(")

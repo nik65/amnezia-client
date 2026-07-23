@@ -631,6 +631,12 @@ if ([string]::IsNullOrWhiteSpace($OutDir)) {
     $OutDir = Join-Path $RepoRoot "dist\selfhosted-updates\$Version"
 }
 
+$bundlesUpdatesInWindowsClient = (-not $NoBundleUpdatesInWindowsClient) -and
+    ($BuildPlatform -contains "windows")
+if ($bundlesUpdatesInWindowsClient -and ($RequirePlatform -notcontains "windows-x64")) {
+    throw "Bundled Windows update publisher requires the windows-x64 manifest artifact."
+}
+
 New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
 
 if ($Preflight) {

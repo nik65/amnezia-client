@@ -8,6 +8,7 @@
 #include <QLocalSocket>
 
 #include <string>
+#include <vector>
 
 #include "windowsprivilegedpipe.h"
 
@@ -270,7 +271,45 @@ bool installProtectedFromWindowsPeer(const LocalPeerIdentity &identity, const QS
     return true;
 }
 
-bool windowsServicePidMatches(const QString &serviceName, qint64 processId, QString *errorMessage)
+bool serviceExecutablePathFromCommandLine(const QString &commandLine,
+                                          const QString &expectedPath, QString &path,
+                                          QString *errorMessage)
+{
+    path.clear();
+    const QString trimmed = commandLine.trimmed();
+    if (trimmed.isEmpty()) {
+        setError(errorMessage, QStringLiteral("Privileged VPN service has no binary path"));
+        return false;
+    }
+
+    if (trimmed.startsWith(QLatin1Char('"'))) {
+        const qsizetype closingQuote = trimmed.indexOf(QLatin1Char('"'), 1);
+        if (closingQuote <= 1 || closingQuote != trimmed.size() - 1) {
+            setError(errorMessage, QStringLiteral("Privileged VPN service must have exactly one binary path"));
+            return false;
+        }
+        path = trimmed.mid(1, closingQuote - 1);
+    } else {
+        // Older packages registered the full path without quotation marks.
+        // Treat the entire command line as that path; do not parse a prefix
+        // before whitespace, because doing so would silently accept arguments.
+        path = trimmed;
+    }
+
+    if (path.isEmpty() || !QFileInfo(path).isAbsolute()) {
+        setError(errorMessage, QStringLiteral("Privileged VPN service binary path is not absolute"));
+        return false;
+    }
+    if (!executablePathsMatch(path, expectedPath)) {
+        setError(errorMessage, QStringLiteral("Privileged VPN service binary path is not the expected executable"));
+        return false;
+    }
+    return true;
+}
+
+bool windowsServiceMatchesExpectedServer(const QString &serviceName, qint64 processId,
+                                         const QString &expectedExecutablePath,
+                                         QString *errorMessage)
 {
     SC_HANDLE manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
     if (!manager) {
@@ -279,25 +318,90 @@ bool windowsServicePidMatches(const QString &serviceName, qint64 processId, QStr
     }
     SC_HANDLE service = OpenServiceW(manager,
                                      reinterpret_cast<LPCWSTR>(serviceName.utf16()),
-                                     SERVICE_QUERY_STATUS);
+                                     SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG);
     if (!service) {
         CloseServiceHandle(manager);
         setError(errorMessage, QStringLiteral("Unable to query privileged VPN service"));
         return false;
     }
 
-    SERVICE_STATUS_PROCESS status {};
-    DWORD bytesNeeded = 0;
-    const BOOL queried = QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO,
-                                               reinterpret_cast<LPBYTE>(&status), sizeof(status),
-                                               &bytesNeeded);
-    CloseServiceHandle(service);
-    CloseServiceHandle(manager);
-    if (!queried || status.dwCurrentState != SERVICE_RUNNING
-        || status.dwProcessId != static_cast<DWORD>(processId)) {
+    SERVICE_STATUS_PROCESS statusBefore {};
+    DWORD statusBytesNeeded = 0;
+    const BOOL statusBeforeQueried = QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO,
+                                                           reinterpret_cast<LPBYTE>(&statusBefore),
+                                                           sizeof(statusBefore), &statusBytesNeeded);
+    if (!statusBeforeQueried || statusBefore.dwServiceType != SERVICE_WIN32_OWN_PROCESS
+        || statusBefore.dwCurrentState != SERVICE_RUNNING
+        || statusBefore.dwProcessId != static_cast<DWORD>(processId)) {
+        CloseServiceHandle(service);
+        CloseServiceHandle(manager);
         setError(errorMessage, QStringLiteral("Named-pipe server is not the running VPN service"));
         return false;
     }
+
+    DWORD configBytesNeeded = 0;
+    QueryServiceConfigW(service, nullptr, 0, &configBytesNeeded);
+    if (configBytesNeeded < sizeof(QUERY_SERVICE_CONFIGW)
+        || GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+        CloseServiceHandle(service);
+        CloseServiceHandle(manager);
+        setError(errorMessage, QStringLiteral("Unable to query privileged VPN service configuration"));
+        return false;
+    }
+    std::vector<BYTE> configStorage(configBytesNeeded);
+    auto *config = reinterpret_cast<QUERY_SERVICE_CONFIGW *>(configStorage.data());
+    if (!QueryServiceConfigW(service, config, configBytesNeeded, &configBytesNeeded)
+        || config->lpBinaryPathName == nullptr || config->lpServiceStartName == nullptr) {
+        CloseServiceHandle(service);
+        CloseServiceHandle(manager);
+        setError(errorMessage, QStringLiteral("Unable to read privileged VPN service configuration"));
+        return false;
+    }
+
+    const QString configuredCommandLine = QString::fromWCharArray(config->lpBinaryPathName);
+    QString configuredExecutablePath;
+    const bool configuredPathResolved = serviceExecutablePathFromCommandLine(
+        configuredCommandLine, expectedExecutablePath, configuredExecutablePath, errorMessage);
+    const bool ownProcess = config->dwServiceType == SERVICE_WIN32_OWN_PROCESS;
+    const bool localSystem = QString::fromWCharArray(config->lpServiceStartName)
+                                 .compare(QStringLiteral("LocalSystem"), Qt::CaseInsensitive) == 0;
+
+    SERVICE_STATUS_PROCESS statusAfter {};
+    statusBytesNeeded = 0;
+    const BOOL statusAfterQueried = QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO,
+                                                          reinterpret_cast<LPBYTE>(&statusAfter),
+                                                          sizeof(statusAfter), &statusBytesNeeded);
+    CloseServiceHandle(service);
+    CloseServiceHandle(manager);
+    if (!configuredPathResolved || !ownProcess || !localSystem || !statusAfterQueried
+        || statusAfter.dwServiceType != SERVICE_WIN32_OWN_PROCESS
+        || statusAfter.dwCurrentState != SERVICE_RUNNING
+        || statusAfter.dwProcessId != static_cast<DWORD>(processId)
+        || statusBefore.dwProcessId != statusAfter.dwProcessId
+        || !executablePathsMatch(configuredExecutablePath, expectedExecutablePath)) {
+        if (errorMessage && errorMessage->isEmpty()) {
+            *errorMessage = QStringLiteral("Named-pipe server is not the expected LocalSystem VPN service");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool namedPipeServerProcessId(QLocalSocket *socket, qint64 &processId, QString *errorMessage)
+{
+    processId = -1;
+    if (!socket || socket->socketDescriptor() == -1) {
+        setError(errorMessage, QStringLiteral("Invalid local socket descriptor"));
+        return false;
+    }
+
+    ULONG serverProcessId = 0;
+    const HANDLE pipe = reinterpret_cast<HANDLE>(socket->socketDescriptor());
+    if (!GetNamedPipeServerProcessId(pipe, &serverProcessId) || serverProcessId == 0) {
+        setError(errorMessage, QStringLiteral("Unable to query named-pipe server PID"));
+        return false;
+    }
+    processId = static_cast<qint64>(serverProcessId);
     return true;
 }
 #endif
@@ -653,26 +757,41 @@ bool authorizePrivilegedServer(QLocalSocket *socket, const QString &expectedExec
         return false;
     }
 #endif
+
+    const QString expected = canonicalExecutablePath(expectedExecutablePath);
+    if (!QFileInfo(expected).isFile()) {
+        setError(errorMessage, QStringLiteral("Expected VPN service executable is missing"));
+        return false;
+    }
+
     LocalPeerIdentity resolved;
+
+#ifndef Q_OS_WIN
     if (!queryLocalServerIdentity(socket, resolved, errorMessage)) {
         return false;
     }
-
-    const QString expected = canonicalExecutablePath(expectedExecutablePath);
-    if (!QFileInfo(expected).isFile() || !executablePathsMatch(resolved.executablePath, expected)) {
+    if (!executablePathsMatch(resolved.executablePath, expected)) {
         setError(errorMessage, QStringLiteral("Local socket server is not the installed VPN service"));
         return false;
     }
+#endif
 
 #ifdef Q_OS_WIN
-    if (resolved.userIdentifier.compare(QStringLiteral("S-1-5-18"), Qt::CaseInsensitive) != 0
-        || resolved.sessionId != 0
-        || !windowsServicePidMatches(windowsServiceName, resolved.processId, errorMessage)) {
-        if (errorMessage && errorMessage->isEmpty()) {
-            *errorMessage = QStringLiteral("Local socket server is not LocalSystem");
-        }
+    qint64 serverProcessId = -1;
+    if (!namedPipeServerProcessId(socket, serverProcessId, errorMessage)
+        || !windowsServiceMatchesExpectedServer(windowsServiceName, serverProcessId, expected,
+                                                errorMessage)) {
         return false;
     }
+
+    // A standard user cannot inspect the LocalSystem process token.  The SCM
+    // is the authority for its account, process type, configured binary and
+    // running PID, while GetNamedPipeServerProcessId binds those facts to this
+    // connected pipe endpoint.
+    resolved.processId = serverProcessId;
+    resolved.userIdentifier = QStringLiteral("S-1-5-18");
+    resolved.sessionId = 0;
+    resolved.executablePath = expected;
 
     LocalPeerIdentity currentProcess;
     QString currentError;

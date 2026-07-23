@@ -36,26 +36,27 @@ manifest that is already live.
 
 ## Release freeze automation
 
-`.github/workflows/upstream-release-freeze.yml` is the daily guard for this
-fork branch. It watches the latest published upstream GitHub Release whose tag
-matches `x.y.z.w`; an upstream tag alone is not enough to freeze the fork.
+The local Codex maintenance automation is the daily guard for `dev`. GitHub
+Actions stay disabled and `.github/workflows` must remain absent. The automation
+watches the latest published upstream GitHub Release that is non-draft and
+non-prerelease and whose tag matches `x.y.z.w`; a tag or ordinary
+`upstream/dev` commit alone is not an update signal. In other words, an upstream tag alone is not enough.
 
 - While no published release newer than `.github/upstream-release-freeze.json`
   `baselineTag` exists, it leaves `dev` unchanged.
   Ordinary `upstream/dev` commits are intentionally not merged between releases.
-- When a newer published release appears, it writes `frozen=true` into the state
-  file, pushes the branch, and prints the local release command for the
-  workstation. The freeze step
-  rebuilds the target branch from the upstream release tag and reapplies the
-  fork patch, so post-release `upstream/dev` commits are not retained. Because
-  this intentionally rewrites the target branch to the release base, it pushes
-  the frozen branch with `--force-with-lease`.
+  Consequently, post-release `upstream/dev` commits are not retained.
+- When a newer published release appears, the automation first creates a backup
+  branch and verified bundle, then resolves the release in a temporary worktree
+  while preserving the previous `dev` tip and every fork commit as ancestors.
+  It builds and validates the supported local targets before a normal
+  fast-forward push. It never force-rewrites `dev`.
 - After the state is frozen, later scheduled runs keep waiting and advance the
   fork only when a newer published upstream release appears.
 
-The baseline currently records `4.8.15.4`, matching the latest published
-upstream GitHub Release observed when this automation was added. Use the workflow input
-`FORCE_FREEZE_TAG` only for a deliberate manual freeze.
+`.github/upstream-release-freeze.json` records the currently observed published
+release and keeps `targetBranch` set to `dev`. Update that state only through a
+verified release-advance run.
 
 ## Key setup
 
@@ -160,8 +161,8 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.1.0` with Android
-`versionCode` `2133`, following the `4.9.0.11` / `2132` artifact set.
+The current self-hosted release line is `4.9.2.0` with Android
+`versionCode` `2134`, following the `4.9.1.0` / `2133` artifact set.
 
 `local_release.ps1` parallelizes platform builds with the logical processor
 count by default. Override it when you want to leave CPU/RAM for other work:
@@ -181,6 +182,11 @@ Install that file on the release workstation. On startup, the Windows client
 uses the saved self-hosted admin SSH credentials to upload immutable `files/`
 objects, refresh the update-host container, and switch `manifest.json` on the
 server last.
+The bundled publisher always requires a signed `windows-x64` artifact. It may
+carry only that platform for an intentional Windows-only hotfix, or every local
+artifact declared by the signed manifest for the normal three-platform release;
+in both cases it preserves the complete content-addressed `files/artifacts/...`
+path during validation, upload, publication, and remote verification.
 `local_release.ps1` does not upload to the server. Use
 `-NoBundleUpdatesInWindowsClient` only when you intentionally need a thin
 Windows installer without embedded payload. `-SkipBuild` skips rebuilding
@@ -206,21 +212,45 @@ self-hosted signing inputs, WSL readiness for Linux/Android builds, Android
 signing key inputs, Linux Qt Installer Framework inside WSL, and SSH inputs
 when publishing is enabled.
 
+### Windows uninstall recovery
+
+The Qt IFW 4.7 uninstaller bounds persistent-firewall cleanup retries so a
+broken service cannot leave the UI stuck indefinitely. If cleanup still fails,
+it first copies the complete installed Windows payload to
+`%ProgramFiles%\AmneziaVPN-Recovery\uninstall-recovery`, after rejecting
+reparse points and verifying a protected DACL that grants access only to
+LocalSystem and Administrators. It validates `AmneziaVPN-service.exe` and
+`post_uninstall.cmd`, then records the outcome in the same protected
+`%ProgramFiles%\AmneziaVPN-Recovery` root before the installer can continue.
+It never writes elevated recovery files through an unverified ProgramData or
+TEMP path. Run the recovered `post_uninstall.cmd` from an elevated Command
+Prompt to retry the cleanup. If the receipt says `recovery_validated=0`, use
+the separate `uninstall-recovery-required.txt` marker in that protected root:
+reinstall a fixed Windows package and run its uninstaller elevated. Do not
+manually delete WFP rules or Amnezia driver services.
+The Windows installer fixes `TargetDir` to literal
+`C:\Program Files\AmneziaVPN` instead of trusting Qt IFW command-line
+InstallerValue overrides because it installs a LocalSystem service. Before
+invoking maintenance scripts, the packaged runner rejects reparse points,
+untrusted owners, and directories writable by non-administrative principals.
+It also restores trusted known-folder variables and runs from the protected
+system directory with a minimal system-only `PATH`.
+
 ## Manifest build
 
 Example:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.1.0 \
+  --version 4.9.2.0 \
   --release-date 2026-07-22 \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.1.0_windows_x64.exe \
-  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.1.0_linux_x64.run \
-  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.1.0_android9+_arm64-v8a.apk \
-  --android-version-code 2133 \
+  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.2.0_windows_x64.exe \
+  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.2.0_linux_x64.run \
+  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.2.0_android9+_arm64-v8a.apk \
+  --android-version-code 2134 \
   --auto-install
 ```
 
@@ -294,7 +324,7 @@ artifact available for rollback:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.1.0 \
+  --version 4.9.2.0 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \
@@ -310,7 +340,7 @@ python deploy/selfhosted_updates/make_manifest.py \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=dist/current/AmneziaVPN_4.9.1.0_windows_x64.exe \
+  --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.0_windows_x64.exe \
   --auto-install
 ```
 
@@ -319,7 +349,7 @@ rollback artifacts:
 
 ```bash
 python deploy/selfhosted_updates/publish_release.py \
-  --version 4.9.1.0 \
+  --version 4.9.2.0 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \

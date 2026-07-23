@@ -21,8 +21,10 @@ function appExecutableFileName()
 function appInstalled()
 {
     if (runningOnWindows()) {
-        appInstalledUninstallerPath = installer.value("RootDir") + "Program Files/AmneziaVPN/maintenancetool.exe";
-        appInstalledUninstallerPath_x86 = installer.value("RootDir") + "Program Files (x86)/AmneziaVPN/maintenancetool.exe";
+        // InstallerValue arguments can override RootDir. Never use it to select
+        // an executable that this controller may launch.
+        appInstalledUninstallerPath = "C:/Program Files/AmneziaVPN/maintenancetool.exe";
+        appInstalledUninstallerPath_x86 = "C:/Program Files (x86)/AmneziaVPN/maintenancetool.exe";
     } else if (runningOnMacOS()){
         appInstalledUninstallerPath = "/Applications/" + appName() + ".app/maintenancetool.app/Contents/MacOS/maintenancetool";
     } else if (runningOnLinux()){
@@ -227,6 +229,17 @@ onNextButtonClicked = function()
 function Controller () {
     console.log("OS: %1, architecture: %2".arg(systemInfo.prettyProductName).arg(systemInfo.currentCpuArchitecture));
 
+    if (runningOnWindows()) {
+        if (appName() !== "AmneziaVPN") {
+            throw new Error("Windows package Name must remain AmneziaVPN.");
+        }
+        // This package installs and starts a LocalSystem service. Qt IFW lets
+        // callers replace predefined values on the command line, so do not
+        // derive this security-sensitive path from ApplicationsDirX64,
+        // RootDir, TargetDir, Name, or the process environment.
+        installer.setValue("TargetDir", "C:\\Program Files\\AmneziaVPN");
+    }
+
     if (installer.isInstaller() || installer.isUpdater()) {
         console.log("Check if app already installed: " + appInstalled());
     }
@@ -298,11 +311,12 @@ function Controller () {
         }
 
     } else if (installer.isUninstaller()) {
-        // Qt IFW 4.7 hardcodes Ignore as the default for failed undo
-        // operations. post_uninstall.cmd normally retries without returning;
-        // this answer also prevents a crashed or externally terminated cleanup
-        // process from turning into an ignorable firewall-cleanup failure.
-        installer.setMessageBoxAutomaticAnswer("installationErrorWithIgnore", QMessageBox.Retry);
+        // Qt IFW 4.7 exposes Retry and Ignore for a failed UNDOEXECUTE
+        // operation; it cannot honor Cancel for this dialog. post_uninstall.cmd
+        // owns the retry budget and saves a durable recovery bundle plus a
+        // receipt before returning a failure. Choosing Ignore after that
+        // bounded work prevents IFW itself from getting stuck forever.
+        installer.setMessageBoxAutomaticAnswer("installationErrorWithIgnore", QMessageBox.Ignore);
 
         isDesktopAppProcessRunningMessageLoop();
 

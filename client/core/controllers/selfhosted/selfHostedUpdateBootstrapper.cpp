@@ -9,13 +9,19 @@
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QPointer>
+#include <QSet>
 #include <QThreadPool>
 #include <QTimer>
-#include <QUrl>
 #include <QVariant>
+
+#include <cmath>
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
+
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#endif
 
 #include "core/repositories/secureServersRepository.h"
 #include "core/utils/constants/protocolConstants.h"
@@ -36,12 +42,6 @@ namespace
 #define SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 ""
 #endif
 
-    const QStringList kRequiredPlatforms = {
-        QStringLiteral("windows-x64"),
-        QStringLiteral("linux-x64"),
-        QStringLiteral("android-arm64-v8a"),
-    };
-
     QString shellQuote(const QString &value)
     {
         return QStringLiteral("'") + QString(value).replace(QStringLiteral("'"), QStringLiteral("'\\''")) + QStringLiteral("'");
@@ -59,6 +59,56 @@ namespace
             return {};
         }
         return hash.result().toHex();
+    }
+
+    bool isPathWithinRoot(const QString &path, const QString &root)
+    {
+        const QString normalizedPath = QDir::cleanPath(path);
+        const QString normalizedRoot = QDir::cleanPath(root);
+#if defined(Q_OS_WIN)
+        constexpr Qt::CaseSensitivity caseSensitivity = Qt::CaseInsensitive;
+#else
+        constexpr Qt::CaseSensitivity caseSensitivity = Qt::CaseSensitive;
+#endif
+        return normalizedPath.compare(normalizedRoot, caseSensitivity) == 0
+                || normalizedPath.startsWith(normalizedRoot + u'/', caseSensitivity);
+    }
+
+    bool hasSymlinkOrReparsePoint(const QDir &root, const QString &relativePath)
+    {
+        QString componentPath = root.absolutePath();
+        for (const QString &segment : relativePath.split(u'/', Qt::SkipEmptyParts)) {
+            componentPath = QDir(componentPath).filePath(segment);
+            const QFileInfo componentInfo(componentPath);
+            if (componentInfo.isSymLink()) {
+                return true;
+            }
+#if defined(Q_OS_WIN)
+            const DWORD attributes = GetFileAttributesW(reinterpret_cast<LPCWSTR>(componentPath.utf16()));
+            if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+                return true;
+            }
+#endif
+        }
+        return false;
+    }
+
+    bool canonicalPolicyGeneration(const QJsonValue &value, QString &generationOut)
+    {
+        generationOut.clear();
+        if (!value.isDouble()) {
+            return false;
+        }
+
+        constexpr qint64 kMaximumPolicyGeneration = 9007199254740991LL;
+        const double rawGeneration = value.toDouble(-1.0);
+        if (!std::isfinite(rawGeneration) || rawGeneration < 1.0 || rawGeneration > kMaximumPolicyGeneration
+            || std::floor(rawGeneration) != rawGeneration) {
+            return false;
+        }
+
+        generationOut = QString::number(static_cast<qint64>(rawGeneration));
+        return amnezia::selfhostedUpdates::isCanonicalNonnegativeDecimal(generationOut);
     }
 
     bool decodeManifestPayload(const QJsonObject &manifest, QJsonObject &payloadOut)
@@ -142,25 +192,6 @@ namespace
         return ok;
     }
 
-    QString artifactFileName(const QJsonObject &platform)
-    {
-        const QUrl url(platform.value(QStringLiteral("url")).toString());
-        return QFileInfo(url.path(QUrl::FullyDecoded)).fileName();
-    }
-
-    bool isSha256Hex(const QString &value)
-    {
-        if (value.size() != 64) {
-            return false;
-        }
-
-        for (const QChar ch : value) {
-            if (!((ch >= u'0' && ch <= u'9') || (ch >= u'a' && ch <= u'f') || (ch >= u'A' && ch <= u'F'))) {
-                return false;
-            }
-        }
-        return true;
-    }
 }
 
 SelfHostedUpdateBootstrapper::SelfHostedUpdateBootstrapper(SecureServersRepository *serversRepository, QObject *parent)
@@ -280,31 +311,64 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
         return false;
     }
 
-    QStringList files;
-    const QDir filesDir(root.filePath(kFilesDirName));
-    for (const QString &platform : kRequiredPlatforms) {
-        if (!platforms.contains(platform)) {
-            logger.warning() << "Bundled update manifest is missing platform" << platform;
+    constexpr auto kWindowsPlatform = "windows-x64";
+    const QJsonObject windowsArtifact = platforms.value(QString::fromLatin1(kWindowsPlatform)).toObject();
+    if (windowsArtifact.isEmpty() || windowsArtifact.value(QStringLiteral("openExternal")).toBool()) {
+        logger.warning() << "Bundled update manifest is missing a local platform" << kWindowsPlatform;
+        return false;
+    }
+
+    const QString canonicalRoot = QFileInfo(root.absolutePath()).canonicalFilePath();
+    if (canonicalRoot.isEmpty()) {
+        logger.warning() << "Bundled update payload root cannot be canonicalized" << root.absolutePath();
+        return false;
+    }
+
+    QSet<QString> seenRelativePaths;
+    QList<PayloadFile> files;
+    const auto appendLocalArtifact = [&root, &canonicalRoot, &seenRelativePaths, &files](
+                                             const QString &platform,
+                                             const QJsonObject &platformObject,
+                                             bool isRollback,
+                                             const QString &rollbackGeneration,
+                                             const QString &rollbackVersion) {
+        const QString expectedSha256 = platformObject.value(QStringLiteral("sha256")).toString();
+        if (!amnezia::selfhostedUpdates::isCanonicalSha256(expectedSha256)) {
+            logger.warning() << "Bundled update manifest has invalid artifact sha256 for" << platform;
             return false;
         }
 
-        const QJsonObject platformObject = platforms.value(platform).toObject();
-        const QString fileName = artifactFileName(platformObject);
-        if (fileName.isEmpty()) {
-            logger.warning() << "Bundled update manifest has no artifact file name for" << platform;
+        const QString urlText = platformObject.value(QStringLiteral("url")).toString();
+        QString relativePath;
+        const bool safePath = isRollback
+                ? amnezia::selfhostedUpdates::bundledRollbackArtifactRelativePath(
+                        urlText, rollbackGeneration, rollbackVersion, relativePath)
+                : amnezia::selfhostedUpdates::bundledArtifactRelativePath(urlText, expectedSha256, relativePath);
+        if (!safePath) {
+            logger.warning() << "Bundled update manifest has unsafe artifact URL for" << platform;
             return false;
         }
+        if (seenRelativePaths.contains(relativePath)) {
+            logger.warning() << "Bundled update manifest reuses an artifact path" << relativePath;
+            return false;
+        }
+        seenRelativePaths.insert(relativePath);
 
-        const QString filePath = filesDir.filePath(fileName);
+        const QString filePath = root.filePath(relativePath);
         const QFileInfo artifactInfo(filePath);
         if (!artifactInfo.isFile()) {
             logger.warning() << "Bundled update artifact is missing" << filePath;
             return false;
         }
+        if (hasSymlinkOrReparsePoint(root, relativePath)
+            || !isPathWithinRoot(artifactInfo.canonicalFilePath(), canonicalRoot)) {
+            logger.warning() << "Bundled update artifact escapes payload root" << filePath;
+            return false;
+        }
 
         bool sizeOk = false;
         const qint64 expectedSize = platformObject.value(QStringLiteral("size")).toVariant().toLongLong(&sizeOk);
-        if (!sizeOk || expectedSize < 0) {
+        if (!sizeOk || expectedSize <= 0) {
             logger.warning() << "Bundled update manifest has invalid artifact size for" << platform;
             return false;
         }
@@ -313,23 +377,68 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
             return false;
         }
 
-        const QString expectedSha256 = platformObject.value(QStringLiteral("sha256")).toString().toLower();
-        if (!isSha256Hex(expectedSha256)) {
-            logger.warning() << "Bundled update manifest has invalid artifact sha256 for" << platform;
-            return false;
-        }
         if (fileSha256(filePath) != expectedSha256.toLatin1()) {
             logger.warning() << "Bundled update artifact sha256 mismatch for" << platform << filePath;
             return false;
         }
-        files.append(filePath);
-        payload.fileSha256ByName.insert(QFileInfo(filePath).fileName(), expectedSha256);
+
+        const QString relativeUrlPath = QUrl(urlText, QUrl::StrictMode).path(QUrl::FullyEncoded);
+        files.append({ platform, filePath, relativePath, relativeUrlPath, expectedSha256, expectedSize });
+        return true;
+    };
+
+    for (auto iterator = platforms.constBegin(); iterator != platforms.constEnd(); ++iterator) {
+        const QString platform = iterator.key();
+        const QJsonObject platformObject = iterator.value().toObject();
+        if (platformObject.isEmpty()) {
+            logger.warning() << "Bundled update manifest has invalid platform entry" << platform;
+            return false;
+        }
+        if (platformObject.value(QStringLiteral("openExternal")).toBool()) {
+            continue;
+        }
+        if (!appendLocalArtifact(platform, platformObject, false, QString(), QString())) {
+            return false;
+        }
+    }
+
+    const QJsonObject releasePolicy = decodedPayload.value(QStringLiteral("releasePolicy")).toObject();
+    if (releasePolicy.contains(QStringLiteral("rollback"))) {
+        const QJsonObject rollback = releasePolicy.value(QStringLiteral("rollback")).toObject();
+        if (rollback.isEmpty() || releasePolicy.value(QStringLiteral("schema")).toInt() != 2) {
+            logger.warning() << "Bundled update manifest has invalid rollback policy";
+            return false;
+        }
+
+        QString rollbackGeneration;
+        const QString rollbackVersion = rollback.value(QStringLiteral("version")).toString();
+        if (!canonicalPolicyGeneration(releasePolicy.value(QStringLiteral("generation")), rollbackGeneration)
+            || !amnezia::selfhostedUpdates::isCanonicalReleaseVersion(rollbackVersion)
+            || rollbackVersion != releasePolicy.value(QStringLiteral("previousVersion")).toString()) {
+            logger.warning() << "Bundled update manifest has invalid rollback identity";
+            return false;
+        }
+
+        const QJsonObject rollbackPlatforms = rollback.value(QStringLiteral("platforms")).toObject();
+        if (rollbackPlatforms.isEmpty()) {
+            logger.warning() << "Bundled update manifest has no rollback platforms";
+            return false;
+        }
+        for (auto iterator = rollbackPlatforms.constBegin(); iterator != rollbackPlatforms.constEnd(); ++iterator) {
+            const QString platform = QStringLiteral("rollback:") + iterator.key();
+            const QJsonObject platformObject = iterator.value().toObject();
+            if (platformObject.isEmpty() || platformObject.value(QStringLiteral("openExternal")).toBool()
+                || !appendLocalArtifact(platform, platformObject, true, rollbackGeneration, rollbackVersion)) {
+                logger.warning() << "Bundled update manifest has invalid rollback artifact" << platform;
+                return false;
+            }
+        }
     }
 
     payload.rootDir = root.absolutePath();
     payload.manifestPath = manifestPath;
     payload.version = decodedPayload.value(QStringLiteral("version")).toString();
-    payload.filePaths = files;
+    payload.files = files;
     payload.manifestSha256 = fileSha256(manifestPath);
     return !payload.version.isEmpty() && !payload.manifestSha256.isEmpty();
 }
@@ -424,11 +533,19 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
                 "test \"$(sha256sum %1 | awk '{print $1}')\" = %2\n")
                 .arg(shellQuote(remoteManifest), shellQuote(QString::fromLatin1(payload.manifestSha256)));
 
-        for (const QString &filePath : payload.filePaths) {
-            const QString fileName = QFileInfo(filePath).fileName();
+        for (const PayloadFile &file : payload.files) {
             verifyScript += QStringLiteral("test \"$(sha256sum %1 | awk '{print $1}')\" = %2\n")
-                    .arg(shellQuote(serverDir + QStringLiteral("/files/") + fileName),
-                         shellQuote(payload.fileSha256ByName.value(fileName)));
+                    .arg(shellQuote(serverDir + QStringLiteral("/") + file.relativePath),
+                         shellQuote(file.sha256));
+
+            const QString localHttpUrl = QStringLiteral("http://127.0.0.1:17865/%1").arg(file.relativeUrlPath);
+            const QString containerFetch = QStringLiteral(
+                    "sudo docker exec amnezia-client-updates busybox wget -q -O - %1")
+                    .arg(shellQuote(localHttpUrl));
+            verifyScript += QStringLiteral("test \"$(%1 | sha256sum | awk '{print $1}')\" = %2\n")
+                    .arg(containerFetch, shellQuote(file.sha256));
+            verifyScript += QStringLiteral("test \"$(%1 | wc -c | tr -d ' ')\" = %2\n")
+                    .arg(containerFetch, shellQuote(QString::number(file.size)));
         }
 
         verifyScript += QStringLiteral(
@@ -455,11 +572,16 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
         return true;
     };
 
-    for (const QString &filePath : payload.filePaths) {
-        const QString remotePath = remoteTmp + QStringLiteral("/files/") + QFileInfo(filePath).fileName();
-        error = sshSession.uploadLocalFileToHost(credentials, filePath, remotePath);
+    for (const PayloadFile &file : payload.files) {
+        const QString remotePath = remoteTmp + QStringLiteral("/") + file.relativePath;
+        const QString remoteDirectory = remoteTmp + QStringLiteral("/")
+                + file.relativePath.left(file.relativePath.lastIndexOf(u'/'));
+        error = sshSession.runScript(credentials, QStringLiteral("mkdir -p %1").arg(shellQuote(remoteDirectory)));
+        if (error == amnezia::ErrorCode::NoError) {
+            error = sshSession.uploadLocalFileToHost(credentials, file.localPath, remotePath);
+        }
         if (error != amnezia::ErrorCode::NoError) {
-            logger.warning() << "Failed to upload bundled update artifact" << filePath;
+            logger.warning() << "Failed to upload bundled update artifact" << file.localPath;
             cleanupRemoteTmp();
             return false;
         }
@@ -479,13 +601,13 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
     const QString publishScript = QStringLiteral(
             "set -eu\n"
             "sudo mkdir -p %1 %2\n"
-            "for f in %3/*; do [ -f \"$f\" ] || continue; sudo cp -a \"$f\" %2/; done\n"
+            "sudo cp -a %3 %2/\n"
             "sudo cp -a %4 %5\n"
             "sudo mv -f %5 %6\n"
             "rm -rf %7")
             .arg(shellQuote(serverDir),
                  shellQuote(serverDir + QStringLiteral("/files")),
-                 shellQuote(remoteTmp + QStringLiteral("/files")),
+                 shellQuote(remoteTmp + QStringLiteral("/files/.")),
                  shellQuote(remoteTmp + QStringLiteral("/manifest.json")),
                  shellQuote(serverDir + QStringLiteral("/manifest.json.tmp")),
                  shellQuote(remoteManifest),
