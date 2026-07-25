@@ -110,6 +110,19 @@ int main(int argc, char **argv)
     Utils::initializePath(Logger::systemLogDir());
 
 #ifdef Q_OS_WIN
+    if (argc == 8 &&
+        QString::fromLocal8Bit(argv[1]) ==
+            QStringLiteral("split-tunnel-config-helper")) {
+        QCoreApplication app(argc, argv);
+        Logger::init(true);
+        return WindowsSplitTunnel::runConfigurationHelper(
+            QString::fromLocal8Bit(argv[2]),
+            QString::fromLocal8Bit(argv[3]),
+            QString::fromLocal8Bit(argv[4]),
+            QString::fromLocal8Bit(argv[5]),
+            QString::fromLocal8Bit(argv[6]),
+            QString::fromLocal8Bit(argv[7]));
+    }
     if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("cleanup-firewall")) {
         QCoreApplication app(argc, argv);
         Logger::init(true);

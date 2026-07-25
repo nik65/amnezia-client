@@ -1909,8 +1909,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.1)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2135)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.2)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2136)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -1930,11 +1930,16 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("selfhosted_rebuild_", rebuild)
         self.assertIn("local_release.ps1", rebuild)
 
-    def test_windows_split_tunnel_creates_driver_dns_sublayer(self) -> None:
+    def test_windows_split_tunnel_uses_race_fixed_driver_and_bounded_helper(self) -> None:
         firewall = (REPO_ROOT / "client/platforms/windows/daemon/windowsfirewall.cpp").read_text(encoding="utf-8")
+        firewall_header = (REPO_ROOT / "client/platforms/windows/daemon/windowsfirewall.h").read_text(encoding="utf-8")
         split_tunnel = (REPO_ROOT / "client/platforms/windows/daemon/windowssplittunnel.cpp").read_text(encoding="utf-8")
+        split_tunnel_header = (REPO_ROOT / "client/platforms/windows/daemon/windowssplittunnel.h").read_text(encoding="utf-8")
+        service_main = (REPO_ROOT / "service/server/main.cpp").read_text(encoding="utf-8")
+        root_conan = (REPO_ROOT / "conanfile.py").read_text(encoding="utf-8")
+        recipe = (REPO_ROOT / "recipes/win-split-tunnel/conanfile.py").read_text(encoding="utf-8")
 
-        self.assertIn("win-split-tunnel v1.2.5.0 uses this hardcoded DNS sublayer key", firewall)
+        self.assertIn("win-split-tunnel v1.3.0.0 at initialization", firewall)
         self.assertIn("0x60090787, 0xcca1, 0x4937", firewall)
         self.assertIn("Amnezia-SplitTunnel-DNS-Sublayer", firewall)
         self.assertIn("Persistent DNS filters shared with the split-tunnel driver", firewall)
@@ -1942,8 +1947,50 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("blockTrafficOnPort(53, MED_WEIGHT, \"Block all DNS\",\n                          ST_DRIVER_DNS_SUBLAYER_KEY", firewall)
         self.assertIn("FWP_E_SUBLAYER_NOT_FOUND", firewall)
         self.assertIn("baselineExists && dnsExists", firewall)
-        self.assertIn("IOCTL_INITIALIZE CTL_CODE(0x8000, 1, METHOD_NEITHER", split_tunnel)
-        self.assertIn("DeviceIoControl(driverIO, IOCTL_INITIALIZE, nullptr, 0, nullptr, 0", split_tunnel)
+        self.assertIn("splitTunnelBaselineSublayerKey", firewall_header)
+        self.assertIn("splitTunnelDnsSublayerKey", firewall_header)
+        self.assertIn("IOCTL_INITIALIZE CTL_CODE(0x8000, 1, METHOD_BUFFERED", split_tunnel)
+        self.assertIn("initDriver(driverFile, sublayerGuids)", split_tunnel)
+        self.assertIn("sendInitializeIoctl(driverIO, sublayerGuids)", split_tunnel)
+        self.assertIn("sendInitializeIoctl(m_driver, m_sublayerGuids)", split_tunnel)
+        self.assertNotIn("IOCTL_INITIALIZE, nullptr, 0", split_tunnel)
+        self.assertIn("sizeof(SUBLAYER_GUIDS) == 2 * sizeof(GUID)", split_tunnel_header)
+
+        self.assertIn('version = "1.3.0.0"', recipe)
+        self.assertIn('self.requires("win-split-tunnel/1.3.0.0")', root_conan)
+        self.assertNotIn('self.requires("win-split-tunnel/1.2.5.0")', root_conan)
+        self.assertIn("5b6f46cde692acb77ee74b37b9fd3f1678c45a52", recipe)
+        self.assertIn("10cf25bbcfe51fd663a1fec88a98e9b858f3a579589bb2ec496b66e4fdd1b201", recipe)
+        self.assertIn("6af8b3bfe5aa095d5276187558c7c7d3a3e0c174b34406cd6c4b3f8e6ffa6534", recipe)
+
+        self.assertIn("CONFIGURATION_HELPER_TIMEOUT_MS = 5000", split_tunnel)
+        self.assertIn("CreateJobObjectW", split_tunnel)
+        self.assertIn("JOB_OBJECT_LIMIT_ACTIVE_PROCESS", split_tunnel)
+        self.assertIn("CREATE_SUSPENDED", split_tunnel)
+        self.assertIn("CreateFileMappingW", split_tunnel)
+        self.assertIn("SetEvent(configuredEvent)", split_tunnel)
+        self.assertIn("SetEvent(commitEvent)", split_tunnel)
+        self.assertIn("controlEvents = {abortEvent, parentProcess", split_tunnel)
+        self.assertIn("stopSignals = {abortEvent, parentProcess}", split_tunnel)
+        self.assertEqual(split_tunnel.count("parentStoppedOrAborted()"), 2)
+        pre_ioctl_guard = split_tunnel.rfind(
+            "parentStoppedOrAborted()",
+            0,
+            split_tunnel.find("DeviceIoControl(driver, IOCTL_SET_CONFIGURATION"),
+        )
+        self.assertGreaterEqual(pre_ioctl_guard, 0)
+        self.assertGreater(
+            pre_ioctl_guard,
+            split_tunnel.find("HANDLE driver = openSplitTunnelDriver()"),
+        )
+        self.assertIn("OpenProcess(SYNCHRONIZE, TRUE, GetCurrentProcessId())", split_tunnel)
+        self.assertIn("reapQuarantinedConfigurationHelper", split_tunnel)
+        self.assertNotIn("WriteFile(", split_tunnel)
+        self.assertIn("quarantineConfigurationHelper", split_tunnel)
+        self.assertIn("state is indeterminate until late cleanup completes", split_tunnel)
+        self.assertIn("IOCTL_CLEAR_CONFIGURATION", split_tunnel)
+        self.assertNotIn("DeviceIoControl(m_driver, IOCTL_SET_CONFIGURATION", split_tunnel)
+        self.assertIn("split-tunnel-config-helper", service_main)
 
     def test_deploy_upload_artifacts_have_stable_names(self) -> None:
         deploy_workflow = read_workflow_if_enabled(REPO_ROOT / ".github/workflows/deploy.yml")
@@ -4929,6 +4976,9 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         cls.qif_control_script = (
             REPO_ROOT / "deploy/installer/qif/controlscript.js"
         ).read_text(encoding="utf-8")
+        cls.update_controller = (
+            REPO_ROOT / "client/core/controllers/updateController.cpp"
+        ).read_text(encoding="utf-8")
         cls.wix_service_patch = (
             REPO_ROOT / "deploy/installer/wix/service_install_patch.xml"
         ).read_text(encoding="utf-8")
@@ -5294,6 +5344,78 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertNotIn("UNDOEXECUTE", create_body[post_install:start_service])
         self.assertNotIn('installer.execute("net", ["start"', finish_body)
         self.assertNotIn('installer.execute("sc", ["failure"', finish_body)
+
+    def test_qif_windows_driver_upgrade_is_uninstall_first_and_fail_closed(self) -> None:
+        controller = self.function_body(
+            "function Controller ()", self.qif_control_script
+        )
+        service_check = self.function_body(
+            "function windowsServiceIsAbsent", self.qif_control_script
+        )
+        cleanup_check = self.function_body(
+            "function windowsUpgradeCleanupIsComplete", self.qif_control_script
+        )
+        component_ops = self.function_body(
+            "Component.prototype.createOperations", self.qif_component_script
+        )
+
+        updater_guard = controller.find(
+            "if (runningOnWindows() && installer.isUpdater())"
+        )
+        installer_dispatch = controller.find("if (installer.isInstaller())")
+        self.assertGreaterEqual(updater_guard, 0)
+        self.assertLess(updater_guard, installer_dispatch)
+        self.assertIn("full offline AmneziaVPN installer", controller)
+        self.assertIn("installer.setCancelled()", controller[updater_guard:installer_dispatch])
+
+        component_updater_guard = component_ops.find("if (runningOnWindows()")
+        default_extract_creation = component_ops.find("component.createOperations()")
+        self.assertGreaterEqual(component_updater_guard, 0)
+        self.assertLess(component_updater_guard, default_extract_creation)
+        self.assertIn(
+            "installer.isUpdater() || component.updateRequested()",
+            component_ops[:default_extract_creation],
+        )
+        self.assertIn("throw new Error", component_ops[:default_extract_creation])
+
+        self.assertIn('var systemSc = "C:/Windows/System32/sc.exe"', service_check)
+        self.assertIn("exitCode === 1060", service_check)
+        self.assertIn("return false", service_check)
+        for service_name in (
+            "AmneziaVPN-service",
+            "AmneziaVPNSplitTunnel",
+            "AmneziaWGTunnel$AmneziaVPN",
+        ):
+            self.assertIn(service_name, cleanup_check)
+        for residue in (
+            "maintenancetool.exe",
+            "AmneziaVPN-service.exe",
+            "mullvad-split-tunnel.sys",
+            "uninstall-cleanup-failed.txt",
+            "uninstall-recovery-required.txt",
+        ):
+            self.assertIn(residue, cleanup_check)
+
+        uninstall_launch = controller.find(
+            "var resultArray = installer.execute(uninstallerPath);"
+        )
+        cleanup_postcondition = controller.find(
+            "!windowsUpgradeCleanupIsComplete()"
+        )
+        uninstaller_dispatch = controller.find(
+            "} else if (installer.isUninstaller())"
+        )
+        self.assertGreaterEqual(uninstall_launch, 0)
+        self.assertGreater(cleanup_postcondition, uninstall_launch)
+        self.assertLess(cleanup_postcondition, uninstaller_dispatch)
+
+        launch = self.function_body(
+            "int UpdateController::runWindowsInstaller(", self.update_controller
+        )
+        self.assertIn("CreateProcessW(", launch)
+        self.assertIn("resolvedInstallerPath.utf16()", launch)
+        self.assertIn('const QString commandLine = QStringLiteral("\\\"")', launch)
+        self.assertNotIn("maintenancetool", launch.lower())
 
     @unittest.skipUnless(os.name == "nt", "Windows PowerShell runner test")
     def test_qif_batch_runner_rejects_untrusted_install_directory(self) -> None:

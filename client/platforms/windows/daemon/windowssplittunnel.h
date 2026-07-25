@@ -8,7 +8,9 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <cstddef>
 #include <memory>
+#include <vector>
 
 // Note: the ws2tcpip.h import must come before the others.
 // clang-format off
@@ -30,6 +32,14 @@ class WindowsSplitTunnel final {
    * @return std::unique_ptr<WindowsSplitTunnel> - Is null on failure.
    */
   static std::unique_ptr<WindowsSplitTunnel> create(WindowsFirewall* fw);
+
+  /** Runs the isolated SET_CONFIGURATION helper process. */
+  static int runConfigurationHelper(const QString& mappingHandle,
+                                    const QString& configuredEventHandle,
+                                    const QString& commitEventHandle,
+                                    const QString& abortEventHandle,
+                                    const QString& parentProcessHandle,
+                                    const QString& configSize);
 
   /**
    * @brief Releases any WFP objects owned by a surviving driver session.
@@ -82,15 +92,34 @@ class WindowsSplitTunnel final {
   };
 
  private:
+  // win-split-tunnel v1.3.0.0 initialize IOCTL ABI. Keep the field order and
+  // size synchronized with upstream ST_SUBLAYER_GUIDS.
+  struct SUBLAYER_GUIDS {
+    GUID Baseline;
+    GUID Dns;
+  };
+  static_assert(sizeof(SUBLAYER_GUIDS) == 2 * sizeof(GUID));
+
   // Installes the Kernel Driver as Driver Service
   static SC_HANDLE installDriver();
   static bool uninstallDriver();
   static bool isInstalled();
-  static bool initDriver(HANDLE driverIO);
+  static bool initDriver(HANDLE driverIO,
+                         const SUBLAYER_GUIDS& sublayerGuids);
+  static bool sendInitializeIoctl(HANDLE driverIO,
+                                  const SUBLAYER_GUIDS& sublayerGuids);
   static DRIVER_STATE getState(HANDLE driverIO);
   static bool resetDriver(HANDLE driverIO);
+  bool applyConfigurationBounded(const std::vector<uint8_t>& config);
+  void quarantineConfigurationHelper(HANDLE job, HANDLE process,
+                                     HANDLE abortEvent);
+  bool reapQuarantinedConfigurationHelper();
 
   HANDLE m_driver = INVALID_HANDLE_VALUE;
+  SUBLAYER_GUIDS m_sublayerGuids{};
+  HANDLE m_quarantinedHelperJob = nullptr;
+  HANDLE m_quarantinedHelperProcess = nullptr;
+  HANDLE m_quarantinedHelperAbortEvent = nullptr;
   DRIVER_STATE getState();
   QString stateString();
 

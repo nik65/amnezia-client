@@ -36,10 +36,9 @@
 
 #define IPV6_ADDRESS_SIZE 16
 
-// Shared sublayers expected by win-split-tunnel v1.2.5.0.
+// Shared sublayers supplied to win-split-tunnel v1.3.0.0 at initialization.
 DEFINE_GUID(ST_DRIVER_BASELINE_SUBLAYER_KEY, 0xc78056ff, 0x2bc1, 0x4211, 0xaa,
             0xdd, 0x7f, 0x35, 0x8d, 0xef, 0x20, 0x2d);
-// win-split-tunnel v1.2.5.0 uses this hardcoded DNS sublayer key.
 DEFINE_GUID(ST_DRIVER_DNS_SUBLAYER_KEY, 0x60090787, 0xcca1, 0x4937, 0xaa, 0xce,
             0x51, 0x25, 0x6e, 0xf4, 0x81, 0xf3);
 // Amnezia-specific provider ownership boundary. Never reuse a third-party
@@ -92,6 +91,14 @@ bool sublayerExists(HANDLE wfp, const GUID& key, const wchar_t* name,
   return false;
 }
 }  // namespace
+
+const GUID& WindowsFirewall::splitTunnelBaselineSublayerKey() {
+  return ST_DRIVER_BASELINE_SUBLAYER_KEY;
+}
+
+const GUID& WindowsFirewall::splitTunnelDnsSublayerKey() {
+  return ST_DRIVER_DNS_SUBLAYER_KEY;
+}
 
 WindowsFirewall* WindowsFirewall::create(QObject* parent) {
   if (s_instance != nullptr) {

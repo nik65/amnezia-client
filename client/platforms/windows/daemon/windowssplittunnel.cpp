@@ -6,8 +6,13 @@
 
 #include <qassert.h>
 
+#include <array>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "../windowscommons.h"
 #include "../windowsservicemanager.h"
@@ -89,7 +94,7 @@ using ProcessInfo = struct {
 #endif
 
 // Known ControlCodes
-#define IOCTL_INITIALIZE CTL_CODE(0x8000, 1, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define IOCTL_INITIALIZE CTL_CODE(0x8000, 1, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 #define IOCTL_DEQUEUE_EVENT \
   CTL_CODE(0x8000, 2, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -123,11 +128,57 @@ constexpr static const auto DRIVER_SYMLINK = L"\\\\.\\MULLVADSPLITTUNNEL";
 constexpr static const auto DRIVER_FILENAME = "mullvad-split-tunnel.sys";
 constexpr static const auto DRIVER_SERVICE_NAME = L"AmneziaVPNSplitTunnel";
 constexpr static const auto MV_SERVICE_NAME = L"MullvadVPN";
+constexpr static const auto CONFIGURATION_HELPER_COMMAND =
+    L"split-tunnel-config-helper";
+constexpr static DWORD CONFIGURATION_HELPER_TIMEOUT_MS = 5000;
+constexpr static DWORD CONFIGURATION_HELPER_MAX_BYTES = 16 * 1024 * 1024;
+
+enum CONFIGURATION_HELPER_EXIT_CODE {
+  CONFIGURATION_HELPER_SUCCESS = 0,
+  CONFIGURATION_HELPER_INVALID_INPUT = 2,
+  CONFIGURATION_HELPER_DRIVER_OPEN_FAILED = 3,
+  CONFIGURATION_HELPER_IOCTL_FAILED = 4,
+  CONFIGURATION_HELPER_ABORTED = 5,
+};
 
 #pragma endregion
 
 namespace {
 Logger logger("WindowsSplitTunnel");
+
+QString inheritedHandleArgument(HANDLE handle) {
+  return QString::number(static_cast<qulonglong>(
+      reinterpret_cast<std::uintptr_t>(handle)));
+}
+
+HANDLE parseInheritedHandle(const QString& value) {
+  bool ok = false;
+  const qulonglong raw = value.toULongLong(&ok);
+  if (!ok || raw == 0 ||
+      raw > static_cast<qulonglong>(
+                std::numeric_limits<std::uintptr_t>::max())) {
+    return INVALID_HANDLE_VALUE;
+  }
+  return reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(raw));
+}
+
+HANDLE openSplitTunnelDriver() {
+  return CreateFileW(DRIVER_SYMLINK, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                     OPEN_EXISTING, 0, nullptr);
+}
+
+HANDLE reopenSplitTunnelDriverBounded() {
+  constexpr DWORD retryCount = 20;
+  constexpr DWORD retryDelayMs = 50;
+  for (DWORD attempt = 0; attempt < retryCount; ++attempt) {
+    HANDLE driver = openSplitTunnelDriver();
+    if (driver != INVALID_HANDLE_VALUE) {
+      return driver;
+    }
+    Sleep(retryDelayMs);
+  }
+  return INVALID_HANDLE_VALUE;
+}
 
 ProcessInfo getProcessInfo(HANDLE process, const PROCESSENTRY32W& processMeta) {
   ProcessInfo pi;
@@ -319,15 +370,23 @@ std::unique_ptr<WindowsSplitTunnel> WindowsSplitTunnel::create(
       return nullptr;
     }
   }
-  if (!initDriver(driverFile)) {
+  const SUBLAYER_GUIDS sublayerGuids = {
+      WindowsFirewall::splitTunnelBaselineSublayerKey(),
+      WindowsFirewall::splitTunnelDnsSublayerKey(),
+  };
+  if (!initDriver(driverFile, sublayerGuids)) {
     logger.error() << "Failed to init driver";
+    CloseHandle(driverFile);
     return nullptr;
   }
   // We're ready to talk to the driver, it's alive and setup.
-  return std::make_unique<WindowsSplitTunnel>(driverFile);
+  auto splitTunnel = std::make_unique<WindowsSplitTunnel>(driverFile);
+  splitTunnel->m_sublayerGuids = sublayerGuids;
+  return splitTunnel;
 }
 
-bool WindowsSplitTunnel::initDriver(HANDLE driverIO) {
+bool WindowsSplitTunnel::initDriver(
+    HANDLE driverIO, const SUBLAYER_GUIDS& sublayerGuids) {
   // We need to now check the state and init it, if required
   auto state = getState(driverIO);
   if (state == STATE_UNKNOWN) {
@@ -347,10 +406,7 @@ bool WindowsSplitTunnel::initDriver(HANDLE driverIO) {
     }
   }
 
-  DWORD bytesReturned;
-  auto ok = DeviceIoControl(driverIO, IOCTL_INITIALIZE, nullptr, 0, nullptr, 0,
-                            &bytesReturned, nullptr);
-  if (!ok) {
+  if (!sendInitializeIoctl(driverIO, sublayerGuids)) {
     auto err = GetLastError();
     logger.error() << "Driver init failed err -" << err;
     logger.error() << "State:" << getState(driverIO);
@@ -368,6 +424,25 @@ WindowsSplitTunnel::WindowsSplitTunnel(HANDLE driverIO) : m_driver(driverIO) {
 }
 
 WindowsSplitTunnel::~WindowsSplitTunnel() {
+  if (m_quarantinedHelperAbortEvent != nullptr) {
+    SetEvent(m_quarantinedHelperAbortEvent);
+  }
+  // Never join or terminate a helper that is potentially stuck inside the
+  // kernel driver. Its inherited abort event remains signaled after these
+  // parent handles close, so a late IOCTL completion can clear its ruleset and
+  // exit without blocking daemon shutdown.
+  if (m_quarantinedHelperJob != nullptr) {
+    CloseHandle(m_quarantinedHelperJob);
+    m_quarantinedHelperJob = nullptr;
+  }
+  if (m_quarantinedHelperProcess != nullptr) {
+    CloseHandle(m_quarantinedHelperProcess);
+    m_quarantinedHelperProcess = nullptr;
+  }
+  if (m_quarantinedHelperAbortEvent != nullptr) {
+    CloseHandle(m_quarantinedHelperAbortEvent);
+    m_quarantinedHelperAbortEvent = nullptr;
+  }
   if (m_driver != INVALID_HANDLE_VALUE) {
     const DRIVER_STATE state = getState(m_driver);
     if (state >= STATE_INITIALIZED && !resetDriver(m_driver)) {
@@ -379,6 +454,10 @@ WindowsSplitTunnel::~WindowsSplitTunnel() {
 }
 
 bool WindowsSplitTunnel::excludeApps(const QStringList& appPaths) {
+  if (m_driver == INVALID_HANDLE_VALUE &&
+      !reapQuarantinedConfigurationHelper()) {
+    return false;
+  }
   auto state = getState();
   if (state != STATE_READY && state != STATE_RUNNING) {
     logger.warning() << "Driver is not in the right State to set Rules"
@@ -393,18 +472,385 @@ bool WindowsSplitTunnel::excludeApps(const QStringList& appPaths) {
     return false;
   }
 
-  DWORD bytesReturned;
-  auto ok = DeviceIoControl(m_driver, IOCTL_SET_CONFIGURATION, &config[0],
-                            (DWORD)config.size(), nullptr, 0, &bytesReturned,
-                            nullptr);
-  if (!ok) {
-    auto err = GetLastError();
-    WindowsUtils::windowsLog("Set Config Failed:");
-    logger.error() << "Failed to set Config err code " << err;
+  if (!applyConfigurationBounded(config)) {
     return false;
   }
   logger.debug() << "New Configuration applied: " << stateString();
   return true;
+}
+
+bool WindowsSplitTunnel::sendInitializeIoctl(
+    HANDLE driverIO, const SUBLAYER_GUIDS& sublayerGuids) {
+  DWORD bytesReturned = 0;
+  return DeviceIoControl(
+             driverIO, IOCTL_INITIALIZE,
+             const_cast<SUBLAYER_GUIDS*>(&sublayerGuids),
+             sizeof(sublayerGuids), nullptr, 0, &bytesReturned, nullptr) !=
+         FALSE;
+}
+
+int WindowsSplitTunnel::runConfigurationHelper(
+    const QString& mappingHandleValue,
+    const QString& configuredEventHandleValue,
+    const QString& commitEventHandleValue,
+    const QString& abortEventHandleValue,
+    const QString& parentProcessHandleValue,
+    const QString& configSizeValue) {
+  HANDLE mappingHandle = parseInheritedHandle(mappingHandleValue);
+  HANDLE configuredEvent = parseInheritedHandle(configuredEventHandleValue);
+  HANDLE commitEvent = parseInheritedHandle(commitEventHandleValue);
+  HANDLE abortEvent = parseInheritedHandle(abortEventHandleValue);
+  HANDLE parentProcess = parseInheritedHandle(parentProcessHandleValue);
+  bool sizeValid = false;
+  const qulonglong rawConfigSize = configSizeValue.toULongLong(&sizeValid);
+  if (mappingHandle == INVALID_HANDLE_VALUE ||
+      configuredEvent == INVALID_HANDLE_VALUE ||
+      commitEvent == INVALID_HANDLE_VALUE ||
+      abortEvent == INVALID_HANDLE_VALUE || !sizeValid ||
+      parentProcess == INVALID_HANDLE_VALUE ||
+      rawConfigSize < sizeof(CONFIGURATION_HEADER) ||
+      rawConfigSize > CONFIGURATION_HELPER_MAX_BYTES) {
+    return CONFIGURATION_HELPER_INVALID_INPUT;
+  }
+  auto closeInheritedHandles = qScopeGuard([&] {
+    CloseHandle(mappingHandle);
+    CloseHandle(configuredEvent);
+    CloseHandle(commitEvent);
+    CloseHandle(abortEvent);
+    CloseHandle(parentProcess);
+  });
+
+  const DWORD configSize = static_cast<DWORD>(rawConfigSize);
+  const void* config =
+      MapViewOfFile(mappingHandle, FILE_MAP_READ, 0, 0, configSize);
+  if (config == nullptr) {
+    return CONFIGURATION_HELPER_INVALID_INPUT;
+  }
+  auto unmapConfig =
+      qScopeGuard([&] { UnmapViewOfFile(const_cast<void*>(config)); });
+  const auto* header =
+      reinterpret_cast<const CONFIGURATION_HEADER*>(config);
+  if (header->TotalLength != configSize ||
+      header->NumEntries >
+          (configSize - sizeof(CONFIGURATION_HEADER)) /
+              sizeof(CONFIGURATION_ENTRY)) {
+    return CONFIGURATION_HELPER_INVALID_INPUT;
+  }
+
+  const auto* entries =
+      reinterpret_cast<const CONFIGURATION_ENTRY*>(header + 1);
+  const SIZE_T stringRegionOffset =
+      sizeof(CONFIGURATION_HEADER) +
+      header->NumEntries * sizeof(CONFIGURATION_ENTRY);
+  const SIZE_T stringRegionSize = configSize - stringRegionOffset;
+  for (SIZE_T i = 0; i < header->NumEntries; ++i) {
+    const CONFIGURATION_ENTRY& entry = entries[i];
+    if (entry.ImageNameLength == 0 ||
+        entry.ImageNameLength % sizeof(wchar_t) != 0 ||
+        entry.ImageNameOffset % sizeof(wchar_t) != 0 ||
+        entry.ImageNameOffset > stringRegionSize ||
+        entry.ImageNameLength > stringRegionSize - entry.ImageNameOffset) {
+      return CONFIGURATION_HELPER_INVALID_INPUT;
+    }
+  }
+  const auto parentStoppedOrAborted = [&]() {
+    const std::array<HANDLE, 2> stopSignals = {abortEvent, parentProcess};
+    const DWORD wait =
+        WaitForMultipleObjects(static_cast<DWORD>(stopSignals.size()),
+                               stopSignals.data(), FALSE, 0);
+    // WAIT_TIMEOUT is the only result proving both the parent and request are
+    // still live.  Invalid/inconclusive inherited state must fail closed.
+    return wait != WAIT_TIMEOUT;
+  };
+  if (parentStoppedOrAborted()) {
+    return CONFIGURATION_HELPER_ABORTED;
+  }
+
+  HANDLE driver = openSplitTunnelDriver();
+  if (driver == INVALID_HANDLE_VALUE) {
+    return CONFIGURATION_HELPER_DRIVER_OPEN_FAILED;
+  }
+  auto closeDriver = qScopeGuard([&] { CloseHandle(driver); });
+
+  // Recheck immediately before the mutating IOCTL.  The service may have
+  // exited while this helper was waiting for the driver's exclusive handle.
+  if (parentStoppedOrAborted()) {
+    return CONFIGURATION_HELPER_ABORTED;
+  }
+
+  DWORD bytesReturned = 0;
+  const bool configured =
+      DeviceIoControl(driver, IOCTL_SET_CONFIGURATION,
+                      const_cast<void*>(config), configSize, nullptr, 0,
+                      &bytesReturned, nullptr) != FALSE;
+  if (!configured) {
+    logger.error() << "Split-tunnel configuration helper IOCTL failed:"
+                   << GetLastError();
+    SetEvent(configuredEvent);
+    return CONFIGURATION_HELPER_IOCTL_FAILED;
+  }
+
+  // Two-phase handoff closes the timeout race: a configuration is never
+  // considered accepted until the parent explicitly commits it. On timeout,
+  // abort wins if both control events become signaled together.
+  SetEvent(configuredEvent);
+  const std::array<HANDLE, 3> controlEvents = {abortEvent, parentProcess,
+                                               commitEvent};
+  const DWORD control =
+      WaitForMultipleObjects(static_cast<DWORD>(controlEvents.size()),
+                             controlEvents.data(), FALSE, INFINITE);
+  if (control != WAIT_OBJECT_0 + 2) {
+    // The parent already continued without split tunneling. If the original
+    // request completed late, remove that late ruleset before releasing the
+    // quarantined device handle. This is best effort because the v1.3 driver
+    // ABI does not support cancelable/generation-bound requests.
+    DeviceIoControl(driver, IOCTL_CLEAR_CONFIGURATION, nullptr, 0, nullptr, 0,
+                    &bytesReturned, nullptr);
+    return CONFIGURATION_HELPER_ABORTED;
+  }
+  return CONFIGURATION_HELPER_SUCCESS;
+}
+
+void WindowsSplitTunnel::quarantineConfigurationHelper(
+    HANDLE job, HANDLE process, HANDLE abortEvent) {
+  SetEvent(abortEvent);
+  m_quarantinedHelperJob = job;
+  m_quarantinedHelperProcess = process;
+  m_quarantinedHelperAbortEvent = abortEvent;
+  logger.error()
+      << "Split-tunnel configuration timed out after"
+      << CONFIGURATION_HELPER_TIMEOUT_MS
+      << "ms; helper and driver quarantined while main VPN activation resumes; "
+         "split-tunnel state is indeterminate until late cleanup completes";
+}
+
+bool WindowsSplitTunnel::reapQuarantinedConfigurationHelper() {
+  if (m_quarantinedHelperProcess == nullptr) {
+    return m_driver != INVALID_HANDLE_VALUE;
+  }
+  if (WaitForSingleObject(m_quarantinedHelperProcess, 0) != WAIT_OBJECT_0) {
+    logger.warning() << "Split-tunnel helper is still quarantined";
+    return false;
+  }
+
+  CloseHandle(m_quarantinedHelperJob);
+  CloseHandle(m_quarantinedHelperProcess);
+  CloseHandle(m_quarantinedHelperAbortEvent);
+  m_quarantinedHelperJob = nullptr;
+  m_quarantinedHelperProcess = nullptr;
+  m_quarantinedHelperAbortEvent = nullptr;
+
+  m_driver = reopenSplitTunnelDriverBounded();
+  if (m_driver == INVALID_HANDLE_VALUE) {
+    logger.error() << "Failed to reopen split-tunnel driver after quarantine";
+    return false;
+  }
+  logger.info() << "Split-tunnel helper quarantine cleared";
+  return true;
+}
+
+bool WindowsSplitTunnel::applyConfigurationBounded(
+    const std::vector<uint8_t>& config) {
+  if (m_driver == INVALID_HANDLE_VALUE ||
+      m_quarantinedHelperJob != nullptr || config.empty() ||
+      config.size() > CONFIGURATION_HELPER_MAX_BYTES ||
+      config.size() > std::numeric_limits<DWORD>::max()) {
+    logger.error() << "Refusing invalid or quarantined split-tunnel "
+                      "configuration request";
+    return false;
+  }
+
+  SECURITY_ATTRIBUTES inheritableAttributes{};
+  inheritableAttributes.nLength = sizeof(inheritableAttributes);
+  inheritableAttributes.bInheritHandle = TRUE;
+
+  const DWORD configSize = static_cast<DWORD>(config.size());
+  HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE,
+                                      &inheritableAttributes, PAGE_READWRITE,
+                                      0, configSize, nullptr);
+  if (mapping == nullptr) {
+    WindowsUtils::windowsLog(
+        "Failed to create split-tunnel helper memory mapping");
+    return false;
+  }
+  auto closeMapping = qScopeGuard([&] { CloseHandle(mapping); });
+  void* mappingView =
+      MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, configSize);
+  if (mappingView == nullptr) {
+    WindowsUtils::windowsLog(
+        "Failed to map split-tunnel helper configuration");
+    return false;
+  }
+  std::memcpy(mappingView, config.data(), configSize);
+  UnmapViewOfFile(mappingView);
+
+  HANDLE configuredEvent =
+      CreateEventW(&inheritableAttributes, TRUE, FALSE, nullptr);
+  HANDLE commitEvent =
+      CreateEventW(&inheritableAttributes, TRUE, FALSE, nullptr);
+  HANDLE abortEvent =
+      CreateEventW(&inheritableAttributes, TRUE, FALSE, nullptr);
+  if (configuredEvent == nullptr || commitEvent == nullptr ||
+      abortEvent == nullptr) {
+    if (configuredEvent != nullptr) {
+      CloseHandle(configuredEvent);
+    }
+    if (commitEvent != nullptr) {
+      CloseHandle(commitEvent);
+    }
+    if (abortEvent != nullptr) {
+      CloseHandle(abortEvent);
+    }
+    WindowsUtils::windowsLog(
+        "Failed to create split-tunnel helper control events");
+    return false;
+  }
+  auto closeConfiguredEvent =
+      qScopeGuard([&] { CloseHandle(configuredEvent); });
+  auto closeCommitEvent = qScopeGuard([&] { CloseHandle(commitEvent); });
+  auto closeAbortEvent = qScopeGuard([&] { CloseHandle(abortEvent); });
+
+  HANDLE parentProcess =
+      OpenProcess(SYNCHRONIZE, TRUE, GetCurrentProcessId());
+  if (parentProcess == nullptr) {
+    WindowsUtils::windowsLog(
+        "Failed to create split-tunnel helper parent monitor");
+    return false;
+  }
+  auto closeParentProcess = qScopeGuard([&] { CloseHandle(parentProcess); });
+
+  HANDLE job = CreateJobObjectW(nullptr, nullptr);
+  if (job == nullptr) {
+    WindowsUtils::windowsLog("Failed to create split-tunnel helper job");
+    return false;
+  }
+  auto closeJob = qScopeGuard([&] { CloseHandle(job); });
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobInfo{};
+  jobInfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+  jobInfo.BasicLimitInformation.ActiveProcessLimit = 1;
+  if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                               &jobInfo, sizeof(jobInfo))) {
+    WindowsUtils::windowsLog("Failed to constrain split-tunnel helper job");
+    return false;
+  }
+
+  SIZE_T attributeListSize = 0;
+  InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeListSize);
+  auto attributeStorage = std::make_unique<std::byte[]>(attributeListSize);
+  auto* attributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
+      attributeStorage.get());
+  if (!InitializeProcThreadAttributeList(attributeList, 1, 0,
+                                         &attributeListSize)) {
+    WindowsUtils::windowsLog(
+        "Failed to initialize split-tunnel helper handle list");
+    return false;
+  }
+  auto deleteAttributeList =
+      qScopeGuard([&] { DeleteProcThreadAttributeList(attributeList); });
+  const std::array<HANDLE, 5> inheritedHandles = {
+      mapping, configuredEvent, commitEvent, abortEvent, parentProcess};
+  if (!UpdateProcThreadAttribute(
+          attributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+          const_cast<HANDLE*>(inheritedHandles.data()),
+          sizeof(inheritedHandles), nullptr, nullptr)) {
+    WindowsUtils::windowsLog(
+        "Failed to restrict split-tunnel helper inherited handles");
+    return false;
+  }
+
+  const std::wstring executable =
+      QCoreApplication::applicationFilePath().toStdWString();
+  std::wstring commandLine = L"\"" + executable + L"\" " +
+                             CONFIGURATION_HELPER_COMMAND + L" " +
+                             inheritedHandleArgument(mapping).toStdWString() +
+                             L" " +
+                             inheritedHandleArgument(configuredEvent)
+                                 .toStdWString() +
+                             L" " +
+                             inheritedHandleArgument(commitEvent)
+                                 .toStdWString() +
+                             L" " +
+                             inheritedHandleArgument(abortEvent).toStdWString() +
+                             L" " +
+                             inheritedHandleArgument(parentProcess)
+                                 .toStdWString() +
+                             L" " + std::to_wstring(configSize);
+  std::vector<wchar_t> mutableCommandLine(commandLine.begin(),
+                                          commandLine.end());
+  mutableCommandLine.push_back(L'\0');
+
+  STARTUPINFOEXW startupInfo{};
+  startupInfo.StartupInfo.cb = sizeof(startupInfo);
+  startupInfo.lpAttributeList = attributeList;
+  PROCESS_INFORMATION processInfo{};
+
+  // The helper must be the sole owner of the exclusive device handle while
+  // SET_CONFIGURATION is in flight.
+  CloseHandle(m_driver);
+  m_driver = INVALID_HANDLE_VALUE;
+  const bool created = CreateProcessW(
+      executable.c_str(), mutableCommandLine.data(), nullptr, nullptr, TRUE,
+      EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED,
+      nullptr, nullptr, &startupInfo.StartupInfo, &processInfo) != FALSE;
+  if (!created) {
+    WindowsUtils::windowsLog("Failed to start split-tunnel helper process");
+    m_driver = reopenSplitTunnelDriverBounded();
+    return false;
+  }
+  auto closeProcess = qScopeGuard([&] { CloseHandle(processInfo.hProcess); });
+  auto closeThread = qScopeGuard([&] { CloseHandle(processInfo.hThread); });
+
+  if (!AssignProcessToJobObject(job, processInfo.hProcess) ||
+      ResumeThread(processInfo.hThread) == static_cast<DWORD>(-1)) {
+    WindowsUtils::windowsLog("Failed to activate split-tunnel helper process");
+    TerminateProcess(processInfo.hProcess, CONFIGURATION_HELPER_ABORTED);
+    WaitForSingleObject(processInfo.hProcess, 1000);
+    m_driver = reopenSplitTunnelDriverBounded();
+    return false;
+  }
+  CloseHandle(processInfo.hThread);
+  processInfo.hThread = nullptr;
+  closeThread.dismiss();
+
+  const std::array<HANDLE, 2> completionHandles = {configuredEvent,
+                                                   processInfo.hProcess};
+  const DWORD waitResult = WaitForMultipleObjects(
+      static_cast<DWORD>(completionHandles.size()), completionHandles.data(),
+      FALSE, CONFIGURATION_HELPER_TIMEOUT_MS);
+  if (waitResult == WAIT_TIMEOUT || waitResult == WAIT_FAILED) {
+    quarantineConfigurationHelper(job, processInfo.hProcess, abortEvent);
+    closeJob.dismiss();
+    closeProcess.dismiss();
+    closeAbortEvent.dismiss();
+    return false;
+  }
+
+  if (waitResult == WAIT_OBJECT_0) {
+    SetEvent(commitEvent);
+    if (WaitForSingleObject(processInfo.hProcess, 1000) != WAIT_OBJECT_0) {
+      quarantineConfigurationHelper(job, processInfo.hProcess, abortEvent);
+      closeJob.dismiss();
+      closeProcess.dismiss();
+      closeAbortEvent.dismiss();
+      return false;
+    }
+  }
+
+  DWORD exitCode = CONFIGURATION_HELPER_IOCTL_FAILED;
+  if (!GetExitCodeProcess(processInfo.hProcess, &exitCode)) {
+    exitCode = CONFIGURATION_HELPER_IOCTL_FAILED;
+  }
+  m_driver = reopenSplitTunnelDriverBounded();
+  if (m_driver == INVALID_HANDLE_VALUE) {
+    logger.error() << "Failed to reopen split-tunnel driver after helper";
+    return false;
+  }
+  if (exitCode != CONFIGURATION_HELPER_SUCCESS) {
+    logger.error() << "Split-tunnel configuration helper failed with code"
+                   << exitCode;
+    return false;
+  }
+  return getState() == STATE_RUNNING;
 }
 
 bool WindowsSplitTunnel::start(int inetAdapterIndex, int vpnAdapterIndex) {
@@ -413,12 +859,14 @@ bool WindowsSplitTunnel::start(int inetAdapterIndex, int vpnAdapterIndex) {
   logger.debug() << "Starting SplitTunnel";
   DWORD bytesReturned;
 
+  if (m_driver == INVALID_HANDLE_VALUE &&
+      !reapQuarantinedConfigurationHelper()) {
+    return false;
+  }
+
   if (getState() == STATE_STARTED) {
     logger.debug() << "Driver needs Init Call";
-    DWORD bytesReturned;
-    auto ok = DeviceIoControl(m_driver, IOCTL_INITIALIZE, nullptr, 0, nullptr,
-                              0, &bytesReturned, nullptr);
-    if (!ok) {
+    if (!sendInitializeIoctl(m_driver, m_sublayerGuids)) {
       logger.error() << "Driver init failed";
       return false;
     }
@@ -465,6 +913,12 @@ bool WindowsSplitTunnel::start(int inetAdapterIndex, int vpnAdapterIndex) {
 }
 
 void WindowsSplitTunnel::stop() {
+  if (m_driver == INVALID_HANDLE_VALUE) {
+    if (!reapQuarantinedConfigurationHelper()) {
+      logger.warning() << "Skipping split-tunnel stop for quarantined helper";
+      return;
+    }
+  }
   DWORD bytesReturned;
   auto ok = DeviceIoControl(m_driver, IOCTL_CLEAR_CONFIGURATION, nullptr, 0,
                             nullptr, 0, &bytesReturned, nullptr);

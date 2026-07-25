@@ -40,6 +40,8 @@ class WindowsFirewall final : public QObject {
    */
   static WindowsFirewall* create(QObject* parent);
   static bool removePersistentPolicy();
+  static const GUID& splitTunnelBaselineSublayerKey();
+  static const GUID& splitTunnelDnsSublayerKey();
   ~WindowsFirewall() override;
 
   bool enableInterface(int vpnAdapterIndex);

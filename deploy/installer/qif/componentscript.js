@@ -59,6 +59,18 @@ Component.prototype.installationFinishedPageIsShown = function()
 
 Component.prototype.createOperations = function()
 {
+    // Qt IFW runs archive Extract operations in the Unpack group before every
+    // ordinary/elevated Execute operation.  A maintenance-tool updater cannot
+    // therefore unload the v1.2 driver before replacing the v1.3 userspace
+    // service.  Stop operation creation before the default Extract operation
+    // is even registered; supported Windows upgrades use the full offline
+    // installer and its uninstall-first controller path.
+    if (runningOnWindows()
+            && (installer.isUpdater() || component.updateRequested())) {
+        installer.setCancelled();
+        throw new Error("Windows split-tunnel driver updates require the full offline AmneziaVPN installer.");
+    }
+
     component.createOperations();
 
     if (runningOnWindows()) {

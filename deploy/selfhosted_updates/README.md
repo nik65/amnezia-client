@@ -161,8 +161,25 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.1` with Android
-`versionCode` `2135`, following the `4.9.2.0` / `2134` artifact set.
+The current self-hosted release line is `4.9.2.2` with Android
+`versionCode` `2136`, following the `4.9.2.1` / `2135` artifact set.
+
+Release notes for `4.9.2.2`: the Windows split-tunnel package advances from
+the signed upstream driver `1.2.5.0` to `1.3.0.0`, which fixes its upstream
+reset/event-processing race. The service supplies the existing shared WFP
+sublayer GUIDs through the new initialize ABI. Ruleset application now runs in
+an isolated helper with a five-second IOCTL deadline and bounded handoff. On
+timeout the helper and device are quarantined, main VPN activation resumes,
+and a late configuration is cleared on a best-effort basis before the helper
+releases the device. The v1.3 driver does not offer cancelable or
+generation-bound requests, so the fallback reports its state as indeterminate
+until cleanup completes instead of pretending that kernel cancellation is
+guaranteed. Because `1.3.0.0` changes the driver initialize ABI, Windows
+upgrades must use the full offline installer. It runs the previous uninstaller
+before archive extraction and independently verifies that the old services,
+driver payload, and protected cleanup-failure receipts are absent. Direct Qt
+IFW maintenance-tool updates and stale/partial installations fail closed before
+the new archive is extracted.
 
 Release notes for `4.9.2.1`: an incomplete client-side managed-DNS pass now
 keeps the persisted last-known-good route cache and the currently installed
@@ -241,21 +258,31 @@ untrusted owners, and directories writable by non-administrative principals.
 It also restores trusted known-folder variables and runs from the protected
 system directory with a minimal system-only `PATH`.
 
+Windows driver-ABI upgrades are intentionally uninstall-first. The full
+offline installer waits for the old `maintenancetool.exe`, accepts only a
+successful uninstaller result, and then requires `sc.exe query` to report
+`ERROR_SERVICE_DOES_NOT_EXIST` (`1060`) for all Amnezia-owned services before
+Qt IFW may extract new files. Any remaining install payload or protected
+cleanup-failure marker cancels the install and asks for a reboot plus a retry
+with the full offline installer. The maintenance-tool updater is disabled for
+this path because Qt IFW performs archive `Extract` operations before ordinary
+install operations.
+
 ## Manifest build
 
 Example:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.2.1 \
-  --release-date 2026-07-23 \
+  --version 4.9.2.2 \
+  --release-date 2026-07-25 \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.2.1_windows_x64.exe \
-  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.2.1_linux_x64.run \
-  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.2.1_android9+_arm64-v8a.apk \
-  --android-version-code 2135 \
+  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.2.2_windows_x64.exe \
+  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.2.2_linux_x64.run \
+  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.2.2_android9+_arm64-v8a.apk \
+  --android-version-code 2136 \
   --auto-install
 ```
 
@@ -329,7 +356,7 @@ artifact available for rollback:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.2.1 \
+  --version 4.9.2.2 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \
@@ -345,7 +372,7 @@ python deploy/selfhosted_updates/make_manifest.py \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.1_windows_x64.exe \
+  --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.2_windows_x64.exe \
   --auto-install
 ```
 
@@ -354,7 +381,7 @@ rollback artifacts:
 
 ```bash
 python deploy/selfhosted_updates/publish_release.py \
-  --version 4.9.2.1 \
+  --version 4.9.2.2 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \

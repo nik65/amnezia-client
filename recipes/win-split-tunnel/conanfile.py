@@ -7,7 +7,7 @@ import os
 
 class WinSplitTunnel(ConanFile):
     name = "win-split-tunnel"
-    version = "1.2.5.0"
+    version = "1.3.0.0"
     settings = "os", "arch"
 
     @property
@@ -31,14 +31,22 @@ class WinSplitTunnel(ConanFile):
             )
 
     def build(self):
-        url = f"https://raw.githubusercontent.com/mullvad/mullvadvpn-app-binaries/ff0e3746c89a04314377cffeb52faaa976413a69/{self._target}/split-tunnel"
+        url = f"https://raw.githubusercontent.com/mullvad/mullvadvpn-app-binaries/5b6f46cde692acb77ee74b37b9fd3f1678c45a52/{self._target}/split-tunnel"
 
-        files = [
-            ("mullvad-split-tunnel.cat", "9bbd10b95a2cf2226b266a52077300c280f7782def69ebbeb892bb60505d9a5f"),
-            ("mullvad-split-tunnel.inf", "4ec3c2bdefc2a1df9e4e19cd4301b5774624ea07e61add588067b16f8925f5d7"),
-            ("mullvad-split-tunnel.pdb", "ee0e246b18a3bfecfc27104b40f9492ffd2b735582870fbd572f93d55e8e9eaa"),
-            ("mullvad-split-tunnel.sys", "4056b22d08115c1a83bc2cafa17de0bb17db3705eac382de77fd7935eeff7edb"),
-        ]
+        files = {
+            "x86_64": [
+                ("mullvad-split-tunnel.cat", "c599926a0327d7ae06b534f4cd039db30392e1897bb9d03e4fec3631744a4e6d"),
+                ("mullvad-split-tunnel.inf", "3dd5905e5fb98d61a942a33e8c9a5ba07c3a2de1e4f319e1fec3e54df6591608"),
+                ("mullvad-split-tunnel.pdb", "595016a62c4967bb9155d9964e8ea59fc6eeb395ba7b37f646f0057bc6905bae"),
+                ("mullvad-split-tunnel.sys", "10cf25bbcfe51fd663a1fec88a98e9b858f3a579589bb2ec496b66e4fdd1b201"),
+            ],
+            "aarch64": [
+                ("mullvad-split-tunnel.cat", "c3d27636739ebaa7dde369d113347de83e3e2173b8a512bb8863d11b148de7ce"),
+                ("mullvad-split-tunnel.inf", "0bfdb044e40535dabbeb3620b655c1563714b3a6f3231d3492c972c6e8dea6f1"),
+                ("mullvad-split-tunnel.pdb", "672292bdea2bc792c717c986e46a315d136bdff9ef62507631ded4eb3bcc15eb"),
+                ("mullvad-split-tunnel.sys", "6af8b3bfe5aa095d5276187558c7c7d3a3e0c174b34406cd6c4b3f8e6ffa6534"),
+            ],
+        }[self._arch]
 
         for name, sha256 in files:
             download(self, f"{url}/{name}", os.path.join("prebuilt", name), sha256=sha256)
