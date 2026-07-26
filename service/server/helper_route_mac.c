@@ -209,6 +209,7 @@ int	locking, lockrest, debugonly;
 struct	rt_metrics rt_metrics;
 u_long  rtm_inits;
 unsigned int ifscope;
+static int route_operation_result;
 
 static const char *route_strerror(int);
 const char	*routename(), *netname();
@@ -253,6 +254,7 @@ mainRouteIface(argc, argv)
     locking = lockrest = debugonly = 0;
     rtm_inits = 0;
     ifscope = 0;
+    route_operation_result = -1;
     //
 
     int ch;
@@ -318,7 +320,7 @@ mainRouteIface(argc, argv)
         }
     close(s);
     fflush(stdout);
-    return 0;
+    return route_operation_result;
     //usage(*argv);
     /* NOTREACHED */
 }
@@ -857,9 +859,16 @@ newroute(argc, argv)
 		} else
 			break;
 	}
-	if (*cmd == 'g')
-        return;
 	oerrno = errno;
+	if (*cmd == 'g') {
+        route_operation_result = ret == 0 ? 0 : -1;
+        return;
+    }
+	// Deleting an already absent route satisfies teardown. Every other
+	// failure remains observable to the C++ registry owner.
+	route_operation_result = (ret == 0
+	        || (*cmd == 'd' && (oerrno == ESRCH || oerrno == ENOENT)))
+	        ? 0 : -1;
 //	(void) printf("%s %s %s", cmd, ishost? "host" : "net", dest);
 //	if (*gateway) {
 //		(void) printf(": gateway %s", gateway);

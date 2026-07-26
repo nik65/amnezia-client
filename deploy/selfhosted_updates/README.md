@@ -75,6 +75,36 @@ export SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64="$(base64 -w0 selfhosted-update-p
 
 Keep `selfhosted-update-private.pem` off client devices and logs.
 
+## SSH server identity pinning
+
+Self-hosted administrative SSH connections are fail-closed on the server host
+key. Verify the SHA-256 host-key fingerprint through an independent trusted
+channel before entering it in the setup wizard or release configuration. The
+client does not use trust-on-first-use and does not send a password or attempt
+public-key authentication until the key received during the SSH handshake
+matches the effective pin.
+
+Release builds embed a fallback only for one exact, case-sensitive original
+hostname. Configure the pair together:
+
+```powershell
+$env:SELFHOSTED_SSH_TRUSTED_HOST = "85.208.87.69"
+$env:SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 = "SHA256:2UtHIoVd4Lft+s4E/LZlA8+reysEexYyhkt03rg8Rdg"
+```
+
+`setup_release_workstation.ps1` writes this non-secret pair to
+`dist\selfhosted-release-env.ps1`; `local_release.ps1` requires and validates
+both values and forwards them to Windows, Linux, and Android builds. Supplying
+only one value or a padded, whitespace-containing, URL-safe, non-canonical, or
+non-32-byte fingerprint fails before a build starts. Generic source builds may
+omit both compile-time values, but every new self-hosted server must then carry
+an explicit verified fingerprint in its stored admin configuration. An
+explicit malformed value never falls back to the compiled pin.
+
+SSHFS/SFTP mounting uses the operating SSH client's separate `known_hosts`
+trust store with `StrictHostKeyChecking=yes`; it does not bypass host checking
+or reuse the administrative libssh pin automatically.
+
 `SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64` is required at build time because the
 clients must embed that public key to accept the signed private update manifest.
 The private signing key is used only by the local publisher. The manifest tools
@@ -161,8 +191,23 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.2` with Android
-`versionCode` `2136`, following the `4.9.2.1` / `2135` artifact set.
+The current self-hosted release line is `4.9.2.3` with Android
+`versionCode` `2137`, following the `4.9.2.2` / `2136` artifact set.
+
+Release notes for `4.9.2.3`: the five-feature completion audit makes
+privileged settings access brokered and read-only outside the owning thread,
+keeps server-managed and local split-tunnel routes separated through the
+shared matcher and receipt-backed reconciliation, and makes the Guardian
+connectivity probe fail closed unless the final request still uses the direct
+network path. Desktop and Android remote-log uploaders now persist secret-set
+transitions in two phases and require an independent stable-source scan before
+leaving quarantine. Self-hosted administration requires an exact out-of-band
+`SHA256:` SSH host-key pin and verifies it after the handshake but before any
+private-key import or authentication. Bundled update publication uses bounded
+absolute deadlines, durable transaction receipts and crash reconciliation;
+lost-ack upload reconciliation must prove the parent-directory sync, and
+remote installer/verification output is byte-bounded and never copied raw into
+the client log.
 
 Release notes for `4.9.2.2`: the Windows split-tunnel package advances from
 the signed upstream driver `1.2.5.0` to `1.3.0.0`, which fixes its upstream
@@ -274,15 +319,15 @@ Example:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.2.2 \
-  --release-date 2026-07-25 \
+  --version 4.9.2.3 \
+  --release-date 2026-07-26 \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.2.2_windows_x64.exe \
-  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.2.2_linux_x64.run \
-  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.2.2_android9+_arm64-v8a.apk \
-  --android-version-code 2136 \
+  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.2.3_windows_x64.exe \
+  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.2.3_linux_x64.run \
+  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.2.3_android9+_arm64-v8a.apk \
+  --android-version-code 2137 \
   --auto-install
 ```
 
@@ -356,7 +401,7 @@ artifact available for rollback:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.2.2 \
+  --version 4.9.2.3 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \
@@ -372,7 +417,7 @@ python deploy/selfhosted_updates/make_manifest.py \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.2_windows_x64.exe \
+  --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.3_windows_x64.exe \
   --auto-install
 ```
 
@@ -381,7 +426,7 @@ rollback artifacts:
 
 ```bash
 python deploy/selfhosted_updates/publish_release.py \
-  --version 4.9.2.2 \
+  --version 4.9.2.3 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \

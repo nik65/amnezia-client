@@ -35,7 +35,8 @@ PageType {
     property string resultModeOverride: ""
     property string resultSource: qsTr("Current client policy")
     property string resultStatus: qsTr("Ready")
-    property string resultExplanation: qsTr("Route Inspector previews the saved split tunneling policy. A runtime inspector can replace this preview with the route actually selected by the operating system.")
+    property string resultInspectionBasis: "policyPreview"
+    property string resultExplanation: qsTr("Route Inspector previews saved policy or, when available, evaluates a confirmed client route receipt. It does not inspect the operating system route table.")
     property bool resultPending: false
     property bool resultFromIntegration: false
     property int resultGeneration: 0
@@ -249,7 +250,8 @@ PageType {
         root.resultModeOverride = "";
         root.resultSource = qsTr("Current client policy");
         root.resultStatus = qsTr("Inspecting");
-        root.resultExplanation = qsTr("Reading the current split tunneling mode and matching saved entries.");
+        root.resultInspectionBasis = "runtimeSnapshotPending";
+        root.resultExplanation = qsTr("Reading a confirmed client route receipt when available; otherwise only saved policy can be previewed.");
         root.resultPending = true;
         root.resultFromIntegration = false;
     }
@@ -297,7 +299,11 @@ PageType {
     }
 
     function runtimeModeText(result) {
-        var mode = Number(root.resultMapValue(result, "routeMode", routeMode.allSites));
+        var runtimeApplied = root.resultMapValue(result, "runtimeApplied", false) === true;
+        var mode = Number(root.resultMapValue(
+                              result,
+                              runtimeApplied ? "appliedRouteMode" : "routeMode",
+                              routeMode.allSites));
         if (mode === routeMode.onlyForwardSites) {
             return qsTr("VPN only for listed sites");
         }
@@ -418,7 +424,13 @@ PageType {
         var matchedRule = String(root.resultMapValue(result, "matchedRule", ""));
         var matchType = String(root.resultMapValue(result, "matchType", ""));
         var warnings = root.resultMapValue(result, "warnings", null);
+        var runtimeApplied = root.resultMapValue(result, "runtimeApplied", false) === true;
+        var inspectionBasis = String(root.resultMapValue(result, "inspectionBasis", "runtimeSnapshotUnavailable"));
+        var routeModeDiverged = root.resultMapValue(result, "runtimeRouteModeDiverged", false) === true;
+        var managedRouteDiverged = root.resultMapValue(result, "runtimeManagedRouteDiverged", false) === true;
+        var dnsProcessingTruncated = root.resultMapValue(result, "dnsProcessingTruncated", false) === true;
         var ipv6SplitRouteUnknown = decision === "unknown" && root.resultListContains(warnings, "ipv6_split_rules_not_installed");
+        var localRouteReceiptUnavailable = decision === "unknown" && root.resultListContains(warnings, "local_route_receipt_unavailable");
         var ipv4 = root.joinedResultList(root.resultMapValue(result, "resolvedIpv4", null));
         var ipv6 = root.joinedResultList(root.resultMapValue(result, "resolvedIpv6", null));
         var explanationParts = [];
@@ -426,6 +438,7 @@ PageType {
         root.resultGeneration += 1;
         root.resultModeOverride = root.runtimeModeText(result);
         root.resultSource = root.runtimeSourceText(source);
+        root.resultInspectionBasis = inspectionBasis;
         root.resultFromIntegration = true;
 
         if (state === "resolving") {
@@ -443,12 +456,32 @@ PageType {
             explanationParts.push(qsTr("The saved policy context is shown above, but a DNS-aware decision could not be completed."));
         } else {
             root.resultDecision = root.runtimeDecisionText(decision);
-            root.resultStatus = qsTr("DNS-aware policy result");
+            if (decision === "unknown") {
+                root.resultStatus = qsTr("Runtime state unavailable");
+            } else if (runtimeApplied
+                       && inspectionBasis === "authoritativeManagedRouteSnapshot") {
+                root.resultStatus = qsTr("Confirmed client route snapshot");
+            } else if (inspectionBasis === "policyPreview") {
+                root.resultStatus = qsTr("Saved policy preview");
+            } else {
+                root.resultStatus = qsTr("Runtime policy result");
+            }
             root.resultPending = false;
 
             if (decision === "unknown") {
-                if (ipv6SplitRouteUnknown) {
+                if (routeModeDiverged || managedRouteDiverged
+                    || inspectionBasis === "runtimePolicyDiverged") {
+                    explanationParts.push(qsTr("The installed route snapshot and the current desired policy diverge, so no definitive route is reported."));
+                } else if (inspectionBasis === "runtimeRouteTransitionPending") {
+                    explanationParts.push(qsTr("Managed routes are being reconciled or a bounded reconnect is pending. The route remains unknown until a new installation receipt arrives."));
+                } else if (inspectionBasis === "runtimeRouteSnapshotUnconfirmed") {
+                    explanationParts.push(qsTr("The connected tunnel has no confirmed managed-route installation receipt."));
+                } else if (dnsProcessingTruncated) {
+                    explanationParts.push(qsTr("DNS returned more addresses than the bounded inspector can examine, so the aggregate route is unknown."));
+                } else if (ipv6SplitRouteUnknown) {
                     explanationParts.push(qsTr("At least one resolved IPv6 address has an unknown route because this client installs split-tunneling site routes for IPv4 only."));
+                } else if (localRouteReceiptUnavailable) {
+                    explanationParts.push(qsTr("No confirmed managed route matched, and local desktop routes have no exact installation receipt. The route therefore remains unknown."));
                 } else {
                     explanationParts.push(qsTr("A definitive route could not be determined from the current runtime state."));
                 }
@@ -495,7 +528,21 @@ PageType {
             explanationParts.push(qsTr("The managed route content digest does not match, so the policy is inactive."));
         }
 
-        explanationParts.push(qsTr("This result resolves DNS and evaluates the effective saved policy; it does not yet query the operating system route table."));
+        if (runtimeApplied
+            && inspectionBasis === "authoritativeManagedRouteSnapshot") {
+            var installedRevision = String(root.resultMapValue(
+                                               result,
+                                               "managedRouteSnapshotRevision",
+                                               ""));
+            explanationParts.push(
+                        installedRevision !== ""
+                         ? qsTr("This result uses confirmed client managed-route receipt revision %1 and resolved DNS addresses; it does not query the operating system route table.").arg(installedRevision)
+                         : qsTr("This result uses a confirmed client managed-route receipt and resolved DNS addresses; it does not query the operating system route table."));
+        } else if (inspectionBasis === "policyPreview") {
+            explanationParts.push(qsTr("The VPN is disconnected, so this is a saved-policy preview rather than a runtime route claim."));
+        } else {
+            explanationParts.push(qsTr("No definitive installed-route receipt is available; the operating system route table was not queried."));
+        }
         root.resultExplanation = explanationParts.join(" ");
         root.resultAnnouncementRequested(root.resultDecision + ". " + root.resultStatus);
         return true;
@@ -587,6 +634,7 @@ PageType {
         root.resultModeOverride = "";
         root.resultSource = source;
         root.resultStatus = qsTr("Limited policy preview");
+        root.resultInspectionBasis = "policyPreview";
         root.resultExplanation = explanation + " " + qsTr("Only exact saved entries were checked because the runtime inspector is unavailable. DNS resolution and subnet matches may change this result.");
         root.resultPending = false;
         root.resultFromIntegration = false;
@@ -606,6 +654,7 @@ PageType {
         root.resultModeOverride = String(mode || "");
         root.resultSource = String(source || qsTr("Runtime inspector"));
         root.resultStatus = String(status || qsTr("Complete"));
+        root.resultInspectionBasis = "externalIntegration";
         root.resultExplanation = String(explanation || qsTr("The runtime inspector did not provide additional details."));
         root.resultPending = false;
         root.resultFromIntegration = true;
@@ -804,7 +853,7 @@ PageType {
                 Layout.rightMargin: 16
 
                 headerText: qsTr("Route Inspector")
-                descriptionText: qsTr("Preview how the current split tunneling policy handles a website or IP address.")
+                descriptionText: qsTr("Inspect a confirmed client route receipt when available, or preview saved split tunneling policy. The operating system route table is not queried.")
             }
         }
 
@@ -987,7 +1036,7 @@ PageType {
 
                         objectName: "routeInspectorResultStatus"
                         Layout.fillWidth: true
-                        text: root.resultFromIntegration ? qsTr("Connected-policy estimate · %1").arg(root.resultStatus) : root.resultStatus
+                        text: root.resultStatus
                         color: AmneziaStyle.color.goldenApricot
                     }
 

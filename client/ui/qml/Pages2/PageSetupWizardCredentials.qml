@@ -25,6 +25,7 @@ PageType {
             if (this.activeFocus) {
                 listView.positionViewAtBeginning()
             }
+
         }
     }
 
@@ -96,6 +97,18 @@ PageType {
                 iconPath: "qrc:/images/controls/alert-circle.svg"
                 textString: qsTr("SSH key requirements: supported key types are ED25519 and RSA in PEM format. Paste the private key, including the BEGIN/END lines. If your key doesn’t work, generate a compatible one")
             }
+
+            WarningType {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.topMargin: 8
+
+                visible: title === qsTr("SSH server host key fingerprint")
+                backGroundColor: AmneziaStyle.color.translucentWhite
+                iconPath: "qrc:/images/controls/alert-circle.svg"
+                textString: qsTr("Verify this SHA-256 fingerprint through an independent trusted channel before entering credentials. Amnezia never trusts a new SSH server key automatically")
+            }
         }
 
         footer: ColumnLayout {
@@ -119,8 +132,9 @@ PageType {
                     var _hostname = listView.itemAtIndex(vars.hostnameIndex).children[0].textField.text
                     var _username = listView.itemAtIndex(vars.usernameIndex).children[0].textField.text
                     var _secretData = listView.itemAtIndex(vars.secretDataIndex).children[0].textField.text
+                    var _sshHostKeyFingerprint = listView.itemAtIndex(vars.sshHostKeyFingerprintIndex).children[0].textField.text
 
-                    InstallController.setProcessedServerCredentials(_hostname, _username, _secretData)
+                    InstallController.setProcessedServerCredentials(_hostname, _username, _secretData, _sshHostKeyFingerprint)
                     ServersUiController.setProcessedServerId("")
 
                     PageController.showBusyIndicator(true)
@@ -185,6 +199,16 @@ PageType {
             hasEmptyField = true
         }
 
+        var sshHostKeyFingerprintItem = listView.itemAtIndex(vars.sshHostKeyFingerprintIndex).children[0]
+        var sshHostKeyFingerprint = sshHostKeyFingerprintItem.textField.text
+        if (sshHostKeyFingerprint === "") {
+            sshHostKeyFingerprintItem.errorText = qsTr("SSH host key fingerprint cannot be empty")
+            hasEmptyField = true
+        } else if (!/^SHA256:[A-Za-z0-9+\/]{42}[AEIMQUYcgkosw048]$/.test(sshHostKeyFingerprint)) {
+            sshHostKeyFingerprintItem.errorText = qsTr("Enter a canonical SHA256 fingerprint without spaces or padding")
+            hasEmptyField = true
+        }
+
         var secretDataItem = listView.itemAtIndex(vars.secretDataIndex).children[0]
         if (secretDataItem.textField.text === "") {
             secretDataItem.errorText = qsTr("Password/private key cannot be empty")
@@ -196,6 +220,7 @@ PageType {
 
     property list<QtObject> inputFields: [
         hostnameObject,
+        sshHostKeyFingerprintObject,
         usernameObject,
         secretDataObject
     ]
@@ -205,6 +230,15 @@ PageType {
 
         property string title: qsTr("Server IP address [:port]")
         readonly property string placeholderContent: qsTr("255.255.255.255:22")
+        property bool hideContent: false
+        readonly property var clickedHandler: undefined
+    }
+
+    QtObject {
+        id: sshHostKeyFingerprintObject
+
+        property string title: qsTr("SSH server host key fingerprint")
+        readonly property string placeholderContent: "SHA256:..."
         property bool hideContent: false
         readonly property var clickedHandler: undefined
     }
@@ -235,7 +269,8 @@ PageType {
         id: vars
 
         readonly property int hostnameIndex: 0
-        readonly property int usernameIndex: 1
-        readonly property int secretDataIndex: 2
+        readonly property int sshHostKeyFingerprintIndex: 1
+        readonly property int usernameIndex: 2
+        readonly property int secretDataIndex: 3
     }
 }

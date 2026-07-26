@@ -251,11 +251,203 @@ class PrivilegedIpcSecuritySourceContracts(unittest.TestCase):
             constructor,
         )
         self.assertTrue(0 <= organization_name_index < lock_index, constructor)
+        self.assertIn("SecureQSettings::AccessMode::ReadOnly", constructor)
+        self.assertIn("SecureQSettings::AccessMode::ReadWrite", constructor)
         self.assertRegex(
             constructor,
             r"if\s*\(\s*!m_operatorCommandLineDetected\s*&&\s*!acquireCoreOwnership\s*\(\s*\)\s*\)"
             r"\s*\{\s*return\s*;\s*\}",
         )
+
+        secure_settings_header = (
+            REPO_ROOT / "client/secureQSettings.h"
+        ).read_text(encoding="utf-8")
+        secure_settings = (
+            REPO_ROOT / "client/secureQSettings.cpp"
+        ).read_text(encoding="utf-8")
+        qtkeychain_unix = (
+            REPO_ROOT / "client/3rd/qtkeychain/qtkeychain/keychain_unix.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("enum class AccessMode", secure_settings_header)
+        self.assertIn("keychainReadAllowed", secure_settings_header)
+        self.assertIn("AccessMode::ReadOnly", secure_settings)
+        keychain_policy = compact(
+            braced_block(
+                secure_settings_header,
+                r"inline\s+constexpr\s+bool\s+keychainReadAllowed\s*\(",
+            )
+        )
+        self.assertIn("!unixBackendMayMigrate || !readOnlyAccess", keychain_policy)
+        keychain_adapter = compact(
+            braced_block(
+                secure_settings,
+                r"bool\s+keychainReadAllowed\s*\(\s*SecureQSettings::AccessMode",
+            )
+        )
+        self.assertRegex(
+            keychain_adapter,
+            r"#if\s+defined\(Q_OS_UNIX\).*?"
+            r"backendReadMayMigratePlaintext\s*=\s*true",
+        )
+        self.assertIn(
+            "accessMode == SecureQSettings::AccessMode::ReadOnly",
+            keychain_adapter,
+        )
+        read_only_guard = "if (m_accessMode == AccessMode::ReadOnly)"
+        self.assertGreaterEqual(secure_settings.count(read_only_guard), 5)
+        settings_constructor_start = secure_settings.index(
+            "SecureQSettings::SecureQSettings("
+        )
+        settings_value_start = secure_settings.index(
+            "QVariant SecureQSettings::value(", settings_constructor_start
+        )
+        constructor_block = secure_settings[
+            settings_constructor_start:settings_value_start
+        ]
+        self.assertIn(read_only_guard, constructor_block)
+        self.assertLess(
+            constructor_block.index(read_only_guard),
+            constructor_block.index('m_settings.value("Conf/encrypted")'),
+        )
+        get_key = braced_block(
+            secure_settings,
+            r"QByteArray\s+SecureQSettings::getEncKey\s*\(\s*bool\s+allowCreate\s*\)\s*const",
+        )
+        get_iv = braced_block(
+            secure_settings,
+            r"QByteArray\s+SecureQSettings::getEncIv\s*\(\s*bool\s+allowCreate\s*\)\s*const",
+        )
+        material_creation_guard = (
+            "if (m_accessMode == AccessMode::ReadOnly || !allowCreate)"
+        )
+        for getter in (get_key, get_iv):
+            self.assertIn(material_creation_guard, getter)
+            self.assertIn("!allowCreate", getter)
+            self.assertLess(
+                getter.index(material_creation_guard),
+                getter.index("generateRandomBytes"),
+            )
+            self.assertIn("keychainReadAllowed(m_accessMode)", getter)
+            self.assertLess(
+                getter.index("keychainReadAllowed(m_accessMode)"),
+                getter.index("getSecTag"),
+            )
+
+        migration = braced_block(
+            secure_settings,
+            r"bool\s+SecureQSettings::migrateEncryptedSettings\s*\(",
+        )
+        self.assertIn("m_accessMode != AccessMode::ReadWrite", migration)
+        self.assertIn("existingCiphertext", migration)
+        self.assertIn("keychainMaterialCreationAllowed", migration)
+        self.assertIn("getEncKey(allowMaterialCreation)", migration)
+        self.assertIn("getEncIv(allowMaterialCreation)", migration)
+        self.assertIn("QHash<QString, QByteArray> stagedValues", migration)
+        payload_sync_index = migration.index("if (!stagedValues.isEmpty())")
+        encrypted_marker_index = migration.index(
+            'm_settings.setValue(QStringLiteral("Conf/encrypted"), true)'
+        )
+        self.assertLess(payload_sync_index, encrypted_marker_index)
+        self.assertIn("m_settings.sync()", migration[payload_sync_index:encrypted_marker_index])
+        self.assertIn("m_settings.status() != QSettings::NoError", migration)
+        self.assertIn("getEncKey(false)", secure_settings)
+        self.assertIn("getEncIv(false)", secure_settings)
+        self.assertIn("hasEncryptedPayloads()", secure_settings)
+
+        broker_gate = compact(
+            braced_block(
+                secure_settings_header,
+                r"class\s+KeychainBrokerGate",
+            )
+        )
+        self.assertIn("MaximumKeychainBrokerPendingOperations", secure_settings_header)
+        self.assertIn("admitOperation()", broker_gate)
+        self.assertIn("KeychainBrokerAdmissionStatus::QueueFull", broker_gate)
+        self.assertIn("m_pendingOperationIds.enqueue(operationId)", broker_gate)
+        self.assertIn("completeAndStartNext", broker_gate)
+        self.assertIn("deadlineExceeded", broker_gate)
+        self.assertIn("m_failedClosed = true", broker_gate)
+        self.assertIn("m_pendingOperationIds.clear()", broker_gate)
+        self.assertIn("beginShutdown", broker_gate)
+
+        keychain_broker = compact(
+            braced_block(secure_settings, r"class\s+KeychainBroker\s+final")
+        )
+        self.assertIn("static KeychainBroker *const broker = new KeychainBroker()", keychain_broker)
+        self.assertEqual(keychain_broker.count("new QThread()"), 1)
+        self.assertIn("m_worker->moveToThread(m_workerThread)", keychain_broker)
+        self.assertIn("m_workerThread->start()", keychain_broker)
+        self.assertIn("QMutex m_mutex", keychain_broker)
+        self.assertIn("m_pendingOperations.enqueue(state)", keychain_broker)
+        self.assertIn("QueueCapacityExceeded", keychain_broker)
+
+        broker_execute = compact(
+            braced_block(
+                secure_settings,
+                r"KeychainOperationResult\s+execute\s*\(",
+            )
+        )
+        self.assertIn("QDeadlineTimer deadline(keychainOperationDeadlineMs)", broker_execute)
+        self.assertIn("state->completion.wait(&m_mutex, deadline)", broker_execute)
+        self.assertIn("m_gate.deadlineExceeded(state->operationId)", broker_execute)
+        self.assertIn("failPendingLocked", broker_execute)
+        self.assertNotIn("QEventLoop", broker_execute)
+
+        start_operation = compact(
+            braced_block(secure_settings, r"void\s+startOperation\s*\(")
+        )
+        self.assertIn("QThread::currentThread() == m_workerThread", start_operation)
+        self.assertIn("new ReadPasswordJob", start_operation)
+        self.assertIn("new WritePasswordJob", start_operation)
+        self.assertGreaterEqual(start_operation.count(", m_worker)"), 2)
+        self.assertGreaterEqual(start_operation.count("job->start()"), 2)
+        self.assertGreaterEqual(start_operation.count("job->deleteLater()"), 2)
+        self.assertIn("if (!state->cancelled)", keychain_broker)
+        self.assertIn("QSharedPointer<KeychainOperationState>", keychain_broker)
+
+        broker_shutdown = compact(
+            braced_block(secure_settings, r"void\s+shutdown\s*\(")
+        )
+        self.assertIn("m_gate.beginShutdown()", broker_shutdown)
+        self.assertIn("m_workerThread->requestInterruption()", broker_shutdown)
+        self.assertIn("m_workerThread->quit()", broker_shutdown)
+        self.assertIn("m_workerThread->wait(keychainBrokerShutdownWaitMs)", broker_shutdown)
+
+        get_secret = braced_block(
+            secure_settings,
+            r"QByteArray\s+SecureQSettings::getSecTag\s*\(",
+        )
+        self.assertIn("KeychainBroker::instance().read(tag)", get_secret)
+        self.assertNotIn("loop.exec()", get_secret)
+        set_secret = braced_block(
+            secure_settings,
+            r"bool\s+SecureQSettings::setSecTag\s*\(",
+        )
+        self.assertIn("m_accessMode != AccessMode::ReadWrite", set_secret)
+        self.assertIn("KeychainBroker::instance().write(tag, data)", set_secret)
+        self.assertIn("refusing replacement key after incomplete keychain read", get_key)
+        self.assertIn("refusing replacement IV after incomplete keychain read", get_iv)
+        self.assertNotIn("QEventLoop", secure_settings)
+
+        broker_native_test = read_source(
+            "client/tests/secure_qsettings_broker/tst_secure_qsettings_broker.cpp"
+        )
+        for scenario in (
+            "neverCompleting",
+            "lateFinish",
+            "concurrentGate",
+            "queuedDeadline",
+            "shutdownGate",
+        ):
+            self.assertIn(scenario, broker_native_test)
+
+        unix_keychain_read = braced_block(
+            qtkeychain_unix,
+            r"void\s+ReadPasswordJobPrivate::kwalletOpenFinished\s*\(",
+        )
+        self.assertIn("plainTextStore.remove", unix_keychain_read)
+        self.assertIn("new WritePasswordJob", unix_keychain_read)
+        self.assertIn("j->start()", unix_keychain_read)
 
         start = braced_block(
             application,
@@ -995,6 +1187,256 @@ class PrivilegedIpcSecuritySourceContracts(unittest.TestCase):
         self.assertIn("disableRemoting", finalize)
         self.assertIn("ProcessPhase::AwaitingClaim", header)
         self.assertIn("QTimer lifecycleTimer", header)
+
+    def test_remote_log_retry_and_unknown_tail_privacy_state_is_fail_closed(self) -> None:
+        uploader_header = read_source("client/core/controllers/remoteLogUploader.h")
+        uploader = read_source("client/core/controllers/remoteLogUploader.cpp")
+        retry_policy = read_source("client/core/utils/remoteLogBatchHealth.h")
+        android = read_source(
+            "client/android/src/org/amnezia/vpn/AmneziaVpnService.kt"
+        )
+
+        self.assertIn("QString sanitizerSecretSetSha256", uploader_header)
+        self.assertIn("QString currentSecretSetSha256", uploader_header)
+        self.assertIn("qint64 highWaterOffset", uploader_header)
+        self.assertIn("bool awaitingStableSource", uploader_header)
+        self.assertIn("qint64 confirmationCursorOffset", uploader_header)
+        self.assertIn("QString confirmationCursorAnchor", uploader_header)
+        self.assertIn("m_retryPersistenceFailClosed", uploader_header)
+        self.assertIn("QSet<QString> m_retrySanitizerKeys", uploader_header)
+        self.assertNotIn("struct RetrySanitizerSecrets", uploader_header)
+        union = compact(
+            braced_block(
+                retry_policy,
+                r"remoteLogSanitizerSecretUnion\s*\(",
+            )
+        )
+        self.assertIn("RemoteLogSanitizerSecretSet result = inherited", union)
+        self.assertIn("result.values.contains(value)", union)
+        self.assertIn("result.forceRedacted = true", union)
+        transition_policy = compact(
+            braced_block(retry_policy, r"remoteLogAdvanceSecretTransition\s*\(")
+        )
+        self.assertIn("lastAcceptedSecretSetMatches", transition_policy)
+        self.assertIn("awaitingStableSource", transition_policy)
+        self.assertIn("highWaterOffset", transition_policy)
+        self.assertIn("sourceIdentityMatches", transition_policy)
+        self.assertIn("cursorMatchesSource", transition_policy)
+        self.assertIn("markerCursorMatches", transition_policy)
+        self.assertIn("globalFailClosed = true", transition_policy)
+        self.assertIn("clearMarker = true", transition_policy)
+        arm_policy = compact(
+            braced_block(retry_policy, r"remoteLogArmStableSourceAfterAck\s*\(")
+        )
+        self.assertIn("awaitingStableSource = true", arm_policy)
+        self.assertNotIn("clearMarker = true", arm_policy)
+        accepted_transition = compact(
+            braced_block(retry_policy, r"remoteLogAcceptedTransitionCanClose\s*\(")
+        )
+        self.assertIn("sourceIdentityMatches", accepted_transition)
+        self.assertIn("cursorMatchesSource", accepted_transition)
+        self.assertIn("markerCursorMatches", accepted_transition)
+        self.assertIn("secretSetMatches", accepted_transition)
+        self.assertIn("capturedSize == acceptedCursorOffset", accepted_transition)
+        self.assertIn("acceptedCursorOffset == highWaterOffset", accepted_transition)
+
+        post_next = compact(braced_block(uploader, r"void\s+RemoteLogUploader::postNext\s*\("))
+        retain_index = post_next.find("retainRetrySanitizerSecrets(payload)")
+        clear_index = post_next.find("clearRemoteLogToken")
+        self.assertTrue(0 <= retain_index < clear_index, post_next)
+        self.assertIn("if (statusCode == 401 || statusCode == 403)", post_next)
+        self.assertIn(
+            "m_currentTarget.bootstrap && m_appSettingsRepository && retryPrivacyStateDurable",
+            post_next,
+        )
+        self.assertRegex(
+            post_next,
+            r"for\s*\(\s*const LogPayload &pendingPayload.*?"
+            r"retainRetrySanitizerSecrets\(pendingPayload\)",
+        )
+        arm_transition_index = post_next.find(
+            "armRetrySanitizerStableSource"
+        )
+        persist_cursor_index = post_next.find("persistCursor(payload.offsetKey, nextCursor)")
+        self.assertTrue(0 <= arm_transition_index < persist_cursor_index, post_next)
+        self.assertNotIn("discardRetrySanitizerSecrets", post_next)
+        self.assertIn(
+            "nextCursor.sanitizerSecretSetSha256 = payload.currentSecretSetSha256",
+            post_next,
+        )
+
+        persist_marker = compact(
+            braced_block(
+                uploader,
+                r"RemoteLogUploader::persistRetrySanitizerMarker\s*\(",
+            )
+        )
+        for field in (
+            "binding",
+            "fingerprint",
+            "offset",
+            "nextOffset",
+            "offsetAnchor",
+            "nextAnchor",
+            "sourceRangeSha256",
+            "secretSetSha256",
+            "requiresInheritedSecrets",
+            "highWaterOffset",
+            "awaitingStableSource",
+            "confirmationCursorOffset",
+            "confirmationCursorAnchor",
+        ):
+            self.assertIn(f'StringLiteral("{field}")', persist_marker)
+        self.assertIn("maximumRetrySanitizerMarkers", persist_marker)
+        self.assertIn("retryMarkerOverflowFailClosedKey", persist_marker)
+        self.assertIn("remoteLogRetryMarkerCapacityDecision", persist_marker)
+        self.assertIn("settings.sync()", persist_marker)
+        self.assertIn("settings.status()", persist_marker)
+        self.assertNotIn("marker.token", persist_marker)
+        self.assertNotIn("marker.secrets", persist_marker)
+        self.assertNotIn("marker.values", persist_marker)
+
+        payload_secrets = compact(
+            braced_block(
+                uploader,
+                r"RemoteLogUploader::sanitizerSecretsForPayload\s*\(",
+            )
+        )
+        self.assertIn("reconcileRetrySanitizerTransition", payload_secrets)
+        self.assertIn("m_retryPersistenceFailClosed", payload_secrets)
+        reconcile_transition = compact(
+            braced_block(
+                uploader,
+                r"RemoteLogUploader::reconcileRetrySanitizerTransition\s*\(",
+            )
+        )
+        self.assertIn("marker.confirmationCursorOffset == cursor.offset", reconcile_transition)
+        self.assertIn("marker.confirmationCursorAnchor == cursor.anchor", reconcile_transition)
+        self.assertIn("remoteLogAdvanceSecretTransition", reconcile_transition)
+        self.assertIn("discardRetrySanitizerSecrets(key)", reconcile_transition)
+        self.assertIn("persistRetrySanitizerMarker(key, marker)", reconcile_transition)
+        arm_transition = compact(
+            braced_block(
+                uploader,
+                r"RemoteLogUploader::armRetrySanitizerStableSource\s*\(",
+            )
+        )
+        self.assertIn("remoteLogArmStableSourceAfterAck", arm_transition)
+        self.assertIn("marker.confirmationCursorOffset = cursor.offset", arm_transition)
+        self.assertIn("marker.confirmationCursorAnchor = cursor.anchor", arm_transition)
+        self.assertNotIn("discardRetrySanitizerSecrets", arm_transition)
+        retain = compact(
+            braced_block(uploader, r"RemoteLogUploader::retainRetrySanitizerSecrets\s*\(")
+        )
+        self.assertNotIn("takeFirst", retain)
+        self.assertIn("retryMarkerOverflowFailClosedKey", retain)
+        self.assertIn("persistentCursorId(payload.offsetKey)", retain)
+        self.assertNotIn("payload.sanitizerSecrets", retain)
+
+        payload_from_file = compact(
+            braced_block(uploader, r"RemoteLogUploader::payloadFromFile\s*\(")
+        )
+        self.assertIn("remoteLogCapturedReadIsExact", payload_from_file)
+        self.assertIn("remoteLogCapturedTailIsPartial", payload_from_file)
+        self.assertIn("remoteLogByteIsRecordDelimiter", payload_from_file)
+        self.assertIn("if (offset >= size)", payload_from_file)
+        self.assertIn("reconcileRetrySanitizerTransition", payload_from_file)
+
+        recovery_cursor = compact(
+            braced_block(android, r"private fun freshRemoteLogRecoveryCursor\s*\(")
+        )
+        self.assertIn("sanitizerRecoveryQuarantine = true", recovery_cursor)
+        self.assertIn("sanitizerRecoveryCheckpointAttempts = 1", recovery_cursor)
+        self.assertIn("sanitizerRecoveryNonce = recoveryNonce.orEmpty()", recovery_cursor)
+        begin_recovery = compact(
+            braced_block(android, r"private fun beginRemoteLogRecovery\s*\(")
+        )
+        self.assertLess(
+            begin_recovery.find("writeRemoteLogOriginCheckpoint()"),
+            begin_recovery.find("saveRemoteLogCursor("),
+        )
+        advance_checkpoint = compact(
+            braced_block(android, r"private fun advanceRemoteLogRecoveryCheckpoint\s*\(")
+        )
+        self.assertIn("remoteLogRecoveryCheckpointCanRetry", advance_checkpoint)
+        self.assertIn("saveRemoteLogCursor(target, next)", advance_checkpoint)
+        self.assertIn("Log.i(TAG", advance_checkpoint)
+        batch_end = compact(
+            braced_block(android, r"private fun remoteLogBatchEndOffset\s*\(")
+        )
+        self.assertIn("preferCompleteRecord", batch_end)
+        self.assertIn("logBytes[candidate]", batch_end)
+        recovery_exit = compact(
+            braced_block(android, r"private fun remoteLogRecoveryMayExit\s*\(")
+        )
+        self.assertIn("originOffset > 0", recovery_exit)
+        self.assertIn("completeRecord", recovery_exit)
+        self.assertIn("state == RemoteLogSanitizerState()", recovery_exit)
+
+        prepare = compact(
+            braced_block(android, r"private fun prepareRemoteLogPayload\s*\(")
+        )
+        self.assertIn("cursor.sanitizerAcceptedSecretsSha256", prepare)
+        self.assertIn("sanitizerSecretTransitionEndOffset", prepare)
+        self.assertIn("sanitizerAwaitingStableSource", prepare)
+        self.assertIn("advanceRemoteLogRecoveryCheckpoint", prepare)
+        self.assertIn("remoteLogBatchEndOffset", prepare)
+        self.assertIn(
+            "forceRedactedOutput = cursor.sanitizerRecoveryQuarantine || transitionQuarantine ||",
+            prepare,
+        )
+        self.assertIn("state = sanitizedPayload.state", prepare)
+        self.assertIn("remoteLogRecoveryMayExit", prepare)
+        self.assertIn("remoteLogSecretTransitionHighWater", prepare)
+        self.assertIn("remoteLogStableSourceCanConfirm", prepare)
+        stable_save_index = prepare.find("saveRemoteLogCursor(target, confirmedCursor)")
+        empty_return_index = prepare.find("if (offset >= batchEndOffset) return null")
+        self.assertTrue(0 <= stable_save_index < empty_return_index, prepare)
+        self.assertIn(
+            "sanitizerAcceptedSecretsSha256 = cursor.sanitizerAcceptedSecretsSha256",
+            prepare,
+        )
+
+        load_cursor = compact(
+            braced_block(android, r"private fun loadRemoteLogCursor\s*\(")
+        )
+        save_cursor = compact(
+            braced_block(android, r"private fun saveRemoteLogCursor\s*\(")
+        )
+        for field in (
+            "sanitizerRecoveryQuarantine",
+            "sanitizerRecoveryOriginOffset",
+            "sanitizerRecoveryCheckpointAttempts",
+            "sanitizerRecoveryNonce",
+            "sanitizerSecretTransitionEndOffset",
+            "sanitizerAwaitingStableSource",
+            "sanitizerAcceptedSecretsSha256",
+        ):
+            self.assertIn(field, load_cursor)
+            self.assertRegex(save_cursor, rf'put\(\s*"{field}"')
+
+        sanitizer_contract = compact(
+            braced_block(android, r"private fun verifyRemoteLogSanitizerContract\s*\(")
+        )
+        for sentinel in (
+            "contract-post-origin-pem-continuation-342",
+            "contract-post-origin-static-continuation-343",
+            "contract-post-origin-secret-continuation-344",
+            "contract-post-origin-structured-continuation-345",
+        ):
+            self.assertIn(sentinel, sanitizer_contract)
+        self.assertIn("recoveryContinuationChecks.all", sanitizer_contract)
+        self.assertIn("remoteLogRecoveryCheckpointCanRetry", sanitizer_contract)
+        self.assertIn("verifiedRecoveryBoundary > CLIENT_LOGS_MAX_BATCH_RAW_BYTES", sanitizer_contract)
+        self.assertIn("recoveryExitAfterSecondBatch", sanitizer_contract)
+        self.assertIn("overflowSet.overflowed", sanitizer_contract)
+        self.assertIn("appendedTransitionHighWater == 140", sanitizer_contract)
+        self.assertIn("acceptedDuringTransition == oldSecretHash", sanitizer_contract)
+        self.assertIn("ackOnlyArms", sanitizer_contract)
+        self.assertIn("appendPreservesQuarantine", sanitizer_contract)
+        self.assertIn("stableNextScanCloses", sanitizer_contract)
+        self.assertIn("mismatchPreservesQuarantine", sanitizer_contract)
+        self.assertIn("acceptedAfterStableScan == newSecretHash", sanitizer_contract)
 
 
 if __name__ == "__main__":

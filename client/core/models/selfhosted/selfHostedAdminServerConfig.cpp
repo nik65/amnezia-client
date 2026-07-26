@@ -31,6 +31,7 @@ ServerCredentials SelfHostedAdminServerConfig::credentials() const
     creds.hostName = hostName;
     creds.userName = userName;
     creds.secretData = password;
+    creds.sshHostKeyFingerprint = sshHostKeyFingerprint;
     creds.port = port;
     return creds;
 }
@@ -120,6 +121,9 @@ QJsonObject SelfHostedAdminServerConfig::toJson() const
     if (!password.isEmpty()) {
         obj[configKey::password] = password;
     }
+    if (!sshHostKeyFingerprint.isEmpty()) {
+        obj[configKey::sshHostKeyFingerprint] = sshHostKeyFingerprint;
+    }
     if (port > 0) {
         obj[configKey::port] = port;
     }
@@ -154,6 +158,7 @@ SelfHostedAdminServerConfig SelfHostedAdminServerConfig::fromJson(const QJsonObj
 
     config.userName = json.value(configKey::userName).toString();
     config.password = json.value(configKey::password).toString();
+    config.sshHostKeyFingerprint = json.value(configKey::sshHostKeyFingerprint).toString();
     if (json.contains(configKey::port)) {
         config.port = json.value(configKey::port).toInt();
     } else {

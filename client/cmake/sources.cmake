@@ -6,6 +6,9 @@ set(HEADERS ${HEADERS}
     ${CLIENT_ROOT_DIR}/amneziaApplication.h
     ${CLIENT_ROOT_DIR}/core/utils/errorCodes.h
     ${CLIENT_ROOT_DIR}/core/utils/routeModes.h
+    ${CLIENT_ROOT_DIR}/core/utils/boundedQueuedSnapshot.h
+    ${CLIENT_ROOT_DIR}/core/utils/remoteLogBatchHealth.h
+    ${CLIENT_ROOT_DIR}/core/utils/routeRuleMatcher.h
     ${CLIENT_ROOT_DIR}/core/utils/managedRoutePolicy.h
     ${CLIENT_ROOT_DIR}/core/utils/operatorCommand.h
     ${CLIENT_ROOT_DIR}/core/utils/remoteLogSanitizer.h
@@ -26,6 +29,7 @@ set(HEADERS ${HEADERS}
     ${CLIENT_ROOT_DIR}/core/controllers/coreSignalHandlers.h
     ${CLIENT_ROOT_DIR}/core/controllers/gatewayController.h
     ${CLIENT_ROOT_DIR}/core/utils/selfhosted/sshSession.h
+    ${CLIENT_ROOT_DIR}/core/utils/selfhosted/sshHostKeyPin.h
     ${CLIENT_ROOT_DIR}/core/controllers/serversController.h
     ${CLIENT_ROOT_DIR}/core/controllers/selfhosted/usersController.h
     ${CLIENT_ROOT_DIR}/core/controllers/selfhosted/installController.h
@@ -101,6 +105,7 @@ set(SOURCES ${SOURCES}
     ${CLIENT_ROOT_DIR}/core/utils/migrations.cpp
     ${CLIENT_ROOT_DIR}/amneziaApplication.cpp
     ${CLIENT_ROOT_DIR}/core/utils/errorStrings.cpp
+    ${CLIENT_ROOT_DIR}/core/utils/routeRuleMatcher.cpp
     ${CLIENT_ROOT_DIR}/core/utils/remoteLogSanitizer.cpp
     ${CLIENT_ROOT_DIR}/core/utils/containers/containerUtils.cpp
     ${CLIENT_ROOT_DIR}/core/protocols/protocolUtils.cpp
@@ -111,6 +116,7 @@ set(SOURCES ${SOURCES}
     ${CLIENT_ROOT_DIR}/core/controllers/coreSignalHandlers.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/gatewayController.cpp
     ${CLIENT_ROOT_DIR}/core/utils/selfhosted/sshSession.cpp
+    ${CLIENT_ROOT_DIR}/core/utils/selfhosted/sshHostKeyPin.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/serversController.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/selfhosted/usersController.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/selfhosted/installController.cpp

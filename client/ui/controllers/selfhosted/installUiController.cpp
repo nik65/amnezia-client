@@ -519,7 +519,9 @@ void InstallUiController::clearProcessedServerCredentials()
     m_processedServerCredentials = ServerCredentials();
 }
 
-void InstallUiController::setProcessedServerCredentials(const QString &hostName, const QString &userName, const QString &secretData)
+void InstallUiController::setProcessedServerCredentials(const QString &hostName, const QString &userName,
+                                                        const QString &secretData,
+                                                        const QString &sshHostKeyFingerprint)
 {
     m_processedServerCredentials.hostName = hostName;
     if (m_processedServerCredentials.hostName.contains(":")) {
@@ -528,6 +530,7 @@ void InstallUiController::setProcessedServerCredentials(const QString &hostName,
     }
     m_processedServerCredentials.userName = userName;
     m_processedServerCredentials.secretData = secretData;
+    m_processedServerCredentials.sshHostKeyFingerprint = sshHostKeyFingerprint;
 }
 
 void InstallUiController::mountSftpDrive(const QString &serverId, const QString &port, const QString &password, const QString &username)

@@ -1,31 +1,10 @@
 #include "sshSession.h"
 
-#include <QCryptographicHash>
-#include <QDir>
-#include <QEventLoop>
-#include <QFile>
-#include <QFileInfo>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QLoggingCategory>
-#include <QPointer>
 #include <QTemporaryFile>
-#include <QThread>
-#include <QTimer>
-#include <QtConcurrent>
-
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <sys/stat.h>
-
-#include <chrono>
-#include <thread>
 
 #include "core/utils/containerEnum.h"
 #include "core/utils/containers/containerUtils.h"
 #include "core/utils/protocolEnum.h"
-#include "core/utils/networkUtilities.h"
 #include "core/utils/selfhosted/scriptsRegistry.h"
 #include "logger.h"
 #include "core/utils/utilities.h"
@@ -41,56 +20,75 @@ SshSession::SshSession(QObject *parent) : QObject(parent)
 
 SshSession::~SshSession()
 {
+    m_sshClient.cancelCurrentOperation();
     m_sshClient.disconnectFromHost();
 }
 
 ErrorCode SshSession::runScript(const ServerCredentials &credentials, QString script,
                                 const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdOut,
-                                const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdErr)
+                                const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdErr,
+                                int timeoutMs)
 {
-
-    auto error = m_sshClient.connectToHost(credentials);
+    ErrorCode error = m_sshClient.beginOperation(timeoutMs);
     if (error != ErrorCode::NoError) {
         return error;
     }
+    error = m_sshClient.connectToHost(credentials);
 
     script.replace("\r", "");
 
-    qDebug() << "SshSession::Run script";
+    if (error == ErrorCode::NoError) {
+        qDebug() << "SshSession::Run script";
+    }
 
     QString totalLine;
     const QStringList &lines = script.split("\n", Qt::SkipEmptyParts);
-    for (int i = 0; i < lines.count(); i++) {
-        QString currentLine = lines.at(i);
-
+    for (const QString &currentLine : lines) {
+        if (error != ErrorCode::NoError) {
+            break;
+        }
         if (totalLine.isEmpty()) {
             totalLine = currentLine;
         } else {
-            totalLine = totalLine + "\n" + currentLine;
+            totalLine += QStringLiteral("\n") + currentLine;
         }
 
-        QString lineToExec;
-        if (currentLine.endsWith("\\")) {
+        if (currentLine.endsWith(u'\\')) {
             continue;
-        } else {
-            lineToExec = totalLine;
-            totalLine.clear();
         }
-
-        if (lineToExec.startsWith("#")) {
+        const QString lineToExec = totalLine;
+        totalLine.clear();
+        if (lineToExec.startsWith(u'#')) {
             continue;
         }
 
         qDebug().noquote() << lineToExec;
-
-        error = m_sshClient.executeCommand(lineToExec, cbReadStdOut, cbReadStdErr);
-        if (error != ErrorCode::NoError) {
-            return error;
-        }
+        error = m_sshClient.executeCommand(lineToExec, cbReadStdOut, cbReadStdErr, timeoutMs);
     }
 
-    qDebug().noquote() << "SshSession::runScript finished\n";
-    return ErrorCode::NoError;
+    if (error == ErrorCode::NoError) {
+        qDebug().noquote() << "SshSession::runScript finished\n";
+    }
+    return m_sshClient.finishOperation(error);
+}
+
+ErrorCode SshSession::runScriptInSingleShell(
+        const ServerCredentials &credentials, QString script,
+        const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdOut,
+        const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdErr,
+        int timeoutMs)
+{
+    ErrorCode error = m_sshClient.beginOperation(timeoutMs);
+    if (error != ErrorCode::NoError) {
+        return error;
+    }
+    error = m_sshClient.connectToHost(credentials);
+    script.replace("\r", "");
+    if (error == ErrorCode::NoError) {
+        qDebug() << "SshSession::Run script in one remote shell";
+        error = m_sshClient.executeScript(script, cbReadStdOut, cbReadStdErr, timeoutMs);
+    }
+    return m_sshClient.finishOperation(error);
 }
 
 ErrorCode SshSession::runContainerScript(const ServerCredentials &credentials, DockerContainer container, QString script,
@@ -189,35 +187,45 @@ QByteArray SshSession::getTextFileFromContainer(DockerContainer container, const
 }
 
 ErrorCode SshSession::uploadFileToHost(const ServerCredentials &credentials, const QByteArray &data, const QString &remotePath,
-                                       libssh::ScpOverwriteMode overwriteMode)
+                                       libssh::ScpOverwriteMode overwriteMode, int timeoutMs)
 {
-    auto error = m_sshClient.connectToHost(credentials);
+    ErrorCode error = m_sshClient.beginOperation(timeoutMs);
     if (error != ErrorCode::NoError) {
         return error;
     }
+    error = m_sshClient.connectToHost(credentials);
 
     QTemporaryFile localFile;
-    localFile.open();
-    localFile.write(data);
-    localFile.close();
-
-    error = m_sshClient.scpFileCopy(overwriteMode, localFile.fileName(), remotePath, "non_desc");
-
-    if (error != ErrorCode::NoError) {
-        return error;
+    if (error == ErrorCode::NoError) {
+        if (!localFile.open() || localFile.write(data) != data.size() || !localFile.flush()) {
+            error = ErrorCode::ReadError;
+        } else {
+            localFile.close();
+            error = m_sshClient.scpFileCopy(
+                    overwriteMode, localFile.fileName(), remotePath, "non_desc", timeoutMs);
+        }
     }
-    return ErrorCode::NoError;
+    return m_sshClient.finishOperation(error);
 }
 
 ErrorCode SshSession::uploadLocalFileToHost(const ServerCredentials &credentials, const QString &localPath, const QString &remotePath,
-                                            libssh::ScpOverwriteMode overwriteMode)
+                                            libssh::ScpOverwriteMode overwriteMode, int timeoutMs)
 {
-    auto error = m_sshClient.connectToHost(credentials);
+    ErrorCode error = m_sshClient.beginOperation(timeoutMs);
     if (error != ErrorCode::NoError) {
         return error;
     }
+    error = m_sshClient.connectToHost(credentials);
+    if (error == ErrorCode::NoError) {
+        error = m_sshClient.scpFileCopy(
+                overwriteMode, localPath, remotePath, "selfhosted_update_payload", timeoutMs);
+    }
+    return m_sshClient.finishOperation(error);
+}
 
-    return m_sshClient.scpFileCopy(overwriteMode, localPath, remotePath, "selfhosted_update_payload");
+void SshSession::cancelCurrentOperation()
+{
+    m_sshClient.cancelCurrentOperation();
 }
 
 QString SshSession::checkSshConnection(const ServerCredentials &credentials, ErrorCode &errorCode)

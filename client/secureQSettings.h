@@ -3,15 +3,200 @@
 
 #include <QMutex>
 #include <QMutexLocker>
+#include <QQueue>
 #include <QRecursiveMutex>
 #include <QObject>
 #include <QSettings>
 #include <QStringList>
 
-#include "../client/3rd/qtkeychain/qtkeychain/keychain.h"
-
 namespace amnezia::secureSettingsPolicy
 {
+    inline constexpr bool keychainReadAllowed(bool unixBackendMayMigrate,
+                                              bool readOnlyAccess) noexcept
+    {
+        return !unixBackendMayMigrate || !readOnlyAccess;
+    }
+
+    inline constexpr bool keychainMaterialCreationAllowed(
+            bool encryptedPayloadExists, bool readOnlyAccess) noexcept
+    {
+        return !encryptedPayloadExists && !readOnlyAccess;
+    }
+
+    inline constexpr int MaximumKeychainBrokerPendingOperations = 8;
+
+    enum class KeychainBrokerStartStatus {
+        Accepted,
+        Busy,
+        FailedClosed,
+    };
+
+    struct KeychainBrokerStartDecision
+    {
+        KeychainBrokerStartStatus status = KeychainBrokerStartStatus::FailedClosed;
+        quint64 operationId = 0;
+    };
+
+    enum class KeychainBrokerAdmissionStatus {
+        Started,
+        Queued,
+        QueueFull,
+        FailedClosed,
+        ShuttingDown,
+    };
+
+    struct KeychainBrokerAdmissionDecision
+    {
+        KeychainBrokerAdmissionStatus status =
+                KeychainBrokerAdmissionStatus::FailedClosed;
+        quint64 operationId = 0;
+    };
+
+    struct KeychainBrokerCompletionDecision
+    {
+        bool accepted = false;
+        quint64 nextOperationId = 0;
+    };
+
+    // Pure state gate shared by the production broker and deterministic tests.
+    // A deadline permanently poisons the process-local broker: the native
+    // backend may still own the timed-out job, so starting another job would
+    // recreate the unbounded thread/job fan-out this gate exists to prevent.
+    class KeychainBrokerGate
+    {
+    public:
+        explicit KeychainBrokerGate(
+                int maximumPendingOperations =
+                        MaximumKeychainBrokerPendingOperations) noexcept
+            : m_maximumPendingOperations(qMax(0, maximumPendingOperations))
+        {
+        }
+
+        KeychainBrokerAdmissionDecision admitOperation() noexcept
+        {
+            if (m_shuttingDown) {
+                return { KeychainBrokerAdmissionStatus::ShuttingDown, 0 };
+            }
+            if (m_failedClosed) {
+                return { KeychainBrokerAdmissionStatus::FailedClosed, 0 };
+            }
+
+            if (m_activeOperationId == 0) {
+                const quint64 operationId = nextOperationId();
+                m_activeOperationId = operationId;
+                ++m_startedOperationCount;
+                return { KeychainBrokerAdmissionStatus::Started, operationId };
+            }
+            if (m_pendingOperationIds.size() >= m_maximumPendingOperations) {
+                return { KeychainBrokerAdmissionStatus::QueueFull, 0 };
+            }
+
+            const quint64 operationId = nextOperationId();
+            m_pendingOperationIds.enqueue(operationId);
+            return { KeychainBrokerAdmissionStatus::Queued, operationId };
+        }
+
+        KeychainBrokerCompletionDecision completeAndStartNext(
+                quint64 operationId) noexcept
+        {
+            if (operationId == 0 || operationId != m_activeOperationId) {
+                return {};
+            }
+
+            m_activeOperationId = 0;
+            if (!m_failedClosed && !m_shuttingDown
+                && !m_pendingOperationIds.isEmpty()) {
+                m_activeOperationId = m_pendingOperationIds.dequeue();
+                ++m_startedOperationCount;
+            }
+            return { true, m_activeOperationId };
+        }
+
+        KeychainBrokerStartDecision beginOperation() noexcept
+        {
+            if (m_failedClosed || m_shuttingDown) {
+                return { KeychainBrokerStartStatus::FailedClosed, 0 };
+            }
+            if (m_activeOperationId != 0 || !m_pendingOperationIds.isEmpty()) {
+                return { KeychainBrokerStartStatus::Busy, 0 };
+            }
+
+            m_activeOperationId = nextOperationId();
+            ++m_startedOperationCount;
+            return { KeychainBrokerStartStatus::Accepted, m_activeOperationId };
+        }
+
+        bool completeOperation(quint64 operationId) noexcept
+        {
+            return completeAndStartNext(operationId).accepted;
+        }
+
+        bool deadlineExceeded(quint64 operationId) noexcept
+        {
+            if (operationId == 0
+                || (operationId != m_activeOperationId
+                    && !m_pendingOperationIds.contains(operationId))) {
+                return false;
+            }
+            m_failedClosed = true;
+            m_pendingOperationIds.clear();
+            return true;
+        }
+
+        void failClosed() noexcept
+        {
+            m_failedClosed = true;
+            m_pendingOperationIds.clear();
+        }
+
+        bool beginShutdown() noexcept
+        {
+            if (m_shuttingDown) {
+                return false;
+            }
+            m_shuttingDown = true;
+            m_failedClosed = true;
+            m_pendingOperationIds.clear();
+            return true;
+        }
+
+        bool isFailedClosed() const noexcept { return m_failedClosed; }
+        bool isShuttingDown() const noexcept { return m_shuttingDown; }
+        bool hasActiveOperation() const noexcept { return m_activeOperationId != 0; }
+        bool isPendingOperation(quint64 operationId) const noexcept
+        {
+            return m_pendingOperationIds.contains(operationId);
+        }
+        quint64 activeOperationId() const noexcept { return m_activeOperationId; }
+        int pendingOperationCount() const noexcept
+        {
+            return m_pendingOperationIds.size();
+        }
+        int maximumPendingOperations() const noexcept
+        {
+            return m_maximumPendingOperations;
+        }
+        quint64 startedOperationCount() const noexcept { return m_startedOperationCount; }
+
+    private:
+        quint64 nextOperationId() noexcept
+        {
+            ++m_nextOperationId;
+            if (m_nextOperationId == 0) {
+                ++m_nextOperationId;
+            }
+            return m_nextOperationId;
+        }
+
+        bool m_failedClosed = false;
+        bool m_shuttingDown = false;
+        const int m_maximumPendingOperations;
+        QQueue<quint64> m_pendingOperationIds;
+        quint64 m_nextOperationId = 0;
+        quint64 m_activeOperationId = 0;
+        quint64 m_startedOperationCount = 0;
+    };
+
     inline bool isValidSettingsKey(const QString &key)
     {
         if (key.isEmpty()) {
@@ -122,8 +307,13 @@ class SecureQSettings : public QObject
     Q_OBJECT
 
 public:
+    enum class AccessMode {
+        ReadWrite,
+        ReadOnly,
+    };
+
     explicit SecureQSettings(const QString &organization, const QString &application = QString(),
-                             QObject *parent = nullptr, bool enableEncryption = true);
+                             QObject *parent = nullptr, AccessMode accessMode = AccessMode::ReadWrite);
 
     QVariant value(const QString &key, const QVariant &defaultValue = QVariant()) const;
     void setValue(const QString &key, const QVariant &value);
@@ -139,12 +329,15 @@ private:
     QByteArray decryptText(const QByteArray &ba) const;
 
     bool encryptionRequired() const;
+    bool hasEncryptedPayloads() const;
+    bool migrateEncryptedSettings();
 
-    QByteArray getEncKey() const;
-    QByteArray getEncIv() const;
+    QByteArray getEncKey(bool allowCreate) const;
+    QByteArray getEncIv(bool allowCreate) const;
 
-    static QByteArray getSecTag(const QString &tag);
-    static void setSecTag(const QString &tag, const QByteArray &data);
+    static QByteArray getSecTag(const QString &tag, bool *readCompleted = nullptr,
+                                bool *entryNotFound = nullptr);
+    bool setSecTag(const QString &tag, const QByteArray &data) const;
 
     QSettings m_settings;
 
@@ -158,10 +351,12 @@ private:
 
     mutable QByteArray m_key;
     mutable QByteArray m_iv;
+    mutable bool m_keyReadAttempted = false;
+    mutable bool m_ivReadAttempted = false;
 
     const QByteArray magicString { "EncData" }; // Magic keyword used for mark encrypted QByteArray
 
-    bool m_encryptionEnabled;
+    const AccessMode m_accessMode;
 
     mutable QRecursiveMutex m_mutex;
 };

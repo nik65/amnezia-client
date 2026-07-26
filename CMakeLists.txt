@@ -4,7 +4,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(PROJECT AmneziaVPN)
-set(AMNEZIAVPN_VERSION 4.9.2.2)
+set(AMNEZIAVPN_VERSION 4.9.2.3)
 
 set(QT_CREATOR_SKIP_PACKAGE_MANAGER_SETUP ON CACHE BOOL "" FORCE)
 set(CMAKE_PROJECT_TOP_LEVEL_INCLUDES
@@ -32,7 +32,7 @@ string(TIMESTAMP CURRENT_DATE "%Y-%m-%d")
 set(RELEASE_DATE "${CURRENT_DATE}")
 
 set(APP_MAJOR_VERSION ${CMAKE_PROJECT_VERSION_MAJOR}.${CMAKE_PROJECT_VERSION_MINOR}.${CMAKE_PROJECT_VERSION_PATCH})
-set(APP_ANDROID_VERSION_CODE 2136)
+set(APP_ANDROID_VERSION_CODE 2137)
 
 if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
     set(MZ_PLATFORM_NAME "linux")
@@ -79,4 +79,17 @@ endif()
 
 if ((LINUX AND NOT ANDROID) OR (APPLE AND NOT IOS AND NOT MACOS_NE) OR (WIN32))
     include(${CMAKE_SOURCE_DIR}/cmake/CPack.cmake)
+endif()
+
+# Focused regression targets intentionally remain opt-in so normal desktop and
+# cross-platform release packaging is unchanged.  A native maintainer build can
+# enable one aggregate CTest surface instead of configuring every standalone
+# test directory by hand.
+option(AMNEZIAVPN_BUILD_FOCUSED_TESTS "Build the native focused regression suite" OFF)
+if(AMNEZIAVPN_BUILD_FOCUSED_TESTS)
+    if(CMAKE_CROSSCOMPILING OR ANDROID OR IOS OR MACOS_NE)
+        message(FATAL_ERROR "AMNEZIAVPN_BUILD_FOCUSED_TESTS requires a native desktop build")
+    endif()
+    enable_testing()
+    add_subdirectory(client/tests)
 endif()

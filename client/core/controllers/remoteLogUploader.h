@@ -7,11 +7,13 @@
 #include <QList>
 #include <QNetworkAccessManager>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QTimer>
 
 #include "core/protocols/vpnProtocol.h"
 #include "core/utils/containerEnum.h"
+#include "core/utils/remoteLogBatchHealth.h"
 #include "core/utils/remoteLogSanitizer.h"
 
 class SecureAppSettingsRepository;
@@ -92,12 +94,18 @@ private:
         QString offsetKey;
         QString fingerprint;
         qint64 fingerprintBytes = 0;
+        QString offsetAnchor;
         QString nextAnchor;
+        QString sourceRangeSha256;
+        QString sanitizerSecretSetSha256;
+        QString currentSecretSetSha256;
         qint64 offset = 0;
         qint64 nextOffset = 0;
+        qint64 sourceSize = 0;
         qint64 remainingBytes = 0;
         bool hasMore = false;
         bool advancesCursor = true;
+        bool wholeRedacted = false;
         amnezia::remoteLogSanitizer::StreamState streamState;
         qint64 sourceBytes = 0;
     };
@@ -105,7 +113,7 @@ private:
     struct ConnectionSnapshot
     {
         Vpn::ConnectionState state = Vpn::ConnectionState::Unknown;
-        int serverIndex = -1;
+        QString serverId;
         amnezia::DockerContainer container = amnezia::DockerContainer::None;
     };
 
@@ -115,8 +123,10 @@ private:
         QString fingerprint;
         qint64 fingerprintBytes = 0;
         QString anchor;
+        QString sanitizerSecretSetSha256;
         amnezia::remoteLogSanitizer::StreamState streamState;
         bool streamStateKnown = false;
+        bool persistenceReadable = true;
     };
 
     struct StateScanProgress
@@ -129,16 +139,36 @@ private:
         amnezia::remoteLogSanitizer::StreamState state;
     };
 
+    struct RetrySanitizerMarker
+    {
+        bool present = false;
+        bool valid = false;
+        QString binding;
+        QString fingerprint;
+        qint64 offset = -1;
+        qint64 nextOffset = -1;
+        qint64 highWaterOffset = -1;
+        QString offsetAnchor;
+        QString nextAnchor;
+        QString sourceRangeSha256;
+        QString secretSetSha256;
+        bool requiresInheritedSecrets = true;
+        bool awaitingStableSource = false;
+        qint64 confirmationCursorOffset = -1;
+        QString confirmationCursorAnchor;
+    };
+
     void uploadNow();
-    UploadTarget findUploadTarget() const;
-    ConnectionSnapshot currentConnectionSnapshot() const;
+    void uploadWithSnapshot(const ConnectionSnapshot &snapshot);
+    UploadTarget findUploadTarget(const ConnectionSnapshot &snapshot) const;
     QList<LogPayload> collectPayloads();
     void bootstrapCurrentTarget();
     void postNext();
     QString payloadDedupeKey(const QString &kind) const;
     LogCursor cursorForKey(const QString &key);
-    void persistCursor(const QString &key, const LogCursor &cursor) const;
-    LogPayload payloadFromFile(const QString &kind, const QString &filePath);
+    bool persistCursor(const QString &key, const LogCursor &cursor) const;
+    LogPayload payloadFromFile(const QString &kind, const QString &filePath,
+                               bool *sourceReadable = nullptr);
     LogPayload payloadFromBytes(const QString &kind, const QByteArray &data);
     bool advanceFileStateScan(QFile &file,
                               const QString &key,
@@ -155,7 +185,31 @@ private:
                                bool endsInsideRecord,
                                const amnezia::remoteLogSanitizer::StreamState &streamState,
                                const amnezia::remoteLogSanitizer::StreamBoundary &boundary,
+                               const amnezia::RemoteLogSanitizerSecretSet &sanitizerSecrets,
                                amnezia::remoteLogSanitizer::StreamState &nextStreamState) const;
+    amnezia::RemoteLogSanitizerSecretSet sanitizerSecretsForPayload(
+            const QString &key, const QString &fingerprint, qint64 offset,
+            const QString &offsetAnchor, const QString &sourceRangeSha256,
+            qint64 nextOffset, const QString &nextAnchor, qint64 sourceSize,
+            const LogCursor &cursor, bool cursorMatchesSource,
+            QString *currentSecretSetSha256 = nullptr);
+    amnezia::RemoteLogSanitizerSecretSet currentSanitizerSecrets() const;
+    QString sanitizerSecretSetSha256(
+            const amnezia::RemoteLogSanitizerSecretSet &secrets) const;
+    RetrySanitizerMarker retrySanitizerMarker(const QString &key) const;
+    bool persistRetrySanitizerMarker(const QString &key,
+                                     const RetrySanitizerMarker &marker) const;
+    bool reconcileRetrySanitizerTransition(
+            const QString &key, const QString &fingerprint,
+            qint64 capturedSize, qint64 sourceOffset,
+            const QString &offsetAnchor, qint64 nextOffset,
+            const QString &nextAnchor, const QString &sourceRangeSha256,
+            const LogCursor &cursor,
+            bool cursorMatchesSource, const QString &currentSecretSetSha256);
+    bool retainRetrySanitizerSecrets(const LogPayload &payload);
+    bool armRetrySanitizerStableSource(const LogPayload &payload,
+                                       const LogCursor &cursor);
+    bool discardRetrySanitizerSecrets(const QString &key);
     void finishUpload();
     void recordFailure(ErrorCategory category);
     void markUploadSuccess();
@@ -179,9 +233,11 @@ private:
     QTimer m_healthTimer;
     QNetworkAccessManager m_networkAccessManager;
     UploadTarget m_currentTarget;
+    ConnectionSnapshot m_currentConnectionSnapshot;
     QList<LogPayload> m_pendingPayloads;
     QHash<QString, LogCursor> m_logCursors;
     QHash<QString, StateScanProgress> m_stateScans;
+    QSet<QString> m_retrySanitizerKeys;
     State m_state = State::WaitingForVpn;
     ErrorCategory m_lastErrorCategory = ErrorCategory::None;
     QDateTime m_lastSuccess;
@@ -192,11 +248,19 @@ private:
     int m_consecutiveFailures = 0;
     bool m_uploadInProgress = false;
     bool m_uploadRequested = false;
+    bool m_snapshotPending = false;
+    quint64 m_snapshotGeneration = 0;
+    quint64 m_connectionContextGeneration = 0;
+    quint64 m_currentConnectionContextGeneration = 0;
     bool m_bootstrapInProgress = false;
     bool m_batchHadFailure = false;
     bool m_started = false;
     bool m_collectionHasReadableSource = false;
+    bool m_collectionAllExpectedSourcesReadable = false;
     bool m_collectionHasPendingStateScan = false;
+    bool m_collectionPrivacyQuarantined = false;
+    bool m_collectionWholeRedactionUsed = false;
+    bool m_retryPersistenceFailClosed = false;
 };
 
 #endif // REMOTELOGUPLOADER_H

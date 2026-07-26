@@ -1,4 +1,4 @@
 extern "C"
 {
-void mainRouteIface(int argc, char **argv);
+int mainRouteIface(int argc, char **argv);
 }

@@ -1577,6 +1577,7 @@ void InstallController::addEmptyServer(const ServerCredentials &credentials)
     serverConfig.hostName = credentials.hostName;
     serverConfig.userName = credentials.userName;
     serverConfig.password = credentials.secretData;
+    serverConfig.sshHostKeyFingerprint = credentials.sshHostKeyFingerprint;
     serverConfig.port = credentials.port;
     serverConfig.description = m_serversRepository->nextAvailableServerName();
     serverConfig.displayName = serverConfig.description.isEmpty() ? serverConfig.hostName : serverConfig.description;
@@ -2393,6 +2394,7 @@ ErrorCode InstallController::installServer(const ServerCredentials &credentials,
     serverConfig.hostName = credentials.hostName;
     serverConfig.userName = credentials.userName;
     serverConfig.password = credentials.secretData;
+    serverConfig.sshHostKeyFingerprint = credentials.sshHostKeyFingerprint;
     serverConfig.port = credentials.port;
     serverConfig.description = m_serversRepository->nextAvailableServerName();
 
@@ -2551,8 +2553,7 @@ ErrorCode InstallController::mountSftpDrive(const ServerCredentials &credentials
                            "-o rellinks "
                            "-o fstypename=SSHFS "
                            "-o ssh_command=/usr/bin/ssh.exe "
-                           "-o UserKnownHostsFile=/dev/null "
-                           "-o StrictHostKeyChecking=no "
+                           "-o StrictHostKeyChecking=yes "
                            "-o password_stdin")
                            .arg(username, hostname, mountPath, port);
 

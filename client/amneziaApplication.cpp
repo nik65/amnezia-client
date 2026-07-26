@@ -39,6 +39,8 @@
 #include "core/utils/containers/containerUtils.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/constants/protocolConstants.h"
+#include "core/utils/managedRoutePolicy.h"
+#include "core/utils/routeRuleMatcher.h"
 #ifdef AMNEZIA_DESKTOP
     #include "core/utils/ipcClient.h"
 #endif
@@ -76,10 +78,13 @@ constexpr int operatorWatchConnectTimeoutMs = 1500;
 constexpr int operatorWatchResponseTimeoutMs = 3000;
 constexpr int operatorSnapshotRefreshIntervalMs = 1000;
 constexpr int operatorSnapshotStaleAfterMs = 3000;
+constexpr int vpnWorkerShutdownTimeoutMs = 8000;
 constexpr int operatorMaximumActiveClients = 16;
 constexpr qsizetype operatorMaximumIdentifierOutputLength = 1024;
 constexpr qsizetype operatorMaximumMatchedValueOutputLength = 2048;
 constexpr qsizetype operatorMaximumHumanFieldLength = 256;
+static_assert(operatorMaximumMatchedValueOutputLength
+              == routeRuleMatcher::maximumMatchedValueLength);
 
 void writeConsole(FILE *stream, const QString &text)
 {
@@ -346,68 +351,6 @@ bool isWritableLocation(const QString &path)
     return parent.exists() && QFileInfo(parent.absolutePath()).isWritable();
 }
 
-bool normalizeOperatorHost(const QString &input, QString *normalized)
-{
-    if (!normalized || input.isEmpty()
-        || input.size() > amnezia::operatorMode::MaximumRouteArgumentLength) {
-        return false;
-    }
-    for (const QChar character : input) {
-        const QChar::Category category = character.category();
-        if (character.isNull() || character.isSpace()
-            || category == QChar::Other_Control || category == QChar::Other_Format
-            || category == QChar::Other_Surrogate || category == QChar::Other_PrivateUse
-            || category == QChar::Other_NotAssigned) {
-            return false;
-        }
-    }
-
-    QString value = input;
-    if (value.startsWith(QLatin1Char('[')) && value.endsWith(QLatin1Char(']'))
-        && value.size() > 2) {
-        value = value.mid(1, value.size() - 2);
-    }
-    QHostAddress address;
-    if (address.setAddress(value)) {
-        // Scoped IPv6 addresses depend on a local interface name/index and are
-        // not stable operator targets.
-        if (!address.scopeId().isEmpty()) {
-            return false;
-        }
-        *normalized = address.toString().toLower();
-        return true;
-    }
-
-    if (value.contains(QLatin1Char(':')) || value.contains(QLatin1Char('/'))
-        || value.contains(QLatin1Char('\\')) || value.contains(QLatin1Char('@'))
-        || value.contains(QLatin1Char('?')) || value.contains(QLatin1Char('#'))
-        || value.contains(QLatin1Char('%'))) {
-        return false;
-    }
-    while (value.endsWith(QLatin1Char('.'))) {
-        value.chop(1);
-    }
-    const QByteArray ace = QUrl::toAce(value);
-    if (ace.isEmpty() || ace.size() > 253) {
-        return false;
-    }
-    const QList<QByteArray> labels = ace.toLower().split('.');
-    for (const QByteArray &label : labels) {
-        if (label.isEmpty() || label.size() > 63 || label.startsWith('-') || label.endsWith('-')) {
-            return false;
-        }
-        for (const char character : label) {
-            const bool alphaNumeric = (character >= 'a' && character <= 'z')
-                    || (character >= '0' && character <= '9');
-            if (!alphaNumeric && character != '-') {
-                return false;
-            }
-        }
-    }
-    *normalized = QString::fromLatin1(ace.toLower());
-    return true;
-}
-
 QString boundedOperatorField(const QString &value, qsizetype maximumLength,
                              bool *truncated = nullptr)
 {
@@ -431,119 +374,6 @@ QString terminalSafeOperatorField(const QString &value)
         }
     }
     return safe;
-}
-
-quint32 operatorIpv4Mask(int prefixLength)
-{
-    return prefixLength == 0 ? 0 : (0xffffffffu << (32 - prefixLength));
-}
-
-bool operatorRouteOverlapsRange(quint32 address, int prefixLength, quint32 base, int rangePrefixLength)
-{
-    const quint32 routeStart = address & operatorIpv4Mask(prefixLength);
-    const quint32 routeEnd = routeStart | ~operatorIpv4Mask(prefixLength);
-    const quint32 rangeStart = base & operatorIpv4Mask(rangePrefixLength);
-    const quint32 rangeEnd = rangeStart | ~operatorIpv4Mask(rangePrefixLength);
-    return routeStart <= rangeEnd && rangeStart <= routeEnd;
-}
-
-bool operatorRuntimeSupportsRoute(const QString &route, bool clientSource)
-{
-    const QStringList parts = route.trimmed().split(QLatin1Char('/'));
-    if (parts.isEmpty() || parts.size() > 2) {
-        return false;
-    }
-    const QHostAddress address(parts.first());
-    if (address.protocol() != QAbstractSocket::IPv4Protocol) {
-        return false;
-    }
-    bool prefixOk = true;
-    const int prefixLength = parts.size() == 2 ? parts.at(1).toInt(&prefixOk) : 32;
-    const quint32 ipv4 = address.toIPv4Address();
-    if (!prefixOk || prefixLength < 0 || prefixLength > 32
-        || (ipv4 & operatorIpv4Mask(prefixLength)) != ipv4) {
-        return false;
-    }
-    if (!clientSource) {
-        return true;
-    }
-    if (prefixLength == 0) {
-        return false;
-    }
-
-    const QHostAddress hostAddress(ipv4);
-    if (hostAddress.isNull() || hostAddress.isLoopback() || hostAddress.isBroadcast()
-        || hostAddress.isLinkLocal() || hostAddress.isMulticast()) {
-        return false;
-    }
-    const auto inRange = [ipv4](quint32 base, int prefix) {
-        const quint32 mask = operatorIpv4Mask(prefix);
-        return (ipv4 & mask) == (base & mask);
-    };
-    if (operatorRouteOverlapsRange(ipv4, prefixLength, 0x00000000u, 8)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0x7f000000u, 8)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xc0000000u, 24)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xc0000200u, 24)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xc01f0000u, 24)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xc01fc400u, 24)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xc034c100u, 24)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xc0586300u, 24)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xc0af3000u, 24)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xc6120000u, 15)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xc6336400u, 24)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xcb007100u, 24)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xe0000000u, 4)
-        || operatorRouteOverlapsRange(ipv4, prefixLength, 0xf0000000u, 4)) {
-        return false;
-    }
-    const bool localOrServiceRoute = inRange(0x0a000000u, 8)
-            || inRange(0x64400000u, 10) || inRange(0xac100000u, 12)
-            || inRange(0xc0a80000u, 16);
-    return prefixLength >= (localOrServiceRoute ? 24 : 16);
-}
-
-bool addressMatchesSubnet(const QString &addressText, const QString &subnetText, bool clientSource)
-{
-    const QHostAddress address(addressText);
-    if (address.protocol() != QAbstractSocket::IPv4Protocol
-        || !operatorRuntimeSupportsRoute(subnetText, clientSource)) {
-        return false;
-    }
-    const auto subnet = QHostAddress::parseSubnet(subnetText);
-    return !subnet.first.isNull() && address.isInSubnet(subnet);
-}
-
-bool hostMatchesRule(const QString &host, QString rule, bool clientSource)
-{
-    rule = rule.trimmed().toLower();
-    while (rule.endsWith(QLatin1Char('.'))) {
-        rule.chop(1);
-    }
-    if (rule.isEmpty()) {
-        return false;
-    }
-    if (addressMatchesSubnet(host, rule, clientSource)) {
-        return true;
-    }
-    // Runtime split routing resolves each configured hostname independently;
-    // it does not install DNS suffix or wildcard rules.
-    return host == rule;
-}
-
-bool mappedAddressMatches(const QString &host, const QVariant &value, bool clientSource)
-{
-    const QHostAddress address(host);
-    if (address.isNull()) {
-        return false;
-    }
-    const QStringList values = value.toString().split(QRegularExpression(QStringLiteral("[,;\\s]+")),
-                                                      Qt::SkipEmptyParts);
-    for (const QString &candidate : values) {
-        if (addressMatchesSubnet(host, candidate, clientSource)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 struct OperatorServerView {
@@ -590,9 +420,11 @@ struct OperatorVpnSnapshot {
     QString serverId;
     DockerContainer container = DockerContainer::None;
     RouteMode appliedSiteRouteMode = RouteMode::VpnAllSites;
+    quint64 connectionEpoch = 0;
     QString remoteAddress;
     QString serverRoutingRulesSyncHost;
     QString vpnGateway;
+    VpnConnection::ManagedRouteRuntimeSnapshot managedRouteSnapshot;
     int lastError = static_cast<int>(ErrorCode::NoError);
 };
 
@@ -607,6 +439,8 @@ OperatorVpnSnapshot captureVpnSnapshot(VpnConnection *vpnConnection)
     snapshot.serverId = vpnConnection->serverId();
     snapshot.container = vpnConnection->container();
     snapshot.appliedSiteRouteMode = vpnConnection->appliedSiteRouteMode();
+    snapshot.connectionEpoch = vpnConnection->connectionEpoch();
+    snapshot.managedRouteSnapshot = vpnConnection->managedRouteRuntimeSnapshot();
     snapshot.remoteAddress = vpnConnection->remoteAddress();
     snapshot.serverRoutingRulesSyncHost = vpnConnection->serverRoutingRulesSyncHost();
     const QSharedPointer<VpnProtocol> protocol = vpnConnection->vpnProtocol();
@@ -1028,8 +862,10 @@ AmneziaApplication::AmneziaApplication(
     }
 #endif
 
-    m_settings = new SecureQSettings(ORGANIZATION_NAME, APPLICATION_NAME, this,
-                                     !m_operatorCommandLineDetected);
+    m_settings = new SecureQSettings(
+            ORGANIZATION_NAME, APPLICATION_NAME, this,
+            m_operatorCommandLineDetected ? SecureQSettings::AccessMode::ReadOnly
+                                          : SecureQSettings::AccessMode::ReadWrite);
     if (!m_operatorCommandLineDetected) {
         m_nam = new QNetworkAccessManager(this);
     }
@@ -1038,24 +874,34 @@ AmneziaApplication::AmneziaApplication(
 AmneziaApplication::~AmneziaApplication()
 {
     m_operatorSnapshotRefreshTimer.stop();
-#ifdef AMNEZIA_DESKTOP
+    bool vpnWorkerShutdownQueued = false;
+    QThread *const destructionThread = QThread::currentThread();
     if (m_vpnConnection && m_vpnConnectionThread.isRunning()) {
-        QMetaObject::invokeMethod(m_vpnConnection.get(), "disconnectSlots", Qt::BlockingQueuedConnection);
-
+        bool disconnectVpn = false;
+#ifdef AMNEZIA_DESKTOP
         const bool explicitOperatorDisconnect = m_hasOperatorCommand
                 && m_operatorCommand.type == amnezia::operatorMode::CommandType::Disconnect;
-        if (!m_hasOperatorCommand || explicitOperatorDisconnect) {
-            QMetaObject::invokeMethod(m_vpnConnection.get(), "disconnectFromVpn", Qt::BlockingQueuedConnection);
-        }
-    }
+        disconnectVpn = !m_hasOperatorCommand || explicitOperatorDisconnect;
 #endif
+        VpnConnection *const vpnConnection = m_vpnConnection.get();
+        vpnWorkerShutdownQueued = QMetaObject::invokeMethod(
+                vpnConnection,
+                [vpnConnection, disconnectVpn, destructionThread]() {
+                    vpnConnection->shutdownForApplicationExit(disconnectVpn, destructionThread);
+                },
+                Qt::QueuedConnection);
+    }
 
     m_vpnConnectionThread.requestInterruption();
-    m_vpnConnectionThread.quit();
+    if (!vpnWorkerShutdownQueued) {
+        m_vpnConnectionThread.quit();
+    }
 
-    if (!m_vpnConnectionThread.wait(3000)) {
-        m_vpnConnectionThread.terminate();
-        m_vpnConnectionThread.wait(500);
+    if (!m_vpnConnectionThread.wait(vpnWorkerShutdownTimeoutMs)) {
+        qFatal("VPN worker did not stop cooperatively; refusing forced termination or live-object destruction");
+    }
+    if (m_vpnConnection && m_vpnConnection->thread() != destructionThread) {
+        qFatal("VPN worker stopped without transferring VpnConnection to its destruction thread");
     }
 
     // Keep the authoritative lock while controllers, update timers and the VPN
@@ -1338,7 +1184,7 @@ void AmneziaApplication::initVpnConnection()
         return;
     }
 
-    m_vpnConnection.reset(new VpnConnection(nullptr, nullptr));
+    m_vpnConnection.reset(new VpnConnection());
     m_operatorConnectionState = m_vpnConnection->connectionState();
     connect(m_vpnConnection.get(), &VpnConnection::connectionStateChanged, this,
             [this](Vpn::ConnectionState state) {
@@ -2347,8 +2193,10 @@ amnezia::operatorMode::CommandResponse AmneziaApplication::operatorDoctor() cons
 amnezia::operatorMode::CommandResponse AmneziaApplication::operatorRoutesExplain(const QString &hostInput) const
 {
     amnezia::operatorMode::CommandResponse response;
-    QString host;
-    if (!normalizeOperatorHost(hostInput, &host)) {
+    const routeRuleMatcher::NormalizedTarget normalizedTarget =
+            routeRuleMatcher::normalizeTarget(
+                    hostInput, routeRuleMatcher::InputPolicy::BareHostOrAddress);
+    if (!normalizedTarget.error.isEmpty()) {
         response.exitCode = 2;
         response.humanOutput = QStringLiteral("Invalid host name or IP address.");
         response.result = {
@@ -2358,6 +2206,7 @@ amnezia::operatorMode::CommandResponse AmneziaApplication::operatorRoutesExplain
         };
         return response;
     }
+    const QString host = normalizedTarget.host;
 
     const OperatorVpnSnapshot snapshot = m_vpnConnection && m_vpnConnectionThread.isRunning()
             ? readVpnSnapshot(m_vpnConnection) : OperatorVpnSnapshot();
@@ -2373,64 +2222,115 @@ amnezia::operatorMode::CommandResponse AmneziaApplication::operatorRoutesExplain
     const RouteMode localMode = appSettings.routeMode();
     const bool localSplitEnabled = appSettings.isSitesSplitTunnelingEnabled();
     SecureServersRepository serverRepository(m_settings, nullptr, false);
-    const RouteMode policyMode = serverRepository.effectiveSiteRouteMode(
+    const RouteMode desiredMode = serverRepository.effectiveSiteRouteMode(
             serverIndex, localSplitEnabled, localMode);
+    const QJsonObject serverConfig = serverIndex >= 0
+            ? serverRepository.serverJson(serverIndex) : QJsonObject();
+    const bool managedPolicyPresent =
+            !serverConfig.value(managedRoutePolicy::stateKey()).isUndefined()
+            || managedRoutePolicy::containsSourceSites(serverConfig);
+    const bool managedPolicyEffective =
+            managedRoutePolicy::isEffective(serverConfig);
+    const QString effectivePolicyRevision =
+            managedRoutePolicy::effectiveRevision(serverConfig);
+    const QString effectivePolicyContentHash =
+            managedRoutePolicy::effectiveContentHash(serverConfig);
+    const VpnConnection::ManagedRouteRuntimeSnapshot &managedSnapshot =
+            snapshot.managedRouteSnapshot;
+    const bool receiptConfirmed = runtimeConnected && managedSnapshot.confirmed
+            && !managedSnapshot.transitionPending;
+    const bool serverEpochMatches = receiptConfirmed
+            && managedSnapshot.connectionEpoch != 0
+            && managedSnapshot.connectionEpoch == snapshot.connectionEpoch
+            && !snapshot.serverId.isEmpty()
+            && managedSnapshot.serverId == snapshot.serverId
+            && serverView.id == snapshot.serverId;
+    const bool modeMatches = receiptConfirmed
+            && managedSnapshot.mode == snapshot.appliedSiteRouteMode
+            && managedSnapshot.mode == desiredMode;
+    const bool policyIdentityMatches = receiptConfirmed
+            && managedRoutePolicy::isCanonicalPolicyIdentity(
+                    managedSnapshot.policyRevision,
+                    managedSnapshot.policyContentHash)
+            && managedSnapshot.policyRevision == effectivePolicyRevision
+            && managedSnapshot.policyContentHash == effectivePolicyContentHash
+            && (!managedPolicyPresent || managedPolicyEffective);
+    const bool snapshotAuthoritative = receiptConfirmed
+            && serverEpochMatches && modeMatches && policyIdentityMatches;
+    const RouteMode inspectedMode = receiptConfirmed
+            ? managedSnapshot.mode : desiredMode;
 
-    const QVariantMap localRules = policyMode == RouteMode::VpnAllSites
-            ? QVariantMap() : appSettings.vpnSites(policyMode);
-    const QVariantMap managedRules = policyMode == RouteMode::VpnAllSites
-            ? QVariantMap() : serverRepository.managedVpnSitesForRouting(serverIndex, policyMode);
-
-    QString matchedRule;
-    QString matchedValue;
-    QString matchedSource;
-    const auto findMatch = [&host, &matchedRule, &matchedValue, &matchedSource](const QVariantMap &rules,
-                                                                              const QString &source) {
-        for (auto it = rules.constBegin(); it != rules.constEnd(); ++it) {
-            const bool clientSource = source == QStringLiteral("local");
-            if (hostMatchesRule(host, it.key(), clientSource)
-                || mappedAddressMatches(host, it.value(), clientSource)) {
-                matchedRule = it.key();
-                matchedValue = it.value().toString();
-                matchedSource = source;
-                return true;
-            }
+    QVariantMap installedRules;
+    if (snapshotAuthoritative && inspectedMode != RouteMode::VpnAllSites) {
+        for (const QString &route : managedSnapshot.installedRoutes) {
+            installedRules.insert(route, QVariant());
         }
-        return false;
-    };
-    const bool matched = findMatch(localRules, QStringLiteral("local"))
-            || findMatch(managedRules, QStringLiteral("server-managed"));
+    }
+    const routeRuleMatcher::MatchResult matchResult =
+            snapshotAuthoritative
+            ? routeRuleMatcher::matchRules(
+                    {}, installedRules, host, normalizedTarget.literalAddress,
+                    routeRuleMatcher::DomainMatchPolicy::PolicyOnly)
+            : routeRuleMatcher::MatchResult {};
+    const routeRuleMatcher::RuleMatch &match = matchResult.accepted;
+    const bool ruleCoverageComplete = !snapshotAuthoritative
+            || matchResult.coverageComplete;
+    const bool matched = snapshotAuthoritative
+            && ruleCoverageComplete && match.matched;
+    const QString matchedRule = matched ? match.configuredRule : QString();
+    const QString matchedSource = matched
+            ? QStringLiteral("server-managed") : QString();
     bool matchedRuleTruncated = false;
-    bool matchedValueTruncated = false;
     const QString outputMatchedRule = boundedOperatorField(
             matchedRule, operatorMaximumIdentifierOutputLength, &matchedRuleTruncated);
-    const QString outputMatchedValue = boundedOperatorField(
-            matchedValue, operatorMaximumMatchedValueOutputLength, &matchedValueTruncated);
+    const bool matchedValueTruncated = matched && match.matchedValueTruncated;
+    const QString outputMatchedValue = !matched ? QString()
+            : match.matchedValue
+                    + (matchedValueTruncated ? QStringLiteral("...") : QString());
     bool serverIdTruncated = false;
     const QString outputServerId = boundedOperatorField(
             serverView.id, operatorMaximumIdentifierOutputLength, &serverIdTruncated);
 
-    QString policyRoute;
+    QString snapshotRoute = QStringLiteral("unknown");
     QString reason;
-    switch (policyMode) {
-    case RouteMode::VpnAllSites:
-        policyRoute = QStringLiteral("vpn");
-        reason = QStringLiteral("all sites use the VPN");
-        break;
-    case RouteMode::VpnOnlyForwardSites:
-        policyRoute = matched ? QStringLiteral("vpn") : QStringLiteral("direct");
-        reason = matched ? QStringLiteral("host matches the VPN-only list")
-                         : QStringLiteral("host is absent from the VPN-only list");
-        break;
-    case RouteMode::VpnAllExceptSites:
-        policyRoute = matched ? QStringLiteral("direct") : QStringLiteral("vpn");
-        reason = matched ? QStringLiteral("host matches the VPN bypass list")
-                         : QStringLiteral("host is absent from the VPN bypass list");
-        break;
+    if (!snapshotAuthoritative) {
+        reason = QStringLiteral("confirmed installed route snapshot is unavailable or diverged");
+    } else {
+        switch (inspectedMode) {
+        case RouteMode::VpnAllSites:
+            snapshotRoute = QStringLiteral("vpn");
+            reason = QStringLiteral("confirmed client snapshot applies full-tunnel site routing");
+            break;
+        case RouteMode::VpnOnlyForwardSites:
+            if (matched) {
+                snapshotRoute = QStringLiteral("vpn");
+                reason = QStringLiteral("target matches a confirmed installed managed route");
+            } else {
+                // The managed receipt says nothing about best-effort local
+                // routes, so absence of a managed match cannot prove that the
+                // target uses the split-mode default.
+                snapshotRoute = QStringLiteral("unknown");
+                reason = QStringLiteral("no managed receipt matched and local route installation is unconfirmed");
+            }
+            break;
+        case RouteMode::VpnAllExceptSites:
+            if (matched) {
+                snapshotRoute = QStringLiteral("direct");
+                reason = QStringLiteral("target matches a confirmed installed managed bypass route");
+            } else {
+                snapshotRoute = QStringLiteral("unknown");
+                reason = QStringLiteral("no managed bypass receipt matched and local route installation is unconfirmed");
+            }
+            break;
+        }
+    }
+    if (snapshotAuthoritative && !ruleCoverageComplete) {
+        snapshotRoute = QStringLiteral("unknown");
+        reason = QStringLiteral("installed rule coverage exceeded bounded inspection limits");
     }
 
-    QHostAddress targetAddress;
-    const bool literalTarget = targetAddress.setAddress(host);
+    const QHostAddress targetAddress = normalizedTarget.literalAddress;
+    const bool literalTarget = !targetAddress.isNull();
     const bool ipv6Target = literalTarget
             && targetAddress.protocol() == QAbstractSocket::IPv6Protocol;
 
@@ -2466,21 +2366,30 @@ amnezia::operatorMode::CommandResponse AmneziaApplication::operatorRoutesExplain
         }
     }
 
-    const bool appliedModeMatchesPolicy = !runtimeConnected
-            || snapshot.appliedSiteRouteMode == policyMode;
-    const bool splitMode = runtimeConnected
-            ? snapshot.appliedSiteRouteMode != RouteMode::VpnAllSites
-            : policyMode != RouteMode::VpnAllSites;
+    const bool splitMode = inspectedMode != RouteMode::VpnAllSites;
     const amnezia::operatorMode::RouteRuntimeDecision runtimeDecision =
             amnezia::operatorMode::assessRouteRuntime(
-                policyRoute, snapshot.available,
+                snapshotRoute, snapshot.available,
                 effectiveConnectionState == Vpn::ConnectionState::Connected,
+                snapshotAuthoritative,
                 literalTarget, ipv6Target, splitMode, protectedTarget,
-                appliedModeMatchesPolicy);
+                modeMatches);
 
     QJsonArray warnings;
     if (!runtimeDecision.warning.isEmpty()) {
         warnings.append(runtimeDecision.warning);
+    }
+    if (!ruleCoverageComplete) {
+        warnings.append(QStringLiteral("route_rule_coverage_truncated"));
+    }
+    if (receiptConfirmed && !serverEpochMatches) {
+        warnings.append(QStringLiteral("runtime_snapshot_binding_diverged"));
+    }
+    if (receiptConfirmed && !modeMatches) {
+        warnings.append(QStringLiteral("runtime_route_mode_diverged"));
+    }
+    if (receiptConfirmed && !policyIdentityMatches) {
+        warnings.append(QStringLiteral("runtime_policy_identity_diverged"));
     }
 
     QJsonObject result {
@@ -2488,9 +2397,11 @@ amnezia::operatorMode::CommandResponse AmneziaApplication::operatorRoutesExplain
         { QStringLiteral("ok"), true },
         { QStringLiteral("host"), host },
         { QStringLiteral("route"), runtimeDecision.route },
-        { QStringLiteral("policyRoute"), policyRoute },
+        { QStringLiteral("policyRoute"), snapshotRoute },
+        { QStringLiteral("snapshotRoute"), snapshotRoute },
         { QStringLiteral("reason"), reason },
-        { QStringLiteral("mode"), routeModeName(policyMode) },
+        { QStringLiteral("mode"), routeModeName(inspectedMode) },
+        { QStringLiteral("desiredMode"), routeModeName(desiredMode) },
         { QStringLiteral("appliedMode"), runtimeConnected
                     ? routeModeName(snapshot.appliedSiteRouteMode) : QStringLiteral("unknown") },
         { QStringLiteral("connectionState"), connectionStateName(effectiveConnectionState) },
@@ -2499,6 +2410,15 @@ amnezia::operatorMode::CommandResponse AmneziaApplication::operatorRoutesExplain
         { QStringLiteral("runtimeApplied"), runtimeDecision.runtimeApplied },
         { QStringLiteral("inspectionBasis"), runtimeDecision.inspectionBasis },
         { QStringLiteral("osRouteVerified"), false },
+        { QStringLiteral("managedRouteReceiptConfirmed"), receiptConfirmed },
+        { QStringLiteral("managedRouteSnapshotAuthoritative"), snapshotAuthoritative },
+        { QStringLiteral("runtimeServerEpochMatches"), serverEpochMatches },
+        { QStringLiteral("runtimeModeMatches"), modeMatches },
+        { QStringLiteral("runtimePolicyIdentityMatches"), policyIdentityMatches },
+        { QStringLiteral("managedRouteSnapshotRevision"),
+                    QString::number(managedSnapshot.revision) },
+        { QStringLiteral("managedPolicyRevision"), managedSnapshot.policyRevision },
+        { QStringLiteral("managedPolicyContentHash"), managedSnapshot.policyContentHash },
         { QStringLiteral("protectedRoute"), protectedTarget },
         { QStringLiteral("targetKind"), literalTarget
                     ? (ipv6Target ? QStringLiteral("ipv6") : QStringLiteral("ipv4"))
@@ -2513,19 +2433,26 @@ amnezia::operatorMode::CommandResponse AmneziaApplication::operatorRoutesExplain
         { QStringLiteral("matchedRuleTruncated"), matchedRuleTruncated },
         { QStringLiteral("matchedValueTruncated"), matchedValueTruncated },
         { QStringLiteral("matchedSource"), matchedSource },
-        { QStringLiteral("localRuleCount"), localRules.size() },
-        { QStringLiteral("managedRuleCount"), managedRules.size() },
+        { QStringLiteral("ruleCoverageComplete"), ruleCoverageComplete },
+        { QStringLiteral("localRulesInspected"), matchResult.localRulesInspected },
+        { QStringLiteral("managedRulesInspected"), matchResult.managedRulesInspected },
+        { QStringLiteral("localRulesTruncated"), matchResult.localRulesTruncated },
+        { QStringLiteral("managedRulesTruncated"), matchResult.managedRulesTruncated },
+        { QStringLiteral("storedValuesTruncated"), matchResult.storedValuesTruncated },
+        { QStringLiteral("localRuleCount"), 0 },
+        { QStringLiteral("managedRuleCount"), installedRules.size() },
     };
 
     QStringList lines {
         QStringLiteral("%1 -> %2").arg(host, runtimeDecision.route),
-        QStringLiteral("Policy decision: %1 (%2)").arg(policyRoute, routeModeName(policyMode)),
-        QStringLiteral("Policy reason: %1").arg(reason),
+        QStringLiteral("Confirmed client snapshot candidate: %1 (%2)")
+                .arg(snapshotRoute, routeModeName(inspectedMode)),
+        QStringLiteral("Snapshot reason: %1").arg(reason),
     };
     if (runtimeDecision.route == QStringLiteral("unknown")) {
         lines.append(QStringLiteral("Runtime: not asserted (%1)").arg(runtimeDecision.warning));
     } else {
-        lines.append(QStringLiteral("Runtime: policy-derived while connected; OS route not verified"));
+        lines.append(QStringLiteral("Runtime: derived from a confirmed client route receipt; OS route table not inspected"));
     }
     if (matched) {
         lines.append(QStringLiteral("Matched: %1 (%2)")

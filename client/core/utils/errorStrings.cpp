@@ -47,6 +47,15 @@ QString errorString(ErrorCode code) {
     case(ErrorCode::SshPrivateKeyError): errorMessage = QObject::tr("Invalid private key or invalid passphrase entered"); break;
     case(ErrorCode::SshPrivateKeyFormatError): errorMessage = QObject::tr("The selected private key format is not supported, use openssh ED25519 key types or PEM key types"); break;
     case(ErrorCode::SshTimeoutError): errorMessage = QObject::tr("Timeout connecting to server"); break;
+    case(ErrorCode::SshHostKeyMissingError):
+        errorMessage = QObject::tr("SSH server identity is not trusted. Independently verify and enter its SHA-256 host key fingerprint before connecting");
+        break;
+    case(ErrorCode::SshHostKeyMalformedError):
+        errorMessage = QObject::tr("SSH server host key fingerprint is malformed. Independently verify and re-enter the SHA256 fingerprint");
+        break;
+    case(ErrorCode::SshHostKeyMismatchError):
+        errorMessage = QObject::tr("SSH server identity does not match the trusted fingerprint. Credentials were not sent; independently verify the server before retrying");
+        break;
 
     // Ssh scp errors
     case(ErrorCode::SshScpFailureError): errorMessage = QObject::tr("SCP error: Generic failure"); break;

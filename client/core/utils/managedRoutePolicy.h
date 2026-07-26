@@ -690,6 +690,61 @@ inline bool isEffective(const QJsonObject &serverConfig,
     return effective.contentMatchesDeclaration && !effective.isExpired(now);
 }
 
+inline QString effectiveContentHash(
+        const QJsonObject &serverConfig,
+        const QDateTime &now = QDateTime::currentDateTimeUtc())
+{
+    if (!isEffective(serverConfig, now)) {
+        return {};
+    }
+    bool contentValid = false;
+    const QString contentHash = canonicalSourcePolicyHash(serverConfig, &contentValid);
+    return contentValid ? contentHash : QString();
+}
+
+// Runtime receipts bind both parts of the accepted policy identity. Empty
+// values are a valid pair only when no managed policy is effective; a partial
+// identity must never be promoted to an authoritative snapshot.
+inline bool isCanonicalPolicyIdentity(const QString &revision,
+                                      const QString &contentHash)
+{
+    if (revision.isEmpty() || contentHash.isEmpty()) {
+        return revision.isEmpty() && contentHash.isEmpty();
+    }
+
+    qint64 numericRevision = -1;
+    const bool revisionValid =
+            (revision.trimmed() == revision
+             && storedCanonicalRevisionNumber(revision, &numericRevision))
+            || normalizedSha256(revision) == revision;
+    return revisionValid && normalizedSha256(contentHash) == contentHash;
+}
+
+inline QString effectiveRevision(
+        const QJsonObject &serverConfig,
+        const QDateTime &now = QDateTime::currentDateTimeUtc())
+{
+    const QString contentHash = effectiveContentHash(serverConfig, now);
+    if (contentHash.isEmpty()) {
+        return {};
+    }
+
+    const QJsonValue stateValue = serverConfig.value(stateKey());
+    if (stateValue.isUndefined()) {
+        // Legacy policies use their canonical source-policy digest as both
+        // revision and content identity.
+        return contentHash;
+    }
+
+    const auto metadata = lastKnownGoodForEffectiveContent(serverConfig);
+    if (!metadata.has_value() || metadata->isExpired(now)
+        || !metadata->contentMatchesDeclaration
+        || metadata->contentHash != contentHash) {
+        return {};
+    }
+    return metadata->revision;
+}
+
 inline std::optional<ManagedRoutePolicyMetadata> validateCandidate(
         const QJsonObject &payload,
         const std::optional<ManagedRoutePolicyMetadata> &currentLastKnownGood,

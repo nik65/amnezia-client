@@ -84,14 +84,21 @@ int RouterLinux::routeAddList(const QString &gw, const QStringList &ips)
 bool RouterLinux::clearSavedRoutes()
 {
     int temp_sock = socket(AF_INET, SOCK_DGRAM,  IPPROTO_IP);
-    int cnt = 0;
-    for (const Route &r: m_addedRoutes) {
-        if (routeDelete(r.dst, r.gw, temp_sock)) cnt++;
+    if (temp_sock < 0) {
+        qWarning() << "RouterLinux::clearSavedRoutes: failed to create route socket";
+        return false;
     }
-    bool ret = (cnt == m_addedRoutes.count());
-    m_addedRoutes.clear();
+    for (auto route = m_addedRoutes.begin(); route != m_addedRoutes.end();) {
+        if (routeDelete(route->dst, route->gw, temp_sock)) {
+            route = m_addedRoutes.erase(route);
+        } else {
+            ++route;
+        }
+    }
     close(temp_sock);
-    return ret;
+    // Failed removals stay registered so a later bounded teardown can retry
+    // them and callers cannot mistake a partial clear for an empty base.
+    return m_addedRoutes.isEmpty();
 }
 
 bool RouterLinux::routeDelete(const QString &ipWithSubnet, const QString &gw, const int &sock)
@@ -135,6 +142,11 @@ bool RouterLinux::routeDelete(const QString &ipWithSubnet, const QString &gw, co
 
     if (ioctl(sock, SIOCDELRT, &route) < 0)
     {
+        if (errno == ESRCH || errno == ENOENT) {
+            // The desired postcondition is already true. This also lets a
+            // retry retire a registry row whose route disappeared externally.
+            return true;
+        }
         qDebug().noquote() << "route delete error: gw " << gw << " ip " << ip << " mask " << mask;
         return false;
     }

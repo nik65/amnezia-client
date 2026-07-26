@@ -10,15 +10,17 @@
 #include <QNetworkRequest>
 #include <QRandomGenerator>
 #include <QSettings>
-#include <QThread>
 #include <QUrl>
 
+#include <optional>
 #include <utility>
 
 #include "core/repositories/secureAppSettingsRepository.h"
 #include "core/repositories/secureServersRepository.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/constants/protocolConstants.h"
+#include "core/utils/boundedQueuedSnapshot.h"
+#include "core/utils/remoteLogBatchHealth.h"
 #include "core/utils/remoteLogSanitizer.h"
 #include "core/utils/selfhosted/clientLogsUtils.h"
 #include "vpnConnection.h"
@@ -35,6 +37,7 @@ namespace
     constexpr int uploadIntervalMs = 60 * 1000;
     constexpr int initialUploadDelayMs = 15 * 1000;
     constexpr int uploadTimeoutMs = 30 * 1000;
+    constexpr int vpnSnapshotTimeoutMs = 750;
     constexpr int healthRefreshIntervalMs = 60 * 1000;
     constexpr int staleAfterMs = 5 * 60 * 1000;
     constexpr int initialRetryDelayMs = 5 * 1000;
@@ -47,8 +50,37 @@ namespace
     constexpr qint64 cursorAnchorBytes = 4096;
     constexpr qint64 stateScanBytesPerTick = 1024 * 1024;
     constexpr int streamStateVersion = 2;
+    constexpr int retrySanitizerMarkerVersion = 3;
+    constexpr int maximumRetrySanitizerMarkers = 16;
     constexpr auto cursorSettingsPrefix = "Runtime/remoteLogUploader/cursors/";
     constexpr auto targetSettingsPrefix = "Runtime/remoteLogUploader/targets/";
+    constexpr auto retryMarkerSettingsPrefix = "Runtime/remoteLogUploader/retryMarkers/";
+    constexpr auto retryMarkerIndexKey = "Runtime/remoteLogUploader/retryMarkerIndex";
+    constexpr auto retryMarkerOverflowFailClosedKey =
+            "Runtime/remoteLogUploader/retryMarkerOverflowFailClosed";
+
+    QString errorCategoryName(RemoteLogUploader::ErrorCategory category)
+    {
+        switch (category) {
+        case RemoteLogUploader::ErrorCategory::None:
+            return QStringLiteral("none");
+        case RemoteLogUploader::ErrorCategory::Configuration:
+            return QStringLiteral("configuration");
+        case RemoteLogUploader::ErrorCategory::Bootstrap:
+            return QStringLiteral("bootstrap");
+        case RemoteLogUploader::ErrorCategory::Authentication:
+            return QStringLiteral("authentication");
+        case RemoteLogUploader::ErrorCategory::Network:
+            return QStringLiteral("network");
+        case RemoteLogUploader::ErrorCategory::Timeout:
+            return QStringLiteral("timeout");
+        case RemoteLogUploader::ErrorCategory::Server:
+            return QStringLiteral("server");
+        case RemoteLogUploader::ErrorCategory::Source:
+            return QStringLiteral("source");
+        }
+        return QStringLiteral("unknown");
+    }
 
     qint64 initialOffset(qint64 size)
     {
@@ -121,6 +153,49 @@ namespace
         return QString::fromLatin1(QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha256).toHex());
     }
 
+    bool isSha256Hex(const QString &value)
+    {
+        if (value.size() != 64) {
+            return false;
+        }
+        for (const QChar character : value) {
+            const ushort code = character.unicode();
+            if (!((code >= '0' && code <= '9') || (code >= 'a' && code <= 'f'))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool readRetryMarkerIndex(QSettings &settings, QStringList &order,
+                              bool &globalFailClosed)
+    {
+        settings.sync();
+        if (settings.status() != QSettings::NoError) {
+            return false;
+        }
+        const QVariant tombstone = settings.value(
+                QLatin1String(retryMarkerOverflowFailClosedKey));
+        if (tombstone.isValid() && !tombstone.canConvert<bool>()) {
+            return false;
+        }
+        globalFailClosed = tombstone.toBool();
+
+        const QVariant index = settings.value(QLatin1String(retryMarkerIndexKey));
+        if (index.isValid() && !index.canConvert<QStringList>()) {
+            return false;
+        }
+        const QStringList storedOrder = index.toStringList();
+        for (const QString &entry : storedOrder) {
+            if (!isSha256Hex(entry) || order.contains(entry)
+                || order.size() >= maximumRetrySanitizerMarkers) {
+                return false;
+            }
+            order.append(entry);
+        }
+        return true;
+    }
+
     bool isTrustedClientLogsEndpoint(const QString &endpoint)
     {
         const QUrl url(endpoint);
@@ -168,8 +243,14 @@ RemoteLogUploader::RemoteLogUploader(SecureServersRepository *serversRepository,
         connect(m_serversRepository, &SecureServersRepository::serverAdded, this, [this](const QString &) { retryNow(); });
         connect(m_serversRepository, &SecureServersRepository::serverEdited, this, [this](const QString &) { retryNow(); });
     }
+
     if (m_vpnConnection) {
-        connect(m_vpnConnection, &VpnConnection::connectionStateChanged, this, [this](Vpn::ConnectionState) { retryNow(); });
+        connect(m_vpnConnection, &VpnConnection::connectionContextChanged, this,
+                [this](const QString &, const QString &, quint64) {
+                    ++m_connectionContextGeneration;
+                    retryNow();
+                },
+                Qt::QueuedConnection);
     }
 }
 
@@ -233,8 +314,16 @@ void RemoteLogUploader::activateTargetHealth(const UploadTarget &target)
     m_healthTargetId = targetId;
     m_nextTokenRefreshAt = {};
     QSettings settings;
+    settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        m_retryPersistenceFailClosed = true;
+    }
     const QString settingsPrefix = QLatin1String(targetSettingsPrefix) + persistentTargetId(targetId) + QLatin1Char('/');
     const QDateTime lastSuccess = settings.value(settingsPrefix + QStringLiteral("lastSuccess")).toDateTime().toUTC();
+    if (settings.contains(settingsPrefix + QStringLiteral("lastSuccess"))
+        && !lastSuccess.isValid()) {
+        m_retryPersistenceFailClosed = true;
+    }
     if (m_lastSuccess != lastSuccess) {
         m_lastSuccess = lastSuccess;
         emit lastSuccessChanged();
@@ -277,7 +366,7 @@ void RemoteLogUploader::start()
 void RemoteLogUploader::retryNow()
 {
     clearRetry();
-    if (m_uploadInProgress || m_bootstrapInProgress) {
+    if (m_uploadInProgress || m_bootstrapInProgress || m_snapshotPending) {
         m_uploadRequested = true;
         return;
     }
@@ -289,12 +378,61 @@ void RemoteLogUploader::uploadNow()
     if (m_retryTimer.isActive() && QDateTime::currentDateTimeUtc() < m_nextRetryAt) {
         return;
     }
-    if (m_uploadInProgress) {
+    if (m_uploadInProgress || m_bootstrapInProgress || m_snapshotPending) {
         m_uploadRequested = true;
         return;
     }
 
-    const ConnectionSnapshot snapshot = currentConnectionSnapshot();
+    m_snapshotPending = true;
+    ++m_snapshotGeneration;
+    if (m_snapshotGeneration == 0) {
+        ++m_snapshotGeneration;
+    }
+    const quint64 generation = m_snapshotGeneration;
+    const quint64 connectionContextGeneration = m_connectionContextGeneration;
+    requestBoundedQueuedSnapshot(
+            m_vpnConnection, this, vpnSnapshotTimeoutMs,
+            [](VpnConnection *vpnConnection) {
+                ConnectionSnapshot snapshot;
+                snapshot.state = vpnConnection->connectionState();
+                snapshot.serverId = vpnConnection->serverId();
+                snapshot.container = vpnConnection->container();
+                return snapshot;
+            },
+            [this, generation, connectionContextGeneration](
+                    BoundedQueuedSnapshotStatus status,
+                    std::optional<ConnectionSnapshot> snapshot) {
+                if (generation != m_snapshotGeneration) {
+                    return;
+                }
+                m_snapshotPending = false;
+                const bool rerunRequested = m_uploadRequested;
+                m_uploadRequested = false;
+                if (connectionContextGeneration != m_connectionContextGeneration) {
+                    m_pendingPayloads.clear();
+                    setPendingBytes(0);
+                    QTimer::singleShot(0, this, &RemoteLogUploader::uploadNow);
+                    return;
+                }
+                if (status != BoundedQueuedSnapshotStatus::Ready || !snapshot.has_value()) {
+                    m_pendingPayloads.clear();
+                    setPendingBytes(0);
+                    recordFailure(ErrorCategory::Timeout);
+                    if (rerunRequested) {
+                        QTimer::singleShot(0, this, &RemoteLogUploader::retryNow);
+                    }
+                    return;
+                }
+                m_currentConnectionContextGeneration = connectionContextGeneration;
+                uploadWithSnapshot(snapshot.value());
+                if (rerunRequested) {
+                    QTimer::singleShot(0, this, &RemoteLogUploader::uploadNow);
+                }
+            });
+}
+
+void RemoteLogUploader::uploadWithSnapshot(const ConnectionSnapshot &snapshot)
+{
     if (snapshot.state != Vpn::ConnectionState::Connected) {
         m_pendingPayloads.clear();
         setPendingBytes(0);
@@ -304,7 +442,8 @@ void RemoteLogUploader::uploadNow()
         return;
     }
 
-    m_currentTarget = findUploadTarget();
+    m_currentConnectionSnapshot = snapshot;
+    m_currentTarget = findUploadTarget(snapshot);
     if (m_currentTarget.endpoint.isEmpty() || m_currentTarget.clientId.isEmpty()) {
         m_pendingPayloads.clear();
         setPendingBytes(0);
@@ -333,7 +472,20 @@ void RemoteLogUploader::uploadNow()
         return;
     }
 
+    m_batchHadFailure = false;
     m_pendingPayloads = collectPayloads();
+    if (m_retryPersistenceFailClosed || m_collectionPrivacyQuarantined
+        || m_collectionWholeRedactionUsed) {
+        recordFailure(ErrorCategory::Source);
+    }
+    if (!m_collectionAllExpectedSourcesReadable
+        && !m_collectionHasPendingStateScan) {
+        recordFailure(ErrorCategory::Source);
+        if (m_pendingPayloads.isEmpty()) {
+            setPendingBytes(0);
+            return;
+        }
+    }
     qint64 pendingBytes = 0;
     for (const LogPayload &payload : std::as_const(m_pendingPayloads)) {
         pendingBytes += payload.remainingBytes;
@@ -356,20 +508,16 @@ void RemoteLogUploader::uploadNow()
         // synchronization. It prevents a freshly configured target from being
         // labelled healthy before the collector has actually acknowledged it.
         const QByteArray heartbeat("\n", 1);
-        m_pendingPayloads.append({ QStringLiteral("client"),
-                                   heartbeat,
-                                   {},
-                                   bytesFingerprint(QByteArrayLiteral("amnezia-empty-sync-v1"), 21),
-                                   21,
-                                   {},
-                                   0,
-                                   0,
-                                   0,
-                                   false,
-                                   false });
+        LogPayload heartbeatPayload;
+        heartbeatPayload.kind = QStringLiteral("client");
+        heartbeatPayload.data = heartbeat;
+        heartbeatPayload.fingerprint = bytesFingerprint(
+                QByteArrayLiteral("amnezia-empty-sync-v1"), 21);
+        heartbeatPayload.fingerprintBytes = 21;
+        heartbeatPayload.advancesCursor = false;
+        m_pendingPayloads.append(heartbeatPayload);
     }
 
-    m_batchHadFailure = false;
     m_uploadInProgress = true;
     setState(State::Uploading);
     postNext();
@@ -389,11 +537,37 @@ RemoteLogUploader::LogCursor RemoteLogUploader::cursorForKey(const QString &key)
 
     LogCursor cursor;
     QSettings settings;
+    settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        cursor.persistenceReadable = false;
+        m_retryPersistenceFailClosed = true;
+        m_logCursors.insert(key, cursor);
+        return cursor;
+    }
     const QString cursorPrefix = QLatin1String(cursorSettingsPrefix) + persistentCursorId(key) + QLatin1Char('/');
+    const bool cursorMetadataPresent = settings.contains(cursorPrefix + QStringLiteral("offset"))
+            || settings.contains(cursorPrefix + QStringLiteral("fingerprint"));
     cursor.offset = settings.value(cursorPrefix + QStringLiteral("offset"), -1).toLongLong();
     cursor.fingerprint = settings.value(cursorPrefix + QStringLiteral("fingerprint")).toString();
     cursor.fingerprintBytes = settings.value(cursorPrefix + QStringLiteral("fingerprintBytes"), 0).toLongLong();
     cursor.anchor = settings.value(cursorPrefix + QStringLiteral("anchor")).toString();
+    cursor.sanitizerSecretSetSha256 = settings.value(
+            cursorPrefix + QStringLiteral("sanitizerSecretSetSha256")).toString();
+    if (!cursor.sanitizerSecretSetSha256.isEmpty()
+        && !isSha256Hex(cursor.sanitizerSecretSetSha256)) {
+        cursor.persistenceReadable = false;
+        m_retryPersistenceFailClosed = true;
+    }
+    const bool cursorMetadataValid = cursor.offset >= 0
+            && isSha256Hex(cursor.fingerprint)
+            && cursor.fingerprintBytes > 0
+            && cursor.fingerprintBytes <= fingerprintSampleBytes
+            && ((cursor.offset == 0 && cursor.anchor.isEmpty())
+                || (cursor.offset > 0 && isSha256Hex(cursor.anchor)));
+    if (cursorMetadataPresent && !cursorMetadataValid) {
+        cursor.persistenceReadable = false;
+        m_retryPersistenceFailClosed = true;
+    }
     const int blockKind = settings.value(
             cursorPrefix + QStringLiteral("streamStateBlockKind"), 0).toInt();
     const qint64 arrayDepth = settings.value(
@@ -474,17 +648,25 @@ RemoteLogUploader::LogCursor RemoteLogUploader::cursorForKey(const QString &key)
             cursor.streamStateKnown = false;
         }
     }
+    const bool streamMetadataPresent = settings.contains(
+            cursorPrefix + QStringLiteral("streamStateVersion"));
+    if (streamMetadataPresent && !cursor.streamStateKnown) {
+        cursor.persistenceReadable = false;
+        m_retryPersistenceFailClosed = true;
+    }
     m_logCursors.insert(key, cursor);
     return cursor;
 }
 
-void RemoteLogUploader::persistCursor(const QString &key, const LogCursor &cursor) const
+bool RemoteLogUploader::persistCursor(const QString &key, const LogCursor &cursor) const
 {
     QSettings settings;
     const QString cursorPrefix = QLatin1String(cursorSettingsPrefix) + persistentCursorId(key) + QLatin1Char('/');
     settings.setValue(cursorPrefix + QStringLiteral("fingerprint"), cursor.fingerprint);
     settings.setValue(cursorPrefix + QStringLiteral("fingerprintBytes"), cursor.fingerprintBytes);
     settings.setValue(cursorPrefix + QStringLiteral("anchor"), cursor.anchor);
+    settings.setValue(cursorPrefix + QStringLiteral("sanitizerSecretSetSha256"),
+                      cursor.sanitizerSecretSetSha256);
     settings.setValue(cursorPrefix + QStringLiteral("streamStateVersion"), streamStateVersion);
     settings.setValue(cursorPrefix + QStringLiteral("streamStateBlockKind"),
                       static_cast<int>(cursor.streamState.blockKind));
@@ -511,6 +693,7 @@ void RemoteLogUploader::persistCursor(const QString &key, const LogCursor &curso
     // that exact raw source position after a crash or partial settings write.
     settings.setValue(cursorPrefix + QStringLiteral("offset"), cursor.offset);
     settings.sync();
+    return settings.status() == QSettings::NoError;
 }
 
 QByteArray RemoteLogUploader::sanitizePayload(const QByteArray &data,
@@ -518,21 +701,9 @@ QByteArray RemoteLogUploader::sanitizePayload(const QByteArray &data,
                                               bool endsInsideRecord,
                                               const amnezia::remoteLogSanitizer::StreamState &streamState,
                                               const amnezia::remoteLogSanitizer::StreamBoundary &boundary,
+                                              const amnezia::RemoteLogSanitizerSecretSet &sanitizerSecrets,
                                               amnezia::remoteLogSanitizer::StreamState &nextStreamState) const
 {
-    QStringList sensitiveValues;
-    if (!m_currentTarget.token.isEmpty()) {
-        sensitiveValues.append(m_currentTarget.token);
-    }
-    if (m_appSettingsRepository) {
-        const QString installationUuid = m_appSettingsRepository->getInstallationUuid(true).trimmed();
-        if (!installationUuid.isEmpty()) {
-            sensitiveValues.append(installationUuid);
-            sensitiveValues.append(installationUuid.toLower());
-            sensitiveValues.append(installationUuid.toUpper());
-        }
-    }
-
     amnezia::remoteLogSanitizer::ChunkContext context;
     context.startsInsideRecord = startsInsideRecord;
     context.endsInsideRecord = endsInsideRecord;
@@ -549,9 +720,453 @@ QByteArray RemoteLogUploader::sanitizePayload(const QByteArray &data,
     context.boundaryPendingSecretWhitespaceBytes =
             boundary.pendingSecretWhitespaceBytes;
     const amnezia::remoteLogSanitizer::SanitizedChunk sanitized =
-            amnezia::remoteLogSanitizer::sanitize(data, context, sensitiveValues);
+            amnezia::remoteLogSanitizer::sanitize(data, context, sanitizerSecrets.values);
     nextStreamState = sanitized.streamState;
-    return sanitized.data;
+    return sanitizerSecrets.forceRedacted
+            ? QByteArrayLiteral("[REDACTED LOG CHUNK]\n") : sanitized.data;
+}
+
+QString RemoteLogUploader::sanitizerSecretSetSha256(
+        const amnezia::RemoteLogSanitizerSecretSet &secrets) const
+{
+    QStringList normalized = secrets.values;
+    normalized.removeDuplicates();
+    normalized.sort(Qt::CaseSensitive);
+    QByteArray canonical = secrets.forceRedacted
+            ? QByteArrayLiteral("force-redacted-v1")
+            : QByteArrayLiteral("bounded-secrets-v1");
+    for (const QString &value : std::as_const(normalized)) {
+        const QByteArray encoded = value.toUtf8();
+        canonical.append('\0');
+        canonical.append(QByteArray::number(encoded.size()));
+        canonical.append(':');
+        canonical.append(encoded);
+    }
+    return QString::fromLatin1(
+            QCryptographicHash::hash(canonical, QCryptographicHash::Sha256).toHex());
+}
+
+amnezia::RemoteLogSanitizerSecretSet RemoteLogUploader::currentSanitizerSecrets() const
+{
+    QStringList currentSecrets;
+    if (!m_currentTarget.token.isEmpty()) {
+        currentSecrets.append(m_currentTarget.token);
+    }
+    if (m_appSettingsRepository) {
+        const QString installationUuid =
+                m_appSettingsRepository->getInstallationUuid(true).trimmed();
+        if (!installationUuid.isEmpty()) {
+            currentSecrets.append(installationUuid);
+            currentSecrets.append(installationUuid.toLower());
+            currentSecrets.append(installationUuid.toUpper());
+        }
+    }
+    return amnezia::remoteLogSanitizerSecretUnion({}, currentSecrets);
+}
+
+RemoteLogUploader::RetrySanitizerMarker RemoteLogUploader::retrySanitizerMarker(
+        const QString &key) const
+{
+    RetrySanitizerMarker marker;
+    const QString binding = persistentCursorId(key);
+    const QString prefix = QLatin1String(retryMarkerSettingsPrefix)
+            + binding + QLatin1Char('/');
+    QSettings settings;
+    QStringList order;
+    bool globalFailClosed = false;
+    if (!readRetryMarkerIndex(settings, order, globalFailClosed) || globalFailClosed) {
+        marker.present = true;
+        marker.valid = false;
+        return marker;
+    }
+    marker.present = settings.contains(prefix + QStringLiteral("version"))
+            || settings.contains(prefix + QStringLiteral("binding"));
+    if (!marker.present) {
+        if (order.contains(binding)) {
+            marker.present = true;
+            marker.valid = false;
+        }
+        return marker;
+    }
+
+    if (!order.contains(binding)) {
+        marker.valid = false;
+        return marker;
+    }
+
+    marker.binding = settings.value(prefix + QStringLiteral("binding")).toString();
+    marker.fingerprint = settings.value(prefix + QStringLiteral("fingerprint")).toString();
+    marker.offset = settings.value(prefix + QStringLiteral("offset"), -1).toLongLong();
+    marker.nextOffset = settings.value(prefix + QStringLiteral("nextOffset"), -1).toLongLong();
+    marker.highWaterOffset = settings.value(
+            prefix + QStringLiteral("highWaterOffset"), -1).toLongLong();
+    marker.offsetAnchor = settings.value(prefix + QStringLiteral("offsetAnchor")).toString();
+    marker.nextAnchor = settings.value(prefix + QStringLiteral("nextAnchor")).toString();
+    marker.sourceRangeSha256 = settings.value(
+            prefix + QStringLiteral("sourceRangeSha256")).toString();
+    marker.secretSetSha256 = settings.value(
+            prefix + QStringLiteral("secretSetSha256")).toString();
+    marker.requiresInheritedSecrets = settings.value(
+            prefix + QStringLiteral("requiresInheritedSecrets"), true).toBool();
+    marker.awaitingStableSource = settings.value(
+            prefix + QStringLiteral("awaitingStableSource"), false).toBool();
+    marker.confirmationCursorOffset = settings.value(
+            prefix + QStringLiteral("confirmationCursorOffset"), -1).toLongLong();
+    marker.confirmationCursorAnchor = settings.value(
+            prefix + QStringLiteral("confirmationCursorAnchor")).toString();
+    const QStringList requiredFields {
+        QStringLiteral("version"), QStringLiteral("binding"),
+        QStringLiteral("fingerprint"), QStringLiteral("offset"),
+        QStringLiteral("nextOffset"), QStringLiteral("highWaterOffset"),
+        QStringLiteral("offsetAnchor"), QStringLiteral("nextAnchor"),
+        QStringLiteral("sourceRangeSha256"), QStringLiteral("secretSetSha256"),
+        QStringLiteral("requiresInheritedSecrets"),
+        QStringLiteral("awaitingStableSource"),
+        QStringLiteral("confirmationCursorOffset"),
+        QStringLiteral("confirmationCursorAnchor")
+    };
+    bool fieldsPresent = true;
+    for (const QString &field : requiredFields) {
+        fieldsPresent = fieldsPresent && settings.contains(prefix + field);
+    }
+    const bool offsetAnchorValid = (marker.offset == 0 && marker.offsetAnchor.isEmpty())
+            || (marker.offset > 0 && isSha256Hex(marker.offsetAnchor));
+    const bool nextAnchorValid = (marker.nextOffset == 0 && marker.nextAnchor.isEmpty())
+            || (marker.nextOffset > 0 && isSha256Hex(marker.nextAnchor));
+    const bool confirmationCursorValid = marker.awaitingStableSource
+            ? marker.confirmationCursorOffset >= 0
+                    && marker.confirmationCursorOffset <= marker.highWaterOffset
+                    && ((marker.confirmationCursorOffset == 0
+                         && marker.confirmationCursorAnchor.isEmpty())
+                        || (marker.confirmationCursorOffset > 0
+                            && isSha256Hex(marker.confirmationCursorAnchor)))
+            : marker.confirmationCursorOffset == -1
+                    && marker.confirmationCursorAnchor.isEmpty();
+    marker.valid = fieldsPresent
+            && settings.value(prefix + QStringLiteral("version"), 0).toInt()
+            == retrySanitizerMarkerVersion
+            && marker.binding == binding
+            && isSha256Hex(marker.fingerprint)
+            && marker.offset >= 0 && marker.nextOffset >= marker.offset
+            && marker.highWaterOffset >= marker.nextOffset
+            && offsetAnchorValid && nextAnchorValid
+            && isSha256Hex(marker.sourceRangeSha256)
+            && isSha256Hex(marker.secretSetSha256)
+            && marker.requiresInheritedSecrets
+            && confirmationCursorValid;
+    return marker;
+}
+
+bool RemoteLogUploader::persistRetrySanitizerMarker(
+        const QString &key, const RetrySanitizerMarker &marker) const
+{
+    const QString binding = persistentCursorId(key);
+    const QString prefix = QLatin1String(retryMarkerSettingsPrefix)
+            + binding + QLatin1Char('/');
+    QSettings settings;
+    QStringList order;
+    bool globalFailClosed = false;
+    if (!readRetryMarkerIndex(settings, order, globalFailClosed) || globalFailClosed) {
+        return false;
+    }
+    const auto capacityDecision = amnezia::remoteLogRetryMarkerCapacityDecision(
+            order.size(), maximumRetrySanitizerMarkers, order.contains(binding),
+            globalFailClosed, amnezia::RemoteLogPersistenceStatus::Healthy);
+    if (capacityDecision
+        == amnezia::RemoteLogRetryMarkerCapacityDecision::GlobalFailClosed) {
+        // Never evict unresolved privacy evidence. A single bounded global
+        // tombstone makes every future range fail closed until operator repair.
+        settings.setValue(QLatin1String(retryMarkerOverflowFailClosedKey), true);
+        settings.sync();
+        return false;
+    }
+
+    settings.setValue(prefix + QStringLiteral("version"), retrySanitizerMarkerVersion);
+    settings.setValue(prefix + QStringLiteral("binding"), binding);
+    settings.setValue(prefix + QStringLiteral("fingerprint"), marker.fingerprint);
+    settings.setValue(prefix + QStringLiteral("offset"), marker.offset);
+    settings.setValue(prefix + QStringLiteral("nextOffset"), marker.nextOffset);
+    settings.setValue(prefix + QStringLiteral("highWaterOffset"), marker.highWaterOffset);
+    settings.setValue(prefix + QStringLiteral("offsetAnchor"), marker.offsetAnchor);
+    settings.setValue(prefix + QStringLiteral("nextAnchor"), marker.nextAnchor);
+    settings.setValue(prefix + QStringLiteral("sourceRangeSha256"), marker.sourceRangeSha256);
+    settings.setValue(prefix + QStringLiteral("secretSetSha256"), marker.secretSetSha256);
+    settings.setValue(prefix + QStringLiteral("requiresInheritedSecrets"), true);
+    settings.setValue(prefix + QStringLiteral("awaitingStableSource"),
+                      marker.awaitingStableSource);
+    settings.setValue(prefix + QStringLiteral("confirmationCursorOffset"),
+                      marker.confirmationCursorOffset);
+    settings.setValue(prefix + QStringLiteral("confirmationCursorAnchor"),
+                      marker.confirmationCursorAnchor);
+    order.removeAll(binding);
+    order.append(binding);
+    settings.setValue(QLatin1String(retryMarkerIndexKey), order);
+    settings.sync();
+    return settings.status() == QSettings::NoError;
+}
+
+bool RemoteLogUploader::reconcileRetrySanitizerTransition(
+        const QString &key, const QString &fingerprint,
+        qint64 capturedSize, qint64 sourceOffset,
+        const QString &offsetAnchor, qint64 nextOffset,
+        const QString &nextAnchor, const QString &sourceRangeSha256,
+        const LogCursor &cursor, bool cursorMatchesSource,
+        const QString &currentSecretSetSha256)
+{
+    RetrySanitizerMarker marker = retrySanitizerMarker(key);
+    if (!marker.present
+        && cursor.sanitizerSecretSetSha256 == currentSecretSetSha256) {
+        return false;
+    }
+
+    const qint64 durableCursorOffset = marker.present ? cursor.offset : sourceOffset;
+    const bool markerCursorMatches = !marker.present
+            || !marker.awaitingStableSource
+            || (marker.confirmationCursorOffset == cursor.offset
+                && marker.confirmationCursorAnchor == cursor.anchor);
+    const bool markerCursorIsAhead = marker.present
+            && marker.awaitingStableSource
+            && marker.confirmationCursorOffset > cursor.offset;
+    const bool markerRangeStartsAtCursor = !marker.present
+            || marker.awaitingStableSource
+            || (marker.offset == cursor.offset && marker.offsetAnchor == cursor.anchor);
+    const amnezia::RemoteLogSecretTransitionState transitionState {
+        marker.present, marker.awaitingStableSource,
+        marker.present ? marker.highWaterOffset : qint64 { 0 }
+    };
+    amnezia::RemoteLogSecretTransitionEvidence evidence;
+    evidence.markerValid = !marker.present || marker.valid;
+    evidence.sourceIdentityMatches = !marker.present
+            || (marker.fingerprint == fingerprint && markerRangeStartsAtCursor);
+    evidence.cursorMatchesSource = !marker.present || cursorMatchesSource;
+    evidence.markerCursorMatches = markerCursorMatches;
+    evidence.markerCursorIsAhead = markerCursorIsAhead;
+    evidence.lastAcceptedSecretSetMatches =
+            cursor.sanitizerSecretSetSha256 == currentSecretSetSha256;
+    evidence.markerSecretSetMatches = !marker.present
+            || marker.secretSetSha256 == currentSecretSetSha256;
+    evidence.sourceSize = capturedSize;
+    evidence.acceptedCursorOffset = durableCursorOffset;
+    const amnezia::RemoteLogSecretTransitionResult transition =
+            amnezia::remoteLogAdvanceSecretTransition(transitionState, evidence);
+    if (transition.globalFailClosed) {
+        m_retryPersistenceFailClosed = true;
+        m_collectionPrivacyQuarantined = true;
+        m_collectionWholeRedactionUsed = true;
+        return true;
+    }
+    if (transition.clearMarker) {
+        if (!discardRetrySanitizerSecrets(key)) {
+            m_retryPersistenceFailClosed = true;
+            m_collectionPrivacyQuarantined = true;
+            m_collectionWholeRedactionUsed = true;
+            return true;
+        }
+        return false;
+    }
+
+    if (transition.state.present) {
+        const qint64 rangeEnd = nextOffset >= sourceOffset ? nextOffset : sourceOffset;
+        const QString rangeEndAnchor = nextOffset >= sourceOffset
+                ? nextAnchor : offsetAnchor;
+        const QString rangeSha256 = sourceRangeSha256.isEmpty()
+                ? QString::fromLatin1(QCryptographicHash::hash(
+                          QByteArray(), QCryptographicHash::Sha256).toHex())
+                : sourceRangeSha256;
+        const bool markerChanged = !marker.present || transition.persistMarker
+                || marker.fingerprint != fingerprint
+                || marker.offset != sourceOffset
+                || marker.nextOffset != rangeEnd
+                || marker.offsetAnchor != offsetAnchor
+                || marker.nextAnchor != rangeEndAnchor
+                || marker.sourceRangeSha256 != rangeSha256;
+        marker.present = true;
+        marker.valid = true;
+        marker.binding = persistentCursorId(key);
+        marker.fingerprint = fingerprint;
+        marker.offset = sourceOffset;
+        marker.nextOffset = rangeEnd;
+        marker.offsetAnchor = offsetAnchor;
+        marker.nextAnchor = rangeEndAnchor;
+        marker.sourceRangeSha256 = rangeSha256;
+        marker.highWaterOffset = transition.state.highWaterOffset;
+        marker.awaitingStableSource = transition.state.awaitingStableSource;
+        marker.requiresInheritedSecrets = true;
+        if (!marker.awaitingStableSource) {
+            marker.confirmationCursorOffset = -1;
+            marker.confirmationCursorAnchor.clear();
+        }
+        if (transition.updateMarkerSecretSet || marker.secretSetSha256.isEmpty()) {
+            marker.secretSetSha256 = currentSecretSetSha256;
+        }
+        if (markerChanged && !persistRetrySanitizerMarker(key, marker)) {
+            m_retryPersistenceFailClosed = true;
+            m_collectionPrivacyQuarantined = true;
+            m_collectionWholeRedactionUsed = true;
+            return true;
+        }
+        m_retrySanitizerKeys.insert(persistentCursorId(key));
+        m_collectionPrivacyQuarantined = true;
+        m_collectionWholeRedactionUsed = true;
+        return true;
+    }
+    return false;
+}
+
+amnezia::RemoteLogSanitizerSecretSet RemoteLogUploader::sanitizerSecretsForPayload(
+        const QString &key, const QString &fingerprint, qint64 offset,
+        const QString &offsetAnchor, const QString &sourceRangeSha256,
+        qint64 nextOffset, const QString &nextAnchor, qint64 sourceSize,
+        const LogCursor &cursor, bool cursorMatchesSource,
+        QString *currentSecretSetSha256Out)
+{
+    const amnezia::RemoteLogSanitizerSecretSet current = currentSanitizerSecrets();
+    const QString currentSecretSetSha256 = sanitizerSecretSetSha256(current);
+    if (currentSecretSetSha256Out) {
+        *currentSecretSetSha256Out = currentSecretSetSha256;
+    }
+    if (current.forceRedacted) {
+        m_collectionWholeRedactionUsed = true;
+    }
+    if (m_retryPersistenceFailClosed || !cursor.persistenceReadable) {
+        m_retryPersistenceFailClosed = true;
+        m_collectionPrivacyQuarantined = true;
+        m_collectionWholeRedactionUsed = true;
+        return { {}, true };
+    }
+    if (reconcileRetrySanitizerTransition(
+                key, fingerprint, sourceSize, offset, offsetAnchor,
+                nextOffset, nextAnchor, sourceRangeSha256, cursor,
+                cursorMatchesSource, currentSecretSetSha256)) {
+        return { {}, true };
+    }
+    return current;
+}
+
+bool RemoteLogUploader::retainRetrySanitizerSecrets(const LogPayload &payload)
+{
+    if (!payload.advancesCursor || payload.offsetKey.isEmpty()) {
+        return true;
+    }
+    if (!isSha256Hex(payload.currentSecretSetSha256)) {
+        m_retryPersistenceFailClosed = true;
+        m_collectionPrivacyQuarantined = true;
+        m_collectionWholeRedactionUsed = true;
+        return false;
+    }
+    RetrySanitizerMarker marker = retrySanitizerMarker(payload.offsetKey);
+    if (marker.present && (!marker.valid || marker.fingerprint != payload.fingerprint)) {
+        m_retryPersistenceFailClosed = true;
+        m_collectionPrivacyQuarantined = true;
+        m_collectionWholeRedactionUsed = true;
+        return false;
+    }
+    marker.present = true;
+    marker.valid = true;
+    marker.binding = persistentCursorId(payload.offsetKey);
+    marker.fingerprint = payload.fingerprint;
+    marker.offset = payload.offset;
+    marker.nextOffset = payload.nextOffset;
+    marker.offsetAnchor = payload.offsetAnchor;
+    marker.nextAnchor = payload.nextAnchor;
+    marker.sourceRangeSha256 = payload.sourceRangeSha256;
+    marker.highWaterOffset = qMax(marker.highWaterOffset, payload.sourceSize);
+    marker.secretSetSha256 = payload.currentSecretSetSha256;
+    marker.requiresInheritedSecrets = true;
+    marker.awaitingStableSource = false;
+    marker.confirmationCursorOffset = -1;
+    marker.confirmationCursorAnchor.clear();
+    if (!persistRetrySanitizerMarker(payload.offsetKey, marker)) {
+        m_retryPersistenceFailClosed = true;
+        m_collectionPrivacyQuarantined = true;
+        m_collectionWholeRedactionUsed = true;
+        return false;
+    }
+    const QString opaqueKey = persistentCursorId(payload.offsetKey);
+    if (!m_retrySanitizerKeys.contains(opaqueKey)
+        && m_retrySanitizerKeys.size() >= maximumRetrySanitizerMarkers) {
+        QSettings settings;
+        settings.setValue(QLatin1String(retryMarkerOverflowFailClosedKey), true);
+        settings.sync();
+        m_retryPersistenceFailClosed = true;
+        m_collectionPrivacyQuarantined = true;
+        m_collectionWholeRedactionUsed = true;
+        return false;
+    }
+    // Keep only the opaque settings binding in memory. The payload-local raw
+    // secrets are neither needed nor retained after the rejected request.
+    m_retrySanitizerKeys.insert(opaqueKey);
+    m_collectionPrivacyQuarantined = true;
+    m_collectionWholeRedactionUsed = true;
+    return true;
+}
+
+bool RemoteLogUploader::armRetrySanitizerStableSource(
+        const LogPayload &payload, const LogCursor &cursor)
+{
+    RetrySanitizerMarker marker = retrySanitizerMarker(payload.offsetKey);
+    if (!marker.present) {
+        return true;
+    }
+    const bool sourceIdentityMatches = marker.valid
+            && marker.fingerprint == payload.fingerprint
+            && marker.fingerprint == cursor.fingerprint
+            && payload.nextOffset == cursor.offset
+            && payload.nextAnchor == cursor.anchor;
+    const bool secretSetMatches = isSha256Hex(payload.currentSecretSetSha256)
+            && payload.currentSecretSetSha256 == marker.secretSetSha256
+            && cursor.sanitizerSecretSetSha256 == marker.secretSetSha256;
+    const amnezia::RemoteLogSecretTransitionResult armed =
+            amnezia::remoteLogArmStableSourceAfterAck(
+                    { true, marker.awaitingStableSource, marker.highWaterOffset },
+                    marker.valid, sourceIdentityMatches, secretSetMatches,
+                    payload.sourceSize, cursor.offset);
+    if (armed.globalFailClosed) {
+        m_retryPersistenceFailClosed = true;
+        m_collectionPrivacyQuarantined = true;
+        m_collectionWholeRedactionUsed = true;
+        return false;
+    }
+    marker.highWaterOffset = armed.state.highWaterOffset;
+    marker.awaitingStableSource = armed.state.awaitingStableSource;
+    marker.confirmationCursorOffset = cursor.offset;
+    marker.confirmationCursorAnchor = cursor.anchor;
+    if (!persistRetrySanitizerMarker(payload.offsetKey, marker)) {
+        m_retryPersistenceFailClosed = true;
+        m_collectionPrivacyQuarantined = true;
+        m_collectionWholeRedactionUsed = true;
+        return false;
+    }
+    m_retrySanitizerKeys.insert(persistentCursorId(payload.offsetKey));
+    m_collectionPrivacyQuarantined = true;
+    m_collectionWholeRedactionUsed = true;
+    return true;
+}
+
+bool RemoteLogUploader::discardRetrySanitizerSecrets(const QString &key)
+{
+    if (key.isEmpty()) {
+        return true;
+    }
+    const QString binding = persistentCursorId(key);
+    QSettings settings;
+    QStringList order;
+    bool globalFailClosed = false;
+    if (!readRetryMarkerIndex(settings, order, globalFailClosed)
+        || globalFailClosed) {
+        return false;
+    }
+    settings.remove(QLatin1String(retryMarkerSettingsPrefix) + binding);
+    order.removeAll(binding);
+    settings.setValue(QLatin1String(retryMarkerIndexKey), order);
+    settings.sync();
+    if (settings.status() != QSettings::NoError
+        || settings.contains(QLatin1String(retryMarkerSettingsPrefix) + binding)
+        || settings.value(QLatin1String(retryMarkerIndexKey)).toStringList().contains(binding)) {
+        return false;
+    }
+    m_retrySanitizerKeys.remove(binding);
+    return true;
 }
 
 bool RemoteLogUploader::advanceFileStateScan(
@@ -679,47 +1294,18 @@ bool RemoteLogUploader::advanceBytesStateScan(
     return true;
 }
 
-RemoteLogUploader::ConnectionSnapshot RemoteLogUploader::currentConnectionSnapshot() const
-{
-    ConnectionSnapshot snapshot;
-    if (!m_vpnConnection) {
-        return snapshot;
-    }
-
-    if (QThread::currentThread() == m_vpnConnection->thread()) {
-        snapshot.state = m_vpnConnection->connectionState();
-        snapshot.serverIndex = m_vpnConnection->serverIndex();
-        snapshot.container = m_vpnConnection->container();
-        return snapshot;
-    }
-
-    const bool invoked = QMetaObject::invokeMethod(m_vpnConnection, [this, &snapshot]() {
-        snapshot.state = m_vpnConnection->connectionState();
-        snapshot.serverIndex = m_vpnConnection->serverIndex();
-        snapshot.container = m_vpnConnection->container();
-    }, Qt::BlockingQueuedConnection);
-    if (!invoked) {
-        return {};
-    }
-    return snapshot;
-}
-
-RemoteLogUploader::UploadTarget RemoteLogUploader::findUploadTarget() const
+RemoteLogUploader::UploadTarget RemoteLogUploader::findUploadTarget(
+        const ConnectionSnapshot &snapshot) const
 {
     if (!m_serversRepository) {
         return {};
     }
 
-    const ConnectionSnapshot snapshot = currentConnectionSnapshot();
     if (snapshot.state != Vpn::ConnectionState::Connected) {
         return {};
     }
 
-    QString serverId;
-    const int activeServerIndex = snapshot.serverIndex;
-    if (activeServerIndex >= 0 && activeServerIndex < m_serversRepository->serversCount()) {
-        serverId = m_serversRepository->serverIdAt(activeServerIndex);
-    }
+    const QString serverId = snapshot.serverId;
     if (serverId.isEmpty()) {
         return {};
     }
@@ -761,8 +1347,12 @@ RemoteLogUploader::UploadTarget RemoteLogUploader::findUploadTarget() const
     return target;
 }
 
-RemoteLogUploader::LogPayload RemoteLogUploader::payloadFromFile(const QString &kind, const QString &filePath)
+RemoteLogUploader::LogPayload RemoteLogUploader::payloadFromFile(
+        const QString &kind, const QString &filePath, bool *sourceReadable)
 {
+    if (sourceReadable) {
+        *sourceReadable = false;
+    }
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
         return {};
@@ -788,7 +1378,21 @@ RemoteLogUploader::LogPayload RemoteLogUploader::payloadFromFile(const QString &
                 ? scan->targetOffset : initialOffset(size);
     }
     if (offset >= size) {
+        const amnezia::RemoteLogSanitizerSecretSet current = currentSanitizerSecrets();
+        const QString currentSecretSetSha256 = sanitizerSecretSetSha256(current);
+        if (current.forceRedacted) {
+            m_collectionWholeRedactionUsed = true;
+        }
+        const RetrySanitizerMarker marker = retrySanitizerMarker(key);
+        if (marker.present) {
+            reconcileRetrySanitizerTransition(
+                    key, fingerprint, size, offset, fileAnchor(file, offset),
+                    -1, {}, {}, cursor, cursorMatches, currentSecretSetSha256);
+        }
         m_collectionHasReadableSource = true;
+        if (sourceReadable) {
+            *sourceReadable = true;
+        }
         return {};
     }
     amnezia::remoteLogSanitizer::StreamState streamState;
@@ -814,33 +1418,76 @@ RemoteLogUploader::LogPayload RemoteLogUploader::payloadFromFile(const QString &
         return {};
     }
 
-    const QByteArray sourceData = file.read(maxPayloadBytes);
-    if (sourceData.isEmpty()) {
+    const qint64 requestedBytes = qMin(maxPayloadBytes, size - offset);
+    const QByteArray sourceData = file.read(requestedBytes);
+    if (!amnezia::remoteLogCapturedReadIsExact(
+                requestedBytes, sourceData.size())) {
         return {};
     }
 
     const qint64 nextOffset = offset + sourceData.size();
+    const QString offsetAnchor = fileAnchor(file, offset);
+    if (offset > 0 && offsetAnchor.isEmpty()) {
+        return {};
+    }
+    const QString sourceRangeSha256 = QString::fromLatin1(
+            QCryptographicHash::hash(sourceData, QCryptographicHash::Sha256).toHex());
+    const QString nextAnchor = fileAnchor(file, nextOffset);
+    if (nextOffset > 0 && nextAnchor.isEmpty()) {
+        return {};
+    }
     const bool startsInsideRecord = offset > 0
-            && (lookbehind.isEmpty() || !lookbehind.endsWith('\n'));
-    const bool endsInsideRecord = nextOffset < size && !sourceData.endsWith('\n');
+            && (lookbehind.isEmpty()
+                || !amnezia::remoteLogByteIsRecordDelimiter(lookbehind.back()));
+    // The last record in the captured file extent is not stable until its
+    // delimiter is present.  A writer may append after file.size() was sampled;
+    // treating an unterminated captured tail as complete would expose the first
+    // half of a concurrently written sensitive record.
+    const bool endsInsideRecord = amnezia::remoteLogCapturedTailIsPartial(
+            sourceData.size(),
+            !sourceData.isEmpty()
+                    && amnezia::remoteLogByteIsRecordDelimiter(sourceData.back()));
     const amnezia::remoteLogSanitizer::StreamBoundary boundary =
             amnezia::remoteLogSanitizer::inspectStreamBoundary(
                     lookbehind, sourceData, streamState);
     amnezia::remoteLogSanitizer::StreamState nextStreamState;
+    QString currentSecretSetSha256;
+    const amnezia::RemoteLogSanitizerSecretSet sanitizerSecrets =
+            sanitizerSecretsForPayload(key, fingerprint, offset, offsetAnchor,
+                                       sourceRangeSha256, nextOffset, nextAnchor,
+                                       size, cursor, cursorMatches,
+                                       &currentSecretSetSha256);
     const QByteArray sanitizedData = sanitizePayload(sourceData,
                                                      startsInsideRecord,
                                                      endsInsideRecord,
                                                      streamState,
                                                      boundary,
+                                                     sanitizerSecrets,
                                                      nextStreamState);
-    const QString nextAnchor = fileAnchor(file, nextOffset);
-    if (nextOffset > 0 && nextAnchor.isEmpty()) {
-        return {};
-    }
     m_collectionHasReadableSource = true;
-    return { kind, sanitizedData, key, fingerprint, fingerprintBytes, nextAnchor,
-             offset, nextOffset, size - offset, nextOffset < size, true,
-             nextStreamState, sourceData.size() };
+    if (sourceReadable) {
+        *sourceReadable = true;
+    }
+    LogPayload payload;
+    payload.kind = kind;
+    payload.data = sanitizedData;
+    payload.offsetKey = key;
+    payload.fingerprint = fingerprint;
+    payload.fingerprintBytes = fingerprintBytes;
+    payload.offsetAnchor = offsetAnchor;
+    payload.nextAnchor = nextAnchor;
+    payload.sourceRangeSha256 = sourceRangeSha256;
+    payload.sanitizerSecretSetSha256 = sanitizerSecretSetSha256(sanitizerSecrets);
+    payload.currentSecretSetSha256 = currentSecretSetSha256;
+    payload.offset = offset;
+    payload.nextOffset = nextOffset;
+    payload.sourceSize = size;
+    payload.remainingBytes = size - offset;
+    payload.hasMore = nextOffset < size;
+    payload.wholeRedacted = sanitizerSecrets.forceRedacted;
+    payload.streamState = nextStreamState;
+    payload.sourceBytes = sourceData.size();
+    return payload;
 }
 
 RemoteLogUploader::LogPayload RemoteLogUploader::payloadFromBytes(const QString &kind, const QByteArray &data)
@@ -866,6 +1513,17 @@ RemoteLogUploader::LogPayload RemoteLogUploader::payloadFromBytes(const QString 
                 ? scan->targetOffset : initialOffset(size);
     }
     if (offset >= size) {
+        const amnezia::RemoteLogSanitizerSecretSet current = currentSanitizerSecrets();
+        const QString currentSecretSetSha256 = sanitizerSecretSetSha256(current);
+        if (current.forceRedacted) {
+            m_collectionWholeRedactionUsed = true;
+        }
+        const RetrySanitizerMarker marker = retrySanitizerMarker(key);
+        if (marker.present) {
+            reconcileRetrySanitizerTransition(
+                    key, fingerprint, size, offset, bytesAnchor(data, offset),
+                    -1, {}, {}, cursor, cursorMatches, currentSecretSetSha256);
+        }
         return {};
     }
 
@@ -876,58 +1534,102 @@ RemoteLogUploader::LogPayload RemoteLogUploader::payloadFromBytes(const QString 
         return {};
     }
 
-    const QByteArray sourceData = data.mid(offset, maxPayloadBytes);
-    if (sourceData.isEmpty()) {
+    const qint64 requestedBytes = qMin(maxPayloadBytes, size - offset);
+    const QByteArray sourceData = data.mid(offset, requestedBytes);
+    if (!amnezia::remoteLogCapturedReadIsExact(
+                requestedBytes, sourceData.size()) || sourceData.isEmpty()) {
         return {};
     }
 
     const qint64 nextOffset = offset + sourceData.size();
+    const QString offsetAnchor = bytesAnchor(data, offset);
+    const QString sourceRangeSha256 = QString::fromLatin1(
+            QCryptographicHash::hash(sourceData, QCryptographicHash::Sha256).toHex());
+    const QString nextAnchor = bytesAnchor(data, nextOffset);
     const qint64 lookbehindOffset = qMax<qint64>(
             0, offset - amnezia::remoteLogSanitizer::MaximumPrivateKeyMarkerBytes);
     const QByteArray lookbehind = data.mid(lookbehindOffset, offset - lookbehindOffset);
-    const bool startsInsideRecord = offset > 0 && data.at(offset - 1) != '\n';
-    const bool endsInsideRecord = nextOffset < size && !sourceData.endsWith('\n');
+    const bool startsInsideRecord = offset > 0
+            && !amnezia::remoteLogByteIsRecordDelimiter(data.at(offset - 1));
+    const bool endsInsideRecord = amnezia::remoteLogCapturedTailIsPartial(
+            sourceData.size(),
+            amnezia::remoteLogByteIsRecordDelimiter(sourceData.back()));
     const amnezia::remoteLogSanitizer::StreamBoundary boundary =
             amnezia::remoteLogSanitizer::inspectStreamBoundary(
                     lookbehind, sourceData, streamState);
     amnezia::remoteLogSanitizer::StreamState nextStreamState;
+    QString currentSecretSetSha256;
+    const amnezia::RemoteLogSanitizerSecretSet sanitizerSecrets =
+            sanitizerSecretsForPayload(key, fingerprint, offset, offsetAnchor,
+                                       sourceRangeSha256, nextOffset, nextAnchor,
+                                       size, cursor, cursorMatches,
+                                       &currentSecretSetSha256);
     const QByteArray sanitizedData = sanitizePayload(sourceData,
                                                      startsInsideRecord,
                                                      endsInsideRecord,
                                                      streamState,
                                                      boundary,
+                                                     sanitizerSecrets,
                                                      nextStreamState);
-    return { kind, sanitizedData, key, fingerprint, fingerprintBytes, bytesAnchor(data, nextOffset),
-             offset, nextOffset, size - offset, nextOffset < size, true,
-             nextStreamState, sourceData.size() };
+    LogPayload payload;
+    payload.kind = kind;
+    payload.data = sanitizedData;
+    payload.offsetKey = key;
+    payload.fingerprint = fingerprint;
+    payload.fingerprintBytes = fingerprintBytes;
+    payload.offsetAnchor = offsetAnchor;
+    payload.nextAnchor = nextAnchor;
+    payload.sourceRangeSha256 = sourceRangeSha256;
+    payload.sanitizerSecretSetSha256 = sanitizerSecretSetSha256(sanitizerSecrets);
+    payload.currentSecretSetSha256 = currentSecretSetSha256;
+    payload.offset = offset;
+    payload.nextOffset = nextOffset;
+    payload.sourceSize = size;
+    payload.remainingBytes = size - offset;
+    payload.hasMore = nextOffset < size;
+    payload.wholeRedacted = sanitizerSecrets.forceRedacted;
+    payload.streamState = nextStreamState;
+    payload.sourceBytes = sourceData.size();
+    return payload;
 }
 
 QList<RemoteLogUploader::LogPayload> RemoteLogUploader::collectPayloads()
 {
     QList<LogPayload> payloads;
     m_collectionHasReadableSource = false;
+    m_collectionAllExpectedSourcesReadable = false;
     m_collectionHasPendingStateScan = false;
+    m_collectionPrivacyQuarantined = false;
+    m_collectionWholeRedactionUsed = false;
 
 #ifdef Q_OS_ANDROID
     const LogPayload payload = payloadFromBytes(QStringLiteral("android"), AndroidController::instance()->getLogs().toUtf8());
-    if (!payload.data.isEmpty()) {
-        payloads.append(payload);
-    }
+    m_collectionAllExpectedSourcesReadable = true;
+        if (!payload.data.isEmpty()) {
+            payloads.append(payload);
+        }
 #elif defined(Q_OS_IOS) || defined(MACOS_NE)
     const LogPayload payload = payloadFromBytes(QStringLiteral("client"), Logger::getLogFile().toUtf8());
-    if (!payload.data.isEmpty()) {
-        payloads.append(payload);
-    }
+    m_collectionAllExpectedSourcesReadable = true;
+        if (!payload.data.isEmpty()) {
+            payloads.append(payload);
+        }
 #else
-    const LogPayload clientLog = payloadFromFile(QStringLiteral("client"), Logger::userLogsFilePath());
-    if (!clientLog.data.isEmpty()) {
-        payloads.append(clientLog);
-    }
+    bool clientSourceReadable = false;
+    bool serviceSourceReadable = false;
+    const LogPayload clientLog = payloadFromFile(
+            QStringLiteral("client"), Logger::userLogsFilePath(), &clientSourceReadable);
+        if (!clientLog.data.isEmpty()) {
+            payloads.append(clientLog);
+        }
 
-    const LogPayload serviceLog = payloadFromFile(QStringLiteral("service"), Logger::serviceLogsFilePath());
-    if (!serviceLog.data.isEmpty()) {
-        payloads.append(serviceLog);
-    }
+    const LogPayload serviceLog = payloadFromFile(
+            QStringLiteral("service"), Logger::serviceLogsFilePath(), &serviceSourceReadable);
+        if (!serviceLog.data.isEmpty()) {
+            payloads.append(serviceLog);
+        }
+    m_collectionAllExpectedSourcesReadable =
+            clientSourceReadable && serviceSourceReadable;
 #endif
 
     return payloads;
@@ -961,7 +1663,10 @@ void RemoteLogUploader::bootstrapCurrentTarget()
         if (networkOk) {
             const QByteArray response = reply->read(maxBootstrapResponseBytes + 1);
             if (response.size() > maxBootstrapResponseBytes) {
-                logger.warning() << "Bootstrap response is too large" << target.serverId;
+                logger.warning() << "Bootstrap response rejected"
+                                 << "target" << targetIdentity(target).left(12)
+                                 << "reason" << "response_too_large"
+                                 << "responseBytes" << response.size();
             }
             const QJsonDocument document = response.size() > maxBootstrapResponseBytes
                     ? QJsonDocument() : QJsonDocument::fromJson(response);
@@ -975,21 +1680,20 @@ void RemoteLogUploader::bootstrapCurrentTarget()
             }
         }
         if (!tokenStored) {
-            logger.warning() << "Bootstrap failed"
-                             << target.serverId
-                             << amnezia::clientLogsUtils::bootstrapEndpoint()
-                             << static_cast<uint64_t>(reply->error())
-                             << static_cast<uint64_t>(statusCode)
-                             << reply->errorString();
+            ErrorCategory category = ErrorCategory::Bootstrap;
             if (statusCode == 401 || statusCode == 403) {
-                recordFailure(ErrorCategory::Authentication);
+                category = ErrorCategory::Authentication;
             } else if (reply->error() == QNetworkReply::TimeoutError) {
-                recordFailure(ErrorCategory::Timeout);
+                category = ErrorCategory::Timeout;
             } else if (reply->error() != QNetworkReply::NoError && statusCode == 0) {
-                recordFailure(ErrorCategory::Network);
-            } else {
-                recordFailure(ErrorCategory::Bootstrap);
+                category = ErrorCategory::Network;
             }
+            recordFailure(category);
+            logger.warning() << "Bootstrap failed"
+                             << "target" << targetIdentity(target).left(12)
+                             << "category" << errorCategoryName(category)
+                             << "networkError" << static_cast<uint64_t>(reply->error())
+                             << "httpStatus" << static_cast<uint64_t>(statusCode);
         } else {
             clearRetry();
             m_consecutiveFailures = 0;
@@ -1012,7 +1716,8 @@ void RemoteLogUploader::postNext()
         return;
     }
 
-    if (!sameTarget(findUploadTarget(), m_currentTarget)) {
+    if (m_currentConnectionContextGeneration != m_connectionContextGeneration
+        || !sameTarget(findUploadTarget(m_currentConnectionSnapshot), m_currentTarget)) {
         m_pendingPayloads.clear();
         setPendingBytes(0);
         m_uploadRequested = true;
@@ -1044,48 +1749,80 @@ void RemoteLogUploader::postNext()
                 && reply->rawHeader("X-Amnezia-Batch-Id") == batchId;
         const bool ok = httpOk && receiptAccepted;
         if (ok) {
+            bool durableCursorAdvanced = true;
             if (payload.advancesCursor) {
-                m_logCursors.insert(payload.offsetKey, { payload.nextOffset, payload.fingerprint });
-                m_logCursors[payload.offsetKey].fingerprintBytes = payload.fingerprintBytes;
-                m_logCursors[payload.offsetKey].anchor = payload.nextAnchor;
-                m_logCursors[payload.offsetKey].streamState = payload.streamState;
-                m_logCursors[payload.offsetKey].streamStateKnown = true;
-                persistCursor(payload.offsetKey, m_logCursors.value(payload.offsetKey));
-                m_stateScans.remove(payload.offsetKey);
+                LogCursor nextCursor;
+                nextCursor.offset = payload.nextOffset;
+                nextCursor.fingerprint = payload.fingerprint;
+                nextCursor.fingerprintBytes = payload.fingerprintBytes;
+                nextCursor.anchor = payload.nextAnchor;
+                nextCursor.sanitizerSecretSetSha256 = payload.currentSecretSetSha256;
+                nextCursor.streamState = payload.streamState;
+                nextCursor.streamStateKnown = true;
+                // Persist phase one before the cursor. A crash between these
+                // writes leaves an armed marker ahead of the old cursor, which
+                // the next scan safely resets to a redacted retry. The ACK
+                // callback never removes quarantine.
+                durableCursorAdvanced = armRetrySanitizerStableSource(
+                        payload, nextCursor);
+                if (durableCursorAdvanced) {
+                    durableCursorAdvanced = persistCursor(payload.offsetKey, nextCursor);
+                }
+                if (durableCursorAdvanced) {
+                    m_logCursors.insert(payload.offsetKey, nextCursor);
+                    m_stateScans.remove(payload.offsetKey);
+                } else {
+                    m_retryPersistenceFailClosed = true;
+                    recordFailure(ErrorCategory::Source);
+                    m_uploadRequested = true;
+                }
             }
-            setPendingBytes(qMax<qint64>(0, m_pendingBytes - payload.sourceBytes));
-            markUploadSuccess();
-            if (payload.hasMore) {
-                m_uploadRequested = true;
+            if (durableCursorAdvanced) {
+                setPendingBytes(qMax<qint64>(0, m_pendingBytes - payload.sourceBytes));
+                markUploadSuccess();
+                if (payload.hasMore) {
+                    m_uploadRequested = true;
+                }
             }
         } else {
             if (httpOk && !receiptAccepted) {
                 logger.warning() << "Upload response did not contain a matching durable batch receipt"
-                                 << m_currentTarget.serverId
-                                 << payload.kind
-                                 << static_cast<uint64_t>(statusCode);
-            }
-            if ((statusCode == 401 || statusCode == 403) && m_currentTarget.bootstrap && m_appSettingsRepository) {
-                m_appSettingsRepository->clearRemoteLogToken(m_currentTarget.tokenCacheKey);
-                m_nextTokenRefreshAt = QDateTime::currentDateTimeUtc().addMSecs(uploadIntervalMs);
-                m_uploadRequested = true;
+                                 << "target" << targetIdentity(m_currentTarget).left(12)
+                                 << "kind" << payload.kind
+                                 << "reason" << "receipt_mismatch"
+                                 << "httpStatus" << static_cast<uint64_t>(statusCode);
             }
             if (statusCode == 401 || statusCode == 403) {
-                recordFailure(ErrorCategory::Authentication);
-            } else if (reply->error() == QNetworkReply::TimeoutError) {
-                recordFailure(ErrorCategory::Timeout);
-            } else if (reply->error() != QNetworkReply::NoError && statusCode == 0) {
-                recordFailure(ErrorCategory::Network);
-            } else {
-                recordFailure(ErrorCategory::Server);
+                bool retryPrivacyStateDurable = retainRetrySanitizerSecrets(payload);
+                for (const LogPayload &pendingPayload : std::as_const(m_pendingPayloads)) {
+                    retryPrivacyStateDurable = retainRetrySanitizerSecrets(pendingPayload)
+                            && retryPrivacyStateDurable;
+                }
+                // Bootstrap refresh is a separate availability policy. Never
+                // clear the old token until every rejected/pending range has a
+                // durable, non-secret fail-closed marker.
+                if (m_currentTarget.bootstrap && m_appSettingsRepository
+                    && retryPrivacyStateDurable) {
+                    m_appSettingsRepository->clearRemoteLogToken(m_currentTarget.tokenCacheKey);
+                    m_nextTokenRefreshAt = QDateTime::currentDateTimeUtc().addMSecs(uploadIntervalMs);
+                    m_uploadRequested = true;
+                }
             }
+            ErrorCategory category = ErrorCategory::Server;
+            if (statusCode == 401 || statusCode == 403) {
+                category = ErrorCategory::Authentication;
+            } else if (reply->error() == QNetworkReply::TimeoutError) {
+                category = ErrorCategory::Timeout;
+            } else if (reply->error() != QNetworkReply::NoError && statusCode == 0) {
+                category = ErrorCategory::Network;
+            }
+            recordFailure(category);
             logger.warning() << "Upload failed"
-                             << m_currentTarget.serverId
-                             << m_currentTarget.endpoint
-                             << payload.kind
-                             << static_cast<uint64_t>(reply->error())
-                             << static_cast<uint64_t>(statusCode)
-                             << reply->errorString();
+                             << "target" << targetIdentity(m_currentTarget).left(12)
+                             << "kind" << payload.kind
+                             << "category" << errorCategoryName(category)
+                             << "networkError" << static_cast<uint64_t>(reply->error())
+                             << "httpStatus" << static_cast<uint64_t>(statusCode);
         }
         reply->deleteLater();
         postNext();
@@ -1097,7 +1834,16 @@ void RemoteLogUploader::finishUpload()
     const bool runAgain = m_uploadRequested;
     m_uploadRequested = false;
     m_uploadInProgress = false;
-    if (!m_batchHadFailure && !runAgain) {
+    if (m_batchHadFailure) {
+        const bool stale = m_lastSuccess.isValid()
+                && m_lastSuccess.msecsTo(QDateTime::currentDateTimeUtc()) >= staleAfterMs;
+        setState(stale ? State::Stale : State::Error);
+    } else if (amnezia::remoteLogBatchCanBecomeHealthy(
+                       m_batchHadFailure, m_collectionAllExpectedSourcesReadable,
+                       m_collectionHasPendingStateScan, runAgain,
+                       m_retryPersistenceFailClosed,
+                       m_collectionPrivacyQuarantined,
+                       m_collectionWholeRedactionUsed)) {
         setState(State::Healthy);
     }
     if (runAgain && !m_retryTimer.isActive()) {
@@ -1108,6 +1854,11 @@ void RemoteLogUploader::finishUpload()
 void RemoteLogUploader::recordFailure(ErrorCategory category)
 {
     m_batchHadFailure = true;
+    if (category != ErrorCategory::Source
+        && (m_retryPersistenceFailClosed || m_collectionPrivacyQuarantined
+            || m_collectionWholeRedactionUsed)) {
+        category = ErrorCategory::Source;
+    }
     setLastErrorCategory(category);
     const bool stale = m_lastSuccess.isValid() && m_lastSuccess.msecsTo(QDateTime::currentDateTimeUtc()) >= staleAfterMs;
     setState(stale ? State::Stale : State::Error);
@@ -1126,6 +1877,16 @@ void RemoteLogUploader::markUploadSuccess()
                 + persistentTargetId(m_healthTargetId) + QLatin1Char('/');
         settings.setValue(settingsPrefix + QStringLiteral("lastSuccess"), m_lastSuccess);
         settings.sync();
+        if (settings.status() != QSettings::NoError) {
+            m_retryPersistenceFailClosed = true;
+            recordFailure(ErrorCategory::Source);
+            return;
+        }
+    }
+    if (m_retryPersistenceFailClosed || m_collectionPrivacyQuarantined
+        || m_collectionWholeRedactionUsed) {
+        recordFailure(ErrorCategory::Source);
+        return;
     }
     if (!m_batchHadFailure) {
         setLastErrorCategory(ErrorCategory::None);

@@ -8,6 +8,7 @@
 #include <QJsonValue>
 #include <QMutexLocker>
 #include <QNetworkAccessManager>
+#include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QSet>
@@ -33,6 +34,7 @@ namespace
     constexpr double kUnhealthyPacketLossPercent = 25.0;
     constexpr int kMinimumProbeTimeoutMs = 250;
     constexpr int kMaximumProbeTimeoutMs = 15000;
+    constexpr int kProbeStateConfirmationCount = 2;
 
     const QList<ConnectionHealthController::RecoveryAction> kRecoveryLadder {
         ConnectionHealthController::RecoveryAction::RefreshNetwork,
@@ -196,7 +198,9 @@ void ConnectionHealthController::startConnectivityProbe(QNetworkAccessManager *n
     if (!tunnelConnected) {
         recordProbeResult(false, false, false, -1.0, -1.0,
                           QStringLiteral("handshake_probe_failed"));
-        evaluateRecovery(QStringLiteral("handshake_probe_failed"));
+        if (healthState() == HealthState::Unhealthy) {
+            evaluateRecovery(QStringLiteral("handshake_probe_failed"));
+        }
         return;
     }
     if (!networkManager || networkManager->thread() != thread()) {
@@ -271,6 +275,22 @@ void ConnectionHealthController::startConnectivityProbe(QNetworkAccessManager *n
     request.setHeader(QNetworkRequest::UserAgentHeader,
                       QStringLiteral("AmneziaVPN-Guardian/1"));
 
+    // Signals emitted while preparing a probe are intentionally observable by
+    // the UI.  A same-thread slot can therefore change the manager policy
+    // re-entrantly after the integration's earlier validation.  Re-check the
+    // dedicated transport in the final straight-line block before dispatch so
+    // no proxy-aware request can escape through that window.
+    const bool proxyPathVerifiedDirect = networkManager->proxyFactory() == nullptr
+            && networkManager->proxy().type() == QNetworkProxy::NoProxy;
+    if (!proxyPathVerifiedDirect) {
+        cancelConnectivityProbe(QStringLiteral("probe_proxy_path_unverified"));
+        recordHealthState(HealthState::Unknown,
+                          QStringLiteral("probe_proxy_path_unverified"));
+        recordEvent(QStringLiteral("probe"), QStringLiteral("probe_unavailable"),
+                    { { QStringLiteral("reason_code"),
+                        QStringLiteral("probe_proxy_path_unverified") } });
+        return;
+    }
     m_probeReply = networkManager->head(request);
     const bool httpsOrigin = probeUrl.scheme() == QStringLiteral("https");
     const QPointer<QNetworkReply> guardedReply = m_probeReply;
@@ -336,6 +356,18 @@ QString ConnectionHealthController::pendingRecoveryAction() const
 {
     QMutexLocker locker(&m_mutex);
     return actionName(m_recovery.pendingAction);
+}
+
+quint64 ConnectionHealthController::pendingRecoveryEpoch() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_recovery.pendingEpoch;
+}
+
+bool ConnectionHealthController::recoveryRequestDispatched() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_recovery.executionRequested;
 }
 
 int ConnectionHealthController::recoveryAttempts() const
@@ -500,11 +532,19 @@ void ConnectionHealthController::recordHealthState(HealthState state, const QStr
         m_health.packetLossPercent = -1.0;
         m_health.originAuthenticated = originAuthenticated;
         m_health.tunnelPathVerified = tunnelPathVerified;
+        m_health.lastProbeObservedState = HealthState::Unknown;
+        m_health.lastProbeObservedReason = QStringLiteral("not_observed");
+        m_health.probeFailureStreak = 0;
+        m_health.probeRecoveryStreak = 0;
 
         const RecoveryAction supersededAction = m_recovery.pendingAction;
         recoveryExpired = supersededAction != RecoveryAction::None;
         if (recoveryExpired) {
             m_recovery.pendingAction = RecoveryAction::None;
+            m_recovery.pendingReason.clear();
+            m_recovery.pendingAttempt = 0;
+            m_recovery.pendingEpoch = 0;
+            m_recovery.executionRequested = false;
         }
 
         if (stateChanged) {
@@ -515,6 +555,10 @@ void ConnectionHealthController::recordHealthState(HealthState state, const QStr
             m_health.unhealthySince = QDateTime();
             m_recovery.nextActionIndex = 0;
             m_recovery.pendingAction = RecoveryAction::None;
+            m_recovery.pendingReason.clear();
+            m_recovery.pendingAttempt = 0;
+            m_recovery.pendingEpoch = 0;
+            m_recovery.executionRequested = false;
         } else if (effectiveState == HealthState::Unhealthy && !m_health.unhealthySince.isValid()) {
             m_health.unhealthySince = now;
         } else if (effectiveState != HealthState::Unhealthy) {
@@ -526,6 +570,8 @@ void ConnectionHealthController::recordHealthState(HealthState state, const QStr
                           { { QStringLiteral("previous_state"), stateName(previousState) },
                             { QStringLiteral("state"), stateName(effectiveState) },
                             { QStringLiteral("reason_code"), reasonCode },
+                            { QStringLiteral("probe_failure_streak"), 0 },
+                            { QStringLiteral("probe_recovery_streak"), 0 },
                             { QStringLiteral("origin_authenticated"), originAuthenticated },
                             { QStringLiteral("tunnel_path_verified"), tunnelPathVerified } });
         if (recoveryExpired) {
@@ -551,78 +597,119 @@ void ConnectionHealthController::recordProbeResult(bool handshakeOk, bool dnsOk,
     const double safeLoss =
             isFiniteMetric(packetLossPercent) && packetLossPercent >= 0.0 ? std::min(packetLossPercent, 100.0) : -1.0;
 
-    HealthState state = HealthState::Healthy;
+    HealthState observedState = HealthState::Healthy;
     QString inferredReason = QStringLiteral("connectivity_probe_ok");
     if (!handshakeOk) {
-        state = HealthState::Unhealthy;
+        observedState = HealthState::Unhealthy;
         inferredReason = QStringLiteral("handshake_probe_failed");
     } else if (!egressOk) {
-        state = HealthState::Unhealthy;
+        observedState = HealthState::Unhealthy;
         inferredReason = QStringLiteral("egress_probe_failed");
     } else if (!originAuthenticated) {
         // Plain HTTP, a captive portal, or a proxy-generated response proves that
         // some egress path answered, not that the configured origin did. Preserve
         // this useful signal without labelling it end-to-end healthy.
-        state = HealthState::Degraded;
+        observedState = HealthState::Degraded;
         inferredReason = QStringLiteral("egress_unverified");
     } else if (!tunnelPathVerified) {
         // Authenticating the configured HTTPS origin proves who answered, but
         // not which interface or route carried the request. Without a separate
         // path guarantee this is useful egress evidence, never tunnel health.
-        state = HealthState::Degraded;
+        observedState = HealthState::Degraded;
         inferredReason = QStringLiteral("tunnel_path_unverified");
     } else if (!dnsOk) {
         // A completed HTTP exchange proves that the configured endpoint was
         // reachable, even when the independent resolver lookup failed (for
         // example because QNetworkAccessManager used a proxy or a warm cache).
         // Preserve the disagreement as degraded instead of claiming total loss.
-        state = HealthState::Degraded;
+        observedState = HealthState::Degraded;
         inferredReason = QStringLiteral("dns_probe_failed");
     } else if (safeLatency >= kUnhealthyLatencyMs || safeLoss >= kUnhealthyPacketLossPercent) {
-        state = HealthState::Unhealthy;
+        observedState = HealthState::Unhealthy;
         inferredReason = QStringLiteral("network_quality_critical");
     } else if (safeLatency >= kDegradedLatencyMs || safeLoss >= kDegradedPacketLossPercent) {
-        state = HealthState::Degraded;
+        observedState = HealthState::Degraded;
         inferredReason = QStringLiteral("network_quality_degraded");
     }
 
-    const QString reasonCode = safeToken(reason, inferredReason);
+    const QString observedReasonCode = safeToken(reason, inferredReason);
     bool recoveryExpired = false;
+    HealthState effectiveState = observedState;
+    QString effectiveReasonCode = observedReasonCode;
     {
         QMutexLocker locker(&m_mutex);
         const HealthState previousState = m_health.state;
-        m_health.state = state;
-        m_health.lastReason = reasonCode;
+
+        if (observedState == HealthState::Unhealthy) {
+            m_health.probeRecoveryStreak = 0;
+            m_health.probeFailureStreak = std::min(
+                    kProbeStateConfirmationCount, m_health.probeFailureStreak + 1);
+            if (previousState != HealthState::Unhealthy
+                && m_health.probeFailureStreak < kProbeStateConfirmationCount) {
+                effectiveState = HealthState::Degraded;
+                effectiveReasonCode = QStringLiteral("probe_failure_unconfirmed");
+            }
+        } else {
+            m_health.probeFailureStreak = 0;
+            if (previousState == HealthState::Unhealthy) {
+                m_health.probeRecoveryStreak = std::min(
+                        kProbeStateConfirmationCount, m_health.probeRecoveryStreak + 1);
+                if (m_health.probeRecoveryStreak < kProbeStateConfirmationCount) {
+                    effectiveState = HealthState::Unhealthy;
+                    effectiveReasonCode = QStringLiteral("probe_recovery_unconfirmed");
+                }
+            } else {
+                m_health.probeRecoveryStreak = 0;
+            }
+        }
+
+        m_health.state = effectiveState;
+        m_health.lastReason = effectiveReasonCode;
         m_health.lastUpdatedAt = now;
         m_health.lastProbeAt = now;
         m_health.latencyMs = safeLatency;
         m_health.packetLossPercent = safeLoss;
         m_health.originAuthenticated = originAuthenticated;
         m_health.tunnelPathVerified = tunnelPathVerified;
+        m_health.lastProbeObservedState = observedState;
+        m_health.lastProbeObservedReason = observedReasonCode;
 
         const RecoveryAction supersededAction = m_recovery.pendingAction;
-        recoveryExpired = supersededAction != RecoveryAction::None;
+        recoveryExpired = supersededAction != RecoveryAction::None
+                && previousState != effectiveState;
         if (recoveryExpired) {
             m_recovery.pendingAction = RecoveryAction::None;
+            m_recovery.pendingReason.clear();
+            m_recovery.pendingAttempt = 0;
+            m_recovery.pendingEpoch = 0;
+            m_recovery.executionRequested = false;
         }
 
-        if (previousState != state) {
+        if (previousState != effectiveState) {
             m_health.lastStateChangedAt = now;
         }
-        if (state == HealthState::Healthy) {
+        if (effectiveState == HealthState::Healthy) {
             m_health.lastHealthyAt = now;
             m_health.unhealthySince = QDateTime();
             m_recovery.nextActionIndex = 0;
             m_recovery.pendingAction = RecoveryAction::None;
-        } else if (state == HealthState::Unhealthy && !m_health.unhealthySince.isValid()) {
+            m_recovery.pendingReason.clear();
+            m_recovery.pendingAttempt = 0;
+            m_recovery.pendingEpoch = 0;
+            m_recovery.executionRequested = false;
+        } else if (effectiveState == HealthState::Unhealthy && !m_health.unhealthySince.isValid()) {
             m_health.unhealthySince = now;
-        } else if (state != HealthState::Unhealthy) {
+        } else if (effectiveState != HealthState::Unhealthy) {
             m_health.unhealthySince = QDateTime();
         }
 
         QVariantMap details { { QStringLiteral("previous_state"), stateName(previousState) },
-                              { QStringLiteral("state"), stateName(state) },
-                              { QStringLiteral("reason_code"), reasonCode },
+                              { QStringLiteral("state"), stateName(effectiveState) },
+                              { QStringLiteral("reason_code"), effectiveReasonCode },
+                              { QStringLiteral("observed_state"), stateName(observedState) },
+                              { QStringLiteral("observed_reason_code"), observedReasonCode },
+                              { QStringLiteral("probe_failure_streak"), m_health.probeFailureStreak },
+                              { QStringLiteral("probe_recovery_streak"), m_health.probeRecoveryStreak },
                               { QStringLiteral("handshake_ok"), handshakeOk },
                               { QStringLiteral("dns_ok"), dnsOk },
                               { QStringLiteral("egress_ok"), egressOk },
@@ -645,7 +732,7 @@ void ConnectionHealthController::recordProbeResult(bool handshakeOk, bool dnsOk,
     m_probeFreshnessTimer.start();
     emit healthSnapshotChanged();
     emit flightRecorderChanged();
-    if (state == HealthState::Healthy || recoveryExpired) {
+    if (effectiveState == HealthState::Healthy || recoveryExpired) {
         emit recoveryPolicyChanged();
     }
 }
@@ -689,9 +776,15 @@ QVariantMap ConnectionHealthController::evaluateRecovery(const QString &triggerR
             const int actionIndex = std::clamp(m_recovery.nextActionIndex, 0, lastActionIndex);
             suggestedAction = kRecoveryLadder.at(actionIndex);
             m_recovery.pendingAction = suggestedAction;
+            m_recovery.pendingReason = triggerCode;
             m_recovery.lastDecisionAt = now;
             m_recovery.attempts.append(now);
             attempt = static_cast<int>(m_recovery.attempts.size());
+            m_recovery.pendingAttempt = attempt;
+            m_recovery.pendingEpoch = m_recovery.nextEpoch++;
+            if (m_recovery.nextEpoch == 0) {
+                m_recovery.nextEpoch = 1;
+            }
             decisionReason = triggerCode;
         }
 
@@ -701,6 +794,8 @@ QVariantMap ConnectionHealthController::evaluateRecovery(const QString &triggerR
                      { QStringLiteral("action"), actionName(suggestedAction) },
                      { QStringLiteral("reason"), decisionReason },
                      { QStringLiteral("attempt"), attempt },
+                     { QStringLiteral("recovery_epoch"),
+                       QString::number(m_recovery.pendingEpoch) },
                      { QStringLiteral("budget_remaining"), budgetRemaining },
                      { QStringLiteral("cooldown_remaining_ms"), cooldownRemaining } };
 
@@ -723,17 +818,55 @@ QVariantMap ConnectionHealthController::evaluateRecovery(const QString &triggerR
     return decision;
 }
 
-void ConnectionHealthController::acknowledgeRecoveryResult(bool success, const QString &reason)
+bool ConnectionHealthController::requestPendingRecovery()
+{
+    RecoveryAction action = RecoveryAction::None;
+    QString reasonCode;
+    int attempt = 0;
+    quint64 recoveryEpoch = 0;
+    {
+        QMutexLocker locker(&m_mutex);
+        action = m_recovery.pendingAction;
+        reasonCode = m_recovery.pendingReason;
+        attempt = m_recovery.pendingAttempt;
+        recoveryEpoch = m_recovery.pendingEpoch;
+        if (action == RecoveryAction::None || recoveryEpoch == 0
+            || m_recovery.executionRequested) {
+            return false;
+        }
+        m_recovery.executionRequested = true;
+        appendEventLocked(
+                QStringLiteral("recovery"), QStringLiteral("user_requested"),
+                { { QStringLiteral("action"), actionName(action) },
+                  { QStringLiteral("attempt"), attempt },
+                  { QStringLiteral("recovery_epoch"),
+                    QString::number(recoveryEpoch) } });
+    }
+    emit flightRecorderChanged();
+    emit recoveryPolicyChanged();
+    emit recoveryActionRequested(action, reasonCode, attempt, recoveryEpoch);
+    return true;
+}
+
+void ConnectionHealthController::acknowledgeRecoveryResult(
+        bool success, const QString &reason, quint64 expectedRecoveryEpoch)
 {
     bool hadPendingAction = false;
+    bool staleEpoch = false;
     {
         QMutexLocker locker(&m_mutex);
         const RecoveryAction action = m_recovery.pendingAction;
-        hadPendingAction = action != RecoveryAction::None;
+        staleEpoch = expectedRecoveryEpoch != 0
+                && expectedRecoveryEpoch != m_recovery.pendingEpoch;
+        hadPendingAction = action != RecoveryAction::None && !staleEpoch;
         const QString reasonCode = safeToken(
                 reason,
-                hadPendingAction ? (success ? QStringLiteral("recovery_succeeded") : QStringLiteral("recovery_failed"))
-                                 : QStringLiteral("no_recovery_pending"));
+                staleEpoch
+                        ? QStringLiteral("recovery_stale_epoch")
+                        : hadPendingAction
+                                ? (success ? QStringLiteral("recovery_succeeded")
+                                           : QStringLiteral("recovery_failed"))
+                                : QStringLiteral("no_recovery_pending"));
 
         if (hadPendingAction) {
             if (success) {
@@ -743,14 +876,23 @@ void ConnectionHealthController::acknowledgeRecoveryResult(bool success, const Q
                 m_recovery.nextActionIndex = std::min(m_recovery.nextActionIndex + 1, lastActionIndex);
             }
             m_recovery.pendingAction = RecoveryAction::None;
+            m_recovery.pendingReason.clear();
+            m_recovery.pendingAttempt = 0;
+            m_recovery.pendingEpoch = 0;
+            m_recovery.executionRequested = false;
         }
 
         appendEventLocked(QStringLiteral("recovery"),
-                          hadPendingAction ? (success ? QStringLiteral("succeeded") : QStringLiteral("failed"))
-                                           : QStringLiteral("result_ignored"),
+                          hadPendingAction
+                                  ? (success ? QStringLiteral("succeeded")
+                                             : QStringLiteral("failed"))
+                                  : QStringLiteral("result_ignored"),
                           { { QStringLiteral("action"), actionName(action) },
                             { QStringLiteral("success"), success },
-                            { QStringLiteral("reason_code"), reasonCode } });
+                            { QStringLiteral("reason_code"), reasonCode },
+                            { QStringLiteral("stale_epoch"), staleEpoch },
+                            { QStringLiteral("expected_recovery_epoch"),
+                              QString::number(expectedRecoveryEpoch) } });
     }
 
     emit flightRecorderChanged();
@@ -765,6 +907,10 @@ void ConnectionHealthController::resetRecoveryPolicy()
         QMutexLocker locker(&m_mutex);
         m_recovery.nextActionIndex = 0;
         m_recovery.pendingAction = RecoveryAction::None;
+        m_recovery.pendingReason.clear();
+        m_recovery.pendingAttempt = 0;
+        m_recovery.pendingEpoch = 0;
+        m_recovery.executionRequested = false;
         m_recovery.lastDecisionAt = QDateTime();
         m_recovery.attempts.clear();
         appendEventLocked(QStringLiteral("recovery"), QStringLiteral("policy_reset"), QVariantMap());
@@ -888,6 +1034,9 @@ QString ConnectionHealthController::safeToken(const QString &value, const QStrin
                                                 QStringLiteral("probe"),
                                                 QStringLiteral("probe_cancelled"),
                                                 QStringLiteral("probe_endpoint_invalid"),
+                                                QStringLiteral("probe_failure_unconfirmed"),
+                                                QStringLiteral("probe_proxy_path_unverified"),
+                                                QStringLiteral("probe_recovery_unconfirmed"),
                                                 QStringLiteral("probe_stale"),
                                                  QStringLiteral("probe_timeout"),
                                                  QStringLiteral("probe_unavailable"),
@@ -901,8 +1050,12 @@ QString ConnectionHealthController::safeToken(const QString &value, const QStrin
                                                 QStringLiteral("recovering"),
                                                 QStringLiteral("recovery"),
                                                 QStringLiteral("recovery_failed"),
+                                                QStringLiteral("recovery_dispatch_failed"),
+                                                QStringLiteral("recovery_dispatched"),
                                                 QStringLiteral("recovery_result_pending"),
+                                                QStringLiteral("recovery_stale_epoch"),
                                                 QStringLiteral("recovery_succeeded"),
+                                                QStringLiteral("recovery_timeout"),
                                                 QStringLiteral("refresh_network"),
                                                 QStringLiteral("repair_dns"),
                                                 QStringLiteral("repair_routes"),
@@ -914,6 +1067,7 @@ QString ConnectionHealthController::safeToken(const QString &value, const QStrin
                                                 QStringLiteral("started"),
                                                  QStringLiteral("succeeded"),
                                                  QStringLiteral("suggested"),
+                                                 QStringLiteral("user_requested"),
                                                  QStringLiteral("superseded"),
                                                 QStringLiteral("switch_protocol"),
                                                 QStringLiteral("switch_server"),
@@ -955,6 +1109,8 @@ QVariantMap ConnectionHealthController::safeDetails(const QVariantMap &details)
                                              QStringLiteral("latency_ms"),
                                              QStringLiteral("max_attempts"),
                                              QStringLiteral("packet_loss_percent"),
+                                             QStringLiteral("probe_failure_streak"),
+                                             QStringLiteral("probe_recovery_streak"),
                                              QStringLiteral("window_ms") };
     static const QSet<QString> booleanKeys { QStringLiteral("accepted"), QStringLiteral("authoritative"),
                                              QStringLiteral("dns_ok"),
@@ -962,6 +1118,8 @@ QVariantMap ConnectionHealthController::safeDetails(const QVariantMap &details)
                                              QStringLiteral("origin_authenticated"), QStringLiteral("success"),
                                              QStringLiteral("tunnel_path_verified") };
     static const QSet<QString> tokenKeys { QStringLiteral("action"),         QStringLiteral("outcome"),
+                                           QStringLiteral("observed_reason_code"),
+                                           QStringLiteral("observed_state"),
                                            QStringLiteral("previous_state"), QStringLiteral("probe"),
                                            QStringLiteral("protocol"),       QStringLiteral("reason_code"),
                                            QStringLiteral("source"),         QStringLiteral("state") };
@@ -1104,6 +1262,9 @@ void ConnectionHealthController::appendEventLocked(const QString &category, cons
         event.insert(QStringLiteral("details"), variantMapToJson(sanitizedDetails));
     }
 
+    qInfo().noquote() << QStringLiteral("GuardianEvent")
+                      << QString::fromUtf8(QJsonDocument(event).toJson(QJsonDocument::Compact));
+
     m_flightRecorder.append(event);
     while (m_flightRecorder.size() > m_flightRecorderCapacity) {
         m_flightRecorder.removeFirst();
@@ -1137,7 +1298,15 @@ QVariantMap ConnectionHealthController::healthSnapshotLocked() const
                            { QStringLiteral("has_latency"), m_health.latencyMs >= 0.0 },
                            { QStringLiteral("has_packet_loss"), m_health.packetLossPercent >= 0.0 },
                            { QStringLiteral("origin_authenticated"), m_health.originAuthenticated },
-                           { QStringLiteral("tunnel_path_verified"), m_health.tunnelPathVerified } };
+                           { QStringLiteral("tunnel_path_verified"), m_health.tunnelPathVerified },
+                           { QStringLiteral("observed_probe_state"),
+                             stateName(m_health.lastProbeObservedState) },
+                           { QStringLiteral("observed_probe_reason"),
+                             m_health.lastProbeObservedReason },
+                           { QStringLiteral("probe_failure_streak"),
+                             std::clamp(m_health.probeFailureStreak, 0, kProbeStateConfirmationCount) },
+                           { QStringLiteral("probe_recovery_streak"),
+                             std::clamp(m_health.probeRecoveryStreak, 0, kProbeStateConfirmationCount) } };
     if (m_health.latencyMs >= 0.0) {
         snapshot.insert(QStringLiteral("latency_ms"), m_health.latencyMs);
     }
@@ -1152,6 +1321,11 @@ QVariantMap ConnectionHealthController::recoverySnapshotLocked(const QDateTime &
     return { { QStringLiteral("mode"), QStringLiteral("recommendation_only") },
              { QStringLiteral("pending"), m_recovery.pendingAction != RecoveryAction::None },
              { QStringLiteral("pending_action"), actionName(m_recovery.pendingAction) },
+             { QStringLiteral("pending_attempt"), m_recovery.pendingAttempt },
+             { QStringLiteral("pending_epoch"),
+               QString::number(m_recovery.pendingEpoch) },
+             { QStringLiteral("execution_requested"),
+               m_recovery.executionRequested },
              { QStringLiteral("attempts"), static_cast<int>(m_recovery.attempts.size()) },
              { QStringLiteral("max_attempts"), m_recovery.maxAttempts },
              { QStringLiteral("budget_remaining"),

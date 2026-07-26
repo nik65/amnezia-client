@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QPointer>
+#include <QRandomGenerator>
 #include <QSet>
 #include <QThreadPool>
 #include <QTimer>
@@ -36,7 +37,14 @@ namespace
     constexpr auto kManifestName = "manifest.json";
     constexpr auto kFilesDirName = "files";
     constexpr auto kInstallHostScript = ":/server_scripts/update_host/install_server_update_host.sh";
-    constexpr auto kUpdateHostImage = "docker.io/library/busybox:1.36.1";
+    constexpr auto kVerifiedInstallHostRunner = ":/server_scripts/update_host/run_verified_update_host_installer.sh";
+    constexpr auto kBundledPublishScript = ":/server_scripts/update_host/publish_bundled_release.sh";
+    constexpr auto kUpdateHostImage = "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+    constexpr qsizetype kMaximumManifestBytes = 1024 * 1024;
+    constexpr qsizetype kMaximumPublishMetadataBytes = 64 * 1024;
+    constexpr qsizetype kMaximumBundledFiles = 64;
+    constexpr qsizetype kMaximumRelativePathBytes = 1024;
+    constexpr int kInstallerOuterSshTimeoutMs = 20 * 60 * 1000;
 
 #ifndef SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64
 #define SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 ""
@@ -93,41 +101,22 @@ namespace
         return false;
     }
 
-    bool canonicalPolicyGeneration(const QJsonValue &value, QString &generationOut)
+    bool canonicalPolicyGenerationValue(const QJsonValue &value, QString &generationOut)
     {
         generationOut.clear();
         if (!value.isDouble()) {
             return false;
         }
 
-        constexpr qint64 kMaximumPolicyGeneration = 9007199254740991LL;
         const double rawGeneration = value.toDouble(-1.0);
-        if (!std::isfinite(rawGeneration) || rawGeneration < 1.0 || rawGeneration > kMaximumPolicyGeneration
+        if (!std::isfinite(rawGeneration) || rawGeneration < 1.0
+            || rawGeneration > amnezia::selfhostedUpdates::maximumPolicyGeneration
             || std::floor(rawGeneration) != rawGeneration) {
             return false;
         }
 
         generationOut = QString::number(static_cast<qint64>(rawGeneration));
         return amnezia::selfhostedUpdates::isCanonicalNonnegativeDecimal(generationOut);
-    }
-
-    bool decodeManifestPayload(const QJsonObject &manifest, QJsonObject &payloadOut)
-    {
-        const QString payloadText = manifest.value(QStringLiteral("payload")).toString();
-        if (payloadText.isEmpty()) {
-            return false;
-        }
-
-        QByteArray payloadBytes = QByteArray::fromBase64(payloadText.toUtf8(),
-                                                         QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
-        QJsonParseError error {};
-        const QJsonDocument payloadDoc = QJsonDocument::fromJson(payloadBytes, &error);
-        if (error.error != QJsonParseError::NoError || !payloadDoc.isObject()) {
-            return false;
-        }
-
-        payloadOut = payloadDoc.object();
-        return true;
     }
 
     bool decodeStrictBase64(const QByteArray &encoded, QByteArray::Base64Options options, QByteArray &decoded)
@@ -140,6 +129,10 @@ namespace
         }
 
         decoded = result.decoded;
+        if (decoded.toBase64(options) != encoded) {
+            decoded.clear();
+            return false;
+        }
         return true;
     }
 
@@ -192,6 +185,115 @@ namespace
         return ok;
     }
 
+    bool decodeManifestPayload(const QJsonObject &manifest, QJsonObject &payloadOut, QByteArray &payloadBytesOut)
+    {
+        const QByteArray encodedPayload = manifest.value(QStringLiteral("payload")).toString().toUtf8();
+        QByteArray payloadBytes;
+        if (encodedPayload.isEmpty()
+            || !decodeStrictBase64(encodedPayload,
+                                   QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals,
+                                   payloadBytes)
+            || payloadBytes.isEmpty()) {
+            return false;
+        }
+
+        QJsonParseError error {};
+        const QJsonDocument payloadDoc = QJsonDocument::fromJson(payloadBytes, &error);
+        if (error.error != QJsonParseError::NoError || !payloadDoc.isObject()) {
+            return false;
+        }
+
+        payloadOut = payloadDoc.object();
+        payloadBytesOut = payloadBytes;
+        return true;
+    }
+
+    bool parseVerifiedManifest(const QByteArray &manifestData,
+                               QJsonObject &manifestOut,
+                               QJsonObject &payloadOut,
+                               amnezia::selfhostedUpdates::BundledManifestIdentity &identityOut)
+    {
+        if (manifestData.isEmpty() || manifestData.size() > kMaximumManifestBytes) {
+            return false;
+        }
+
+        QJsonParseError error {};
+        const QJsonDocument manifestDoc = QJsonDocument::fromJson(manifestData, &error);
+        if (error.error != QJsonParseError::NoError || !manifestDoc.isObject()) {
+            return false;
+        }
+        const QJsonObject manifest = manifestDoc.object();
+        if (!verifyManifestSignature(manifest)) {
+            return false;
+        }
+
+        QByteArray payloadBytes;
+        QJsonObject payload;
+        if (!decodeManifestPayload(manifest, payload, payloadBytes)) {
+            return false;
+        }
+
+        const QJsonValue schemaValue = payload.value(QStringLiteral("schema"));
+        if (!schemaValue.isDouble()) {
+            return false;
+        }
+        const double rawSchema = schemaValue.toDouble(-1.0);
+        if (!std::isfinite(rawSchema) || std::floor(rawSchema) != rawSchema
+            || (rawSchema != 1.0 && rawSchema != 2.0)) {
+            return false;
+        }
+
+        amnezia::selfhostedUpdates::BundledManifestIdentity identity;
+        identity.schema = static_cast<int>(rawSchema);
+        identity.version = payload.value(QStringLiteral("version")).toString();
+        identity.payloadBytes = payloadBytes;
+        identity.releaseContent = payload;
+        identity.releaseContent.remove(QStringLiteral("schema"));
+        identity.releaseContent.remove(QStringLiteral("releasePolicy"));
+
+        if (identity.schema == 2) {
+            const QJsonObject policy = payload.value(QStringLiteral("releasePolicy")).toObject();
+            if (policy.value(QStringLiteral("schema")).toInt(-1) != 2
+                || !canonicalPolicyGenerationValue(policy.value(QStringLiteral("generation")), identity.generation)) {
+                return false;
+            }
+        }
+        if (!amnezia::selfhostedUpdates::isValidBundledManifestIdentity(identity)) {
+            return false;
+        }
+
+        manifestOut = manifest;
+        payloadOut = payload;
+        identityOut = identity;
+        return true;
+    }
+
+    QString transitionFailureName(amnezia::selfhostedUpdates::BundledPublishTransitionResult result)
+    {
+        using Result = amnezia::selfhostedUpdates::BundledPublishTransitionResult;
+        switch (result) {
+        case Result::Allowed: return QStringLiteral("allowed");
+        case Result::InvalidCandidate: return QStringLiteral("invalid_candidate");
+        case Result::InvalidCurrent: return QStringLiteral("invalid_current");
+        case Result::VersionDowngrade: return QStringLiteral("version_downgrade");
+        case Result::SchemaDowngrade: return QStringLiteral("schema_downgrade");
+        case Result::GenerationRollback: return QStringLiteral("generation_rollback");
+        case Result::GenerationRebound: return QStringLiteral("generation_rebound");
+        case Result::SameVersionContentChanged: return QStringLiteral("same_version_content_changed");
+        }
+        return QStringLiteral("unknown");
+    }
+
+    QString randomPublishRunId()
+    {
+        QString result;
+        result.reserve(48);
+        for (int index = 0; index < 6; ++index) {
+            result += QString::number(QRandomGenerator::system()->generate(), 16).rightJustified(8, u'0');
+        }
+        return result;
+    }
+
 }
 
 SelfHostedUpdateBootstrapper::SelfHostedUpdateBootstrapper(SecureServersRepository *serversRepository, QObject *parent)
@@ -226,19 +328,17 @@ bool SelfHostedUpdateBootstrapper::start()
         m_publishScheduled = false;
         m_publishInProgress = true;
         QPointer<SelfHostedUpdateBootstrapper> self(this);
-        QThreadPool::globalInstance()->start([self, payload, credentials]() {
+        auto deliveryContext = amnezia::selfhostedUpdates::makeQueuedDeliveryContext();
+        QThreadPool::globalInstance()->start([self, deliveryContext, payload, credentials]() {
             const bool success = publishPayload(payload, credentials);
-            if (!self) {
-                return;
-            }
-            QMetaObject::invokeMethod(self, [self, success]() {
-                if (!self) {
-                    return;
-                }
-                self->m_publishInProgress = false;
-                self->m_publishSucceeded = success;
-                emit self->publishFinished(success);
-            }, Qt::QueuedConnection);
+            amnezia::selfhostedUpdates::enqueueGuardedCompletion(
+                    deliveryContext,
+                    self,
+                    [success](SelfHostedUpdateBootstrapper *bootstrapper) {
+                        bootstrapper->m_publishInProgress = false;
+                        bootstrapper->m_publishSucceeded = success;
+                        emit bootstrapper->publishFinished(success);
+                    });
         });
     });
     return true;
@@ -286,22 +386,16 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
         logger.warning() << "Failed to open bundled update manifest" << manifestPath;
         return false;
     }
-
-    QJsonParseError error {};
-    const QJsonDocument manifestDoc = QJsonDocument::fromJson(manifestFile.readAll(), &error);
-    if (error.error != QJsonParseError::NoError || !manifestDoc.isObject()) {
-        logger.warning() << "Bundled update manifest is not valid JSON:" << error.errorString();
+    if (manifestFile.size() <= 0 || manifestFile.size() > kMaximumManifestBytes) {
+        logger.warning() << "Bundled update manifest exceeds the supported size";
         return false;
     }
-
-    if (!verifyManifestSignature(manifestDoc.object())) {
-        logger.warning() << "Bundled update manifest signature verification failed";
-        return false;
-    }
-
+    const QByteArray manifestData = manifestFile.read(kMaximumManifestBytes + 1);
+    QJsonObject manifest;
     QJsonObject decodedPayload;
-    if (!decodeManifestPayload(manifestDoc.object(), decodedPayload)) {
-        logger.warning() << "Bundled update manifest has invalid signed payload";
+    amnezia::selfhostedUpdates::BundledManifestIdentity manifestIdentity;
+    if (!parseVerifiedManifest(manifestData, manifest, decodedPayload, manifestIdentity)) {
+        logger.warning() << "Bundled update manifest or signature is invalid";
         return false;
     }
 
@@ -352,6 +446,10 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
             logger.warning() << "Bundled update manifest reuses an artifact path" << relativePath;
             return false;
         }
+        if (relativePath.toUtf8().size() > kMaximumRelativePathBytes) {
+            logger.warning() << "Bundled update artifact path is too long" << relativePath;
+            return false;
+        }
         seenRelativePaths.insert(relativePath);
 
         const QString filePath = root.filePath(relativePath);
@@ -383,7 +481,7 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
         }
 
         const QString relativeUrlPath = QUrl(urlText, QUrl::StrictMode).path(QUrl::FullyEncoded);
-        files.append({ platform, filePath, relativePath, relativeUrlPath, expectedSha256, expectedSize });
+        files.append({ platform, filePath, relativePath, relativeUrlPath, expectedSha256, expectedSize, isRollback });
         return true;
     };
 
@@ -412,7 +510,7 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
 
         QString rollbackGeneration;
         const QString rollbackVersion = rollback.value(QStringLiteral("version")).toString();
-        if (!canonicalPolicyGeneration(releasePolicy.value(QStringLiteral("generation")), rollbackGeneration)
+        if (!canonicalPolicyGenerationValue(releasePolicy.value(QStringLiteral("generation")), rollbackGeneration)
             || !amnezia::selfhostedUpdates::isCanonicalReleaseVersion(rollbackVersion)
             || rollbackVersion != releasePolicy.value(QStringLiteral("previousVersion")).toString()) {
             logger.warning() << "Bundled update manifest has invalid rollback identity";
@@ -435,11 +533,18 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
         }
     }
 
+    if (files.isEmpty() || files.size() > kMaximumBundledFiles) {
+        logger.warning() << "Bundled update manifest has an unsupported local file count" << files.size();
+        return false;
+    }
+
     payload.rootDir = root.absolutePath();
     payload.manifestPath = manifestPath;
-    payload.version = decodedPayload.value(QStringLiteral("version")).toString();
+    payload.version = manifestIdentity.version;
     payload.files = files;
-    payload.manifestSha256 = fileSha256(manifestPath);
+    payload.manifestData = manifestData;
+    payload.manifestSha256 = QCryptographicHash::hash(manifestData, QCryptographicHash::Sha256).toHex();
+    payload.manifestIdentity = manifestIdentity;
     return !payload.version.isEmpty() && !payload.manifestSha256.isEmpty();
 }
 
@@ -471,58 +576,166 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
     SshSession sshSession;
     const QString serverDir = QString::fromLatin1(amnezia::protocols::selfHostedUpdates::hostDirectory);
     const QString remoteManifest = serverDir + QStringLiteral("/") + QString::fromLatin1(kManifestName);
-    QString remoteTmp;
-    auto readRemoteTmp = [&remoteTmp](const QString &data, libssh::Client &) {
-        remoteTmp += data.trimmed();
-        return amnezia::ErrorCode::NoError;
-    };
+    if (serverDir != QStringLiteral("/opt/amnezia/client-updates")) {
+        logger.warning() << "Bundled publisher root does not match the pinned server protocol" << serverDir;
+        return false;
+    }
+
+    const QString runId = randomPublishRunId();
+    const QString remoteTmp = QStringLiteral("/tmp/amnezia-client-updates.%1").arg(runId);
+    const QString remotePublisherScript = remoteTmp + QStringLiteral("/publish_bundled_release.sh");
     amnezia::ErrorCode error = sshSession.runScript(credentials,
-                                                    QStringLiteral("remote_tmp=$(mktemp -d /tmp/amnezia-client-updates.XXXXXX) && "
-                                                                   "chmod 700 \"$remote_tmp\" && "
-                                                                   "mkdir -p \"$remote_tmp/files\" && "
-                                                                   "printf '%s' \"$remote_tmp\""),
-                                                    readRemoteTmp);
+                                                    QStringLiteral("umask 077 && test ! -e %1 && "
+                                                                   "mkdir -m 0700 -- %1 && "
+                                                                   "test -d %1 && ! test -L %1")
+                                                            .arg(shellQuote(remoteTmp)));
     if (error != amnezia::ErrorCode::NoError) {
         logger.warning() << "Failed to prepare remote update payload directory";
         return false;
     }
-    if (!remoteTmp.startsWith(QStringLiteral("/tmp/amnezia-client-updates."))) {
-        logger.warning() << "Remote update payload directory is invalid";
+    const auto cleanupRemoteTmp = [&sshSession, &credentials, &remoteTmp]() {
+        sshSession.runScript(credentials, QStringLiteral("rm -rf -- %1").arg(shellQuote(remoteTmp)));
+    };
+
+    QFile publisherScriptFile(QString::fromLatin1(kBundledPublishScript));
+    if (!publisherScriptFile.open(QIODevice::ReadOnly)) {
+        logger.warning() << "Bundled release publisher script is missing";
+        cleanupRemoteTmp();
+        return false;
+    }
+    QByteArray publisherScript = publisherScriptFile.readAll();
+    publisherScript.replace("\r\n", "\n");
+    publisherScript.replace('\r', '\n');
+    error = sshSession.uploadFileToHost(credentials, publisherScript, remotePublisherScript);
+    if (error != amnezia::ErrorCode::NoError) {
+        logger.warning() << "Failed to upload bundled release publisher script";
+        cleanupRemoteTmp();
         return false;
     }
 
-    const auto cleanupRemoteTmp = [&sshSession, &credentials, &remoteTmp]() {
-        sshSession.runScript(credentials, QStringLiteral("rm -rf %1").arg(shellQuote(remoteTmp)));
+    QByteArray probeOutput;
+    const auto captureProbeOutput = [&probeOutput](const QString &data, libssh::Client &) {
+        probeOutput += data.toUtf8();
+        return probeOutput.size() <= kMaximumManifestBytes + 32
+                ? amnezia::ErrorCode::NoError : amnezia::ErrorCode::ReadError;
     };
+    QString probeError;
+    const auto captureProbeError = [&probeError](const QString &data, libssh::Client &) {
+        if (probeError.size() < 2048) {
+            probeError += data.left(2048 - probeError.size());
+        }
+        return amnezia::ErrorCode::NoError;
+    };
+    error = sshSession.runScript(credentials,
+                                 QStringLiteral("sh %1 probe %2")
+                                         .arg(shellQuote(remotePublisherScript), shellQuote(serverDir)),
+                                 captureProbeOutput,
+                                 captureProbeError);
+    if (error != amnezia::ErrorCode::NoError) {
+        logger.warning() << "Failed to read the currently published manifest" << probeError.trimmed();
+        cleanupRemoteTmp();
+        return false;
+    }
 
-    const auto installOrRefreshUpdateHost = [&sshSession, &credentials, &remoteTmp, &serverDir, &cleanupRemoteTmp]() {
+    QByteArray expectedCurrentManifestSha256;
+    QByteArray currentManifestData;
+    amnezia::selfhostedUpdates::BundledManifestIdentity currentIdentity;
+    const amnezia::selfhostedUpdates::BundledManifestIdentity *currentIdentityPointer = nullptr;
+    if (probeOutput == QByteArrayLiteral("ABSENT\n")) {
+        expectedCurrentManifestSha256 = QByteArrayLiteral("absent");
+    } else if (probeOutput.startsWith(QByteArrayLiteral("PRESENT\n"))) {
+        currentManifestData = probeOutput.mid(8);
+        QJsonObject currentManifest;
+        QJsonObject currentPayload;
+        if (currentManifestData.isEmpty() || currentManifestData.size() > kMaximumManifestBytes
+            || !parseVerifiedManifest(currentManifestData, currentManifest, currentPayload, currentIdentity)) {
+            logger.warning() << "Published self-hosted update manifest or signature is invalid";
+            cleanupRemoteTmp();
+            return false;
+        }
+        expectedCurrentManifestSha256 = QCryptographicHash::hash(
+                currentManifestData, QCryptographicHash::Sha256).toHex();
+        currentIdentityPointer = &currentIdentity;
+    } else {
+        logger.warning() << "Bundled publisher returned an invalid manifest probe response";
+        cleanupRemoteTmp();
+        return false;
+    }
+
+    const auto transitionResult = amnezia::selfhostedUpdates::validateBundledPublishTransition(
+            currentIdentityPointer, payload.manifestIdentity);
+    if (transitionResult != amnezia::selfhostedUpdates::BundledPublishTransitionResult::Allowed) {
+        logger.warning() << "Refusing unsafe bundled manifest transition"
+                         << transitionFailureName(transitionResult);
+        cleanupRemoteTmp();
+        return false;
+    }
+
+    const auto installOrRefreshUpdateHost = [&sshSession, &credentials, &remoteTmp, &serverDir, &runId]() {
         QFile installScriptFile(QString::fromLatin1(kInstallHostScript));
         if (!installScriptFile.open(QIODevice::ReadOnly)) {
             logger.warning() << "Bundled update host install script is missing";
-            cleanupRemoteTmp();
+            return false;
+        }
+        QFile verifiedRunnerFile(QString::fromLatin1(kVerifiedInstallHostRunner));
+        if (!verifiedRunnerFile.open(QIODevice::ReadOnly)) {
+            logger.warning() << "Bundled verified installer runner is missing";
             return false;
         }
 
         const QString remoteInstallScript = remoteTmp + QStringLiteral("/install_server_update_host.sh");
-        QString installOutput;
-        const auto captureInstallOutput = [&installOutput](const QString &data, libssh::Client &) {
-            installOutput += data;
-            return amnezia::ErrorCode::NoError;
+        const QString sealedInstallScript = QStringLiteral("/opt/amnezia/.install-server-update-host.%1").arg(runId);
+        qsizetype installOutputBytes = 0;
+        const auto accountInstallOutput = [&installOutputBytes](const QString &data, libssh::Client &) {
+            return amnezia::selfhostedUpdates::accountBoundedRemoteOutput(installOutputBytes, data)
+                    ? amnezia::ErrorCode::NoError
+                    : amnezia::ErrorCode::ReadError;
         };
         QByteArray installScript = installScriptFile.readAll();
         installScript.replace("\r\n", "\n");
         installScript.replace('\r', '\n');
+        const QByteArray installScriptSha256 = QCryptographicHash::hash(
+                installScript, QCryptographicHash::Sha256).toHex();
+
+        QByteArray verifiedRunner = verifiedRunnerFile.readAll();
+        verifiedRunner.replace("\r\n", "\n");
+        verifiedRunner.replace('\r', '\n');
+        while (verifiedRunner.endsWith('\n')) {
+            verifiedRunner.chop(1);
+        }
+        if (verifiedRunner.isEmpty() || verifiedRunner.contains('\0')) {
+            logger.warning() << "Bundled verified installer runner is invalid";
+            return false;
+        }
+        const QByteArray verifiedRunnerSha256 = QCryptographicHash::hash(
+                verifiedRunner, QCryptographicHash::Sha256).toHex();
+        const QByteArray verifiedRunnerBase64 = verifiedRunner.toBase64();
 
         amnezia::ErrorCode error = sshSession.uploadFileToHost(credentials, installScript, remoteInstallScript);
         if (error == amnezia::ErrorCode::NoError) {
-            error = sshSession.runScript(credentials,
-                                         QStringLiteral("sh %1 %2").arg(shellQuote(remoteInstallScript), shellQuote(serverDir)),
-                                         captureInstallOutput,
-                                         captureInstallOutput);
+            const QString verifiedInstallCommand = QStringLiteral(
+                    "set -eu; verifier_b64=%1; verifier_sha256=%2; "
+                    "verifier=$(printf '%%s' \"$verifier_b64\" | base64 -d); "
+                    "test \"$(printf '%%s' \"$verifier\" | sha256sum | awk '{print $1}')\" = \"$verifier_sha256\"; "
+                    "sh -c \"$verifier\" amnezia-verified-installer %3 %4 %5 %6 %7")
+                    .arg(shellQuote(QString::fromLatin1(verifiedRunnerBase64)),
+                         shellQuote(QString::fromLatin1(verifiedRunnerSha256)),
+                         shellQuote(remoteInstallScript),
+                         shellQuote(sealedInstallScript),
+                         shellQuote(QString::fromLatin1(installScriptSha256)),
+                         shellQuote(QString::number(installScript.size())),
+                         shellQuote(serverDir));
+            error = sshSession.runScript(
+                    credentials,
+                    verifiedInstallCommand,
+                    accountInstallOutput,
+                    accountInstallOutput,
+                    kInstallerOuterSshTimeoutMs);
         }
         if (error != amnezia::ErrorCode::NoError) {
-            logger.warning() << "Failed to install or refresh self-hosted update server" << installOutput.trimmed();
-            cleanupRemoteTmp();
+            logger.warning() << "Failed to install or refresh self-hosted update server"
+                             << "phase" << "installer"
+                             << "errorCode" << static_cast<int>(error);
             return false;
         }
         return true;
@@ -530,18 +743,120 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
 
     const auto verifyRemoteUpdateHost = [&sshSession, &credentials, &payload, &serverDir, &remoteManifest]() {
         QString verifyScript = QStringLiteral(
-                "test \"$(sha256sum %1 | awk '{print $1}')\" = %2\n")
-                .arg(shellQuote(remoteManifest), shellQuote(QString::fromLatin1(payload.manifestSha256)));
+                "set -eu\n"
+                "tx_label=%5\n"
+                "role_label=%6\n"
+                "bind_label=%7\n"
+                "probe_label=%8\n"
+                "port_label=%9\n"
+                "inspect_value() { sudo -n -- docker inspect -f \"$1\" \"$2\"; }\n"
+                "is_ipv4_address() {\n"
+                "  candidate=$1\n"
+                "  case \"$candidate\" in ''|*/*) return 1 ;; esac\n"
+                "  old_ifs=$IFS; IFS=.; set -- $candidate; IFS=$old_ifs\n"
+                "  test \"$#\" -eq 4 || return 1\n"
+                "  for octet do\n"
+                "    case \"$octet\" in ''|*[!0-9]*) return 1 ;; esac\n"
+                "    test \"$octet\" -ge 0 2>/dev/null && test \"$octet\" -le 255 2>/dev/null || return 1\n"
+                "  done\n"
+                "}\n"
+                "is_port() {\n"
+                "  case \"$1\" in ''|*[!0-9]*) return 1 ;; esac\n"
+                "  test \"$1\" -ge 1 2>/dev/null && test \"$1\" -le 65535 2>/dev/null\n"
+                "}\n"
+                "verify_common() {\n"
+                "  verify_id=$1; verify_name=$2; verify_role=$3\n"
+                "  test \"$(inspect_value '{{.Id}}' \"$verify_id\")\" = \"$verify_id\"\n"
+                "  test \"$(inspect_value '{{.Name}}' \"$verify_id\")\" = \"/$verify_name\"\n"
+                "  test \"$(inspect_value '{{.State.Running}}' \"$verify_id\")\" = true\n"
+                "  test \"$(inspect_value \"{{index .Config.Labels \\\"$tx_label\\\"}}\" \"$verify_id\")\" = \"$transaction_id\"\n"
+                "  test \"$(inspect_value \"{{index .Config.Labels \\\"$role_label\\\"}}\" \"$verify_id\")\" = \"$verify_role\"\n"
+                "  test \"$(inspect_value '{{.Config.Image}}' \"$verify_id\")\" = %3\n"
+                "  test \"$(inspect_value '{{range .Mounts}}{{if eq .Destination \"/www\"}}{{.Source}}|{{.RW}}{{println}}{{end}}{{end}}' \"$verify_id\")\" = %4\n"
+                "  test \"$(inspect_value \"{{index .Config.Labels \\\"$bind_label\\\"}}\" \"$verify_id\")\" = \"$host_bind\"\n"
+                "  test \"$(inspect_value \"{{index .Config.Labels \\\"$probe_label\\\"}}\" \"$verify_id\")\" = \"$host_probe\"\n"
+                "  test \"$(inspect_value \"{{index .Config.Labels \\\"$port_label\\\"}}\" \"$verify_id\")\" = \"$sync_port\"\n"
+                "}\n"
+                "test \"$(sha256sum %1 | awk '{print $1}')\" = %2\n"
+                "bridge_id=$(inspect_value '{{.Id}}' amnezia-client-updates)\n"
+                "test -n \"$bridge_id\"\n"
+                "transaction_id=$(inspect_value \"{{index .Config.Labels \\\"$tx_label\\\"}}\" \"$bridge_id\")\n"
+                "test \"${#transaction_id}\" -eq 48\n"
+                "case \"$transaction_id\" in *[!0-9a-f]*) exit 1 ;; esac\n"
+                "host_bind=$(inspect_value \"{{index .Config.Labels \\\"$bind_label\\\"}}\" \"$bridge_id\")\n"
+                "host_probe=$(inspect_value \"{{index .Config.Labels \\\"$probe_label\\\"}}\" \"$bridge_id\")\n"
+                "sync_port=$(inspect_value \"{{index .Config.Labels \\\"$port_label\\\"}}\" \"$bridge_id\")\n"
+                "is_ipv4_address \"$host_bind\"\n"
+                "is_ipv4_address \"$host_probe\"\n"
+                "is_port \"$sync_port\"\n"
+                "if test \"$host_bind\" = 0.0.0.0; then\n"
+                "  test \"$host_probe\" = 127.0.0.1\n"
+                "else\n"
+                "  test \"$host_probe\" = \"$host_bind\"\n"
+                "fi\n"
+                "host_id=$(inspect_value '{{.Id}}' amnezia-client-updates-host)\n"
+                "test -n \"$host_id\" && test \"$host_id\" != \"$bridge_id\"\n"
+                "all_ids=$(sudo -n -- docker ps -aq --no-trunc --filter \"label=$tx_label=$transaction_id\")\n"
+                "test -n \"$all_ids\"\n"
+                "bridge_seen=0; host_seen=0; sidecar_count=0; container_count=0; seen_sidecar_roles=' '; sidecar_report=\n"
+                "for container_id in $all_ids; do\n"
+                "  actual_id=$(inspect_value '{{.Id}}' \"$container_id\")\n"
+                "  test \"$actual_id\" = \"$container_id\"\n"
+                "  container_name=$(inspect_value '{{.Name}}' \"$actual_id\"); container_name=${container_name#/}\n"
+                "  role=$(inspect_value \"{{index .Config.Labels \\\"$role_label\\\"}}\" \"$actual_id\")\n"
+                "  endpoint_probe=127.0.0.1\n"
+                "  case \"$role\" in\n"
+                "    bridge)\n"
+                "      test \"$actual_id\" = \"$bridge_id\" && test \"$container_name\" = amnezia-client-updates\n"
+                "      bridge_seen=$((bridge_seen + 1))\n"
+                "      test \"$(inspect_value '{{.HostConfig.NetworkMode}}' \"$actual_id\")\" != host\n"
+                "      ;;\n"
+                "    host)\n"
+                "      test \"$actual_id\" = \"$host_id\" && test \"$container_name\" = amnezia-client-updates-host\n"
+                "      host_seen=$((host_seen + 1)); endpoint_probe=$host_probe\n"
+                "      test \"$(inspect_value '{{.HostConfig.NetworkMode}}' \"$actual_id\")\" = host\n"
+                "      ;;\n"
+                "    tunnel-*)\n"
+                "      suffix=${role#tunnel-}\n"
+                "      case \"$suffix\" in ''|*[!A-Za-z0-9_.-]*) exit 1 ;; esac\n"
+                "      test \"$container_name\" = \"amnezia-client-updates-vpn-$suffix\"\n"
+                "      case \"$seen_sidecar_roles\" in *\" $role \"*) exit 1 ;; esac\n"
+                "      seen_sidecar_roles=\"$seen_sidecar_roles$role \"\n"
+                "      network_mode=$(inspect_value '{{.HostConfig.NetworkMode}}' \"$actual_id\")\n"
+                "      case \"$network_mode\" in container:*) vpn_id=${network_mode#container:} ;; *) exit 1 ;; esac\n"
+                "      test -n \"$vpn_id\"\n"
+                "      test \"$(inspect_value '{{.Id}}' \"$vpn_id\")\" = \"$vpn_id\"\n"
+                "      test \"$(inspect_value '{{.State.Running}}' \"$vpn_id\")\" = true\n"
+                "      sidecar_count=$((sidecar_count + 1))\n"
+                "      if test -n \"$sidecar_report\"; then sidecar_report=\"$sidecar_report,$container_name|$actual_id|$role\"; else sidecar_report=\"$container_name|$actual_id|$role\"; fi\n"
+                "      ;;\n"
+                "    *) exit 1 ;;\n"
+                "  esac\n"
+                "  verify_common \"$actual_id\" \"$container_name\" \"$role\"\n"
+                "  test \"$(sudo -n -- docker exec \"$actual_id\" busybox wget -q -O - \"http://$endpoint_probe:$sync_port/manifest.json\" | sha256sum | awk '{print $1}')\" = %2\n"
+                "  container_count=$((container_count + 1))\n"
+                "done\n"
+                "test \"$bridge_seen\" -eq 1 && test \"$host_seen\" -eq 1\n"
+                "test \"$container_count\" -eq $((sidecar_count + 2))\n")
+                .arg(shellQuote(remoteManifest))
+                .arg(shellQuote(QString::fromLatin1(payload.manifestSha256)))
+                .arg(shellQuote(QString::fromLatin1(kUpdateHostImage)))
+                .arg(shellQuote(serverDir + QStringLiteral("|false")))
+                .arg(shellQuote(QStringLiteral("org.amnezia.client-update-host.transaction")))
+                .arg(shellQuote(QStringLiteral("org.amnezia.client-update-host.role")))
+                .arg(shellQuote(QStringLiteral("org.amnezia.client-update-host.bind")))
+                .arg(shellQuote(QStringLiteral("org.amnezia.client-update-host.probe")))
+                .arg(shellQuote(QStringLiteral("org.amnezia.client-update-host.port")));
 
         for (const PayloadFile &file : payload.files) {
             verifyScript += QStringLiteral("test \"$(sha256sum %1 | awk '{print $1}')\" = %2\n")
                     .arg(shellQuote(serverDir + QStringLiteral("/") + file.relativePath),
                          shellQuote(file.sha256));
 
-            const QString localHttpUrl = QStringLiteral("http://127.0.0.1:17865/%1").arg(file.relativeUrlPath);
             const QString containerFetch = QStringLiteral(
-                    "sudo docker exec amnezia-client-updates busybox wget -q -O - %1")
-                    .arg(shellQuote(localHttpUrl));
+                    "sudo -n -- docker exec \"$bridge_id\" busybox wget -q -O - "
+                    "\"http://127.0.0.1:$sync_port\"%1")
+                    .arg(shellQuote(file.relativeUrlPath));
             verifyScript += QStringLiteral("test \"$(%1 | sha256sum | awk '{print $1}')\" = %2\n")
                     .arg(containerFetch, shellQuote(file.sha256));
             verifyScript += QStringLiteral("test \"$(%1 | wc -c | tr -d ' ')\" = %2\n")
@@ -549,34 +864,72 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
         }
 
         verifyScript += QStringLiteral(
-                "sudo docker ps --format '{{.Names}}' | grep -qx 'amnezia-client-updates'\n"
-                "test \"$(sudo docker exec amnezia-client-updates sh -c \"busybox wget -q -O - 'http://127.0.0.1:17865/manifest.json'\" | sha256sum | awk '{print $1}')\" = %1\n"
-                "test \"$(sudo docker run --rm --log-driver none --network host --entrypoint sh %2 -c \"busybox wget -q -O - 'http://127.0.0.1:17865/manifest.json'\" | sha256sum | awk '{print $1}')\" = %1\n"
-                "printf 'manifest_sha256=%s\\ncontainer_manifest_sha256=%s\\nhost_manifest_sha256=%s\\nport_map=%s\\n' %1 \"$(sudo docker exec amnezia-client-updates sh -c \"busybox wget -q -O - 'http://127.0.0.1:17865/manifest.json'\" | sha256sum | awk '{print $1}')\" \"$(sudo docker run --rm --log-driver none --network host --entrypoint sh %2 -c \"busybox wget -q -O - 'http://127.0.0.1:17865/manifest.json'\" | sha256sum | awk '{print $1}')\" \"$(sudo docker port amnezia-client-updates 17865 2>/dev/null || true)\"\n")
+                "test \"$(sudo -n -- docker run --rm --log-driver none --network host --entrypoint sh %2 -c \"busybox wget -q -O - 'http://$host_probe:$sync_port/manifest.json'\" | sha256sum | awk '{print $1}')\" = %1\n"
+                "printf 'transaction_id=%s\\nbridge_container_id=%s\\nhost_container_id=%s\\nhost_bind=%s\\nhost_probe_address=%s\\nsync_port=%s\\nsidecar_count=%s\\nvpn_sidecars=%s\\nmanifest_sha256=%s\\n' \"$transaction_id\" \"$bridge_id\" \"$host_id\" \"$host_bind\" \"$host_probe\" \"$sync_port\" \"$sidecar_count\" \"${sidecar_report:-none}\" %1\n")
                 .arg(shellQuote(QString::fromLatin1(payload.manifestSha256)),
                      shellQuote(QString::fromLatin1(kUpdateHostImage)));
 
-        QString verifyOutput;
-        const auto captureOutput = [&verifyOutput](const QString &data, libssh::Client &) {
-            verifyOutput += data;
-            return amnezia::ErrorCode::NoError;
+        qsizetype verificationOutputBytes = 0;
+        const auto accountVerificationOutput = [&verificationOutputBytes](const QString &data, libssh::Client &) {
+            return amnezia::selfhostedUpdates::accountBoundedRemoteOutput(verificationOutputBytes, data)
+                    ? amnezia::ErrorCode::NoError
+                    : amnezia::ErrorCode::ReadError;
         };
 
-        const amnezia::ErrorCode error = sshSession.runScript(credentials, verifyScript, captureOutput, captureOutput);
+        const amnezia::ErrorCode error = sshSession.runScriptInSingleShell(
+                credentials, verifyScript, accountVerificationOutput, accountVerificationOutput);
         if (error != amnezia::ErrorCode::NoError) {
-            logger.warning() << "Remote self-hosted update host verification failed";
+            logger.warning() << "Remote self-hosted update host verification failed"
+                             << "phase" << "verification"
+                             << "errorCode" << static_cast<int>(error);
             return false;
         }
 
-        logger.info() << "Remote self-hosted update host verified" << verifyOutput.trimmed();
+        logger.info() << "Remote self-hosted update host verified";
         return true;
     };
+
+    QByteArray publishMetadata = QByteArrayLiteral("amnezia-bundled-publish-v1\t");
+    publishMetadata += payload.manifestSha256;
+    publishMetadata += '\t';
+    publishMetadata += payload.manifestIdentity.version.toUtf8();
+    publishMetadata += '\t';
+    publishMetadata += QByteArray::number(payload.manifestIdentity.schema);
+    publishMetadata += '\t';
+    publishMetadata += payload.manifestIdentity.generation.isEmpty()
+            ? QByteArrayLiteral("0") : payload.manifestIdentity.generation.toUtf8();
+    publishMetadata += '\t';
+    publishMetadata += QByteArray::number(payload.files.size());
+    publishMetadata += '\n';
+    for (const PayloadFile &file : payload.files) {
+        if (file.relativePath.contains(u'\t') || file.relativePath.contains(u'\r')
+            || file.relativePath.contains(u'\n')) {
+            logger.warning() << "Bundled update artifact path cannot be represented safely" << file.relativePath;
+            cleanupRemoteTmp();
+            return false;
+        }
+        publishMetadata += file.rollback ? 'R' : 'A';
+        publishMetadata += '\t';
+        publishMetadata += file.relativePath.toUtf8();
+        publishMetadata += '\t';
+        publishMetadata += file.sha256.toUtf8();
+        publishMetadata += '\t';
+        publishMetadata += QByteArray::number(file.size);
+        publishMetadata += '\n';
+    }
+    if (publishMetadata.size() > kMaximumPublishMetadataBytes) {
+        logger.warning() << "Bundled publication metadata exceeds the supported size";
+        cleanupRemoteTmp();
+        return false;
+    }
+    const QByteArray publishMetadataSha256 = QCryptographicHash::hash(
+            publishMetadata, QCryptographicHash::Sha256).toHex();
 
     for (const PayloadFile &file : payload.files) {
         const QString remotePath = remoteTmp + QStringLiteral("/") + file.relativePath;
         const QString remoteDirectory = remoteTmp + QStringLiteral("/")
                 + file.relativePath.left(file.relativePath.lastIndexOf(u'/'));
-        error = sshSession.runScript(credentials, QStringLiteral("mkdir -p %1").arg(shellQuote(remoteDirectory)));
+        error = sshSession.runScript(credentials, QStringLiteral("mkdir -p -- %1").arg(shellQuote(remoteDirectory)));
         if (error == amnezia::ErrorCode::NoError) {
             error = sshSession.uploadLocalFileToHost(credentials, file.localPath, remotePath);
         }
@@ -587,40 +940,293 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
         }
     }
 
-    error = sshSession.uploadLocalFileToHost(credentials, payload.manifestPath, remoteTmp + QStringLiteral("/manifest.json"));
+    error = sshSession.uploadFileToHost(credentials, payload.manifestData, remoteTmp + QStringLiteral("/manifest.json"));
     if (error != amnezia::ErrorCode::NoError) {
         logger.warning() << "Failed to upload bundled update manifest";
         cleanupRemoteTmp();
         return false;
     }
+    if (!currentManifestData.isEmpty()) {
+        error = sshSession.uploadFileToHost(
+                credentials, currentManifestData, remoteTmp + QStringLiteral("/previous-manifest.json"));
+        if (error != amnezia::ErrorCode::NoError) {
+            logger.warning() << "Failed to upload the verified previous manifest rollback input";
+            cleanupRemoteTmp();
+            return false;
+        }
+    }
+    error = sshSession.uploadFileToHost(credentials, publishMetadata, remoteTmp + QStringLiteral("/publish.meta"));
+    if (error != amnezia::ErrorCode::NoError) {
+        logger.warning() << "Failed to upload bundled publication metadata";
+        cleanupRemoteTmp();
+        return false;
+    }
+
+    const QString expectedCurrent = QString::fromLatin1(expectedCurrentManifestSha256);
+    const QString candidateSha256 = QString::fromLatin1(payload.manifestSha256);
+    const QString metadataSha256 = QString::fromLatin1(publishMetadataSha256);
+    const QString fileCount = QString::number(payload.files.size());
+    const auto publisherCommand = [&remotePublisherScript,
+                                   &serverDir,
+                                   &runId,
+                                   &expectedCurrent,
+                                   &candidateSha256,
+                                   &metadataSha256,
+                                   &fileCount](const QString &mode) {
+        return QStringLiteral("sh %1 %2 %3 %4 %5 %6 %7 %8")
+                .arg(shellQuote(remotePublisherScript),
+                     shellQuote(mode),
+                     shellQuote(serverDir),
+                     shellQuote(runId),
+                     shellQuote(expectedCurrent),
+                     shellQuote(candidateSha256),
+                     shellQuote(metadataSha256),
+                     shellQuote(fileCount));
+    };
+
+    QByteArray publisherOutput;
+    QString publisherError;
+    const auto capturePublisherOutput = [&publisherOutput](const QString &data, libssh::Client &) {
+        const QByteArray bytes = data.toUtf8();
+        if (publisherOutput.size() + bytes.size() > 4096) {
+            return amnezia::ErrorCode::ReadError;
+        }
+        publisherOutput += bytes;
+        return amnezia::ErrorCode::NoError;
+    };
+    const auto capturePublisherError = [&publisherError](const QString &data, libssh::Client &) {
+        if (publisherError.size() < 2048) {
+            publisherError += data.left(2048 - publisherError.size());
+        }
+        return amnezia::ErrorCode::NoError;
+    };
+    const auto runPublisher = [&sshSession,
+                               &credentials,
+                               &publisherCommand,
+                               &publisherOutput,
+                               &publisherError,
+                               &capturePublisherOutput,
+                               &capturePublisherError](const QString &mode) {
+        publisherOutput.clear();
+        publisherError.clear();
+        return sshSession.runScript(
+                credentials,
+                publisherCommand(mode),
+                capturePublisherOutput,
+                capturePublisherError);
+    };
+    const auto exactMachineReceipt = [&runId,
+                                      &expectedCurrent,
+                                      &candidateSha256,
+                                      &metadataSha256,
+                                      &fileCount](const QByteArray &output,
+                                                  const QByteArray &kind,
+                                                  const QByteArray &result,
+                                                  const QByteArray &phase) {
+        return output == kind + '\t' + runId.toLatin1() + '\t'
+                + expectedCurrent.toLatin1() + '\t' + candidateSha256.toLatin1() + '\t'
+                + metadataSha256.toLatin1() + '\t' + fileCount.toLatin1() + '\t'
+                + result + '\t' + phase + '\n';
+    };
+    const auto reconcilePublication = [&runPublisher,
+                                       &publisherOutput,
+                                       &exactMachineReceipt]() {
+        const amnezia::ErrorCode reconcileError = runPublisher(QStringLiteral("reconcile"));
+        if (reconcileError != amnezia::ErrorCode::NoError) {
+            return amnezia::selfhostedUpdates::BundledMutationReconciliation::Indeterminate;
+        }
+        for (const QByteArray &phase : {
+                     QByteArrayLiteral("committed"),
+                     QByteArrayLiteral("finalizing"),
+                     QByteArrayLiteral("finalized") }) {
+            if (exactMachineReceipt(
+                        publisherOutput,
+                        QByteArrayLiteral("AMNEZIA_PUBLISH_RECONCILE_V1"),
+                        QByteArrayLiteral("APPLIED"),
+                        phase)) {
+                return amnezia::selfhostedUpdates::BundledMutationReconciliation::AppliedWithoutAcknowledgement;
+            }
+        }
+        for (const QByteArray &phase : {
+                     QByteArrayLiteral("aborted"),
+                     QByteArrayLiteral("abort_finalizing"),
+                     QByteArrayLiteral("finalized_aborted") }) {
+            if (exactMachineReceipt(
+                        publisherOutput,
+                        QByteArrayLiteral("AMNEZIA_PUBLISH_RECONCILE_V1"),
+                        QByteArrayLiteral("NOT_APPLIED"),
+                        phase)) {
+                return amnezia::selfhostedUpdates::BundledMutationReconciliation::NotApplied;
+            }
+        }
+        return amnezia::selfhostedUpdates::BundledMutationReconciliation::Indeterminate;
+    };
+    const auto finalizeExact = [&runPublisher,
+                                &publisherOutput,
+                                &publisherError,
+                                &exactMachineReceipt](const QString &mode,
+                                                      const QByteArray &kind,
+                                                      const QByteArray &result,
+                                                      const QByteArray &phase) {
+        const amnezia::ErrorCode finalizeError = runPublisher(mode);
+        const bool acknowledged = finalizeError == amnezia::ErrorCode::NoError
+                && exactMachineReceipt(publisherOutput, kind, result, phase);
+        if (!acknowledged) {
+            logger.warning() << "Publication cleanup was not acknowledged; durable state is preserved"
+                             << publisherError.trimmed();
+        }
+        return acknowledged;
+    };
+    const auto abortUncommitted = [&reconcilePublication, &finalizeExact]() {
+        const auto reconciliation = reconcilePublication();
+        if (reconciliation == amnezia::selfhostedUpdates::BundledMutationReconciliation::NotApplied) {
+            finalizeExact(
+                    QStringLiteral("finalize-abort"),
+                    QByteArrayLiteral("AMNEZIA_PUBLISH_FINALIZE_ABORT_V1"),
+                    QByteArrayLiteral("NOT_APPLIED"),
+                    QByteArrayLiteral("finalized_aborted"));
+        }
+        return reconciliation;
+    };
+
+    error = runPublisher(QStringLiteral("prepare"));
+    const bool prepareAcknowledged = error == amnezia::ErrorCode::NoError
+            && exactMachineReceipt(
+                    publisherOutput,
+                    QByteArrayLiteral("AMNEZIA_PUBLISH_PREPARE_V1"),
+                    QByteArrayLiteral("READY"),
+                    QByteArrayLiteral("prepared"));
+    if (!prepareAcknowledged) {
+        const auto reconciliation = abortUncommitted();
+        logger.warning() << "Failed to prepare the pinned bundled update channel"
+                         << publisherError.trimmed();
+        if (reconciliation == amnezia::selfhostedUpdates::BundledMutationReconciliation::Indeterminate) {
+            logger.error() << "RECOVERY_REQUIRED: prepare state is indeterminate; preserving the remote stage"
+                           << "run_id=" << runId << "remote_stage=" << remoteTmp;
+        }
+        return false;
+    }
 
     if (!installOrRefreshUpdateHost()) {
+        const auto reconciliation = abortUncommitted();
+        if (reconciliation == amnezia::selfhostedUpdates::BundledMutationReconciliation::Indeterminate) {
+            logger.error() << "RECOVERY_REQUIRED: installer failure could not abort prepared publication"
+                           << "run_id=" << runId << "remote_stage=" << remoteTmp;
+        }
         return false;
     }
 
-    const QString publishScript = QStringLiteral(
-            "set -eu\n"
-            "sudo mkdir -p %1 %2\n"
-            "sudo cp -a %3 %2/\n"
-            "sudo cp -a %4 %5\n"
-            "sudo mv -f %5 %6\n"
-            "rm -rf %7")
-            .arg(shellQuote(serverDir),
-                 shellQuote(serverDir + QStringLiteral("/files")),
-                 shellQuote(remoteTmp + QStringLiteral("/files/.")),
-                 shellQuote(remoteTmp + QStringLiteral("/manifest.json")),
-                 shellQuote(serverDir + QStringLiteral("/manifest.json.tmp")),
-                 shellQuote(remoteManifest),
-                 shellQuote(remoteTmp));
-
-    error = sshSession.runScript(credentials, publishScript);
-    if (error != amnezia::ErrorCode::NoError) {
-        logger.warning() << "Failed to publish bundled self-hosted update payload";
+    error = runPublisher(QStringLiteral("commit"));
+    auto commitReconciliation =
+            error == amnezia::ErrorCode::NoError
+                    && exactMachineReceipt(
+                            publisherOutput,
+                            QByteArrayLiteral("AMNEZIA_PUBLISH_COMMIT_V1"),
+                            QByteArrayLiteral("APPLIED"),
+                            QByteArrayLiteral("committed"))
+            ? amnezia::selfhostedUpdates::BundledMutationReconciliation::Acknowledged
+            : reconcilePublication();
+    if (commitReconciliation
+        == amnezia::selfhostedUpdates::BundledMutationReconciliation::NotApplied) {
+        finalizeExact(
+                QStringLiteral("finalize-abort"),
+                QByteArrayLiteral("AMNEZIA_PUBLISH_FINALIZE_ABORT_V1"),
+                QByteArrayLiteral("NOT_APPLIED"),
+                QByteArrayLiteral("finalized_aborted"));
+        logger.warning() << "Bundled publication was not applied";
         return false;
     }
+    if (commitReconciliation
+        == amnezia::selfhostedUpdates::BundledMutationReconciliation::Indeterminate) {
+        logger.error() << "RECOVERY_REQUIRED: bundled commit state is indeterminate; preserving recovery evidence"
+                       << "run_id=" << runId
+                       << "remote_stage=" << remoteTmp
+                       << "channel_root=" << serverDir;
+        return false;
+    }
+    if (commitReconciliation
+        == amnezia::selfhostedUpdates::BundledMutationReconciliation::AppliedWithoutAcknowledgement) {
+        logger.warning() << "Bundled commit acknowledgement was lost; durable state reconciled APPLIED";
+    }
+
     if (!verifyRemoteUpdateHost()) {
+        if (expectedCurrent == candidateSha256) {
+            finalizeExact(
+                    QStringLiteral("finalize"),
+                    QByteArrayLiteral("AMNEZIA_PUBLISH_FINALIZE_V1"),
+                    QByteArrayLiteral("APPLIED"),
+                    QByteArrayLiteral("finalized"));
+            logger.error() << "Pre-existing bundled candidate failed endpoint verification; manifest was not changed";
+            return false;
+        }
+
+        error = runPublisher(QStringLiteral("rollback"));
+        auto rollbackReconciliation =
+                error == amnezia::ErrorCode::NoError
+                        && exactMachineReceipt(
+                                publisherOutput,
+                                QByteArrayLiteral("AMNEZIA_PUBLISH_ROLLBACK_V1"),
+                                QByteArrayLiteral("APPLIED"),
+                                QByteArrayLiteral("rolled_back"))
+                ? amnezia::selfhostedUpdates::BundledMutationReconciliation::Acknowledged
+                : amnezia::selfhostedUpdates::BundledMutationReconciliation::Indeterminate;
+        if (rollbackReconciliation
+            == amnezia::selfhostedUpdates::BundledMutationReconciliation::Indeterminate) {
+            const amnezia::ErrorCode reconcileError =
+                    runPublisher(QStringLiteral("reconcile-rollback"));
+            if (reconcileError == amnezia::ErrorCode::NoError) {
+                for (const QByteArray &phase : {
+                             QByteArrayLiteral("rolled_back"),
+                             QByteArrayLiteral("rollback_finalizing"),
+                             QByteArrayLiteral("rollback_finalized") }) {
+                    if (exactMachineReceipt(
+                                publisherOutput,
+                                QByteArrayLiteral("AMNEZIA_PUBLISH_RECONCILE_ROLLBACK_V1"),
+                                QByteArrayLiteral("APPLIED"),
+                                phase)) {
+                        rollbackReconciliation =
+                                amnezia::selfhostedUpdates::BundledMutationReconciliation::AppliedWithoutAcknowledgement;
+                        break;
+                    }
+                }
+                if (exactMachineReceipt(
+                            publisherOutput,
+                            QByteArrayLiteral("AMNEZIA_PUBLISH_RECONCILE_ROLLBACK_V1"),
+                            QByteArrayLiteral("NOT_APPLIED"),
+                            QByteArrayLiteral("rollback_aborted"))) {
+                    rollbackReconciliation =
+                            amnezia::selfhostedUpdates::BundledMutationReconciliation::NotApplied;
+                }
+            }
+        }
+        const bool rollbackSucceeded =
+                rollbackReconciliation
+                        == amnezia::selfhostedUpdates::BundledMutationReconciliation::Acknowledged
+                || rollbackReconciliation
+                        == amnezia::selfhostedUpdates::BundledMutationReconciliation::AppliedWithoutAcknowledgement;
+        if (rollbackSucceeded) {
+            finalizeExact(
+                    QStringLiteral("finalize-rollback"),
+                    QByteArrayLiteral("AMNEZIA_PUBLISH_FINALIZE_ROLLBACK_V1"),
+                    QByteArrayLiteral("APPLIED"),
+                    QByteArrayLiteral("rollback_finalized"));
+            logger.error() << "Bundled candidate failed endpoint verification; previous manifest was restored";
+            return false;
+        }
+
+        logger.error() << "RECOVERY_REQUIRED: bundled candidate verification and lock-fenced rollback failed;"
+                          " preserving durable state and the remote recovery stage"
+                       << "run_id=" << runId
+                       << "remote_stage=" << remoteTmp
+                       << "channel_root=" << serverDir;
         return false;
     }
+
+    finalizeExact(
+            QStringLiteral("finalize"),
+            QByteArrayLiteral("AMNEZIA_PUBLISH_FINALIZE_V1"),
+            QByteArrayLiteral("APPLIED"),
+            QByteArrayLiteral("finalized"));
 
     logger.info() << "Bundled self-hosted update payload published" << payload.version;
     return true;

@@ -16,6 +16,8 @@ param(
     [string] $AndroidReleaseKeystoreAlias = $(if ($env:QT_ANDROID_KEYSTORE_ALIAS) { $env:QT_ANDROID_KEYSTORE_ALIAS } else { "release" }),
     [string] $UpdateSyncHost = $(if ($env:SELFHOSTED_UPDATE_SYNC_HOST) { $env:SELFHOSTED_UPDATE_SYNC_HOST } else { "10.8.1.0" }),
     [string] $BaseUrl = $(if ($env:SELFHOSTED_UPDATE_BASE_URL) { $env:SELFHOSTED_UPDATE_BASE_URL } else { "" }),
+    [string] $SshTrustedHost = $(if ($env:SELFHOSTED_SSH_TRUSTED_HOST) { $env:SELFHOSTED_SSH_TRUSTED_HOST } else { "85.208.87.69" }),
+    [string] $SshTrustedHostKeySha256 = $(if ($env:SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256) { $env:SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 } else { "SHA256:2UtHIoVd4Lft+s4E/LZlA8+reysEexYyhkt03rg8Rdg" }),
     [ValidateSet(1, 2)]
     [int] $PayloadSchema = $(if ($env:SELFHOSTED_UPDATE_PAYLOAD_SCHEMA) { [int] $env:SELFHOSTED_UPDATE_PAYLOAD_SCHEMA } else { 1 }),
     [ValidateSet("stable", "canary", "emergency")]
@@ -78,6 +80,32 @@ function Write-Step([string] $Message) {
 function Assert-Command([string] $CommandName) {
     if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
         throw "Required command is not available in PATH: $CommandName"
+    }
+}
+
+function Assert-SshHostKeyPinPair {
+    $hasHost = -not [string]::IsNullOrWhiteSpace($SshTrustedHost)
+    $hasPin = -not [string]::IsNullOrWhiteSpace($SshTrustedHostKeySha256)
+    if (-not $hasHost -or -not $hasPin) {
+        throw "SshTrustedHost and SshTrustedHostKeySha256 must be supplied together"
+    }
+    if ($SshTrustedHost -notmatch "^[A-Za-z0-9._:-]+$") {
+        throw "SshTrustedHost must be an exact hostname or IP without whitespace, scheme, path, or brackets"
+    }
+    if ($SshTrustedHostKeySha256.Length -ne 50 -or
+        $SshTrustedHostKeySha256 -notmatch "^SHA256:[A-Za-z0-9+/]+$") {
+        throw "SshTrustedHostKeySha256 must be a canonical SHA256: fingerprint with 43 standard Base64 characters and no padding"
+    }
+
+    try {
+        $encoded = $SshTrustedHostKeySha256.Substring(7)
+        $decoded = [Convert]::FromBase64String($encoded + "=")
+    } catch {
+        throw "SshTrustedHostKeySha256 is not strict standard Base64"
+    }
+    if ($decoded.Length -ne 32 -or
+        ([Convert]::ToBase64String($decoded).TrimEnd([char]'=') -cne $encoded)) {
+        throw "SshTrustedHostKeySha256 must canonically encode exactly 32 SHA-256 bytes"
     }
 }
 
@@ -655,6 +683,8 @@ function Write-EnvironmentFile {
         "`$env:WSL_ANDROID_HOME = $(Quote-PsSingle $resolvedWslAndroidHome)",
         "`$env:SELFHOSTED_UPDATE_BASE_URL = $(Quote-PsSingle $BaseUrl)",
         "`$env:SELFHOSTED_UPDATE_SYNC_HOST = $(Quote-PsSingle $UpdateSyncHost)",
+        "`$env:SELFHOSTED_SSH_TRUSTED_HOST = $(Quote-PsSingle $SshTrustedHost)",
+        "`$env:SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 = $(Quote-PsSingle $SshTrustedHostKeySha256)",
         "`$env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH = $(Quote-PsSingle $PrivateKeyPath)",
         "`$env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $(Quote-PsSingle $publicKeyBase64)",
         "`$env:SELFHOSTED_UPDATE_PAYLOAD_SCHEMA = $(Quote-PsSingle ([string] $PayloadSchema))",
@@ -688,6 +718,7 @@ function Write-EnvironmentFile {
 }
 
 Assert-SafeFleetPolicySettings
+Assert-SshHostKeyPinPair
 Assert-Command "wsl.exe"
 Ensure-WslJava
 Ensure-AqtInstall

@@ -751,6 +751,37 @@ PageType {
             }
 
             BasicButtonType {
+                objectName: "guardianRunSuggestedRecoveryButton"
+
+                visible: root.connectionHealthController
+                         && root.connectionHealthController.recoveryPending
+                enabled: visible
+                         && !root.connectionHealthController.recoveryRequestDispatched
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.topMargin: 8
+
+                text: root.connectionHealthController
+                      && root.connectionHealthController.recoveryRequestDispatched
+                      ? qsTr("Recovery in progress...")
+                      : qsTr("Run suggested recovery")
+                leftImageSource: "qrc:/images/controls/refresh-cw.svg"
+
+                // This is the sole production dispatch surface. Guardian never
+                // restarts a live tunnel merely because it emitted a
+                // recommendation; the bounded Core consumer runs only after
+                // this explicit user action.
+                clickedFunc: function () {
+                    if (root.connectionHealthController
+                        && !root.connectionHealthController.requestPendingRecovery()) {
+                        PageController.showErrorMessage(
+                                    qsTr("The recovery recommendation is no longer current"));
+                    }
+                }
+            }
+
+            BasicButtonType {
                 objectName: "runConnectionDoctorButton"
 
                 visible: root.canRunDoctor

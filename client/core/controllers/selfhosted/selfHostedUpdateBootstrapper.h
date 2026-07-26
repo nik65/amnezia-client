@@ -2,11 +2,20 @@
 #define SELFHOSTEDUPDATEBOOTSTRAPPER_H
 
 #include <QObject>
+#include <QByteArray>
 #include <QDir>
+#include <QJsonObject>
 #include <QList>
+#include <QMetaObject>
+#include <QPointer>
 #include <QString>
 #include <QStringList>
+#include <QThread>
 #include <QUrl>
+
+#include <memory>
+#include <type_traits>
+#include <utility>
 
 #include "core/utils/commonStructs.h"
 
@@ -14,6 +23,55 @@ class SecureServersRepository;
 
 namespace amnezia::selfhostedUpdates
 {
+    constexpr qint64 maximumPolicyGeneration = 9007199254740991LL;
+    constexpr qsizetype maximumBootstrapPhaseOutputBytes = 64 * 1024;
+
+    inline bool accountBoundedRemoteOutput(qsizetype &acceptedBytes,
+                                           const QString &chunk,
+                                           qsizetype maximumBytes = maximumBootstrapPhaseOutputBytes)
+    {
+        if (maximumBytes < 0 || acceptedBytes < 0 || acceptedBytes > maximumBytes) {
+            return false;
+        }
+
+        const qsizetype chunkBytes = chunk.toUtf8().size();
+        if (chunkBytes > maximumBytes - acceptedBytes) {
+            return false;
+        }
+
+        acceptedBytes += chunkBytes;
+        return true;
+    }
+
+    using QueuedDeliveryContext = std::shared_ptr<QObject>;
+
+    inline QueuedDeliveryContext makeQueuedDeliveryContext()
+    {
+        return QueuedDeliveryContext(new QObject, [](QObject *context) {
+            context->deleteLater();
+        });
+    }
+
+    template<typename Target, typename Callback>
+    inline bool enqueueGuardedCompletion(QueuedDeliveryContext context,
+                                         const QPointer<Target> &target,
+                                         Callback &&callback)
+    {
+        QObject *const dispatchContext = context.get();
+        using StoredCallback = std::decay_t<Callback>;
+        return QMetaObject::invokeMethod(
+                dispatchContext,
+                [context = std::move(context),
+                 target,
+                 callback = StoredCallback(std::forward<Callback>(callback))]() mutable {
+                    Q_UNUSED(context);
+                    if (Target *const resolved = target.data()) {
+                        callback(resolved);
+                    }
+                },
+                Qt::QueuedConnection);
+    }
+
     inline bool isCanonicalSha256(const QString &value)
     {
         if (value.size() != 64) {
@@ -55,6 +113,171 @@ namespace amnezia::selfhostedUpdates
             }
         }
         return true;
+    }
+
+    struct BundledManifestIdentity {
+        int schema = 0;
+        QString version;
+        QString generation;
+        QByteArray payloadBytes;
+        QJsonObject releaseContent;
+    };
+
+    enum class BundledPublishTransitionResult {
+        Allowed,
+        InvalidCandidate,
+        InvalidCurrent,
+        VersionDowngrade,
+        SchemaDowngrade,
+        GenerationRollback,
+        GenerationRebound,
+        SameVersionContentChanged,
+    };
+
+    enum class BundledPostCommitDisposition {
+        FinalizeAndCleanup,
+        RolledBackAndCleanup,
+        PreserveRecoveryEvidence,
+    };
+
+    enum class BundledMutationReconciliation {
+        Acknowledged,
+        AppliedWithoutAcknowledgement,
+        NotApplied,
+        Indeterminate,
+    };
+
+    inline BundledMutationReconciliation reconcileBundledMutation(
+            bool receiptAcknowledged,
+            const QString &observedManifestSha256,
+            const QString &desiredManifestSha256,
+            const QString &priorManifestSha256)
+    {
+        if (receiptAcknowledged) {
+            return BundledMutationReconciliation::Acknowledged;
+        }
+        if (observedManifestSha256 == desiredManifestSha256) {
+            return BundledMutationReconciliation::AppliedWithoutAcknowledgement;
+        }
+        if (observedManifestSha256 == priorManifestSha256) {
+            return BundledMutationReconciliation::NotApplied;
+        }
+        return BundledMutationReconciliation::Indeterminate;
+    }
+
+    inline BundledPostCommitDisposition bundledPostCommitDisposition(
+            bool endpointVerified,
+            bool candidateWasAlreadyCurrent,
+            bool rollbackSucceeded)
+    {
+        if (endpointVerified || candidateWasAlreadyCurrent) {
+            return BundledPostCommitDisposition::FinalizeAndCleanup;
+        }
+        return rollbackSucceeded
+                ? BundledPostCommitDisposition::RolledBackAndCleanup
+                : BundledPostCommitDisposition::PreserveRecoveryEvidence;
+    }
+
+    inline bool canonicalPolicyGeneration(const QString &value, qint64 &generationOut)
+    {
+        generationOut = -1;
+        bool parsed = false;
+        const qlonglong generation = value.toLongLong(&parsed);
+        if (!parsed || !isCanonicalNonnegativeDecimal(value) || generation < 1
+            || generation > maximumPolicyGeneration) {
+            return false;
+        }
+        generationOut = generation;
+        return true;
+    }
+
+    inline bool compareCanonicalReleaseVersions(const QString &left, const QString &right, int &comparisonOut)
+    {
+        comparisonOut = 0;
+        if (!isCanonicalReleaseVersion(left) || !isCanonicalReleaseVersion(right)) {
+            return false;
+        }
+        const QStringList leftComponents = left.split(u'.');
+        const QStringList rightComponents = right.split(u'.');
+        for (int index = 0; index < leftComponents.size(); ++index) {
+            const qlonglong leftValue = leftComponents.at(index).toLongLong();
+            const qlonglong rightValue = rightComponents.at(index).toLongLong();
+            if (leftValue == rightValue) {
+                continue;
+            }
+            comparisonOut = leftValue < rightValue ? -1 : 1;
+            return true;
+        }
+        return true;
+    }
+
+    inline bool isValidBundledManifestIdentity(const BundledManifestIdentity &identity)
+    {
+        if ((identity.schema != 1 && identity.schema != 2)
+            || !isCanonicalReleaseVersion(identity.version) || identity.payloadBytes.isEmpty()) {
+            return false;
+        }
+        qint64 generation = -1;
+        return identity.schema == 1
+                ? identity.generation.isEmpty()
+                : canonicalPolicyGeneration(identity.generation, generation);
+    }
+
+    inline BundledPublishTransitionResult validateBundledPublishTransition(
+            const BundledManifestIdentity *current,
+            const BundledManifestIdentity &candidate)
+    {
+        if (!isValidBundledManifestIdentity(candidate)) {
+            return BundledPublishTransitionResult::InvalidCandidate;
+        }
+        if (!current) {
+            return BundledPublishTransitionResult::Allowed;
+        }
+        if (!isValidBundledManifestIdentity(*current)) {
+            return BundledPublishTransitionResult::InvalidCurrent;
+        }
+
+        int versionComparison = 0;
+        if (!compareCanonicalReleaseVersions(candidate.version, current->version, versionComparison)) {
+            return BundledPublishTransitionResult::InvalidCandidate;
+        }
+        if (versionComparison < 0) {
+            return BundledPublishTransitionResult::VersionDowngrade;
+        }
+
+        qint64 currentGeneration = -1;
+        qint64 candidateGeneration = -1;
+        if (current->schema == 2) {
+            if (candidate.schema != 2) {
+                return BundledPublishTransitionResult::SchemaDowngrade;
+            }
+            if (!canonicalPolicyGeneration(current->generation, currentGeneration)) {
+                return BundledPublishTransitionResult::InvalidCurrent;
+            }
+            if (!canonicalPolicyGeneration(candidate.generation, candidateGeneration)) {
+                return BundledPublishTransitionResult::InvalidCandidate;
+            }
+            if (candidateGeneration < currentGeneration) {
+                return BundledPublishTransitionResult::GenerationRollback;
+            }
+            if (candidateGeneration == currentGeneration
+                && candidate.payloadBytes != current->payloadBytes) {
+                return BundledPublishTransitionResult::GenerationRebound;
+            }
+        } else if (candidate.schema == 2
+                   && !canonicalPolicyGeneration(candidate.generation, candidateGeneration)) {
+            return BundledPublishTransitionResult::InvalidCandidate;
+        }
+
+        if (versionComparison == 0 && candidate.payloadBytes != current->payloadBytes) {
+            const bool policyOnlyAdvance = candidate.schema == 2
+                    && candidate.releaseContent == current->releaseContent
+                    && (current->schema == 1 || candidateGeneration > currentGeneration);
+            if (!policyOnlyAdvance) {
+                return BundledPublishTransitionResult::SameVersionContentChanged;
+            }
+        }
+        return BundledPublishTransitionResult::Allowed;
     }
 
     // Bundled update payloads are local files.  Keep the manifest URL as a
@@ -177,6 +400,7 @@ private:
         QString relativeUrlPath;
         QString sha256;
         qint64 size = -1;
+        bool rollback = false;
     };
 
     struct Payload {
@@ -185,6 +409,8 @@ private:
         QString version;
         QList<PayloadFile> files;
         QByteArray manifestSha256;
+        QByteArray manifestData;
+        amnezia::selfhostedUpdates::BundledManifestIdentity manifestIdentity;
     };
 
     QString findPayloadDir() const;

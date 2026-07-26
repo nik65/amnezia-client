@@ -2,13 +2,16 @@
 
 #include <QDateTime>
 #include <QDirIterator>
+#include <QNetworkAccessManager>
+#include <QNetworkProxy>
 #include <QTranslator>
 #include <QTimer>
 #include <QUrl>
 
 #include <algorithm>
+#include <optional>
 
-#include "amneziaApplication.h"
+#include "core/utils/boundedQueuedSnapshot.h"
 #include "core/utils/selfhosted/sshSession.h"
 #include "core/controllers/selfhosted/installController.h"
 #include "core/controllers/selfhosted/importController.h"
@@ -29,16 +32,43 @@
     #include <AmneziaVPN-Swift.h>
 #endif
 
+namespace
+{
+constexpr int guardianVpnSnapshotTimeoutMs = 750;
+constexpr int guardianRecoveryDeadlineMs = 30000;
+
+struct GuardianTunnelRuntimeSnapshot
+{
+    bool connected = false;
+    bool applicationRoutedThroughVpn = false;
+    bool tunnelPathVerified = false;
+    quint64 connectionEpoch = 0;
+};
+
+}
+
 CoreController::CoreController(const QSharedPointer<VpnConnection> &vpnConnection, SecureQSettings* settings,
                                QQmlApplicationEngine *engine, QObject *parent)
     : QObject(parent), m_vpnConnection(vpnConnection), m_settings(settings), m_engine(engine)
 {
+    m_guardianNetworkManager = new QNetworkAccessManager(this);
+    m_guardianNetworkManager->setProxy(QNetworkProxy::NoProxy);
+
     m_guardianPeriodicProbeTimer.setInterval(90 * 1000);
     m_guardianPeriodicProbeTimer.setSingleShot(false);
     connect(&m_guardianPeriodicProbeTimer, &QTimer::timeout, this, [this]() {
         if (m_latestConnectionState == Vpn::ConnectionState::Connected
             && m_connectionHealthController && !m_connectionHealthController->probeRunning()) {
             scheduleGuardianConnectivityProbe(0);
+        }
+    });
+    m_guardianRecoveryDeadlineTimer.setSingleShot(true);
+    m_guardianRecoveryDeadlineTimer.setInterval(guardianRecoveryDeadlineMs);
+    connect(&m_guardianRecoveryDeadlineTimer, &QTimer::timeout, this, [this]() {
+        if (m_guardianRecoveryInFlight) {
+            finishGuardianRecovery(
+                    false, QStringLiteral("recovery_timeout"),
+                    m_guardianInFlightRecoveryEpoch);
         }
     });
 
@@ -166,9 +196,6 @@ void CoreController::initRepositories()
     m_serversRepository = new SecureServersRepository(m_settings, this);
     m_appSettingsRepository = new SecureAppSettingsRepository(m_settings, this);
 
-    if (m_vpnConnection) {
-        m_vpnConnection->setRepositories(m_serversRepository, m_appSettingsRepository);
-    }
 }
 
 void CoreController::initCoreControllers()
@@ -193,10 +220,42 @@ void CoreController::initCoreControllers()
                                                               m_vpnConnection.get(), this);
     m_settingsController = new SettingsController(m_serversRepository, m_appSettingsRepository, this);
 
+    connect(m_vpnConnection.get(), &VpnConnection::connectionContextChanged,
+            this, [this](const QString &, const QString &, quint64 connectionEpoch) {
+                m_latestConnectionEpoch = connectionEpoch;
+            }, Qt::QueuedConnection);
+    connect(m_connectionHealthController,
+            &ConnectionHealthController::recoverySuggested,
+            this, [this](ConnectionHealthController::RecoveryAction action,
+                         const QString &, int attempt) {
+                m_guardianSuggestedRecoveryAction = action;
+                m_guardianSuggestedRecoveryAttempt = attempt;
+                m_guardianSuggestedRecoveryEpoch =
+                        m_connectionHealthController->pendingRecoveryEpoch();
+                m_guardianSuggestedConnectionEpoch = m_latestConnectionEpoch;
+            });
+    connect(m_connectionHealthController,
+            &ConnectionHealthController::recoveryActionRequested,
+            this, &CoreController::handleGuardianRecoveryRequest);
+
     connect(m_connectionController, &ConnectionController::connectionStateChanged,
             m_connectionHealthController, [this](Vpn::ConnectionState state) {
                 using HealthState = ConnectionHealthController::HealthState;
                 m_latestConnectionState = state;
+                if (m_guardianRecoveryInFlight) {
+                    if (state == Vpn::ConnectionState::Connected
+                        && m_latestConnectionEpoch
+                                != m_guardianRecoveryConnectionEpoch) {
+                        finishGuardianRecovery(
+                                true, QStringLiteral("recovery_succeeded"),
+                                m_guardianInFlightRecoveryEpoch);
+                    } else if (state == Vpn::ConnectionState::Error
+                               || state == Vpn::ConnectionState::Disconnected) {
+                        finishGuardianRecovery(
+                                false, QStringLiteral("recovery_failed"),
+                                m_guardianInFlightRecoveryEpoch);
+                    }
+                }
                 switch (state) {
                 case Vpn::ConnectionState::Connected: {
                     const bool reachable = !m_networkReachabilityController
@@ -219,8 +278,11 @@ void CoreController::initCoreControllers()
                 }
                 case Vpn::ConnectionState::Reconnecting:
                     cancelGuardianConnectivityProbe(QStringLiteral("tunnel_connecting"));
-                    m_connectionHealthController->recordHealthState(HealthState::Recovering,
-                                                                    QStringLiteral("recovering"));
+                    if (!m_guardianRecoveryInFlight) {
+                        m_connectionHealthController->recordHealthState(
+                                HealthState::Recovering,
+                                QStringLiteral("recovering"));
+                    }
                     break;
                 case Vpn::ConnectionState::Error:
                     cancelGuardianConnectivityProbe(QStringLiteral("tunnel_error"));
@@ -404,7 +466,6 @@ void CoreController::scheduleGuardianConnectivityProbe(int delayMs)
             return;
         }
 
-        QNetworkAccessManager *networkManager = amnApp ? amnApp->networkManager() : nullptr;
         QUrl guardianProbeEndpoint(m_appSettingsRepository->getGatewayEndpoint());
         // The production gateway historically defaults to plain HTTP for the
         // legacy API transport. Guardian needs an authenticated origin before
@@ -417,12 +478,153 @@ void CoreController::scheduleGuardianConnectivityProbe(int delayMs)
             guardianProbeEndpoint.setPort(-1);
         }
 
-        // A connected/full-tunnel configuration is not independent proof that
-        // this request used the VPN data path. Keep the path proof conservative
-        // until the platform can bind the probe or attest the observed egress.
-        m_connectionHealthController->startConnectivityProbe(
-                networkManager, guardianProbeEndpoint, true, 5000, false);
+        requestBoundedQueuedSnapshot(
+                m_vpnConnection.get(), this, guardianVpnSnapshotTimeoutMs,
+                [](VpnConnection *vpnConnection) {
+                    GuardianTunnelRuntimeSnapshot snapshot;
+                    snapshot.connected = vpnConnection->connectionState()
+                            == Vpn::ConnectionState::Connected;
+                    const VpnConnection::ManagedRouteRuntimeSnapshot routeSnapshot =
+                            vpnConnection->managedRouteRuntimeSnapshot();
+                    snapshot.connectionEpoch = routeSnapshot.connectionEpoch;
+                    snapshot.applicationRoutedThroughVpn =
+                            vpnConnection->applicationUsesVpnDataPath(
+                                    QStringLiteral("org.amnezia.vpn"));
+                    // A confirmed full-tunnel route receipt is read-only,
+                    // connection-epoch-bound evidence that ordinary origin
+                    // traffic is assigned to the VPN data path. Split modes
+                    // remain unverified until a target-specific route receipt
+                    // exists.
+                    snapshot.tunnelPathVerified = snapshot.connected
+                            && routeSnapshot.confirmed
+                            && !routeSnapshot.transitionPending
+                            && routeSnapshot.mode == RouteMode::VpnAllSites
+                            && vpnConnection->appliedSiteRouteMode()
+                                    == RouteMode::VpnAllSites
+                            && snapshot.applicationRoutedThroughVpn
+                            && !vpnConnection->remoteAddress().isEmpty();
+                    return snapshot;
+                },
+                [this, requestGeneration, guardianProbeEndpoint](
+                        BoundedQueuedSnapshotStatus status,
+                        std::optional<GuardianTunnelRuntimeSnapshot> snapshot) {
+                    if (requestGeneration != m_guardianProbeRequestGeneration
+                        || !m_connectionHealthController
+                        || m_latestConnectionState
+                                != Vpn::ConnectionState::Connected) {
+                        return;
+                    }
+                    const bool snapshotCurrent =
+                            status == BoundedQueuedSnapshotStatus::Ready
+                            && snapshot.has_value()
+                            && snapshot->connected
+                            && snapshot->connectionEpoch
+                                    == m_latestConnectionEpoch;
+                    const bool applicationPathVerified = snapshotCurrent
+                            && snapshot->applicationRoutedThroughVpn;
+                    if (!applicationPathVerified) {
+                        m_connectionHealthController->recordHealthState(
+                                ConnectionHealthController::HealthState::Unknown,
+                                QStringLiteral("probe_app_route_unverified"));
+                        return;
+                    }
+                    if (!snapshot->tunnelPathVerified) {
+                        m_connectionHealthController->recordHealthState(
+                                ConnectionHealthController::HealthState::Unknown,
+                                QStringLiteral("probe_tunnel_path_unverified"));
+                        return;
+                    }
+                    // The Guardian transport is a CoreController child, so it
+                    // follows this object's thread and lifetime. Re-validate
+                    // its immutable direct-transport policy at the last
+                    // possible point before creating a request.
+                    if (!m_guardianNetworkManager
+                        || m_guardianNetworkManager->thread() != thread()
+                        || m_guardianNetworkManager->proxyFactory() != nullptr
+                        || m_guardianNetworkManager->proxy().type()
+                                != QNetworkProxy::NoProxy) {
+                        m_connectionHealthController->recordHealthState(
+                                ConnectionHealthController::HealthState::Unknown,
+                                QStringLiteral("probe_proxy_path_unverified"));
+                        return;
+                    }
+                    m_connectionHealthController->startConnectivityProbe(
+                            m_guardianNetworkManager, guardianProbeEndpoint,
+                            true, 5000, true);
+                });
     });
+}
+
+void CoreController::handleGuardianRecoveryRequest(
+        ConnectionHealthController::RecoveryAction action,
+        const QString &reasonCode, int attempt, quint64 recoveryEpoch)
+{
+    Q_UNUSED(reasonCode)
+    if (!m_connectionHealthController || recoveryEpoch == 0) {
+        return;
+    }
+    const bool suggestionCurrent = !m_guardianRecoveryInFlight
+            && recoveryEpoch == m_guardianSuggestedRecoveryEpoch
+            && action == m_guardianSuggestedRecoveryAction
+            && attempt == m_guardianSuggestedRecoveryAttempt
+            && m_latestConnectionState == Vpn::ConnectionState::Connected
+            && m_latestConnectionEpoch == m_guardianSuggestedConnectionEpoch;
+    if (!suggestionCurrent) {
+        m_connectionHealthController->acknowledgeRecoveryResult(
+                false, QStringLiteral("recovery_stale_epoch"), recoveryEpoch);
+        return;
+    }
+
+    const bool restartAction =
+            action == ConnectionHealthController::RecoveryAction::RefreshNetwork
+            || action == ConnectionHealthController::RecoveryAction::RepairDns
+            || action == ConnectionHealthController::RecoveryAction::RepairRoutes
+            || action == ConnectionHealthController::RecoveryAction::ReconnectTunnel;
+    if (!restartAction || !m_vpnConnection) {
+        m_connectionHealthController->acknowledgeRecoveryResult(
+                false, QStringLiteral("recovery_dispatch_failed"), recoveryEpoch);
+        return;
+    }
+
+    m_guardianRecoveryInFlight = true;
+    m_guardianRecoveryConnectionEpoch = m_latestConnectionEpoch;
+    m_guardianInFlightRecoveryEpoch = recoveryEpoch;
+    const bool queued = QMetaObject::invokeMethod(
+            m_vpnConnection.get(), "reconnectToVpn", Qt::QueuedConnection);
+    if (!queued) {
+        finishGuardianRecovery(
+                false, QStringLiteral("recovery_dispatch_failed"),
+                recoveryEpoch);
+        return;
+    }
+
+    m_guardianRecoveryDeadlineTimer.start();
+    m_connectionHealthController->recordEvent(
+            QStringLiteral("recovery"), QStringLiteral("recovery_dispatched"),
+            { { QStringLiteral("attempt"), attempt },
+              { QStringLiteral("recovery_epoch"),
+                QString::number(recoveryEpoch) } });
+}
+
+void CoreController::finishGuardianRecovery(
+        bool success, const QString &reasonCode, quint64 recoveryEpoch)
+{
+    if (!m_guardianRecoveryInFlight
+        || recoveryEpoch == 0
+        || recoveryEpoch != m_guardianInFlightRecoveryEpoch) {
+        return;
+    }
+    m_guardianRecoveryInFlight = false;
+    m_guardianRecoveryDeadlineTimer.stop();
+    m_guardianInFlightRecoveryEpoch = 0;
+    if (m_connectionHealthController) {
+        m_connectionHealthController->acknowledgeRecoveryResult(
+                success, reasonCode, recoveryEpoch);
+    }
+    if (success
+        && m_latestConnectionState == Vpn::ConnectionState::Connected) {
+        scheduleGuardianConnectivityProbe(500);
+    }
 }
 
 void CoreController::cancelGuardianConnectivityProbe(const QString &reason)

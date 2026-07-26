@@ -11,6 +11,7 @@ namespace amnezia
         QString hostName;
         QString userName;
         QString secretData;
+        QString sshHostKeyFingerprint;
         int port = 22;
 
         bool isValid() const

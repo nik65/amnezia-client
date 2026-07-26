@@ -42,6 +42,8 @@
         <file>remove_container.sh</file>
         <file>setup_host_firewall.sh</file>
         <file alias="update_host/install_server_update_host.sh">../../deploy/selfhosted_updates/install_server_update_host.sh</file>
+        <file alias="update_host/publish_bundled_release.sh">../../deploy/selfhosted_updates/publish_bundled_release.sh</file>
+        <file alias="update_host/run_verified_update_host_installer.sh">../../deploy/selfhosted_updates/run_verified_update_host_installer.sh</file>
         <file>sftp/configure_container.sh</file>
         <file>sftp/Dockerfile</file>
         <file>sftp/run_container.sh</file>

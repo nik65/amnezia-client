@@ -13,9 +13,8 @@
 #include <QSharedPointer>
 #include <QString>
 #include <QStringList>
+#include <QThread>
 #include <QTimer>
-
-#include <functional>
 
 #include <core/configurators/openVpnConfigurator.h>
 #include <core/configurators/wireguardConfigurator.h>
@@ -27,8 +26,6 @@
 
 #ifdef Q_OS_ANDROID
     #include "platforms/android/android_controller.h"
-    #include <QThread>
-
 #endif
 
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
@@ -36,6 +33,7 @@
 #endif
 
 #include "core/utils/networkUtilities.h"
+#include "core/utils/managedRoutePolicy.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/constants/protocolConstants.h"
 #include "core/utils/containers/containerUtils.h"
@@ -48,16 +46,10 @@ namespace
 {
 constexpr int maxIncrementalManagedRouteDelta = 256;
 constexpr int incrementalManagedRouteIpcTimeoutMs = 5000;
+constexpr int killSwitchIpcTimeoutMs = 1000;
+constexpr int dnsFlushIpcTimeoutMs = 1000;
+constexpr int clearSavedRoutesIpcTimeoutMs = 5000;
 constexpr int deferredManagedRouteDeadlineMs = 10000;
-constexpr int maxConcurrentManagedRouteLookups = 4;
-
-struct ManagedRouteLookupState
-{
-    QStringList sites;
-    qsizetype nextIndex = 0;
-    int inFlight = 0;
-    std::function<void()> pump;
-};
 
 enum class SplitTunnelRouteSource {
     Client,
@@ -485,11 +477,26 @@ QStringList routableSplitTunnelRoutes(const QStringList &routes)
     result.removeDuplicates();
     return result;
 }
+
+#ifdef AMNEZIA_DESKTOP
+bool addTrustedRoutesWithReceipt(const QString &gateway, const QStringList &routes)
+{
+    if (routes.isEmpty()) {
+        return true;
+    }
+    return IpcClient::withInterface(
+            [&gateway, &routes](QSharedPointer<IpcInterfaceReplica> iface) {
+                auto reply = iface->routeAddTrustedList(gateway, routes);
+                return reply.waitForFinished(incrementalManagedRouteIpcTimeoutMs)
+                        && reply.returnValue() == routes.size();
+            },
+            []() { return false; });
+}
+#endif
 }
 
-VpnConnection::VpnConnection(SecureServersRepository* serversRepository, SecureAppSettingsRepository* appSettingsRepository, QObject *parent)
-    : QObject(parent), m_serversRepository(serversRepository), m_appSettingsRepository(appSettingsRepository),
-      m_checkTimer(this), m_deferredManagedRouteReconnectTimer(this)
+VpnConnection::VpnConnection(QObject *parent)
+    : QObject(parent), m_checkTimer(this), m_deferredManagedRouteReconnectTimer(this)
 {
     m_deferredManagedRouteReconnectTimer.setSingleShot(true);
     m_deferredManagedRouteReconnectTimer.setInterval(deferredManagedRouteDeadlineMs);
@@ -515,6 +522,199 @@ VpnConnection::~VpnConnection()
 {
 }
 
+QStringList VpnConnection::normalizedManagedRoutesForRuntime(
+        RouteMode mode, const QStringList &managedRoutes,
+        const QVariantMap &localSites, const QStringList &protectedHosts,
+        bool *valid) const
+{
+    bool routesValid = false;
+    QStringList boundedRoutes = managedRoutePolicy::validatedManagedRoutes(
+            managedRoutes, &routesValid);
+    if (!routesValid) {
+        if (valid) {
+            *valid = false;
+        }
+        return {};
+    }
+    if (mode != RouteMode::VpnAllExceptSites) {
+        const bool emptyAsRequired = boundedRoutes.isEmpty();
+        if (valid) {
+            *valid = emptyAsRequired;
+        }
+        return {};
+    }
+
+    QStringList unsupportedManagedRoutes;
+    boundedRoutes = normalizedSupportedIpv4Routes(
+            splitRoutesKeepingHostsInVpn(boundedRoutes, protectedHosts),
+            &unsupportedManagedRoutes);
+    boundedRoutes = managedRoutePolicy::validatedManagedRoutes(
+            boundedRoutes, &routesValid);
+    if (!routesValid || !unsupportedManagedRoutes.isEmpty()) {
+        if (valid) {
+            *valid = false;
+        }
+        return {};
+    }
+
+    QStringList localRoutes;
+    appendSplitTunnelSiteRoutes(
+            localRoutes, localSites, SplitTunnelRouteSource::Client);
+    localRoutes = normalizedSupportedIpv4Routes(
+            splitRoutesKeepingHostsInVpn(localRoutes, protectedHosts));
+    const QSet<QString> localSet(localRoutes.cbegin(), localRoutes.cend());
+
+    QStringList result;
+    for (const QString &route : boundedRoutes) {
+        if (!localSet.contains(route) && !result.contains(route)) {
+            result.append(route);
+        }
+    }
+    result.sort();
+    if (valid) {
+        *valid = true;
+    }
+    return result;
+}
+
+void VpnConnection::invalidateAuthoritativeManagedRouteBase()
+{
+    ++m_authoritativeManagedRouteBaseRevision;
+    m_hasAuthoritativeManagedRouteBase = false;
+    m_managedRouteTransitionPending = true;
+    m_authoritativeManagedRouteMode = RouteMode::VpnAllSites;
+    m_authoritativeManagedRoutes.clear();
+    m_authoritativeManagedRouteConnectionEpoch = 0;
+    m_authoritativeManagedRouteServerId.clear();
+    m_authoritativeManagedRoutePolicyRevision.clear();
+    m_authoritativeManagedRoutePolicyContentHash.clear();
+}
+
+void VpnConnection::publishManagedRouteBase(
+        RouteMode mode, const QStringList &managedRoutes,
+        const QVariantMap &localSites, const QString &policyRevision,
+        const QString &policyContentHash, bool confirmed)
+{
+    QStringList protectedHosts = serverRoutingRulesSyncHosts();
+    protectedHosts << m_vpnConfiguration.value(configKey::dns1).toString()
+                   << m_vpnConfiguration.value(configKey::dns2).toString();
+    protectedHosts.removeAll(QString());
+    protectedHosts.removeDuplicates();
+    bool normalizedValid = false;
+    const QStringList normalizedRoutes = normalizedManagedRoutesForRuntime(
+            mode, managedRoutes, localSites, protectedHosts,
+            &normalizedValid);
+    const bool identityValid = managedRoutePolicy::isCanonicalPolicyIdentity(
+            policyRevision, policyContentHash)
+            && (normalizedRoutes.isEmpty() || !policyRevision.isEmpty());
+    const bool baseConfirmed = confirmed && normalizedValid
+            && identityValid && m_startupRouteTeardownConfirmed
+            && !m_serverId.isEmpty();
+
+    ++m_authoritativeManagedRouteBaseRevision;
+    m_hasAuthoritativeManagedRouteBase = baseConfirmed;
+    m_managedRouteTransitionPending = !baseConfirmed;
+    m_authoritativeManagedRouteMode = mode;
+    m_authoritativeManagedRoutes = baseConfirmed ? normalizedRoutes : QStringList();
+    m_authoritativeManagedRouteConnectionEpoch = baseConfirmed
+            ? m_connectionEpoch : 0;
+    m_authoritativeManagedRouteServerId = baseConfirmed
+            ? m_serverId : QString();
+    m_authoritativeManagedRoutePolicyRevision = baseConfirmed
+            ? policyRevision : QString();
+    m_authoritativeManagedRoutePolicyContentHash = baseConfirmed
+            ? policyContentHash : QString();
+
+    const quint64 epoch = m_connectionEpoch;
+    const QString serverId = m_serverId;
+    const quint64 revision = m_authoritativeManagedRouteBaseRevision;
+    QTimer::singleShot(0, this, [this, epoch, serverId, mode, normalizedRoutes,
+                                revision, policyRevision, policyContentHash,
+                                baseConfirmed]() {
+        if (epoch != m_connectionEpoch || serverId != m_serverId
+            || revision != m_authoritativeManagedRouteBaseRevision
+            || m_connectionState != Vpn::ConnectionState::Connected) {
+            return;
+        }
+        emit managedSplitTunnelRouteBaseReady(
+                epoch, serverId, static_cast<int>(mode),
+                baseConfirmed ? normalizedRoutes : QStringList(),
+                revision,
+                baseConfirmed ? policyRevision : QString(),
+                baseConfirmed ? policyContentHash : QString(),
+                baseConfirmed);
+    });
+}
+
+void VpnConnection::prepareManagedRouteConnectionSnapshot(
+        quint64 generation, const QString &serverId, int modeValue,
+        const QStringList &managedRoutes, const QString &policyRevision,
+        const QString &policyContentHash, const QVariantMap &localSites)
+{
+    if (QThread::currentThread() != thread()) {
+        qCritical() << "VpnConnection: refusing managed-route snapshot preparation outside the VPN worker thread";
+        return;
+    }
+    if (generation < m_latestPreparedManagedRouteSnapshotGeneration
+        || (generation == m_latestPreparedManagedRouteSnapshotGeneration
+            && !m_preparedManagedRouteServerId.isEmpty()
+            && serverId != m_preparedManagedRouteServerId)) {
+        return;
+    }
+    m_latestPreparedManagedRouteSnapshotGeneration = generation;
+    m_preparedManagedRouteServerId = serverId;
+    const auto mode = static_cast<RouteMode>(modeValue);
+    const bool modeValid = mode == RouteMode::VpnAllSites
+            || mode == RouteMode::VpnOnlyForwardSites
+            || mode == RouteMode::VpnAllExceptSites;
+    bool routesValid = false;
+    const QStringList boundedRoutes = managedRoutePolicy::validatedManagedRoutes(
+            managedRoutes, &routesValid);
+    const QString normalizedContentHash =
+            managedRoutePolicy::normalizedSha256(policyContentHash);
+    const bool identityValid = managedRoutePolicy::isCanonicalPolicyIdentity(
+            policyRevision, normalizedContentHash)
+            && (boundedRoutes.isEmpty() || !policyRevision.isEmpty());
+    if (serverId.isEmpty() || !modeValid || !routesValid || !identityValid) {
+        m_hasPreparedManagedRouteSnapshot = false;
+        m_preparedManagedRouteServerId.clear();
+        m_preparedManagedRouteMode = RouteMode::VpnAllSites;
+        m_preparedManagedRoutes.clear();
+        m_preparedManagedRoutePolicyRevision.clear();
+        m_preparedManagedRoutePolicyContentHash.clear();
+        m_preparedLocalSites.clear();
+        return;
+    }
+
+    m_preparedManagedRouteMode = mode;
+    m_preparedManagedRoutes = boundedRoutes;
+    m_preparedManagedRoutes.removeDuplicates();
+    m_preparedManagedRoutes.sort();
+    m_preparedManagedRoutePolicyRevision = policyRevision;
+    m_preparedManagedRoutePolicyContentHash = normalizedContentHash;
+    m_preparedLocalSites = localSites;
+    m_hasPreparedManagedRouteSnapshot = true;
+}
+
+void VpnConnection::rebuildManagedSplitTunnelRoutes(
+        quint64 expectedConnectionEpoch, const QString &expectedServerId)
+{
+    if (QThread::currentThread() != thread()
+        || expectedConnectionEpoch != m_connectionEpoch
+        || expectedServerId.isEmpty() || expectedServerId != m_serverId
+        || m_connectionState != Vpn::ConnectionState::Connected) {
+        return;
+    }
+    invalidateAuthoritativeManagedRouteBase();
+    QTimer::singleShot(0, this, [this, expectedConnectionEpoch, expectedServerId]() {
+        if (expectedConnectionEpoch == m_connectionEpoch
+            && expectedServerId == m_serverId
+            && m_connectionState == Vpn::ConnectionState::Connected) {
+            reconnectToVpn();
+        }
+    });
+}
+
 void VpnConnection::onBytesChanged(quint64 receivedBytes, quint64 sentBytes)
 {
     emit bytesChanged(receivedBytes, sentBytes);
@@ -525,7 +725,7 @@ void VpnConnection::onKillSwitchModeChanged(bool enabled)
 #ifdef AMNEZIA_DESKTOP
     IpcClient::withInterface([enabled](QSharedPointer<IpcInterfaceReplica> iface){
         QRemoteObjectPendingReply<bool> reply = iface->refreshKillSwitch(enabled);
-        if (reply.waitForFinished() && reply.returnValue())
+        if (reply.waitForFinished(killSwitchIpcTimeoutMs) && reply.returnValue())
             qDebug() << "VpnConnection::onKillSwitchModeChanged: Killswitch refreshed";
         else
             qWarning() << "VpnConnection::onKillSwitchModeChanged: Failed to execute remote refreshKillSwitch call";
@@ -536,66 +736,7 @@ void VpnConnection::onKillSwitchModeChanged(bool enabled)
 void VpnConnection::onConnectionStateChanged(Vpn::ConnectionState state)
 {
 #ifdef AMNEZIA_DESKTOP
-    if (!m_serversRepository || !m_appSettingsRepository) {
-        qCritical() << "VpnConnection::onConnectionStateChanged: repositories not initialized";
-        return;
-    }
-
-    DockerContainer container = DockerContainer::None;
-    if (m_container != DockerContainer::None) {
-        container = m_container;
-    }
-    const int currentServerIndex = serverIndex();
-    const int activeServerIndex = currentServerIndex >= 0
-            ? currentServerIndex : m_serversRepository->defaultServerIndex();
-    const QString activeServerId = m_serverId.isEmpty()
-            ? m_serversRepository->serverIdAt(activeServerIndex) : m_serverId;
-    switch (m_serversRepository->serverKind(activeServerId)) {
-    case serverConfigUtils::ConfigType::SelfHostedAdmin: {
-        const auto cfg = m_serversRepository->selfHostedAdminConfig(activeServerId);
-        if (cfg.has_value()) {
-            if (container == DockerContainer::None) {
-                container = cfg->defaultContainer;
-            }
-        }
-        break;
-    }
-    case serverConfigUtils::ConfigType::SelfHostedUser: {
-        const auto cfg = m_serversRepository->selfHostedUserConfig(activeServerId);
-        if (cfg.has_value()) {
-            if (container == DockerContainer::None) {
-                container = cfg->defaultContainer;
-            }
-        }
-        break;
-    }
-    case serverConfigUtils::ConfigType::Native: {
-        const auto cfg = m_serversRepository->nativeConfig(activeServerId);
-        if (cfg.has_value()) {
-            if (container == DockerContainer::None) {
-                container = cfg->defaultContainer;
-            }
-        }
-        break;
-    }
-    case serverConfigUtils::ConfigType::AmneziaPremiumV2:
-    case serverConfigUtils::ConfigType::AmneziaFreeV3:
-    case serverConfigUtils::ConfigType::ExternalPremium: {
-        const auto cfg = m_serversRepository->apiV2Config(activeServerId);
-        if (cfg.has_value()) {
-            if (container == DockerContainer::None) {
-                container = cfg->defaultContainer;
-            }
-        }
-        break;
-    }
-    case serverConfigUtils::ConfigType::AmneziaPremiumV1:
-    case serverConfigUtils::ConfigType::AmneziaFreeV2:
-        break;
-    case serverConfigUtils::ConfigType::Invalid:
-    default:
-        break;
-    }
+    const DockerContainer container = m_container;
 
     IpcClient::withInterface([&](QSharedPointer<IpcInterfaceReplica> iface) {
         switch (state) {
@@ -603,7 +744,7 @@ void VpnConnection::onConnectionStateChanged(Vpn::ConnectionState state)
                 iface->resetIpStack();
 
                 auto flushDns = iface->flushDns();
-                if (flushDns.waitForFinished() && flushDns.returnValue())
+                if (flushDns.waitForFinished(dnsFlushIpcTimeoutMs) && flushDns.returnValue())
                     qDebug() << "VpnConnection::onConnectionStateChanged: Successfully flushed DNS";
                 else
                     qWarning() << "VpnConnection::onConnectionStateChanged: Failed to flush DNS";
@@ -612,9 +753,7 @@ void VpnConnection::onConnectionStateChanged(Vpn::ConnectionState state)
                     QString dns1 = m_vpnConfiguration.value(configKey::dns1).toString();
                     QString dns2 = m_vpnConfiguration.value(configKey::dns2).toString();
 
-                    const RouteMode effectiveRouteMode = m_serversRepository->effectiveSiteRouteMode(
-                            activeServerIndex, m_appSettingsRepository->isSitesSplitTunnelingEnabled(),
-                            m_appSettingsRepository->routeMode());
+                    const RouteMode effectiveRouteMode = appliedSiteRouteMode();
 
                     QStringList vpnGatewayRoutes = serverRoutingRulesSyncHosts();
 #ifdef Q_OS_MACOS
@@ -633,8 +772,18 @@ void VpnConnection::onConnectionStateChanged(Vpn::ConnectionState state)
                     if (effectiveRouteMode != RouteMode::VpnAllSites) {
                         iface->routeDeleteList(m_vpnProtocol->vpnGateway(), QStringList() << "0.0.0.0");
                         if (effectiveRouteMode == RouteMode::VpnOnlyForwardSites) {
+                            const quint64 expectedConnectionEpoch = m_connectionEpoch;
+                            const QString expectedServerId = m_serverId;
                             QTimer::singleShot(1000, m_vpnProtocol.data(),
-                                               [this, effectiveRouteMode]() { addSitesRoutes(m_vpnProtocol->vpnGateway(), effectiveRouteMode); });
+                                               [this, effectiveRouteMode, expectedConnectionEpoch,
+                                                expectedServerId]() {
+                                if (expectedConnectionEpoch == m_connectionEpoch
+                                    && expectedServerId == m_serverId
+                                    && m_connectionState == Vpn::ConnectionState::Connected
+                                    && !m_vpnProtocol.isNull()) {
+                                    addSitesRoutes(m_vpnProtocol->vpnGateway(), effectiveRouteMode);
+                                }
+                            });
                         } else if (effectiveRouteMode == RouteMode::VpnAllExceptSites) {
                             iface->routeAddList(m_vpnProtocol->vpnGateway(), QStringList() << "0.0.0.0/1");
                             iface->routeAddList(m_vpnProtocol->vpnGateway(), QStringList() << "128.0.0.0/1");
@@ -651,22 +800,58 @@ void VpnConnection::onConnectionStateChanged(Vpn::ConnectionState state)
             case Vpn::ConnectionState::Disconnected:
             case Vpn::ConnectionState::Error: {
                 auto flushDns = iface->flushDns();
-                if (flushDns.waitForFinished() && flushDns.returnValue())
+                if (flushDns.waitForFinished(dnsFlushIpcTimeoutMs) && flushDns.returnValue())
                     qDebug() << "VpnConnection::onConnectionStateChanged: Successfully flushed DNS";
                 else
                     qWarning() << "VpnConnection::onConnectionStateChanged: Failed to flush DNS";
-
-                auto clearSavedRoutes = iface->clearSavedRoutes();
-                if (clearSavedRoutes.waitForFinished() && clearSavedRoutes.returnValue())
-                    qDebug() << "VpnConnection::onConnectionStateChanged: Successfully cleared saved routes";
-                else
-                    qWarning() << "VpnConnection::onConnectionStateChanged: Failed to clear saved routes";
             } break;
             default:
                 break;
         }
     });
 #endif
+
+    if (state == Vpn::ConnectionState::Disconnected
+        || state == Vpn::ConnectionState::Error) {
+        m_startupRouteTeardownConfirmed = clearSavedRoutesWithReceipt();
+        if (m_startupRouteTeardownConfirmed) {
+            qDebug() << "VpnConnection::onConnectionStateChanged: Successfully cleared saved routes";
+        } else {
+            qWarning() << "VpnConnection::onConnectionStateChanged: Saved-route teardown was not confirmed";
+        }
+    }
+
+    if (state == Vpn::ConnectionState::Connected) {
+        const RouteMode connectedMode = appliedSiteRouteMode();
+        bool protocolStartupConfirmsManagedBase = !m_connectionRestoredWithoutStartup;
+#ifdef AMNEZIA_DESKTOP
+        const bool routeReceiptWillArriveAsynchronously = connectedMode != RouteMode::VpnAllSites
+                && !ContainerUtils::isAwgContainer(container)
+                && container != DockerContainer::WireGuard;
+        protocolStartupConfirmsManagedBase = !m_connectionRestoredWithoutStartup
+                && !routeReceiptWillArriveAsynchronously;
+#endif
+        if (protocolStartupConfirmsManagedBase) {
+            const bool startupSnapshotMatches = m_hasStartupManagedRouteSnapshot
+                    && m_startupManagedRouteServerId == m_serverId
+                    && m_startupManagedRouteMode == connectedMode;
+            publishManagedRouteBase(
+                    connectedMode,
+                    startupSnapshotMatches ? m_startupManagedRoutes : QStringList(),
+                    startupSnapshotMatches ? m_startupLocalSites : QVariantMap(),
+                    startupSnapshotMatches
+                            ? m_startupManagedRoutePolicyRevision : QString(),
+                    startupSnapshotMatches
+                            ? m_startupManagedRoutePolicyContentHash : QString(),
+                    startupSnapshotMatches);
+        } else if (m_connectionRestoredWithoutStartup) {
+            // Android can restore a service-owned tunnel after the UI process
+            // restarts. There is no process-local route receipt and cycling
+            // this live tunnel would be disruptive, so keep reconciliation
+            // blocked until a natural, user-initiated connection start.
+            qInfo() << "VpnConnection: restored Android tunnel has no managed-route receipt; waiting for natural reconnect";
+        }
+    }
 
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
     if (state == Vpn::ConnectionState::Connected ||
@@ -686,15 +871,51 @@ const QString &VpnConnection::remoteAddress() const
 
 int VpnConnection::serverIndex() const
 {
-    if (m_serversRepository && !m_serverId.isEmpty()) {
-        return m_serversRepository->indexOfServerId(m_serverId);
-    }
     return m_serverIndex;
 }
 
 QString VpnConnection::serverId() const
 {
     return m_serverId;
+}
+
+quint64 VpnConnection::connectionEpoch() const
+{
+    return m_connectionEpoch;
+}
+
+VpnConnection::ManagedRouteRuntimeSnapshot
+VpnConnection::managedRouteRuntimeSnapshot() const
+{
+    ManagedRouteRuntimeSnapshot snapshot;
+    const bool bindingMatches = m_authoritativeManagedRouteConnectionEpoch
+                    == m_connectionEpoch
+            && m_authoritativeManagedRouteServerId == m_serverId
+            && m_authoritativeManagedRouteMode == appliedSiteRouteMode()
+            && managedRoutePolicy::isCanonicalPolicyIdentity(
+                    m_authoritativeManagedRoutePolicyRevision,
+                    m_authoritativeManagedRoutePolicyContentHash)
+            && (m_authoritativeManagedRoutes.isEmpty()
+                || !m_authoritativeManagedRoutePolicyRevision.isEmpty());
+    snapshot.confirmed = m_hasAuthoritativeManagedRouteBase
+            && !m_managedRouteTransitionPending && bindingMatches
+            && m_connectionState == Vpn::ConnectionState::Connected;
+    snapshot.transitionPending = m_managedRouteTransitionPending
+            || m_connectionState == Vpn::ConnectionState::Reconnecting
+            || m_connectionState == Vpn::ConnectionState::Connecting
+            || m_connectionState == Vpn::ConnectionState::Preparing;
+    snapshot.mode = snapshot.confirmed
+            ? m_authoritativeManagedRouteMode : RouteMode::VpnAllSites;
+    snapshot.installedRoutes = snapshot.confirmed
+            ? m_authoritativeManagedRoutes : QStringList();
+    snapshot.revision = m_authoritativeManagedRouteBaseRevision;
+    snapshot.connectionEpoch = m_connectionEpoch;
+    snapshot.serverId = m_serverId;
+    snapshot.policyRevision = snapshot.confirmed
+            ? m_authoritativeManagedRoutePolicyRevision : QString();
+    snapshot.policyContentHash = snapshot.confirmed
+            ? m_authoritativeManagedRoutePolicyContentHash : QString();
+    return snapshot;
 }
 
 DockerContainer VpnConnection::container() const
@@ -711,6 +932,50 @@ RouteMode VpnConnection::appliedSiteRouteMode() const
         return static_cast<RouteMode>(storedMode);
     }
     return RouteMode::VpnAllSites;
+}
+
+AppsRouteMode VpnConnection::appliedAppsRouteMode() const
+{
+    const int storedMode = m_vpnConfiguration.value(configKey::appSplitTunnelType)
+                                   .toInt(static_cast<int>(AppsRouteMode::VpnAllApps));
+    if (storedMode == static_cast<int>(AppsRouteMode::VpnOnlyForwardApps)
+        || storedMode == static_cast<int>(AppsRouteMode::VpnAllExceptApps)) {
+        return static_cast<AppsRouteMode>(storedMode);
+    }
+    return AppsRouteMode::VpnAllApps;
+}
+
+bool VpnConnection::applicationUsesVpnDataPath(const QString &applicationId) const
+{
+    const AppsRouteMode mode = appliedAppsRouteMode();
+    if (mode == AppsRouteMode::VpnAllApps) {
+        return true;
+    }
+
+    // App identifiers are platform-specific. Android exposes stable package
+    // names, so the Guardian request can be bound to this process exactly.
+    // Other platforms remain fail-closed for selective app routing.
+#ifdef Q_OS_ANDROID
+    const QString normalizedId = applicationId.trimmed();
+    if (normalizedId.isEmpty()) {
+        return false;
+    }
+    QStringList configuredApps;
+    const QJsonArray configuredArray =
+            m_vpnConfiguration.value(configKey::splitTunnelApps).toArray();
+    configuredApps.reserve(configuredArray.size());
+    for (const QJsonValue &value : configuredArray) {
+        const QString candidate = value.toString().trimmed();
+        if (!candidate.isEmpty() && !configuredApps.contains(candidate)) {
+            configuredApps.append(candidate);
+        }
+    }
+    const bool listed = configuredApps.contains(normalizedId);
+    return mode == AppsRouteMode::VpnOnlyForwardApps ? listed : !listed;
+#else
+    Q_UNUSED(applicationId)
+    return false;
+#endif
 }
 
 QString VpnConnection::serverRoutingRulesSyncHost() const
@@ -747,36 +1012,6 @@ QStringList VpnConnection::serverRoutingRulesSyncHosts() const
     return hosts;
 }
 
-void VpnConnection::setRepositories(SecureServersRepository* serversRepository, SecureAppSettingsRepository* appSettingsRepository)
-{
-    if (m_serversRepository) {
-        disconnect(m_serversRepository, &SecureServersRepository::serverRemoved, this, nullptr);
-    }
-    m_serversRepository = serversRepository;
-    m_appSettingsRepository = appSettingsRepository;
-    if (m_serversRepository) {
-        connect(m_serversRepository, &SecureServersRepository::serverRemoved, this,
-                [this](const QString &removedServerId, int removedIndex) {
-            Q_UNUSED(removedIndex)
-            if (removedServerId != m_serverId) {
-                m_serverIndex = m_serverId.isEmpty()
-                        ? -1 : m_serversRepository->indexOfServerId(m_serverId);
-                return;
-            }
-
-            qWarning() << "VpnConnection: active server was removed; disconnecting the bound VPN session";
-            m_serverId.clear();
-            m_serverIndex = -1;
-            invalidateAllSplitRouteResolutions();
-            if (m_connectionState != Vpn::ConnectionState::Disconnected
-                && m_connectionState != Vpn::ConnectionState::Disconnecting
-                && m_connectionState != Vpn::ConnectionState::Unknown) {
-                disconnectFromVpn();
-            }
-        }, Qt::QueuedConnection);
-    }
-}
-
 void VpnConnection::invalidateAllSplitRouteResolutions()
 {
     ++m_clientSplitRouteResolveGeneration;
@@ -784,36 +1019,54 @@ void VpnConnection::invalidateAllSplitRouteResolutions()
     m_pendingClientSplitRouteLookups = 0;
     m_reconnectAfterClientRouteResolution = false;
     m_deferredManagedRouteReconnectTimer.stop();
+    invalidateAuthoritativeManagedRouteBase();
+}
+
+bool VpnConnection::clearSavedRoutesWithReceipt()
+{
+#ifdef AMNEZIA_DESKTOP
+    return IpcClient::withInterface(
+            [](QSharedPointer<IpcInterfaceReplica> iface) {
+                auto reply = iface->clearSavedRoutes();
+                return reply.waitForFinished(clearSavedRoutesIpcTimeoutMs)
+                        && reply.returnValue();
+            },
+            []() { return false; });
+#else
+    // Mobile and NetworkExtension routes are protocol-owned; no desktop route
+    // registry exists on those platforms.
+    return true;
+#endif
 }
 
 void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
 {
 #ifdef AMNEZIA_DESKTOP
-    if (!m_appSettingsRepository || !m_serversRepository) {
-        qCritical() << "VpnConnection::addSitesRoutes: repositories not initialized";
-        return;
-    }
-
-    const int currentServerIndex = serverIndex();
-    const int activeServerIndex = currentServerIndex >= 0
-            ? currentServerIndex : m_serversRepository->defaultServerIndex();
-    const QString activeServerId = m_serverId.isEmpty()
-            ? m_serversRepository->serverIdAt(activeServerIndex) : m_serverId;
+    const QString activeServerId = m_serverId;
+    const bool startupSnapshotMatches = m_hasStartupManagedRouteSnapshot
+            && !activeServerId.isEmpty()
+            && m_startupManagedRouteServerId == activeServerId
+            && m_startupManagedRouteMode == mode;
     const quint64 clientResolveGeneration = ++m_clientSplitRouteResolveGeneration;
     const quint64 managedResolveGeneration = ++m_managedSplitRouteResolveGeneration;
     m_pendingClientSplitRouteLookups = 0;
     m_reconnectAfterClientRouteResolution = false;
     m_deferredManagedRouteReconnectTimer.stop();
     QStringList ips;
-    QStringList managedIps;
+    QStringList managedIps = startupSnapshotMatches
+            ? m_startupManagedRoutes : QStringList();
     QStringList clientSites;
-    QStringList managedSitesToResolve;
     QStringList protectedHosts = serverRoutingRulesSyncHosts();
     protectedHosts << m_vpnConfiguration.value(configKey::dns1).toString()
                    << m_vpnConfiguration.value(configKey::dns2).toString();
     protectedHosts.removeAll(QString());
     protectedHosts.removeDuplicates();
-    const QVariantMap localSitesSnapshot = m_appSettingsRepository->vpnSites(mode);
+    const QVariantMap localSitesSnapshot = startupSnapshotMatches
+            ? m_startupLocalSites : QVariantMap();
+    const QString policyRevision = startupSnapshotMatches
+            ? m_startupManagedRoutePolicyRevision : QString();
+    const QString policyContentHash = startupSnapshotMatches
+            ? m_startupManagedRoutePolicyContentHash : QString();
     for (auto i = localSitesSnapshot.constBegin(); i != localSitesSnapshot.constEnd(); ++i) {
         if (NetworkUtilities::checkIpSubnetFormat(i.key())) {
             appendSplitTunnelRoute(ips, i.key(), SplitTunnelRouteSource::Client);
@@ -823,38 +1076,13 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
         }
     }
 
-    const QVariantMap managedSites = m_serversRepository->managedVpnSitesForRouting(activeServerIndex, mode);
-    qsizetype managedSiteCount = 0;
-    bool managedRoutesValid = true;
-    for (auto i = managedSites.constBegin(); i != managedSites.constEnd(); ++i) {
-        if (managedSiteCount++ >= managedRoutePolicy::maximumSiteCount) {
-            qWarning() << "VpnConnection: managed route set exceeds the safe site limit; ignoring the remainder";
-            break;
-        }
-        if (NetworkUtilities::checkIpSubnetFormat(i.key())) {
-            if (!managedRoutePolicy::isAllowedManagedIpv4Route(i.key())) {
-                managedRoutesValid = false;
-                break;
-            }
-            appendSplitTunnelRoute(managedIps, i.key(), SplitTunnelRouteSource::ServerManaged);
-        } else {
-            bool valueValid = false;
-            const QStringList storedRoutes = managedRoutePolicy::validatedManagedRouteTokens(
-                    i.value().toString(), &valueValid);
-            if (!valueValid || !managedRoutePolicy::isAllowedManagedSiteKey(i.key())) {
-                managedRoutesValid = false;
-                break;
-            }
-            appendSplitTunnelRoutes(managedIps, storedRoutes, SplitTunnelRouteSource::ServerManaged);
-            managedSitesToResolve.append(i.key());
-        }
-    }
+    bool initialManagedSnapshotConfirmable = startupSnapshotMatches;
     bool managedBatchValid = false;
     managedIps = managedRoutePolicy::validatedManagedRoutes(managedIps, &managedBatchValid);
-    if (!managedRoutesValid || !managedBatchValid) {
+    if (!managedBatchValid) {
         qWarning() << "VpnConnection: rejected unsafe or oversized server-managed route snapshot";
+        initialManagedSnapshotConfirmable = false;
         managedIps.clear();
-        managedSitesToResolve.clear();
     }
     ips.removeDuplicates();
     managedIps.removeDuplicates();
@@ -866,8 +1094,8 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
     managedIps = managedRoutePolicy::validatedManagedRoutes(managedIps, &managedBatchValid);
     if (!managedBatchValid) {
         qWarning() << "VpnConnection: protected-host expansion exceeded the managed route boundary";
+        initialManagedSnapshotConfirmable = false;
         managedIps.clear();
-        managedSitesToResolve.clear();
     }
 
     QStringList unsupportedClientRoutes;
@@ -881,6 +1109,7 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
     if (!unsupportedManagedRoutes.isEmpty()) {
         qWarning() << "VpnConnection: desktop split-route IPC supports canonical IPv4 routes only; skipped managed routes"
                    << unsupportedManagedRoutes;
+        initialManagedSnapshotConfirmable = false;
     }
 
     auto activeClientRoutes = QSharedPointer<QSet<QString>>::create();
@@ -888,10 +1117,11 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
         activeClientRoutes->insert(route);
     }
     auto activeManagedRoutes = QSharedPointer<QSet<QString>>::create();
+    auto managedAddsConfirmed = QSharedPointer<bool>::create(initialManagedSnapshotConfirmable);
 
-    // The existing IPC protocol has no transactional asynchronous route-add
-    // receipt. Initial connection/DNS additions therefore remain best-effort;
-    // making them confirmable requires a versioned service contract change.
+    // Local routes keep their existing best-effort owner. Server-managed
+    // routes below are not published as an authoritative base until every
+    // trusted batch has a bounded, full-count receipt.
     IpcClient::withInterface([gw, ips](QSharedPointer<IpcInterfaceReplica> iface) {
         if (!ips.isEmpty()) {
             iface->routeAddList(gw, ips);
@@ -901,9 +1131,10 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
     // Managed routes are installed only after local domains finish resolving.
     // This makes the source boundary explicit: an address learned from a user
     // rule is never subsequently sent through the trusted managed-route API.
-    const auto startManagedRoutes = [this, gw, mode, managedIps, managedSitesToResolve, protectedHosts,
+    const auto startManagedRoutes = [this, gw, mode, managedIps, localSitesSnapshot,
+                                     policyRevision, policyContentHash,
                                      activeServerId, managedResolveGeneration, activeClientRoutes,
-                                     activeManagedRoutes]() {
+                                     activeManagedRoutes, managedAddsConfirmed]() {
         if (managedResolveGeneration != m_managedSplitRouteResolveGeneration
             || m_connectionState != Vpn::ConnectionState::Connected
             || m_serverId != activeServerId || m_vpnProtocol.isNull()) {
@@ -921,102 +1152,22 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
         for (const QString &route : managedIps) {
             if (!activeClientRoutes->contains(route) && !activeManagedRoutes->contains(route)) {
                 managedOnlyRoutes.append(route);
+            }
+        }
+        if (addTrustedRoutesWithReceipt(gw, managedOnlyRoutes)) {
+            for (const QString &route : managedOnlyRoutes) {
                 activeManagedRoutes->insert(route);
             }
+        } else {
+            *managedAddsConfirmed = false;
+            qWarning() << "VpnConnection: initial managed route add was incomplete; base remains unknown";
         }
-        if (!managedOnlyRoutes.isEmpty()) {
-            IpcClient::withInterface([gw, managedOnlyRoutes](QSharedPointer<IpcInterfaceReplica> iface) {
-                iface->routeAddTrustedList(gw, managedOnlyRoutes);
-            });
-        }
-
-        auto lookupState = QSharedPointer<ManagedRouteLookupState>::create();
-        lookupState->sites = managedSitesToResolve.mid(0, managedRoutePolicy::maximumSiteCount);
-        const QWeakPointer<ManagedRouteLookupState> weakLookupState(lookupState);
-        lookupState->pump = [this, gw, mode, protectedHosts, activeServerId, managedResolveGeneration,
-                             activeClientRoutes, activeManagedRoutes, weakLookupState]() {
-            const auto state = weakLookupState.toStrongRef();
-            if (!state) {
-                return;
-            }
-            if (managedResolveGeneration != m_managedSplitRouteResolveGeneration
-                || m_connectionState != Vpn::ConnectionState::Connected
-                || m_serverId != activeServerId || m_vpnProtocol.isNull()) {
-                return;
-            }
-
-            const QString currentGateway = mode == RouteMode::VpnAllExceptSites
-                    ? m_vpnProtocol->routeGateway()
-                    : m_vpnProtocol->vpnGateway();
-            if (gw != currentGateway) {
-                return;
-            }
-
-            while (state->inFlight < maxConcurrentManagedRouteLookups
-                   && state->nextIndex < state->sites.size()) {
-                const QString site = state->sites.at(state->nextIndex++);
-                ++state->inFlight;
-                QHostInfo::lookupHost(site, this,
-                                      [this, gw, mode, protectedHosts, activeServerId, managedResolveGeneration,
-                                       activeClientRoutes, activeManagedRoutes, state](const QHostInfo &hostInfo) {
-                    --state->inFlight;
-                    if (managedResolveGeneration == m_managedSplitRouteResolveGeneration
-                        && m_connectionState == Vpn::ConnectionState::Connected
-                        && m_serverId == activeServerId && !m_vpnProtocol.isNull()) {
-                        const QString currentGateway = mode == RouteMode::VpnAllExceptSites
-                                ? m_vpnProtocol->routeGateway()
-                                : m_vpnProtocol->vpnGateway();
-                        if (gw == currentGateway) {
-                            QStringList resolvedRoutes;
-                            for (const QHostAddress &address : hostInfo.addresses()) {
-                                const QString route = address.toString();
-                                if (address.protocol() == QAbstractSocket::IPv4Protocol
-                                    && managedRoutePolicy::isAllowedManagedIpv4Route(route)
-                                    && !resolvedRoutes.contains(route)) {
-                                    resolvedRoutes.append(route);
-                                    if (resolvedRoutes.size() >= managedRoutePolicy::maximumRoutesPerSite) {
-                                        break;
-                                    }
-                                }
-                            }
-                            if (mode == RouteMode::VpnAllExceptSites) {
-                                resolvedRoutes = splitRoutesKeepingHostsInVpn(resolvedRoutes, protectedHosts);
-                            }
-                            resolvedRoutes = normalizedSupportedIpv4Routes(resolvedRoutes);
-
-                            QStringList managedOnlyRoutes;
-                            for (const QString &route : resolvedRoutes) {
-                                if (activeManagedRoutes->size()
-                                    >= managedRoutePolicy::maximumTotalRouteCount) {
-                                    qWarning() << "VpnConnection: managed DNS route budget exhausted";
-                                    break;
-                                }
-                                if (!activeClientRoutes->contains(route)
-                                    && !activeManagedRoutes->contains(route)) {
-                                    managedOnlyRoutes.append(route);
-                                    activeManagedRoutes->insert(route);
-                                }
-                            }
-                            if (!managedOnlyRoutes.isEmpty()) {
-                                IpcClient::withInterface(
-                                        [gw, managedOnlyRoutes](QSharedPointer<IpcInterfaceReplica> iface) {
-                                    iface->routeAddTrustedList(gw, managedOnlyRoutes);
-                                });
-                            }
-                        }
-                    }
-
-                    if (state->pump) {
-                        QTimer::singleShot(0, this, [state]() {
-                            if (state->pump) {
-                                state->pump();
-                            }
-                        });
-                    }
-                });
-            }
-        };
-        lookupState->pump();
+        QStringList installedManagedRoutes = activeManagedRoutes->values();
+        installedManagedRoutes.sort();
+        publishManagedRouteBase(
+                mode, installedManagedRoutes, localSitesSnapshot,
+                policyRevision, policyContentHash,
+                *managedAddsConfirmed);
     };
 
     m_pendingClientSplitRouteLookups = clientSites.size();
@@ -1026,10 +1177,9 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
     }
 
     for (const QString &site : clientSites) {
-        const QVariant expectedSiteValue = localSitesSnapshot.value(site);
         QHostInfo::lookupHost(site, this,
                               [this, site, gw, mode, protectedHosts, activeServerId, clientResolveGeneration,
-                               expectedSiteValue, activeClientRoutes, startManagedRoutes](const QHostInfo &hostInfo) {
+                               activeClientRoutes, startManagedRoutes](const QHostInfo &hostInfo) {
             if (clientResolveGeneration != m_clientSplitRouteResolveGeneration) {
                 return;
             }
@@ -1047,8 +1197,13 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
                     m_reconnectAfterClientRouteResolution = false;
                     m_deferredManagedRouteReconnectTimer.stop();
                     qInfo() << "VpnConnection: local DNS resolution completed; reconnecting to apply deferred managed policy safely";
-                    QTimer::singleShot(0, this, [this]() {
-                        if (m_connectionState == Vpn::ConnectionState::Connected) {
+                    const quint64 expectedConnectionEpoch = m_connectionEpoch;
+                    const QString expectedServerId = m_serverId;
+                    QTimer::singleShot(0, this, [this, expectedConnectionEpoch,
+                                                expectedServerId]() {
+                        if (expectedConnectionEpoch == m_connectionEpoch
+                            && expectedServerId == m_serverId
+                            && m_connectionState == Vpn::ConnectionState::Connected) {
                             reconnectToVpn();
                         }
                     });
@@ -1067,16 +1222,6 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
                     ? m_vpnProtocol->routeGateway()
                     : m_vpnProtocol->vpnGateway();
             if (gw != currentGateway) {
-                finishClientLookup();
-                return;
-            }
-
-            // DNS completion is not ownership: the user may have removed the
-            // rule or changed its stored value while the lookup was pending.
-            // Only the exact snapshot that launched this lookup may update it.
-            const QVariantMap currentLocalSites = m_appSettingsRepository->vpnSites(mode);
-            if (!currentLocalSites.contains(site) || currentLocalSites.value(site) != expectedSiteValue) {
-                qInfo() << "VpnConnection: ignoring a stale local split-route DNS result";
                 finishClientLookup();
                 return;
             }
@@ -1109,9 +1254,9 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
                     iface->routeAddList(gw, newClientRoutes);
                 });
             }
-            if (!resolvedIps.isEmpty()) {
-                m_appSettingsRepository->addVpnSite(mode, site, resolvedIps.join(QStringLiteral(", ")));
-            }
+            // The worker consumes only the immutable connection snapshot. DNS
+            // answers are deliberately process-local: persisting here would
+            // race a main-thread UI deletion and could resurrect that rule.
 
             IpcClient::withInterface([](QSharedPointer<IpcInterfaceReplica> iface) {
                 auto reply = iface->flushDns();
@@ -1125,23 +1270,21 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
 #endif
 }
 
-bool VpnConnection::updateManagedSplitTunnelRoutes(amnezia::RouteMode mode,
-                                                    const QStringList &oldRoutes,
-                                                    const QStringList &newRoutes)
+VpnConnection::ManagedRouteUpdateResult VpnConnection::updateManagedSplitTunnelRoutes(
+        amnezia::RouteMode mode,
+        const QStringList &oldRoutes,
+        const QStringList &newRoutes,
+        const QVariantMap &localSites)
 {
+    if (QThread::currentThread() != thread()) {
+        qCritical() << "VpnConnection: refusing managed route mutation outside the VPN worker thread";
+        return ManagedRouteUpdateResult::ReconnectRequired;
+    }
 #ifdef AMNEZIA_DESKTOP
-    if (!m_serversRepository || !m_appSettingsRepository || m_vpnProtocol.isNull()
-        || m_connectionState != Vpn::ConnectionState::Connected
+    if (m_vpnProtocol.isNull() || m_connectionState != Vpn::ConnectionState::Connected
         || mode != RouteMode::VpnAllExceptSites
         || ContainerUtils::isAwgContainer(m_container) || m_container == DockerContainer::WireGuard) {
-        return false;
-    }
-
-    const RouteMode effectiveMode = m_serversRepository->effectiveSiteRouteMode(
-            serverIndex(), m_appSettingsRepository->isSitesSplitTunnelingEnabled(),
-            m_appSettingsRepository->routeMode());
-    if (effectiveMode != mode) {
-        return false;
+        return ManagedRouteUpdateResult::ReconnectRequired;
     }
 
     // Invalidate only stale managed-domain answers. Local lookups remain valid
@@ -1156,7 +1299,7 @@ bool VpnConnection::updateManagedSplitTunnelRoutes(amnezia::RouteMode mode,
         qInfo() << "VpnConnection: queued managed policy refresh behind"
                 << m_pendingClientSplitRouteLookups << "local DNS lookups; reconnect deadline"
                 << deferredManagedRouteDeadlineMs << "ms";
-        return true;
+        return ManagedRouteUpdateResult::ReconnectDeferred;
     }
 
     QStringList protectedHosts = serverRoutingRulesSyncHosts();
@@ -1165,42 +1308,15 @@ bool VpnConnection::updateManagedSplitTunnelRoutes(amnezia::RouteMode mode,
     protectedHosts.removeAll(QString());
     protectedHosts.removeDuplicates();
 
-    QStringList localRoutes;
-    appendSplitTunnelSiteRoutes(localRoutes, m_appSettingsRepository->vpnSites(mode), SplitTunnelRouteSource::Client);
-    localRoutes = splitRoutesKeepingHostsInVpn(localRoutes, protectedHosts);
-    localRoutes = normalizedSupportedIpv4Routes(localRoutes);
-
-    QStringList unsupportedOldRoutes;
-    QStringList unsupportedNewRoutes;
     bool oldManagedRoutesValid = false;
     bool newManagedRoutesValid = false;
-    const QStringList boundedOldRoutes = managedRoutePolicy::validatedManagedRoutes(
-            oldRoutes, &oldManagedRoutesValid);
-    const QStringList boundedNewRoutes = managedRoutePolicy::validatedManagedRoutes(
-            newRoutes, &newManagedRoutesValid);
+    const QStringList normalizedOldRoutes = normalizedManagedRoutesForRuntime(
+            mode, oldRoutes, localSites, protectedHosts, &oldManagedRoutesValid);
+    const QStringList normalizedNewRoutes = normalizedManagedRoutesForRuntime(
+            mode, newRoutes, localSites, protectedHosts, &newManagedRoutesValid);
     if (!oldManagedRoutesValid || !newManagedRoutesValid) {
-        qWarning() << "VpnConnection: managed route update failed its safety boundary";
-        return false;
-    }
-    QStringList normalizedOldRoutes = normalizedSupportedIpv4Routes(
-            splitRoutesKeepingHostsInVpn(boundedOldRoutes, protectedHosts), &unsupportedOldRoutes);
-    QStringList normalizedNewRoutes = normalizedSupportedIpv4Routes(
-            splitRoutesKeepingHostsInVpn(boundedNewRoutes, protectedHosts), &unsupportedNewRoutes);
-    normalizedOldRoutes = managedRoutePolicy::validatedManagedRoutes(
-            normalizedOldRoutes, &oldManagedRoutesValid);
-    normalizedNewRoutes = managedRoutePolicy::validatedManagedRoutes(
-            normalizedNewRoutes, &newManagedRoutesValid);
-    if (!oldManagedRoutesValid || !newManagedRoutesValid) {
-        qWarning() << "VpnConnection: managed route update expansion exceeded its safety boundary";
-        return false;
-    }
-    unsupportedOldRoutes.removeDuplicates();
-    unsupportedNewRoutes.removeDuplicates();
-    unsupportedOldRoutes.sort();
-    unsupportedNewRoutes.sort();
-    if (unsupportedOldRoutes != unsupportedNewRoutes) {
-        qInfo() << "VpnConnection: managed route delta contains changed non-IPv4 or non-canonical routes; reconnect required";
-        return false;
+        qWarning() << "VpnConnection: managed route update failed its immutable snapshot safety boundary";
+        return ManagedRouteUpdateResult::ReconnectRequired;
     }
 
     QSet<QString> oldSet;
@@ -1211,11 +1327,6 @@ bool VpnConnection::updateManagedSplitTunnelRoutes(amnezia::RouteMode mode,
     for (const QString &route : normalizedNewRoutes) {
         newSet.insert(route);
     }
-    for (const QString &localRoute : localRoutes) {
-        oldSet.remove(localRoute);
-        newSet.remove(localRoute);
-    }
-
     QStringList addedRoutes;
     QStringList removedRoutes;
     for (const QString &route : newSet) {
@@ -1231,11 +1342,11 @@ bool VpnConnection::updateManagedSplitTunnelRoutes(amnezia::RouteMode mode,
     addedRoutes.sort();
     removedRoutes.sort();
     if (addedRoutes.isEmpty() && removedRoutes.isEmpty()) {
-        return true;
+        return ManagedRouteUpdateResult::Updated;
     }
     if (addedRoutes.size() + removedRoutes.size() > maxIncrementalManagedRouteDelta) {
         qInfo() << "VpnConnection: managed route delta is too large for a safe incremental update";
-        return false;
+        return ManagedRouteUpdateResult::ReconnectRequired;
     }
 
 
@@ -1245,12 +1356,12 @@ bool VpnConnection::updateManagedSplitTunnelRoutes(amnezia::RouteMode mode,
     // normal route teardown/rebuild path applies the complete policy.
     if (!removedRoutes.isEmpty()) {
         qInfo() << "VpnConnection: managed route removal requires an atomic reconnect; no incremental mutation attempted";
-        return false;
+        return ManagedRouteUpdateResult::ReconnectRequired;
     }
 
     const QString gateway = m_vpnProtocol->routeGateway();
     if (!NetworkUtilities::checkIPv4Format(gateway)) {
-        return false;
+        return ManagedRouteUpdateResult::ReconnectRequired;
     }
 
     const bool updated = IpcClient::withInterface(
@@ -1272,13 +1383,157 @@ bool VpnConnection::updateManagedSplitTunnelRoutes(amnezia::RouteMode mode,
         qInfo() << "VpnConnection: incrementally updated managed routes, added" << addedRoutes.size()
                 << "removed" << removedRoutes.size();
     }
-    return updated;
+    return updated ? ManagedRouteUpdateResult::Updated
+                   : ManagedRouteUpdateResult::ReconnectRequired;
 #else
     Q_UNUSED(mode)
     Q_UNUSED(oldRoutes)
     Q_UNUSED(newRoutes)
-    return false;
+    Q_UNUSED(localSites)
+    return ManagedRouteUpdateResult::ReconnectRequired;
 #endif
+}
+
+void VpnConnection::reconcileManagedSplitTunnelRoutes(
+        quint64 generation, quint64 expectedConnectionEpoch,
+        const QString &expectedServerId, quint64 expectedBaseRevision,
+        const QString &expectedPolicyRevision,
+        const QString &expectedPolicyContentHash,
+        int modeValue, const QStringList &oldRoutes,
+        const QStringList &newRoutes,
+        const QString &desiredPolicyRevision,
+        const QString &desiredPolicyContentHash,
+        const QVariantMap &localSites)
+{
+    if (QThread::currentThread() != thread()) {
+        qCritical() << "VpnConnection: refusing managed route reconciliation outside the VPN worker thread";
+        emit managedSplitTunnelRoutesReconciled(
+                generation, expectedConnectionEpoch, expectedServerId,
+                false, false, false,
+                static_cast<int>(RouteMode::VpnAllSites), QStringList(),
+                0, QString(), QString());
+        return;
+    }
+    const bool generationAccepted = generation > m_latestManagedRouteReconcileGeneration;
+    if (generationAccepted) {
+        m_latestManagedRouteReconcileGeneration = generation;
+    }
+    const auto requestedMode = static_cast<RouteMode>(modeValue);
+    const bool modeValid = requestedMode == RouteMode::VpnAllSites
+            || requestedMode == RouteMode::VpnOnlyForwardSites
+            || requestedMode == RouteMode::VpnAllExceptSites;
+    const bool expectedIdentityValid =
+            managedRoutePolicy::isCanonicalPolicyIdentity(
+                    expectedPolicyRevision, expectedPolicyContentHash)
+            && (oldRoutes.isEmpty() || !expectedPolicyRevision.isEmpty());
+    const bool desiredIdentityValid =
+            managedRoutePolicy::isCanonicalPolicyIdentity(
+                    desiredPolicyRevision, desiredPolicyContentHash)
+            && (newRoutes.isEmpty() || !desiredPolicyRevision.isEmpty());
+    const bool bindingMatches = generationAccepted && modeValid
+            && expectedIdentityValid && desiredIdentityValid
+            && expectedConnectionEpoch == m_connectionEpoch
+            && !expectedServerId.isEmpty()
+            && expectedServerId == m_serverId
+            && m_connectionState == Vpn::ConnectionState::Connected;
+    if (!bindingMatches) {
+        const ManagedRouteRuntimeSnapshot applied = managedRouteRuntimeSnapshot();
+        emit managedSplitTunnelRoutesReconciled(
+                generation, m_connectionEpoch, m_serverId, false, false, false,
+                static_cast<int>(applied.confirmed
+                                         ? applied.mode : RouteMode::VpnAllSites),
+                applied.confirmed ? applied.installedRoutes : QStringList(),
+                applied.revision,
+                applied.confirmed ? applied.policyRevision : QString(),
+                applied.confirmed ? applied.policyContentHash : QString());
+        return;
+    }
+    m_managedRouteTransitionPending = true;
+
+    bool expectedOldValid = false;
+    bool desiredNewValid = false;
+    QStringList protectedHosts = serverRoutingRulesSyncHosts();
+    protectedHosts << m_vpnConfiguration.value(configKey::dns1).toString()
+                   << m_vpnConfiguration.value(configKey::dns2).toString();
+    protectedHosts.removeAll(QString());
+    protectedHosts.removeDuplicates();
+    const QStringList normalizedExpectedOld = normalizedManagedRoutesForRuntime(
+            requestedMode, oldRoutes, localSites, protectedHosts,
+            &expectedOldValid);
+    const QStringList normalizedDesiredNew = normalizedManagedRoutesForRuntime(
+            requestedMode, newRoutes, localSites, protectedHosts,
+            &desiredNewValid);
+    prepareManagedRouteConnectionSnapshot(
+            generation, expectedServerId, modeValue, newRoutes,
+            desiredPolicyRevision, desiredPolicyContentHash, localSites);
+
+    const bool baseMatches = expectedOldValid && desiredNewValid
+            && m_hasAuthoritativeManagedRouteBase
+            && expectedBaseRevision == m_authoritativeManagedRouteBaseRevision
+            && expectedConnectionEpoch
+                    == m_authoritativeManagedRouteConnectionEpoch
+            && expectedServerId == m_authoritativeManagedRouteServerId
+            && requestedMode == m_authoritativeManagedRouteMode
+            && normalizedExpectedOld == m_authoritativeManagedRoutes
+            && expectedPolicyRevision
+                    == m_authoritativeManagedRoutePolicyRevision
+            && expectedPolicyContentHash
+                    == m_authoritativeManagedRoutePolicyContentHash;
+
+    ManagedRouteUpdateResult updateResult = ManagedRouteUpdateResult::ReconnectRequired;
+    if (!baseMatches) {
+        qWarning() << "VpnConnection: rejected managed-route delta because the expected base no longer matches";
+    } else if (normalizedExpectedOld == normalizedDesiredNew) {
+        // A content revision may change while the effective route set does
+        // not. The authoritative base comparison itself is the receipt.
+        updateResult = ManagedRouteUpdateResult::Updated;
+    } else if (appliedSiteRouteMode() == requestedMode) {
+        updateResult = updateManagedSplitTunnelRoutes(
+                requestedMode, oldRoutes, newRoutes, localSites);
+    }
+
+    const bool updated = updateResult == ManagedRouteUpdateResult::Updated;
+    bool reconnectScheduled = updateResult == ManagedRouteUpdateResult::ReconnectDeferred;
+    if (updated) {
+        ++m_authoritativeManagedRouteBaseRevision;
+        m_hasAuthoritativeManagedRouteBase = true;
+        m_managedRouteTransitionPending = false;
+        m_authoritativeManagedRouteMode = requestedMode;
+        m_authoritativeManagedRoutes = normalizedDesiredNew;
+        m_authoritativeManagedRouteConnectionEpoch = m_connectionEpoch;
+        m_authoritativeManagedRouteServerId = m_serverId;
+        m_authoritativeManagedRoutePolicyRevision = desiredPolicyRevision;
+        m_authoritativeManagedRoutePolicyContentHash = desiredPolicyContentHash;
+    } else {
+        invalidateAuthoritativeManagedRouteBase();
+    }
+    if (updateResult == ManagedRouteUpdateResult::ReconnectRequired) {
+        reconnectScheduled = true;
+    }
+
+    emit managedSplitTunnelRoutesReconciled(
+            generation, expectedConnectionEpoch, expectedServerId,
+            true, updated, reconnectScheduled,
+            static_cast<int>(m_hasAuthoritativeManagedRouteBase
+                                     ? m_authoritativeManagedRouteMode
+                                     : RouteMode::VpnAllSites),
+             m_hasAuthoritativeManagedRouteBase
+                     ? m_authoritativeManagedRoutes : QStringList(),
+             m_authoritativeManagedRouteBaseRevision,
+             m_hasAuthoritativeManagedRouteBase
+                     ? m_authoritativeManagedRoutePolicyRevision : QString(),
+             m_hasAuthoritativeManagedRouteBase
+                     ? m_authoritativeManagedRoutePolicyContentHash : QString());
+
+    if (updateResult == ManagedRouteUpdateResult::ReconnectRequired) {
+        QTimer::singleShot(0, this, [this, expectedConnectionEpoch, expectedServerId]() {
+            if (expectedConnectionEpoch == m_connectionEpoch
+                && expectedServerId == m_serverId
+                && m_connectionState == Vpn::ConnectionState::Connected) {
+                reconnectToVpn();
+            }
+        });
+    }
 }
 
 QSharedPointer<VpnProtocol> VpnConnection::vpnProtocol() const
@@ -1311,34 +1566,38 @@ Vpn::ConnectionState VpnConnection::connectionState() const
     return m_connectionState;
 }
 
-void VpnConnection::connectToVpn(const QString &serverId, DockerContainer container, const QJsonObject &vpnConfiguration)
+void VpnConnection::connectToVpn(const QString &serverId, int serverIndex,
+                                 DockerContainer container,
+                                 const QJsonObject &vpnConfiguration)
 {
-    if (!m_appSettingsRepository || !m_serversRepository) {
-        qCritical() << "VpnConnection::connectToVpn: repositories not initialized";
-        setConnectionState(Vpn::ConnectionState::Error);
-        return;
-    }
-
     qDebug() << QString("Trying to connect to VPN, server id is %1, container is %2, route mode is")
                         .arg(serverId)
                         .arg(ContainerUtils::containerToString(container))
-             << m_appSettingsRepository->routeMode();
+             << m_preparedManagedRouteMode;
 
-    const int serverIndex = m_serversRepository->indexOfServerId(serverId);
-    if (serverIndex < 0) {
+    if (serverId.isEmpty() || serverIndex < 0) {
         qCritical() << "VpnConnection::connectToVpn: invalid server id" << serverId;
         setConnectionState(Vpn::ConnectionState::Error);
         return;
     }
 
+    // A fresh protocol start may reuse the same gateway and route keys. Clear
+    // the service registry while the old protocol is still authoritative and
+    // retain the bounded receipt; an incomplete teardown makes the next base
+    // unknown even if all subsequent additions succeed.
+    m_startupRouteTeardownConfirmed = clearSavedRoutesWithReceipt();
+    if (!m_startupRouteTeardownConfirmed) {
+        qWarning() << "VpnConnection::connectToVpn: saved-route teardown was not confirmed";
+    }
     invalidateAllSplitRouteResolutions();
+    ++m_connectionEpoch;
+    m_connectionRestoredWithoutStartup = false;
     m_remoteAddress = NetworkUtilities::getIPAddress(vpnConfiguration.value(configKey::hostName).toString());
     m_serverIndex = serverIndex;
     m_serverId = serverId;
     m_container = container;
-    setConnectionState(Vpn::ConnectionState::Connecting);
-
     m_vpnConfiguration = vpnConfiguration;
+    setConnectionState(Vpn::ConnectionState::Connecting);
 
 #ifdef AMNEZIA_DESKTOP
     if (m_vpnProtocol) {
@@ -1394,22 +1653,16 @@ void VpnConnection::createProtocolConnections()
 
 void VpnConnection::appendKillSwitchConfig()
 {
-    if (!m_appSettingsRepository) {
-        qCritical() << "VpnConnection::appendKillSwitchConfig: repositories not initialized";
-        return;
+    if (!m_vpnConfiguration.contains(configKey::killSwitchOption)) {
+        m_vpnConfiguration.insert(configKey::killSwitchOption, QStringLiteral("false"));
     }
-
-    m_vpnConfiguration.insert(configKey::killSwitchOption, QVariant(m_appSettingsRepository->isKillSwitchEnabled()).toString());
-    m_vpnConfiguration.insert(configKey::allowedDnsServers, QVariant(m_appSettingsRepository->getAllowedDnsServers()).toJsonValue());
+    if (!m_vpnConfiguration.contains(configKey::allowedDnsServers)) {
+        m_vpnConfiguration.insert(configKey::allowedDnsServers, QJsonArray());
+    }
 }
 
 void VpnConnection::appendSplitTunnelingConfig()
 {
-    if (!m_appSettingsRepository || !m_serversRepository) {
-        qCritical() << "VpnConnection::appendSplitTunnelingConfig: repositories not initialized";
-        return;
-    }
-
     bool allowSiteBasedSplitTunneling = true;
 
     // this block is for old native configs and for old self-hosted configs
@@ -1457,31 +1710,30 @@ void VpnConnection::appendSplitTunnelingConfig()
         }
     }
 
-    const int currentServerIndex = serverIndex();
-    const int activeServerIndex = currentServerIndex >= 0
-            ? currentServerIndex : m_serversRepository->defaultServerIndex();
-    RouteMode routeMode = m_serversRepository->effectiveSiteRouteMode(
-            activeServerIndex, m_appSettingsRepository->isSitesSplitTunnelingEnabled(), m_appSettingsRepository->routeMode());
+    const bool preparedSnapshotMatches = m_hasPreparedManagedRouteSnapshot
+            && m_preparedManagedRouteServerId == m_serverId;
+    RouteMode routeMode = preparedSnapshotMatches
+            ? m_preparedManagedRouteMode : RouteMode::VpnAllSites;
+    QStringList startupManagedRoutes;
+    bool startupSnapshotConfirmable = preparedSnapshotMatches;
     QJsonArray sitesJsonArray;
     if (allowSiteBasedSplitTunneling && routeMode != RouteMode::VpnAllSites) {
         QStringList localSites;
-        QStringList managedSites;
+        QStringList managedSites = m_preparedManagedRoutes;
         QStringList protectedHosts = serverRoutingRulesSyncHosts();
         protectedHosts << m_vpnConfiguration.value(configKey::dns1).toString()
                        << m_vpnConfiguration.value(configKey::dns2).toString();
         protectedHosts.removeAll(QString());
         protectedHosts.removeDuplicates();
-        appendSplitTunnelSiteRoutes(localSites, m_appSettingsRepository->vpnSites(routeMode),
+        appendSplitTunnelSiteRoutes(localSites, m_preparedLocalSites,
                                     SplitTunnelRouteSource::Client);
-        appendSplitTunnelSiteRoutes(managedSites,
-                                    m_serversRepository->managedVpnSitesForRouting(activeServerIndex, routeMode),
-                                    SplitTunnelRouteSource::ServerManaged);
         localSites.removeDuplicates();
 
         bool managedSitesValid = false;
         managedSites = managedRoutePolicy::validatedManagedRoutes(managedSites, &managedSitesValid);
         if (!managedSitesValid) {
             qWarning() << "VpnConnection: mobile managed route snapshot failed its safety boundary";
+            startupSnapshotConfirmable = false;
             managedSites.clear();
         }
         if (routeMode == RouteMode::VpnAllExceptSites) {
@@ -1490,9 +1742,11 @@ void VpnConnection::appendSplitTunnelingConfig()
             managedSites = managedRoutePolicy::validatedManagedRoutes(managedSites, &managedSitesValid);
             if (!managedSitesValid) {
                 qWarning() << "VpnConnection: mobile protected-host expansion exceeded the managed route boundary";
+                startupSnapshotConfirmable = false;
                 managedSites.clear();
             }
         }
+        startupManagedRoutes = managedSites;
 
         QStringList sites = localSites;
         sites.append(managedSites);
@@ -1510,47 +1764,72 @@ void VpnConnection::appendSplitTunnelingConfig()
                 sitesJsonArray.append(syncHost);
             }
         }
+    } else if (!allowSiteBasedSplitTunneling && routeMode != RouteMode::VpnAllSites) {
+        // This legacy protocol shape does not accept the site list through the
+        // shared split-tunnel config, so startup cannot receipt the prepared
+        // managed snapshot.
+        startupSnapshotConfirmable = false;
     }
+
+    if (routeMode == RouteMode::VpnAllSites) {
+        startupManagedRoutes.clear();
+    }
+    if (preparedSnapshotMatches && routeMode != m_preparedManagedRouteMode) {
+        startupSnapshotConfirmable = false;
+    }
+    m_startupManagedRouteServerId = m_serverId;
+    m_startupManagedRouteMode = routeMode;
+    m_startupManagedRoutes = startupManagedRoutes;
+    m_startupManagedRoutePolicyRevision = preparedSnapshotMatches
+            ? m_preparedManagedRoutePolicyRevision : QString();
+    m_startupManagedRoutePolicyContentHash = preparedSnapshotMatches
+            ? m_preparedManagedRoutePolicyContentHash : QString();
+    m_startupLocalSites = preparedSnapshotMatches ? m_preparedLocalSites : QVariantMap();
+    m_hasStartupManagedRouteSnapshot = startupSnapshotConfirmable;
 
     m_vpnConfiguration.insert(configKey::splitTunnelType, routeMode);
     m_vpnConfiguration.insert(configKey::splitTunnelSites, sitesJsonArray);
 
-    amnezia::AppsRouteMode appsRouteMode = amnezia::AppsRouteMode::VpnAllApps;
-    QJsonArray appsJsonArray;
-    if (m_appSettingsRepository->isAppsSplitTunnelingEnabled()) {
-        appsRouteMode = m_appSettingsRepository->appsRouteMode();
-
-        auto apps = m_appSettingsRepository->vpnApps(appsRouteMode);
-        for (const auto &app : apps) {
-            appsJsonArray.append(app.appPath.isEmpty() ? app.packageName : app.appPath);
-        }
-        if (appsRouteMode == amnezia::AppsRouteMode::VpnOnlyForwardApps
-            && !m_vpnConfiguration.value(configKey::clientLogs).toObject().isEmpty()) {
-            appsJsonArray.append(QStringLiteral("org.amnezia.vpn"));
-        }
-
-        if (appsJsonArray.isEmpty()) {
-            appsRouteMode = amnezia::AppsRouteMode::VpnAllApps;
-        }
+    const int appsRouteModeValue = m_vpnConfiguration.value(configKey::appSplitTunnelType)
+                                           .toInt(static_cast<int>(amnezia::AppsRouteMode::VpnAllApps));
+    amnezia::AppsRouteMode appsRouteMode = static_cast<amnezia::AppsRouteMode>(appsRouteModeValue);
+    QJsonArray appsJsonArray = m_vpnConfiguration.value(configKey::splitTunnelApps).toArray();
+    if (appsRouteMode != amnezia::AppsRouteMode::VpnOnlyForwardApps
+        && appsRouteMode != amnezia::AppsRouteMode::VpnAllExceptApps) {
+        appsRouteMode = amnezia::AppsRouteMode::VpnAllApps;
+        appsJsonArray = {};
+    } else if (appsRouteMode == amnezia::AppsRouteMode::VpnOnlyForwardApps
+               && !m_vpnConfiguration.value(configKey::clientLogs).toObject().isEmpty()
+               && !appsJsonArray.contains(QStringLiteral("org.amnezia.vpn"))) {
+        // Always-on client-log uploads originate in the Android application.
+        // Keep that application inside an allow-list tunnel without consulting
+        // repositories from the worker thread.
+        appsJsonArray.append(QStringLiteral("org.amnezia.vpn"));
+    } else if (appsJsonArray.isEmpty()) {
+        appsRouteMode = amnezia::AppsRouteMode::VpnAllApps;
     }
 
     m_vpnConfiguration.insert(configKey::appSplitTunnelType, appsRouteMode);
     m_vpnConfiguration.insert(configKey::splitTunnelApps, appsJsonArray);
 
     qDebug() << QString("Site split tunneling is %1, route mode is %2")
-                        .arg(m_appSettingsRepository->isSitesSplitTunnelingEnabled() ? "enabled" : "disabled")
+                        .arg(preparedSnapshotMatches ? "enabled" : "disabled")
                         .arg(routeMode);
     qDebug() << QString("App split tunneling is %1, route mode is %2")
-                        .arg(m_appSettingsRepository->isAppsSplitTunnelingEnabled() ? "enabled" : "disabled")
+                        .arg(appsRouteMode != amnezia::AppsRouteMode::VpnAllApps ? "enabled" : "disabled")
                         .arg(appsRouteMode);
 }
 
 #ifdef Q_OS_ANDROID
-void VpnConnection::restoreConnection(int serverIndex, DockerContainer container, const QJsonObject &vpnConfiguration,
+void VpnConnection::restoreConnection(const QString &serverId, int serverIndex,
+                                      DockerContainer container, const QJsonObject &vpnConfiguration,
                                       Vpn::ConnectionState state)
 {
+    invalidateAllSplitRouteResolutions();
+    ++m_connectionEpoch;
+    m_connectionRestoredWithoutStartup = true;
     m_serverIndex = serverIndex;
-    m_serverId = m_serversRepository ? m_serversRepository->serverIdAt(serverIndex) : QString();
+    m_serverId = serverId;
     m_container = container;
     m_vpnConfiguration = vpnConfiguration;
     m_remoteAddress = NetworkUtilities::getIPAddress(vpnConfiguration.value(configKey::hostName).toString());
@@ -1597,7 +1876,15 @@ void VpnConnection::reconnectToVpn() {
         || m_connectionState != Vpn::ConnectionState::Connected) {
         return;
     }
+    m_startupRouteTeardownConfirmed = clearSavedRoutesWithReceipt();
+    if (!m_startupRouteTeardownConfirmed) {
+        qWarning() << "VpnConnection::reconnectToVpn: saved-route teardown was not confirmed";
+    }
+    ++m_connectionEpoch;
     invalidateAllSplitRouteResolutions();
+    m_connectionRestoredWithoutStartup = false;
+    const quint64 reconnectEpoch = m_connectionEpoch;
+    const QString reconnectServerId = m_serverId;
     setConnectionState(Vpn::ConnectionState::Reconnecting);
 #ifdef AMNEZIA_DESKTOP
     appendKillSwitchConfig();
@@ -1605,8 +1892,10 @@ void VpnConnection::reconnectToVpn() {
     appendSplitTunnelingConfig();
     m_reconnectPending = true;
     IosController::Instance()->disconnectVpn();
-    QTimer::singleShot(10000, this, [this]() {
-        if (!m_reconnectPending || m_connectionState != Vpn::ConnectionState::Reconnecting) {
+    QTimer::singleShot(10000, this, [this, reconnectEpoch, reconnectServerId]() {
+        if (reconnectEpoch != m_connectionEpoch || reconnectServerId != m_serverId
+            || !m_reconnectPending
+            || m_connectionState != Vpn::ConnectionState::Reconnecting) {
             return;
         }
         qWarning() << "Reconnect timeout while waiting for NetworkExtension disconnect, starting VPN";
@@ -1625,7 +1914,18 @@ void VpnConnection::reconnectToVpn() {
     }
 
     qDebug() << "Reconnect triggered. Reconnecting to the server";
+    // The authoritative removal receipt must arrive before protocol signals
+    // are disconnected and before the old protocol is stopped. Otherwise a
+    // reconnect can strand A+B while later claiming that only A is applied.
+    m_startupRouteTeardownConfirmed = clearSavedRoutesWithReceipt();
+    if (!m_startupRouteTeardownConfirmed) {
+        qWarning() << "VpnConnection::reconnectToVpn: saved-route teardown was not confirmed";
+    }
+    ++m_connectionEpoch;
     invalidateAllSplitRouteResolutions();
+    m_connectionRestoredWithoutStartup = false;
+    const quint64 reconnectEpoch = m_connectionEpoch;
+    const QString reconnectServerId = m_serverId;
 
     setConnectionState(Vpn::ConnectionState::Reconnecting);
 #ifdef AMNEZIA_DESKTOP
@@ -1633,7 +1933,11 @@ void VpnConnection::reconnectToVpn() {
 #endif
     appendSplitTunnelingConfig();
 
-    const auto startUpdatedProtocol = [this]() {
+    const auto startUpdatedProtocol = [this, reconnectEpoch, reconnectServerId]() {
+        if (reconnectEpoch != m_connectionEpoch || reconnectServerId != m_serverId
+            || m_connectionState != Vpn::ConnectionState::Reconnecting) {
+            return;
+        }
 #ifdef Q_OS_ANDROID
         createAndroidConnections();
         m_vpnProtocol.reset(androidVpnProtocol);
@@ -1656,8 +1960,10 @@ void VpnConnection::reconnectToVpn() {
     m_vpnProtocol->stop();
     m_vpnProtocol.reset();
 #ifdef Q_OS_ANDROID
-    QTimer::singleShot(1000, this, [this, startUpdatedProtocol]() {
-        if (m_connectionState == Vpn::ConnectionState::Reconnecting) {
+    QTimer::singleShot(1000, this, [this, startUpdatedProtocol,
+                                   reconnectEpoch, reconnectServerId]() {
+        if (reconnectEpoch == m_connectionEpoch && reconnectServerId == m_serverId
+            && m_connectionState == Vpn::ConnectionState::Reconnecting) {
             startUpdatedProtocol();
         }
     });
@@ -1669,6 +1975,11 @@ void VpnConnection::reconnectToVpn() {
 
 void VpnConnection::disconnectFromVpn()
 {
+    m_startupRouteTeardownConfirmed = clearSavedRoutesWithReceipt();
+    if (!m_startupRouteTeardownConfirmed) {
+        qWarning() << "VpnConnection::disconnectFromVpn: saved-route teardown was not confirmed";
+    }
+    ++m_connectionEpoch;
     invalidateAllSplitRouteResolutions();
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
     // iOS/macOS NE use IosController directly; m_vpnProtocol is not set there.
@@ -1704,6 +2015,47 @@ void VpnConnection::disconnectFromVpn()
     m_vpnProtocol = nullptr;
 }
 
+void VpnConnection::shutdownForApplicationExit(bool disconnectVpn, QThread *destructionThread)
+{
+    if (QThread::currentThread() != thread()) {
+        qCritical() << "VpnConnection: refusing application-exit shutdown outside the VPN worker thread";
+        return;
+    }
+    // Preserve the same teardown-before-signal-disconnect ordering used by a
+    // reconnect, but never touch the shared desktop route registry for a
+    // read-only operator process that intentionally leaves the live VPN alone.
+    if (disconnectVpn) {
+        m_startupRouteTeardownConfirmed = clearSavedRoutesWithReceipt();
+        if (!m_startupRouteTeardownConfirmed) {
+            qWarning() << "VpnConnection::shutdownForApplicationExit: saved-route teardown was not confirmed";
+        }
+    }
+    disconnectSlots();
+    m_checkTimer.stop();
+    if (disconnectVpn) {
+        disconnectFromVpn();
+    } else {
+        // QHostInfo callbacks and the deferred reconnect deadline outlive no
+        // process-local protocol owner. Invalidate both generations and stop
+        // the timer before releasing the wrapper.
+        ++m_connectionEpoch;
+        invalidateAllSplitRouteResolutions();
+        // The platform VPN may intentionally outlive this process (for
+        // example Android's service). Release only the process-local protocol
+        // wrapper while it is still in its owning thread.
+        m_vpnProtocol.clear();
+#ifdef Q_OS_ANDROID
+        androidVpnProtocol = nullptr;
+#endif
+    }
+    QThread *const workerThread = QThread::currentThread();
+    if (!destructionThread || destructionThread == workerThread
+        || !moveToThread(destructionThread)) {
+        qFatal("VpnConnection: failed to transfer ownership before worker shutdown");
+    }
+    workerThread->quit();
+}
+
 void VpnConnection::setConnectionState(Vpn::ConnectionState state) {
     onConnectionStateChanged(state);
 
@@ -1719,5 +2071,6 @@ void VpnConnection::setConnectionState(Vpn::ConnectionState state) {
         return;
 
     m_connectionState = state;
+    emit connectionContextChanged(m_serverId, serverRoutingRulesSyncHost(), m_connectionEpoch);
     emit connectionStateChanged(state);
 }

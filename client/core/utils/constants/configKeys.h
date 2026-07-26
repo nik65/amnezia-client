@@ -11,6 +11,7 @@ namespace amnezia
         constexpr QLatin1String userName("userName");
         constexpr QLatin1String password("password");
         constexpr QLatin1String port("port");
+        constexpr QLatin1String sshHostKeyFingerprint("sshHostKeyFingerprint");
         constexpr QLatin1String localPort("local_port");
 
         constexpr QLatin1String dns1("dns1");

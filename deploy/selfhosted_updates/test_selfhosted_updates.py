@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ast
 import base64
 import contextlib
 import hashlib
@@ -203,6 +204,711 @@ def shell_absolute_path(path: Path) -> str:
     drive = resolved.drive.rstrip(":").lower()
     tail = resolved.as_posix().split(":", 1)[1].lstrip("/")
     return f"/{drive}/{tail}"
+
+
+def bundled_publisher_harness_source(channel_root: Path) -> tuple[str, Path]:
+    """Adapt only compile-time publisher constants in a private POSIX test copy."""
+
+    source = (SCRIPT_DIR / "publish_bundled_release.sh").read_text(encoding="utf-8")
+    anchor = channel_root.parent
+    upload_prefix = anchor / "upload."
+    replacements = {
+        "PINNED_ROOT='/opt/amnezia/client-updates'": (
+            "PINNED_ROOT=" + publish_release.sh_quote(str(channel_root))
+        ),
+        "PINNED_PARENT='/opt/amnezia'": "PINNED_PARENT=" + publish_release.sh_quote(str(anchor)),
+        "TRUST_ANCHOR='/opt'": "TRUST_ANCHOR=" + publish_release.sh_quote(str(anchor)),
+        "UPLOAD_PREFIX='/tmp/amnezia-client-updates.'": (
+            "UPLOAD_PREFIX=" + publish_release.sh_quote(str(upload_prefix))
+        ),
+        "TRUSTED_UID=0": "TRUSTED_UID=$(id -u)",
+        "TRUSTED_GID=0": "TRUSTED_GID=$(id -g)",
+        'as_root() {\n    sudo -n -- "$@"\n}': 'as_root() {\n    "$@"\n}',
+    }
+    for original, replacement in replacements.items():
+        if source.count(original) != 1:
+            raise AssertionError(f"publisher harness replacement is not unique: {original!r}")
+        source = source.replace(original, replacement, 1)
+    return source, upload_prefix
+
+
+def bundled_publisher_receipt(
+    kind: str,
+    run_id: str,
+    expected: str,
+    candidate: str,
+    metadata_sha: str,
+    file_count: int,
+    result: str,
+    phase: str,
+) -> str:
+    return (
+        f"{kind}\t{run_id}\t{expected}\t{candidate}\t{metadata_sha}\t"
+        f"{file_count}\t{result}\t{phase}\n"
+    )
+
+
+def extract_ssh_upload_shell_command(variable_name: str) -> str:
+    source = (REPO_ROOT / "client/core/utils/selfhosted/sshClient.cpp").read_text(encoding="utf-8")
+    command_start = source.index(f"const QString {variable_name} = QStringLiteral(")
+    command_end = source.index(".arg(shellQuote(remotePath)", command_start)
+    command_source = source[command_start:command_end]
+    literal_parts = re.findall(r'"((?:\\.|[^"\\])*)"', command_source)
+    return "".join(ast.literal_eval(f'"{part}"') for part in literal_parts)
+
+
+def extract_ssh_upload_durable_sync_function() -> str:
+    command = extract_ssh_upload_shell_command("command")
+    function_start = command.index("durable_sync() {")
+    function_end = command.index("cleanup_upload()", function_start)
+    return command[function_start:function_end]
+
+
+PINNED_UPDATE_HOST_IMAGE = (
+    "docker.io/library/busybox@"
+    "sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+)
+
+
+def update_host_installer_harness_source(trust_anchor: Path) -> str:
+    """Move only trusted filesystem constants into a private POSIX test root."""
+
+    source = (SCRIPT_DIR / "install_server_update_host.sh").read_text(encoding="utf-8")
+    lock_parent = trust_anchor / "amnezia"
+    replacements = {
+        "TRUST_ANCHOR='/opt'": "TRUST_ANCHOR=" + publish_release.sh_quote(str(trust_anchor)),
+        "LOCK_PARENT='/opt/amnezia'": "LOCK_PARENT=" + publish_release.sh_quote(str(lock_parent)),
+        "TRUSTED_UID=0": "TRUSTED_UID=$(id -u)",
+        "TRUSTED_GID=0": "TRUSTED_GID=$(id -g)",
+        'as_root() {\n    sudo -n -- "$@"\n}': 'as_root() {\n    "$@"\n}',
+    }
+    for original, replacement in replacements.items():
+        if source.count(original) != 1:
+            raise AssertionError(f"installer harness replacement is not unique: {original!r}")
+        source = source.replace(original, replacement, 1)
+    return source
+
+
+def transactional_fake_docker_source() -> str:
+    return textwrap.dedent(
+        f'''\
+        #!/usr/bin/env python3
+        import json
+        import os
+        import sys
+        import time
+        from pathlib import Path
+
+        PINNED_IMAGE = {PINNED_UPDATE_HOST_IMAGE!r}
+        POISONED_TAG = "docker.io/library/busybox:1.36.1"
+        args = sys.argv[1:]
+        state_path = Path(os.environ["FAKE_DOCKER_STATE"])
+        log_path = Path(os.environ["FAKE_DOCKER_LOG"])
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        def save() -> None:
+            state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        def resolve(reference: str):
+            if reference in containers:
+                return reference, containers[reference]
+            for container_name, container in containers.items():
+                if container.get("id") == reference:
+                    return container_name, container
+            return None, None
+
+        def inject_aba(phase: str) -> None:
+            if os.environ.get("FAKE_DOCKER_ABA_PHASE") != phase:
+                return
+            marker = Path(os.environ.get("FAKE_DOCKER_ABA_MARKER", str(state_path) + ".aba"))
+            if marker.exists():
+                return
+            marker.touch()
+            canonical = os.environ.get("FAKE_MAIN_NAME", "amnezia-client-updates")
+            if canonical in containers:
+                displaced = canonical + ".aba-displaced"
+                if displaced in containers:
+                    raise SystemExit(79)
+                containers[displaced] = containers.pop(canonical)
+            containers[canonical] = {{
+                "id": "foreign-container-id",
+                "role": "foreign",
+                "running": True,
+                "network": "foreign-network",
+                "ip": "",
+                "labels": {{}},
+                "image": "foreign/image:latest",
+                "mount_source": "",
+                "mount_rw": True,
+            }}
+            save()
+
+        def complete(phase: str, code: int = 0) -> None:
+            invocation = os.environ.get("FAKE_DOCKER_INVOCATION", "single")
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"{{invocation}}|{{phase}}|{{' '.join(args)}}\\n")
+            if os.environ.get("FAKE_DOCKER_HOLD_PHASE") == phase:
+                entered = Path(os.environ["FAKE_DOCKER_HOLD_ENTERED"])
+                release = Path(os.environ["FAKE_DOCKER_HOLD_RELEASE"])
+                entered.touch()
+                deadline = time.monotonic() + 20
+                while not release.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                if not release.exists():
+                    raise SystemExit(78)
+            inject_aba(phase)
+            fail_phase = os.environ.get("FAKE_DOCKER_FAIL_PHASE")
+            fail_marker = Path(os.environ.get("FAKE_DOCKER_FAIL_MARKER", str(state_path) + ".failed"))
+            if fail_phase == phase and not fail_marker.exists():
+                fail_marker.touch()
+                raise SystemExit(73)
+            raise SystemExit(code)
+
+        def fail_before(phase: str) -> None:
+            if os.environ.get("FAKE_DOCKER_FAIL_BEFORE_PHASE") == phase:
+                complete("before-" + phase, 74)
+
+        def option(name: str) -> str | None:
+            try:
+                return args[args.index(name) + 1]
+            except (ValueError, IndexError):
+                return None
+
+        containers = state.setdefault("containers", {{}})
+        networks = state.setdefault("networks", {{}})
+
+        def resolve_network(reference: str):
+            if reference in networks:
+                return reference, networks[reference]
+            for network_name, network in networks.items():
+                if network.get("id") == reference:
+                    return network_name, network
+            return None, None
+
+        def render_container(name: str, container: dict, template: str) -> None:
+            if ".Id" in template:
+                print(container["id"])
+            elif ".Name" in template:
+                print("/" + name)
+            elif ".State.Running" in template:
+                print("true" if container["running"] else "false")
+            elif ".NetworkSettings.Networks" in template:
+                print(container.get("ip", ""))
+            elif ".Config.Image" in template:
+                print(container.get("image", PINNED_IMAGE))
+            elif ".HostConfig.NetworkMode" in template:
+                print(container.get("network", ""))
+            elif ".Config.Labels" in template:
+                for label_key, label_value in container.get("labels", {{}}).items():
+                    if label_key in template:
+                        print(label_value)
+                        break
+                else:
+                    print("")
+            elif ".Mounts" in template:
+                print(f"{{container.get('mount_source', '')}}|{{str(container.get('mount_rw', False)).lower()}}")
+
+        if args[:2] == ["image", "inspect"]:
+            reference = args[2] if len(args) > 2 else ""
+            present = bool(state.get("image_present")) if reference == PINNED_IMAGE else (
+                bool(state.get("poisoned_tag_present")) if reference == POISONED_TAG else False
+            )
+            if not present:
+                print(f"Error: No such image: {{reference}}", file=sys.stderr)
+            complete("image-inspect", 0 if present else 1)
+
+        if args and args[0] == "pull":
+            if len(args) < 2 or args[1] != PINNED_IMAGE:
+                complete("pull-unpinned", 68)
+            if os.environ.get("FAKE_DOCKER_ALLOW_PULL", "0") != "1":
+                complete("pull-pinned", 69)
+            state["image_present"] = True
+            save()
+            complete("pull-pinned")
+
+        if args[:2] == ["container", "inspect"]:
+            name, container = resolve(args[-1])
+            if container is None:
+                print(f"Error: No such object: {{args[-1]}}", file=sys.stderr)
+                complete("container-inspect", 1)
+            render_container(name, container, option("-f") or "")
+            complete("container-inspect")
+
+        if args and args[0] == "inspect":
+            name, container = resolve(args[-1])
+            if container is None:
+                print(f"Error: No such object: {{args[-1]}}", file=sys.stderr)
+                complete("inspect-container", 1)
+            template = option("-f") or ""
+            render_container(name, container, template)
+            complete("inspect-container")
+
+        if args and args[0] == "ps":
+            include_stopped = any(value.startswith("-") and "a" in value for value in args)
+            quiet = any(value.startswith("-") and "q" in value for value in args)
+            filters = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--filter"]
+            for name, container in containers.items():
+                if not (include_stopped or container["running"]):
+                    continue
+                matched = True
+                for filter_value in filters:
+                    if filter_value.startswith("label="):
+                        label_expression = filter_value[len("label="):]
+                        label_key, _, label_value = label_expression.partition("=")
+                        if container.get("labels", {{}}).get(label_key) != label_value:
+                            matched = False
+                if matched:
+                    print(container["id"] if quiet else name)
+            complete("ps")
+
+        if args[:2] == ["network", "inspect"]:
+            network_name, network = resolve_network(args[-1])
+            if network is None:
+                print(f"Error: No such network: {{args[-1]}}", file=sys.stderr)
+                complete("network-inspect", 1)
+            template = option("-f") or ""
+            if ".Id" in template:
+                print(network["id"])
+            elif ".Name" in template:
+                print(network_name)
+            elif ".IPAM.Config" in template:
+                print(network.get("subnet", ""))
+            elif ".Labels" in template:
+                for label_key, label_value in network.get("labels", {{}}).items():
+                    if label_key in template:
+                        print(label_value)
+                        break
+                else:
+                    print("")
+            complete("network-inspect")
+
+        if args[:2] == ["network", "ls"]:
+            filters = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--filter"]
+            for network in networks.values():
+                matched = True
+                for filter_value in filters:
+                    if filter_value.startswith("label="):
+                        label_key, _, label_value = filter_value[len("label="):].partition("=")
+                        if network.get("labels", {{}}).get(label_key) != label_value:
+                            matched = False
+                if matched:
+                    print(network["id"])
+            complete("network-ls")
+
+        if args[:2] == ["network", "create"]:
+            network_name = args[-1]
+            subnet = next((value.split("=", 1)[1] for value in args if value.startswith("--subnet=")), "")
+            labels = {{}}
+            for index, value in enumerate(args[:-1]):
+                if value == "--label":
+                    label_key, _, label_value = args[index + 1].partition("=")
+                    labels[label_key] = label_value
+            next_network_id = int(state.get("next_network_id", 2000))
+            state["next_network_id"] = next_network_id + 1
+            networks[network_name] = {{
+                "id": f"network-id-{{next_network_id}}",
+                "subnet": subnet,
+                "labels": labels,
+            }}
+            save()
+            complete("network-create")
+
+        if args[:2] == ["network", "rm"]:
+            network_name, network = resolve_network(args[-1])
+            if network is None:
+                print(f"Error: No such network: {{args[-1]}}", file=sys.stderr)
+                complete("network-rm", 1)
+            del networks[network_name]
+            save()
+            complete("network-rm")
+
+        if args[:2] == ["network", "disconnect"]:
+            network_name, reference = args[-2:]
+            name, container = resolve(reference)
+            if container is None or container.get("network") != network_name:
+                complete("disconnect-main", 1)
+            container["network"] = ""
+            container["ip"] = ""
+            save()
+            complete("disconnect-main")
+
+        if args[:2] == ["network", "connect"]:
+            reference = args[-1]
+            network_name = args[-2]
+            name, container = resolve(reference)
+            if container is None:
+                complete("rollback-connect", 1)
+            container["network"] = network_name
+            container["ip"] = option("--ip") or ""
+            save()
+            complete("rollback-connect")
+
+        if args and args[0] == "rename":
+            reference, new_name = args[1:3]
+            old_name, container = resolve(reference)
+            if container is None or new_name in containers:
+                complete("rename-invalid", 1)
+            container = containers.pop(old_name)
+            containers[new_name] = container
+            save()
+            complete("rename-" + container["role"])
+
+        if args and args[0] == "stop":
+            name, container = resolve(args[-1])
+            if container is None:
+                complete("stop-invalid", 1)
+            container["running"] = False
+            save()
+            complete("stop-" + container["role"])
+
+        if args and args[0] == "start":
+            name, container = resolve(args[-1])
+            if container is None:
+                complete("rollback-start", 1)
+            container["running"] = True
+            save()
+            complete("rollback-start")
+
+        if args and args[0] == "run":
+            if PINNED_IMAGE not in args:
+                complete("run-unpinned", 68)
+            name = option("--name")
+            command_text = " ".join(args)
+            if name is None:
+                if "busybox --list" in command_text:
+                    complete("candidate-preflight")
+                expected_address = os.environ.get("FAKE_EXPECT_HOST_PROBE_ADDRESS")
+                if expected_address and f"http://{{expected_address}}:" not in command_text:
+                    complete("health-host-wrong-bind", 24)
+                status = int(os.environ.get("FAKE_HTTP_STATUS", "200"))
+                if status < 200 or status >= 300:
+                    complete("health-host-http-status", 22)
+                if os.environ.get("FAKE_SENTINEL_MATCH", "1") != "1":
+                    complete("health-host-sentinel", 23)
+                complete("health-host")
+            if name in containers:
+                complete("run-name-collision", 1)
+            labels = {{}}
+            for index, value in enumerate(args[:-1]):
+                if value == "--label":
+                    label_key, _, label_value = args[index + 1].partition("=")
+                    labels[label_key] = label_value
+            main_name = os.environ.get("FAKE_MAIN_NAME", "amnezia-client-updates")
+            host_name = os.environ.get("FAKE_HOST_NAME", main_name + "-host")
+            if name == main_name:
+                role = "new-main"
+                phase = "run-main"
+            elif name == host_name:
+                role = "new-host"
+                phase = "run-host"
+            else:
+                role = "new-sidecar"
+                phase = "run-sidecar"
+            next_id = int(state.get("next_id", 1000))
+            state["next_id"] = next_id + 1
+            container_id = f"container-id-{{next_id}}"
+            volume = option("-v") or ""
+            mount_source = volume.rsplit(":/www:ro", 1)[0] if volume.endswith(":/www:ro") else ""
+            containers[name] = {{
+                "id": container_id,
+                "role": role,
+                "running": True,
+                "network": option("--network") or "",
+                "ip": option("--ip") or "",
+                "labels": labels,
+                "image": PINNED_IMAGE,
+                "mount_source": mount_source,
+                "mount_rw": False,
+            }}
+            cidfile = option("--cidfile")
+            if cidfile:
+                Path(cidfile).write_text(container_id + "\\n", encoding="utf-8")
+            save()
+            if os.environ.get("FAKE_DOCKER_FAIL_ROLE") == labels.get(
+                    "org.amnezia.client-update-host.role"
+            ):
+                complete("run-sidecar-target", 73)
+            complete(phase)
+
+        if args and args[0] == "exec":
+            name, container = resolve(args[1])
+            if container is None or not container["running"]:
+                complete("health-missing", 1)
+            role = container["role"]
+            if role in ("main", "new-main"):
+                phase = "health-main"
+            elif role in ("host", "new-host"):
+                phase = "health-host"
+            else:
+                phase = "health-sidecar"
+            if role.startswith("new-"):
+                expected_address = os.environ.get("FAKE_EXPECT_HOST_PROBE_ADDRESS")
+                if phase == "health-host" and expected_address \
+                        and f"http://{{expected_address}}:" not in " ".join(args):
+                    complete("health-host-wrong-bind", 24)
+                status = int(os.environ.get("FAKE_HTTP_STATUS", "200"))
+                if status < 200 or status >= 300:
+                    complete(phase + "-http-status", 22)
+                if os.environ.get("FAKE_SENTINEL_MATCH", "1") != "1":
+                    complete(phase + "-sentinel", 23)
+            complete(phase)
+
+        if args and args[0] == "rm":
+            references = [value for value in args[1:] if not value.startswith("-")]
+            phase = "rm"
+            resolved = []
+            for reference in references:
+                name, container = resolve(reference)
+                if container is not None:
+                    role = container["role"]
+                    if ".amnezia-backup." in name:
+                        phase = "cleanup-backup-" + role
+                    elif role.startswith("new-"):
+                        phase = "rollback-remove-" + role
+                    resolved.append(name)
+            fail_before(phase)
+            for name in resolved:
+                del containers[name]
+            save()
+            complete(phase)
+
+        complete("unhandled")
+        '''
+    )
+
+
+def transactional_fake_firewall_source() -> str:
+    return textwrap.dedent(
+        '''\
+        #!/usr/bin/env python3
+        import json
+        import os
+        import sys
+        from pathlib import Path
+
+        backend = Path(sys.argv[0]).name
+        args = sys.argv[1:]
+        state_path = Path(os.environ["FAKE_FIREWALL_STATE"])
+        log_path = Path(os.environ["FAKE_FIREWALL_LOG"])
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+
+        def save() -> None:
+            state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+
+        def finish(phase: str, code: int = 0) -> None:
+            fail_phase = os.environ.get("FAKE_FIREWALL_FAIL_AFTER")
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"{phase}|fail={fail_phase or ''}|{' '.join(args)}\\n")
+            marker = Path(os.environ.get("FAKE_FIREWALL_FAIL_MARKER", str(state_path) + ".failed"))
+            if fail_phase == phase and not marker.exists():
+                marker.touch()
+                raise SystemExit(75)
+            raise SystemExit(code)
+
+        def value_after(name: str) -> str:
+            try:
+                return args[args.index(name) + 1]
+            except (ValueError, IndexError):
+                return ""
+
+        if backend == "ufw":
+            rules = state.setdefault("ufw", [])
+            if args[:2] == ["show", "added"]:
+                for rule in rules:
+                    print(rule)
+                finish("ufw-query")
+            comment = value_after("comment")
+            if "delete" in args:
+                if comment in rules:
+                    rules.remove(comment)
+                save()
+                finish("ufw-remove")
+            if args and args[0] == "allow":
+                if comment not in rules:
+                    rules.append(comment)
+                save()
+                finish("ufw-add")
+            finish("ufw-unhandled", 2)
+
+        if backend == "firewall-cmd":
+            if args == ["--state"]:
+                if os.environ.get("FAKE_FIREWALLD_RUNNING", "1") == "1":
+                    print("running")
+                    finish("firewalld-state")
+                print("not running")
+                finish("firewalld-state", 1)
+            permanent = "--permanent" in args
+            key = "firewalld_permanent" if permanent else "firewalld_runtime"
+            rules = state.setdefault(key, [])
+            rich_arg = next((value for value in args if "rich-rule=" in value), "")
+            rule = rich_arg.split("=", 1)[1] if "=" in rich_arg else ""
+            if any(value.startswith("--query-rich-rule=") for value in args):
+                finish(key + "-query", 0 if rule in rules else 1)
+            if any(value.startswith("--add-rich-rule=") for value in args):
+                if rule not in rules:
+                    rules.append(rule)
+                save()
+                finish(key + "-add")
+            if any(value.startswith("--remove-rich-rule=") for value in args):
+                if rule in rules:
+                    rules.remove(rule)
+                save()
+                finish(key + "-remove")
+            finish(key + "-unhandled", 2)
+
+        if backend == "iptables":
+            rules = state.setdefault("iptables", [])
+            comment = value_after("--comment")
+            if "-C" in args:
+                finish("iptables-query", 0 if comment in rules else 1)
+            if "-I" in args:
+                if comment not in rules:
+                    rules.append(comment)
+                save()
+                finish("iptables-add")
+            if "-D" in args:
+                if comment in rules:
+                    rules.remove(comment)
+                save()
+                finish("iptables-remove")
+            finish("iptables-unhandled", 2)
+
+        finish("unknown-firewall-backend", 2)
+        '''
+    )
+
+
+def initial_transactional_docker_state(*, image_present: bool = True) -> dict[str, object]:
+    return {
+        "image_present": image_present,
+        "poisoned_tag_present": True,
+        "networks": {
+            "amnezia-dns-net": {
+                "id": "network-dns-id",
+                "subnet": "172.29.172.0/24",
+                "labels": {},
+            }
+        },
+        "containers": {
+            "amnezia-client-updates": {
+                "id": "old-main-id",
+                "role": "main",
+                "running": True,
+                "network": "amnezia-dns-net",
+                "ip": "172.29.172.252",
+            },
+            "amnezia-client-updates-host": {
+                "id": "old-host-id",
+                "role": "host",
+                "running": True,
+                "network": "host",
+                "ip": "",
+            },
+            "amnezia-client-updates-vpn-amnezia-awg": {
+                "id": "old-awg-sidecar-id",
+                "role": "sidecar-running",
+                "running": True,
+                "network": "container:amnezia-awg",
+                "ip": "",
+            },
+            "amnezia-client-updates-vpn-retired": {
+                "id": "retired-sidecar-id",
+                "role": "sidecar-stopped",
+                "running": False,
+                "network": "container:retired-vpn",
+                "ip": "",
+            },
+            "amnezia-awg": {
+                "id": "vpn-awg-id",
+                "role": "vpn",
+                "running": True,
+                "network": "bridge",
+                "ip": "172.17.0.2",
+            },
+        },
+    }
+
+
+def prepare_transactional_installer_harness(root: Path, state: dict[str, object]) -> tuple[Path, Path, Path, dict[str, str]]:
+    trust_anchor = root / "trust-anchor"
+    trust_anchor.mkdir(mode=0o755)
+    trust_anchor.chmod(0o755)
+    host_dir = root / "updates"
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    installer = root / "install_server_update_host.sh"
+    installer.write_text(update_host_installer_harness_source(trust_anchor), encoding="utf-8")
+    installer.chmod(0o700)
+    fake_docker = bin_dir / "docker"
+    fake_docker.write_text(transactional_fake_docker_source(), encoding="utf-8")
+    fake_docker.chmod(0o700)
+    for firewall_binary in ("ufw", "firewall-cmd", "iptables"):
+        fake_firewall = bin_dir / firewall_binary
+        fake_firewall.write_text(transactional_fake_firewall_source(), encoding="utf-8")
+        fake_firewall.chmod(0o700)
+    state_path = root / "docker-state.json"
+    state_path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    log_path = root / "docker.log"
+    firewall_state_path = root / "firewall-state.json"
+    firewall_state_path.write_text(
+        json.dumps(
+            {
+                "ufw": [],
+                "firewalld_runtime": [],
+                "firewalld_permanent": [],
+                "iptables": [],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    firewall_log_path = root / "firewall.log"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": str(bin_dir) + os.pathsep + env.get("PATH", ""),
+            "FAKE_DOCKER_STATE": str(state_path),
+            "FAKE_DOCKER_LOG": str(log_path),
+            "FAKE_FIREWALL_STATE": str(firewall_state_path),
+            "FAKE_FIREWALL_LOG": str(firewall_log_path),
+            "AMNEZIA_UPDATE_VPN_CONTAINER": "amnezia-awg",
+        }
+    )
+    return installer, host_dir, state_path, env
+
+
+def write_bundled_publisher_stage(
+    upload_prefix: Path,
+    run_id: str,
+    manifest_data: bytes,
+    version: str,
+    schema: int,
+    generation: int,
+    records: list[tuple[str, str, bytes]],
+) -> tuple[Path, str, str]:
+    stage = Path(str(upload_prefix) + run_id)
+    stage.mkdir(mode=0o700)
+    os.chmod(stage, 0o700)
+    (stage / "manifest.json").write_bytes(manifest_data)
+    candidate_sha = hashlib.sha256(manifest_data).hexdigest()
+    lines = [
+        "\t".join((
+            "amnezia-bundled-publish-v1",
+            candidate_sha,
+            version,
+            str(schema),
+            str(generation),
+            str(len(records)),
+        ))
+    ]
+    for kind, relative_path, contents in records:
+        path = stage.joinpath(*PurePosixPath(relative_path).parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+        lines.append("\t".join((kind, relative_path, hashlib.sha256(contents).hexdigest(), str(len(contents)))))
+    metadata = ("\n".join(lines) + "\n").encode("utf-8")
+    (stage / "publish.meta").write_bytes(metadata)
+    return stage, candidate_sha, hashlib.sha256(metadata).hexdigest()
 
 
 class ReleaseFreezeTests(unittest.TestCase):
@@ -926,6 +1632,61 @@ class SourceContractTests(unittest.TestCase):
         )
         self.assertIn("sealed-memfd-ok", result.stdout)
 
+    def test_guardian_uses_a_dedicated_fail_closed_no_proxy_manager(self) -> None:
+        core_header = (
+            REPO_ROOT / "client/core/controllers/coreController.h"
+        ).read_text(encoding="utf-8")
+        core_controller = (
+            REPO_ROOT / "client/core/controllers/coreController.cpp"
+        ).read_text(encoding="utf-8")
+
+        schedule_start = core_controller.index(
+            "void CoreController::scheduleGuardianConnectivityProbe("
+        )
+        schedule_end = core_controller.index(
+            "void CoreController::handleGuardianRecoveryRequest(", schedule_start
+        )
+        schedule_probe = core_controller[schedule_start:schedule_end]
+
+        self.assertIn(
+            "QNetworkAccessManager* m_guardianNetworkManager = nullptr;",
+            core_header,
+        )
+        self.assertEqual(
+            core_controller.count(
+                "m_guardianNetworkManager = new QNetworkAccessManager(this);"
+            ),
+            1,
+        )
+        self.assertEqual(
+            core_controller.count(
+                "m_guardianNetworkManager->setProxy(QNetworkProxy::NoProxy);"
+            ),
+            1,
+        )
+        self.assertNotIn(
+            "m_guardianNetworkManager->setProxyFactory", core_controller
+        )
+        self.assertNotIn("amnApp->networkManager()", schedule_probe)
+        self.assertNotIn("guardianNetworkPathHasNoProxy", core_controller)
+
+        factory_gate = schedule_probe.index(
+            "m_guardianNetworkManager->proxyFactory() != nullptr"
+        )
+        no_proxy_gate = schedule_probe.index(
+            "m_guardianNetworkManager->proxy().type()"
+        )
+        request = schedule_probe.index(
+            "m_connectionHealthController->startConnectivityProbe("
+        )
+        self.assertLess(factory_gate, request)
+        self.assertLess(no_proxy_gate, request)
+        self.assertIn(
+            "startConnectivityProbe(\n"
+            "                            m_guardianNetworkManager,",
+            schedule_probe,
+        )
+
     def test_always_on_remote_logs_contract(self) -> None:
         remote_log_uploader = (REPO_ROOT / "client/core/controllers/remoteLogUploader.cpp").read_text(encoding="utf-8")
         android_service = (REPO_ROOT / "client/android/src/org/amnezia/vpn/AmneziaVpnService.kt").read_text(encoding="utf-8")
@@ -961,11 +1722,19 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("url.host() == QString::fromLatin1(amnezia::protocols::clientLogs::syncHost)", remote_log_uploader)
         self.assertIn("url.port() == amnezia::protocols::clientLogs::syncPort", remote_log_uploader)
         self.assertIn("url.path() == QString::fromLatin1(amnezia::protocols::clientLogs::uploadPath)", remote_log_uploader)
-        self.assertIn("QMetaObject::invokeMethod(m_vpnConnection", remote_log_uploader)
-        self.assertIn("snapshot.serverIndex = m_vpnConnection->serverIndex();", remote_log_uploader)
-        self.assertIn("snapshot.container = m_vpnConnection->container();", remote_log_uploader)
+        self.assertIn("requestBoundedQueuedSnapshot(", remote_log_uploader)
+        self.assertIn("m_vpnConnection, this, vpnSnapshotTimeoutMs", remote_log_uploader)
+        self.assertIn("[](VpnConnection *vpnConnection)", remote_log_uploader)
+        self.assertIn("snapshot.state = vpnConnection->connectionState();", remote_log_uploader)
+        self.assertIn("snapshot.serverId = vpnConnection->serverId();", remote_log_uploader)
+        self.assertIn("snapshot.container = vpnConnection->container();", remote_log_uploader)
+        self.assertNotIn("QMetaObject::invokeMethod(m_vpnConnection", remote_log_uploader)
+        self.assertNotIn("Qt::BlockingQueuedConnection", remote_log_uploader)
+        self.assertNotIn("m_vpnConnection->connectionState()", remote_log_uploader)
+        self.assertNotIn("vpnConnection->serverIndex()", remote_log_uploader)
+        self.assertNotIn("m_vpnConnection->container()", remote_log_uploader)
         self.assertIn("snapshot.state != Vpn::ConnectionState::Connected", remote_log_uploader)
-        self.assertIn("m_serversRepository->serverIdAt(activeServerIndex)", remote_log_uploader)
+        self.assertIn("m_serversRepository->indexOfServerId(serverId)", remote_log_uploader)
         self.assertNotIn("m_serversRepository->defaultServerId()", remote_log_uploader)
         self.assertIn("serverJson.value(amnezia::configKey::clientLogs).toObject()", remote_log_uploader)
         self.assertIn("clientLogsUtils::legacyBootstrapTarget", remote_log_uploader)
@@ -973,7 +1742,17 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("setRemoteLogToken(target.tokenCacheKey, token)", remote_log_uploader)
         self.assertIn("clearRemoteLogToken(m_currentTarget.tokenCacheKey)", remote_log_uploader)
         self.assertIn("request.setTransferTimeout(uploadTimeoutMs);", remote_log_uploader)
-        self.assertIn("m_logCursors.insert(payload.offsetKey, { payload.nextOffset, payload.fingerprint });", remote_log_uploader)
+        arm_transition = remote_log_uploader.index(
+            "armRetrySanitizerStableSource(\n                        payload, nextCursor)"
+        )
+        persist_cursor = remote_log_uploader.index(
+            "persistCursor(payload.offsetKey, nextCursor)", arm_transition
+        )
+        publish_cursor = remote_log_uploader.index(
+            "m_logCursors.insert(payload.offsetKey, nextCursor)", persist_cursor
+        )
+        self.assertLess(arm_transition, persist_cursor)
+        self.assertLess(persist_cursor, publish_cursor)
         self.assertIn("fileFingerprint(file, fingerprintBytes)", remote_log_uploader)
         self.assertIn("cursor.fingerprintBytes", remote_log_uploader)
         self.assertIn("QString fileFingerprint(QFile &file, qint64 sampleBytes)", remote_log_uploader)
@@ -981,9 +1760,14 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('request.setRawHeader("X-Amnezia-Batch-Id", batchIdForPayload(payload).toLatin1());', remote_log_uploader)
         self.assertIn("maxBootstrapResponseBytes = 4096", remote_log_uploader)
         self.assertIn("m_nextTokenRefreshAt = QDateTime::currentDateTimeUtc().addMSecs(uploadIntervalMs);", remote_log_uploader)
-        self.assertIn("payloadFromFile(QStringLiteral(\"client\"), Logger::userLogsFilePath())", remote_log_uploader)
-        self.assertIn("payloadFromFile(QStringLiteral(\"service\"), Logger::serviceLogsFilePath())", remote_log_uploader)
-        self.assertIn("sameTarget(findUploadTarget(), m_currentTarget)", remote_log_uploader)
+        self.assertIn("Logger::userLogsFilePath(), &clientSourceReadable", remote_log_uploader)
+        self.assertIn("Logger::serviceLogsFilePath(), &serviceSourceReadable", remote_log_uploader)
+        self.assertIn("sameTarget(findUploadTarget(m_currentConnectionSnapshot), m_currentTarget)", remote_log_uploader)
+        self.assertIn("targetIdentity(m_currentTarget).left(12)", remote_log_uploader)
+        self.assertIn("errorCategoryName(category)", remote_log_uploader)
+        self.assertNotIn("reply->errorString()", remote_log_uploader)
+        self.assertNotIn("<< m_currentTarget.serverId", remote_log_uploader)
+        self.assertNotIn("<< m_currentTarget.endpoint", remote_log_uploader)
         self.assertNotIn("m_lastPayloadHashes", remote_log_uploader)
         self.assertIn("vpnConfiguration[configKey::clientLogs] = clientLogs;", connection_controller)
         self.assertIn("clientLogsUtils::legacyBootstrapTarget(container, containerConfig)", connection_controller)
@@ -1024,7 +1808,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("private data class RemoteLogCursor(", android_service)
         self.assertIn("if (!saveRemoteLogCursorForAttempt(attempt, payload.cursorBeforeUpload))", android_service)
         self.assertIn("if (!saveRemoteLogCursorForAttempt(attempt, payload.cursorAfterUpload))", android_service)
-        self.assertIn("logBytes.copyOfRange(offset, endOffset)", android_service)
+        self.assertIn("logBytes.copyOfRange(offset, batchEndOffset)", android_service)
         self.assertNotIn("lastRemoteLogUploadHash", android_service)
         self.assertIn("val initialAttempt = currentRemoteLogAttempt()", android_service)
         self.assertIn("var attempt = initialAttempt", android_service)
@@ -1040,6 +1824,23 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('setRequestProperty("X-Amnezia-Installation-Id", remoteLogInstallationId())', android_service)
         self.assertIn('setRequestProperty("X-Amnezia-Log-Kind", CLIENT_LOGS_KIND_ANDROID)', android_service)
         self.assertIn('setRequestProperty("X-Amnezia-Batch-Id", payload.batchId)', android_service)
+        self.assertIn("val initialized: Boolean = false", android_service)
+        self.assertIn("freshRemoteLogRecoveryCursor", android_service)
+        self.assertIn("if (storedCursor.initialized)", android_service)
+        self.assertIn("retryingPendingPayload && !pendingSecretSetChanged", android_service)
+        self.assertIn("val payloadSecrets = remoteLogSanitizerSecretsForAttempt(", android_service)
+        self.assertIn("inheritedSecrets = sanitizerExplicitSecrets", android_service)
+        self.assertIn("explicitSecrets = payloadSecrets", android_service)
+        self.assertIn(
+            "inheritedSecrets?.values.orEmpty() + listOf(currentToken, installationId, originNonce)",
+            android_service,
+        )
+        self.assertIn("remoteLogExplicitSecretsSha256(mergedRetrySecrets)", android_service)
+        self.assertIn("retryAuthorization = target.bootstrap", android_service)
+        self.assertIn("retryAuthorization = true", android_service)
+        self.assertIn("isRemoteLogRetryableHttpStatus(401, retryAuthorization = true)", android_service)
+        self.assertNotIn("clientId=${target.clientId}", android_service)
+        self.assertNotIn("endpoint=$CLIENT_LOGS_BOOTSTRAP_ENDPOINT", android_service)
         self.assertIn("private fun remoteLogBatchId(", android_service)
         self.assertIn("fun getAppLogs(maxBytes: Int = DEFAULT_EXPORT_MAX_BYTES): String", android_log)
         self.assertIn("withLock {\n            if (logFile.length() > LOG_MAX_FILE_SIZE)", android_log)
@@ -1446,8 +2247,13 @@ class SourceContractTests(unittest.TestCase):
         self.assertNotIn('m_connectionStateText = tr("Connected")', connection_ui_controller)
         self.assertNotIn('"--publish-bundled-updates-once"', qif_component_script)
         self.assertNotIn("Published bundled self-hosted updates", qif_component_script)
-        self.assertIn("remote_tmp=$(mktemp -d /tmp/amnezia-client-updates.XXXXXX) && ", bootstrapper)
-        self.assertNotIn('set -eu\\n"\n                                                                   "remote_tmp=', bootstrapper)
+        self.assertIn('QStringLiteral("/tmp/amnezia-client-updates.%1").arg(runId)', bootstrapper)
+        self.assertIn('QStringLiteral("sh %1 %2 %3 %4 %5 %6 %7 %8")', bootstrapper)
+        self.assertIn('runPublisher(QStringLiteral("prepare"))', bootstrapper)
+        self.assertIn('runPublisher(QStringLiteral("commit"))', bootstrapper)
+        self.assertIn("metadataSha256", bootstrapper)
+        self.assertIn("fileCount", bootstrapper)
+        self.assertNotIn("remote_tmp=$(mktemp", bootstrapper)
         self.assertIn("[ValidateSet(\"windows\", \"linux\", \"android\")]", local_release)
         self.assertIn('"windows-x64"', local_release)
         self.assertIn(
@@ -1611,12 +2417,36 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("verifyManifestSignature", bootstrapper)
         self.assertIn("PayloadFile", bootstrapper_h)
         self.assertIn("relativePath", bootstrapper_h)
-        self.assertIn("mktemp -d /tmp/amnezia-client-updates.XXXXXX", bootstrapper)
-        self.assertIn("sudo docker exec amnezia-client-updates", bootstrapper)
-        self.assertIn("container_manifest_sha256", bootstrapper)
+        self.assertIn('QStringLiteral("/tmp/amnezia-client-updates.%1").arg(runId)', bootstrapper)
+        self.assertIn("QRandomGenerator::system()->generate()", bootstrapper)
+        self.assertNotIn("mktemp -d /tmp/amnezia-client-updates.XXXXXX", bootstrapper)
+        self.assertIn("bridge_id=$(inspect_value '{{.Id}}' amnezia-client-updates)", bootstrapper)
+        verify_host = bootstrapper[
+            bootstrapper.index("const auto verifyRemoteUpdateHost"):
+            bootstrapper.index("QByteArray publishMetadata")
+        ]
+        self.assertIn('"set -eu\\n"', verify_host)
+        self.assertIn('docker exec \\"$bridge_id\\"', bootstrapper)
+        self.assertIn("runScriptInSingleShell", verify_host)
+        self.assertIn('docker ps -aq --no-trunc --filter \\"label=$tx_label=$transaction_id\\"', verify_host)
+        self.assertIn("tunnel-*", verify_host)
+        self.assertIn(".HostConfig.NetworkMode", verify_host)
+        self.assertIn("org.amnezia.client-update-host.transaction", bootstrapper)
+        self.assertIn("org.amnezia.client-update-host.role", bootstrapper)
+        self.assertIn("org.amnezia.client-update-host.bind", bootstrapper)
+        self.assertIn("org.amnezia.client-update-host.probe", bootstrapper)
+        self.assertIn("org.amnezia.client-update-host.port", bootstrapper)
+        self.assertIn("{{.Config.Image}}", bootstrapper)
+        self.assertIn("{{range .Mounts}}", bootstrapper)
+        self.assertIn("|false", bootstrapper)
+        self.assertIn("{{.State.Running}}", bootstrapper)
+        self.assertIn("bridge_container_id", bootstrapper)
         self.assertIn("--network host", bootstrapper)
-        self.assertIn("host_manifest_sha256", bootstrapper)
-        self.assertIn("docker.io/library/busybox:1.36.1", bootstrapper)
+        self.assertIn("host_container_id", bootstrapper)
+        self.assertIn(
+            "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+            bootstrapper,
+        )
         self.assertNotIn("docker.io/library/busybox:latest", bootstrapper)
         self.assertNotIn("Bundled self-hosted update payload is already published", bootstrapper)
         self.assertNotIn("remoteManifestHash", bootstrapper)
@@ -1630,18 +2460,22 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("isPublishBundledUpdatesOnceCommand", main_cpp)
         self.assertIn("!publishBundledUpdatesOnce", main_cpp)
         self.assertIn("uploadLocalFileToHost", ssh_session_h)
-        self.assertIn("scpFileCopy(overwriteMode, localPath, remotePath", ssh_session_cpp)
-        self.assertIn("qint64 localFileSize", ssh_client_cpp := (REPO_ROOT / "client/core/utils/selfhosted/sshClient.cpp").read_text(encoding="utf-8"))
-        self.assertIn("std::numeric_limits<size_t>::max()", ssh_client_cpp)
-        self.assertIn("static_cast<size_t>(localFileSize)", ssh_client_cpp)
-        self.assertIn("ssh_channel_get_exit_status", ssh_client_cpp)
+        self.assertIn("overwriteMode, localPath, remotePath", ssh_session_cpp)
+        ssh_client_cpp = (REPO_ROOT / "client/core/utils/selfhosted/sshClient.cpp").read_text(encoding="utf-8")
+        self.assertIn("QTemporaryFile snapshot", ssh_client_cpp)
+        self.assertIn("QFileInfo(source).isFile()", ssh_client_cpp)
+        self.assertIn('actual_size=$(wc -c < \\"$upload_tmp\\")', ssh_client_cpp)
+        self.assertIn("command.toUtf8(), {}, snapshotPath, true", ssh_client_cpp)
+        self.assertNotIn("ssh_scp_", ssh_client_cpp)
+        self.assertNotIn("ssh_channel_get_exit_status", ssh_client_cpp)
+        self.assertIn("channel_exit_status_function", ssh_client_cpp)
         self.assertIn("ErrorCode::ServerCheckFailed", ssh_client_cpp)
         self.assertIn("update_host/install_server_update_host.sh", server_scripts_qrc)
         self.assertIn("bundledArtifactRelativePath", bootstrapper)
         self.assertIn("bundledRollbackArtifactRelativePath", bootstrapper)
         self.assertIn("unsafe artifact URL", bootstrapper)
-        self.assertIn('QStringLiteral("/files/.")', bootstrapper)
-        self.assertIn("mkdir -p %1", bootstrapper)
+        self.assertIn('remoteTmp + QStringLiteral("/") + file.relativePath', bootstrapper)
+        self.assertIn("mkdir -p -- %1", bootstrapper)
         self.assertIn("hasSymlinkOrReparsePoint", bootstrapper)
         self.assertIn("relativeUrlPath", bootstrapper_h)
         self.assertIn("kWindowsPlatform", bootstrapper)
@@ -1654,9 +2488,10 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("rollbackVersion", bootstrapper)
         self.assertIn("platformObject.value(QStringLiteral(\"openExternal\")).toBool()", bootstrapper)
         self.assertIn("expectedSize <= 0", bootstrapper)
-        self.assertIn("busybox wget -q -O - %1", bootstrapper)
+        self.assertIn('busybox wget -q -O - "', bootstrapper)
         self.assertIn("file.relativePath.left(file.relativePath.lastIndexOf(u'/'))", bootstrapper)
-        self.assertIn("sudo cp -a %3 %2/", bootstrapper)
+        self.assertIn("publish_bundled_release.sh", bootstrapper)
+        self.assertNotIn("sudo cp -a %3 %2/", bootstrapper)
         self.assertNotIn("for f in %3/*", bootstrapper)
         self.assertIn("SELFHOSTED_BUNDLED_UPDATE_PAYLOAD_DIR", bootstrapper)
         self.assertIn("QCoreApplication::applicationDirPath()", bootstrapper)
@@ -1666,10 +2501,13 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("Bundled update artifact sha256 mismatch", bootstrapper)
         self.assertIn("isCanonicalSha256", bootstrapper_h)
         self.assertIn("uploadLocalFileToHost(credentials, file.localPath, remotePath)", bootstrapper)
-        self.assertIn("manifest.json.tmp", bootstrapper)
+        self.assertNotIn("manifest.json.tmp", bootstrapper)
+        self.assertIn('runPublisher(QStringLiteral("commit"))', bootstrapper)
+        self.assertIn("exactMachineReceipt", bootstrapper)
         self.assertIn("sha256sum", bootstrapper)
         self.assertIn("hostDirectory", bootstrapper)
         self.assertIn("install_server_update_host.sh", bootstrapper)
+        self.assertIn("update_host/publish_bundled_release.sh", server_scripts_qrc)
         if deploy_workflow:
             self.assertNotIn("needs.Build-iOS.result == 'success'", deploy_workflow)
             self.assertNotIn("needs.Build-MacOS.result == 'success'", deploy_workflow)
@@ -1850,6 +2688,9 @@ class SourceContractTests(unittest.TestCase):
     def test_site_split_rejects_broad_and_special_bypass_routes(self) -> None:
         router_win = (REPO_ROOT / "service/server/router_win.cpp").read_text(encoding="utf-8")
         vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
+        connection_controller = (
+            REPO_ROOT / "client/core/controllers/connectionController.cpp"
+        ).read_text(encoding="utf-8")
 
         for source in (router_win, vpn_connection):
             self.assertIn("minPublicBypassPrefixLength = 16", source)
@@ -1878,7 +2719,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("SplitTunnelRouteSource::Client && !isRoutableSplitTunnelRoute(route)", vpn_connection)
         self.assertIn("SplitTunnelRouteSource::ServerManaged", vpn_connection)
         self.assertIn("auto activeClientRoutes = QSharedPointer<QSet<QString>>::create()", vpn_connection)
-        self.assertGreaterEqual(
+        self.assertEqual(
             len(
                 re.findall(
                     r"if\s*\(\s*!activeClientRoutes->contains\(route\)\s*&&\s*"
@@ -1886,13 +2727,35 @@ class SourceContractTests(unittest.TestCase):
                     vpn_connection,
                 )
             ),
-            2,
+            1,
         )
-        self.assertGreaterEqual(vpn_connection.count("iface->routeAddTrustedList(gw, managedOnlyRoutes)"), 2)
+        normalized_runtime = ManagedRoutesSourceContractTests.function_body(
+            vpn_connection,
+            "QStringList VpnConnection::normalizedManagedRoutesForRuntime(",
+        )
+        self.assertIn("const QSet<QString> localSet", normalized_runtime)
+        self.assertIn(
+            "!localSet.contains(route) && !result.contains(route)",
+            normalized_runtime,
+        )
+        self.assertGreaterEqual(
+            vpn_connection.count("normalizedManagedRoutesForRuntime("), 5
+        )
+        self.assertIn("addTrustedRoutesWithReceipt(gw, managedOnlyRoutes)", vpn_connection)
+        self.assertGreaterEqual(vpn_connection.count("iface->routeAddTrustedList("), 2)
         self.assertIn("iface->routeAddList(gw, newClientRoutes)", vpn_connection)
         self.assertNotIn("iface->routeAddTrustedList(gw, managedIps)", vpn_connection)
-        self.assertIn("managedVpnSitesForRouting(activeServerIndex, mode)", vpn_connection)
-        self.assertIn("managedVpnSitesForRouting(activeServerIndex, routeMode)", vpn_connection)
+        self.assertNotIn("managedVpnSitesForRouting(", vpn_connection)
+        self.assertIn(
+            "managedVpnSitesForRouting(serverIndex, routeMode)",
+            connection_controller,
+        )
+        self.assertGreaterEqual(
+            connection_controller.count(
+                "managedSplitTunnelIpsForSync(serverIndex, RouteMode::VpnAllExceptSites)"
+            ),
+            3,
+        )
 
         ipc_interface = (REPO_ROOT / "ipc/ipc_interface.rep").read_text(encoding="utf-8")
         ipc_server = (REPO_ROOT / "ipc/ipcserver.cpp").read_text(encoding="utf-8")
@@ -1909,8 +2772,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.2)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2136)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.3)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2137)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -2090,6 +2953,1419 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn(candidate_sha, cas_command)
         self.assertIn("refusing a stale overwrite", cas_command)
 
+    def test_bundled_publisher_has_pinned_atomic_protocol(self) -> None:
+        bootstrapper = (
+            REPO_ROOT / "client/core/controllers/selfhosted/selfHostedUpdateBootstrapper.cpp"
+        ).read_text(encoding="utf-8")
+        bootstrapper_header = (
+            REPO_ROOT / "client/core/controllers/selfhosted/selfHostedUpdateBootstrapper.h"
+        ).read_text(encoding="utf-8")
+        publisher = (SCRIPT_DIR / "publish_bundled_release.sh").read_text(encoding="utf-8")
+        resources = (REPO_ROOT / "client/server_scripts/serverScripts.qrc").read_text(encoding="utf-8")
+
+        self.assertIn("PINNED_ROOT='/opt/amnezia/client-updates'", publisher)
+        self.assertIn("PINNED_PARENT='/opt/amnezia'", publisher)
+        self.assertIn("TRUST_ANCHOR='/opt'", publisher)
+        self.assertIn("UPLOAD_PREFIX='/tmp/amnezia-client-updates.'", publisher)
+        self.assertIn("flock -x -w 60 9", publisher)
+        self.assertIn("MARKER_SHA256='e7f84faa235a87b73f4876438a67069e5e460f405879138e5bb81527dd951bbb'", publisher)
+        self.assertIn("require_channel_marker", publisher)
+        self.assertIn('as_root mv -T -n -- "$source_tree" "$target_tree"', publisher)
+        self.assertIn('as_root diff -qr -- "$source_tree" "$target_tree"', publisher)
+        self.assertIn('manifest_tmp_candidate="$PINNED_ROOT/.manifest.$RUN_ID"', publisher)
+        self.assertIn("MANIFEST_TMP=$manifest_tmp_candidate", publisher)
+        self.assertIn('as_root mv -fT -- "$MANIFEST_TMP" "$PINNED_ROOT/manifest.json"', publisher)
+        self.assertIn('as_root sync -f -- "$MANIFEST_TMP"', publisher)
+        self.assertIn('as_root sync -f -- "$PINNED_ROOT"', publisher)
+        self.assertNotIn("cp -a", publisher)
+        self.assertNotIn("manifest.json.tmp", publisher)
+        self.assertNotIn('rm -rf -- "$PINNED_ROOT"', publisher)
+        self.assertIn("finalize_mode()", publisher)
+        self.assertIn("finalize_abort_mode()", publisher)
+        self.assertIn("reconcile_mode()", publisher)
+        self.assertIn("rollback_mode()", publisher)
+        self.assertIn("reconcile_rollback_mode()", publisher)
+        self.assertIn("finalize_rollback_mode()", publisher)
+        self.assertIn("STATE_MAGIC='amnezia-bundled-publish-state-v1'", publisher)
+        self.assertIn("write_publication_state prepared", publisher)
+        self.assertIn("write_publication_state committing", publisher)
+        self.assertIn("write_publication_state committed", publisher)
+        self.assertIn("AMNEZIA_PUBLISH_PREPARE_V1 READY prepared", publisher)
+        self.assertIn("AMNEZIA_PUBLISH_COMMIT_V1 APPLIED committed", publisher)
+        self.assertIn("AMNEZIA_PUBLISH_RECONCILE_V1", publisher)
+        self.assertIn("AMNEZIA_PUBLISH_RECONCILE_ROLLBACK_V1", publisher)
+        self.assertIn('as_root sync -f -- "$STATE_TMP"', publisher)
+        self.assertIn('as_root mv -fT -- "$STATE_TMP" "$STATE_PATH"', publisher)
+        self.assertNotIn("published_manifest_sha256=", publisher)
+        self.assertNotIn("rolled_back_manifest_sha256=", publisher)
+        self.assertIn('manifest CAS conflict during rollback', publisher)
+        self.assertIn('previous-manifest.json', publisher)
+        rollback_body = publisher[
+            publisher.index("rollback_mode() {") : publisher.index("reconcile_rollback_mode() {")
+        ]
+        self.assertNotIn('rm -rf -- "$UPLOAD_STAGE"', rollback_body)
+        finalize_rollback_body = publisher[
+            publisher.index("finalize_rollback_mode() {") : publisher.index("require_tools\n", publisher.index("finalize_rollback_mode() {"))
+        ]
+        self.assertIn('manifest CAS conflict during rollback finalize', finalize_rollback_body)
+        self.assertIn("cleanup_transaction_staging_durably", finalize_rollback_body)
+
+        commit = publisher[
+            publisher.index("commit_mode() {") : publisher.index("reconcile_mode() {")
+        ]
+        self.assertEqual(commit.count('check_cas "$expected" "$candidate"'), 2)
+        lock_index = commit.index("create_lock_and_acquire")
+        state_read_index = commit.index("read_publication_state", lock_index)
+        committing_index = commit.index("write_publication_state committing", state_read_index)
+        snapshot_index = commit.index("unable to snapshot candidate manifest", committing_index)
+        verified_index = commit.index("manifest staging hash mismatch")
+        publish_tree_index = commit.index("publish_immutable_tree", verified_index)
+        final_cas_index = commit.index('check_cas "$expected" "$candidate"', publish_tree_index)
+        manifest_switch_index = commit.index('mv -fT -- "$MANIFEST_TMP"', final_cas_index)
+        committed_index = commit.index("write_publication_state committed", manifest_switch_index)
+        self.assertLess(lock_index, state_read_index)
+        self.assertLess(state_read_index, committing_index)
+        self.assertLess(committing_index, snapshot_index)
+        self.assertLess(snapshot_index, verified_index)
+        self.assertLess(verified_index, publish_tree_index)
+        self.assertLess(publish_tree_index, final_cas_index)
+        self.assertLess(final_cas_index, manifest_switch_index)
+        self.assertLess(manifest_switch_index, committed_index)
+
+        self.assertIn("QRandomGenerator::system()->generate()", bootstrapper)
+        self.assertIn("result.reserve(48)", bootstrapper)
+        self.assertIn("decoded.toBase64(options) != encoded", bootstrapper)
+        self.assertIn('QStringLiteral("/tmp/amnezia-client-updates.%1").arg(runId)', bootstrapper)
+        self.assertIn("parseVerifiedManifest(currentManifestData", bootstrapper)
+        self.assertIn("validateBundledPublishTransition", bootstrapper)
+        self.assertIn("exactMachineReceipt", bootstrapper)
+        self.assertIn('runPublisher(QStringLiteral("reconcile"))', bootstrapper)
+        self.assertIn('runPublisher(QStringLiteral("reconcile-rollback"))', bootstrapper)
+        self.assertNotIn("probePublishedManifestSha256", bootstrapper)
+        self.assertNotIn("remoteStageIsAbsent", bootstrapper)
+        self.assertIn("AppliedWithoutAcknowledgement", bootstrapper)
+        self.assertIn("Indeterminate", bootstrapper)
+        self.assertNotIn("capturePublisherOutput,\n                    capturePublisherOutput", bootstrapper)
+        self.assertIn("VersionDowngrade", bootstrapper_header)
+        self.assertIn("GenerationRebound", bootstrapper_header)
+        self.assertIn("BundledMutationReconciliation", bootstrapper_header)
+        self.assertNotIn("remote_tmp=$(mktemp", bootstrapper)
+        prepare_index = bootstrapper.index('runPublisher(QStringLiteral("prepare"))')
+        installer_index = bootstrapper.index("if (!installOrRefreshUpdateHost())", prepare_index)
+        commit_index = bootstrapper.index('runPublisher(QStringLiteral("commit"))', installer_index)
+        verify_index = bootstrapper.index("if (!verifyRemoteUpdateHost())", commit_index)
+        rollback_index = bootstrapper.index('runPublisher(QStringLiteral("rollback"))', verify_index)
+        finalize_rollback_index = bootstrapper.index(
+            'QStringLiteral("finalize-rollback")', rollback_index
+        )
+        finalize_index = bootstrapper.index('QStringLiteral("finalize")', verify_index)
+        self.assertLess(prepare_index, installer_index)
+        self.assertLess(installer_index, commit_index)
+        self.assertLess(commit_index, verify_index)
+        self.assertIn("previous-manifest.json", bootstrapper)
+        self.assertGreater(rollback_index, verify_index)
+        self.assertGreater(finalize_rollback_index, rollback_index)
+        self.assertGreater(finalize_index, verify_index)
+        recovery_required_index = bootstrapper.index(
+            "RECOVERY_REQUIRED: bundled candidate verification", rollback_index
+        )
+        recovery_branch = bootstrapper[rollback_index:bootstrapper.index("return false;", recovery_required_index) + 13]
+        self.assertIn('<< "run_id=" << runId', recovery_branch)
+        self.assertIn('<< "remote_stage=" << remoteTmp', recovery_branch)
+        self.assertIn("preserving durable state and the remote recovery stage", recovery_branch)
+        self.assertNotIn("cleanupRemoteTmp();", recovery_branch)
+        self.assertIn(
+            '<file alias="update_host/publish_bundled_release.sh">../../deploy/selfhosted_updates/publish_bundled_release.sh</file>',
+            resources,
+        )
+
+    def test_bootstrapper_verifies_uploaded_installer_before_execution(self) -> None:
+        bootstrapper = (
+            REPO_ROOT / "client/core/controllers/selfhosted/selfHostedUpdateBootstrapper.cpp"
+        ).read_text(encoding="utf-8")
+        runner = (SCRIPT_DIR / "run_verified_update_host_installer.sh").read_text(encoding="utf-8")
+        publisher = (SCRIPT_DIR / "publish_bundled_release.sh").read_text(encoding="utf-8")
+        resources = (REPO_ROOT / "client/server_scripts/serverScripts.qrc").read_text(encoding="utf-8")
+
+        self.assertIn("kVerifiedInstallHostRunner", bootstrapper)
+        self.assertIn("installScriptSha256", bootstrapper)
+        self.assertIn("verifiedRunnerSha256", bootstrapper)
+        self.assertIn("verifiedRunner.toBase64()", bootstrapper)
+        self.assertIn("/opt/amnezia/.install-server-update-host.%1", bootstrapper)
+        self.assertIn("amnezia-verified-installer", bootstrapper)
+        self.assertIn(
+            "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662",
+            bootstrapper,
+        )
+        self.assertNotIn(
+            'QStringLiteral("sh %1 %2").arg(shellQuote(remoteInstallScript), shellQuote(serverDir))',
+            bootstrapper,
+        )
+        upload_index = bootstrapper.index(
+            "uploadFileToHost(credentials, installScript, remoteInstallScript)"
+        )
+        verification_index = bootstrapper.index("verifiedInstallCommand", upload_index)
+        execution_index = bootstrapper.index('sh -c \\"$verifier\\" amnezia-verified-installer', verification_index)
+        self.assertLess(upload_index, verification_index)
+        self.assertLess(verification_index, execution_index)
+
+        uploaded_hash_index = runner.index('sha256sum -- "$UPLOADED_INSTALLER"')
+        seal_index = runner.index('as_root install -o 0 -g 0 -m 0444', uploaded_hash_index)
+        sealed_hash_index = runner.index('as_root sha256sum -- "$SEALED_INSTALLER"', seal_index)
+        sealed_execution_index = runner.index('timeout --signal=TERM --kill-after=60s', sealed_hash_index)
+        self.assertLess(uploaded_hash_index, seal_index)
+        self.assertLess(seal_index, sealed_hash_index)
+        self.assertLess(sealed_hash_index, sealed_execution_index)
+        self.assertIn('sudo -n -- "$@"', runner)
+        self.assertIn('sudo -n -- "$@"', publisher)
+        self.assertNotIn('sudo "$@"', runner)
+        self.assertNotIn('sudo "$@"', publisher)
+        self.assertIn('INSTALL_TIMEOUT_SECONDS=900', runner)
+        self.assertIn("kInstallerOuterSshTimeoutMs = 20 * 60 * 1000", bootstrapper)
+        self.assertIn("kInstallerOuterSshTimeoutMs);", bootstrapper)
+        self.assertIn(
+            '<file alias="update_host/run_verified_update_host_installer.sh">../../deploy/selfhosted_updates/run_verified_update_host_installer.sh</file>',
+            resources,
+        )
+
+    def test_ssh_transport_runs_verifier_in_one_bounded_deadlock_safe_shell(self) -> None:
+        ssh_client_h = (REPO_ROOT / "client/core/utils/selfhosted/sshClient.h").read_text(encoding="utf-8")
+        ssh_client = (REPO_ROOT / "client/core/utils/selfhosted/sshClient.cpp").read_text(encoding="utf-8")
+        ssh_session = (REPO_ROOT / "client/core/utils/selfhosted/sshSession.cpp").read_text(encoding="utf-8")
+        focused_state_test = (
+            REPO_ROOT
+            / "client/tests/selfhosted_update_bootstrapper_path/tst_selfhosted_update_bootstrapper_path.cpp"
+        ).read_text(encoding="utf-8")
+        bootstrapper = (
+            REPO_ROOT / "client/core/controllers/selfhosted/selfHostedUpdateBootstrapper.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("DefaultConnectTimeoutMs = 30 * 1000", ssh_client_h)
+        self.assertIn("DefaultChannelOpenTimeoutMs = 30 * 1000", ssh_client_h)
+        self.assertIn("DefaultCommandTimeoutMs = 15 * 60 * 1000", ssh_client_h)
+        self.assertIn("DefaultScpTimeoutMs = 15 * 60 * 1000", ssh_client_h)
+        self.assertIn("std::atomic_bool m_cancelRequested", ssh_client_h)
+        self.assertIn("std::atomic<qint64> m_operationDeadlineMs", ssh_client_h)
+        self.assertIn("ErrorCode beginOperation(int timeoutMs)", ssh_client_h)
+        self.assertIn("detail::boundaryState", ssh_client)
+        self.assertIn("detail::cappedPhaseDeadline", ssh_client)
+        self.assertEqual(ssh_client.count("m_operationDeadlineMs.store(deadlineMs"), 1)
+        self.assertNotIn("QtConcurrent", ssh_client)
+        self.assertNotIn("QFutureWatcher", ssh_client)
+        self.assertIn("QHostInfo::lookupHost", ssh_client)
+        self.assertIn("QHostInfo::abortHostLookup", ssh_client)
+        self.assertIn("numericHost", ssh_client)
+        self.assertNotIn('credentials.userName + "@"', ssh_client)
+        self.assertIn('QByteArrayLiteral("sh -s --")', ssh_client)
+        self.assertIn("ssh_channel_read_nonblocking", ssh_client)
+        self.assertIn("standardError ? 1 : 0", ssh_client)
+        self.assertIn("ssh_set_blocking(m_session, 0)", ssh_client)
+        self.assertIn("m_cancelRequested.load", ssh_client)
+        execute_channel = ssh_client[
+            ssh_client.index("ErrorCode Client::executeChannel"):
+            ssh_client.index("ErrorCode Client::writeResponse")
+        ]
+        self.assertNotIn("drainStream", execute_channel)
+        self.assertIn("stderrFirst = !stderrFirst", execute_channel)
+        self.assertIn("callbacks.channel_exit_status_function = channelExitStatusCallback", execute_channel)
+        self.assertNotIn("ssh_channel_get_exit_status", ssh_client)
+        self.assertIn("openResult != SSH_AGAIN", execute_channel)
+        self.assertIn("requestResult != SSH_AGAIN", execute_channel)
+        self.assertIn("boundaryError(openDeadlineMs)", execute_channel)
+        self.assertIn("boundaryError(commandDeadlineMs)", execute_channel)
+        self.assertIn("detail::classifyWriteResult(bytesWritten, SSH_AGAIN)", execute_channel)
+        self.assertIn("eofResult != SSH_AGAIN", execute_channel)
+        self.assertIn("terminalObserved = remoteEof || remoteClosed", execute_channel)
+        self.assertIn("stdoutDrained", execute_channel)
+        self.assertIn("stderrDrained", execute_channel)
+        window_query = execute_channel.index("ssh_channel_window_size")
+        bounded_write = execute_channel.index("detail::boundedWriteSize", window_query)
+        write_call = execute_channel.index("ssh_channel_write", bounded_write)
+        self.assertLess(window_query, bounded_write)
+        self.assertLess(bounded_write, write_call)
+        self.assertIn("if (attemptSize > 0)", execute_channel[bounded_write:write_call])
+        write_response = ssh_client[
+            ssh_client.index("ErrorCode Client::writeResponse"):
+            ssh_client.index("ErrorCode Client::closeChannel")
+        ]
+        self.assertIn("m_pendingResponse.append(response)", write_response)
+        self.assertNotIn("ssh_channel_write", write_response)
+        upload = ssh_client[
+            ssh_client.index("ErrorCode Client::scpFileCopy"):
+            ssh_client.index("ErrorCode Client::fromLibsshErrorCode")
+        ]
+        self.assertNotIn("ssh_scp_", ssh_client)
+        self.assertIn("QTemporaryFile snapshot", upload)
+        self.assertIn("QCryptographicHash snapshotHash", upload)
+        self.assertIn("_commit(snapshot.handle())", upload)
+        self.assertIn("::fsync(snapshot.handle())", upload)
+        self.assertIn("executeChannel(\n                command.toUtf8(), {}, snapshotPath, true", upload)
+        self.assertIn('actual_size=$(wc -c < \\"$upload_tmp\\")', upload)
+        self.assertIn('upload_parent=${upload_target%/*}', upload)
+        self.assertIn('sync -f -- \\"$sync_path\\"', upload)
+        self.assertIn('fsync \\"$sync_path\\" || exit 74', upload)
+        self.assertIn('"exit 69; }; "', upload)
+        self.assertIn('mv -fT -- \\"$upload_tmp\\" \\"$upload_target\\"', upload)
+        self.assertIn('AMNEZIA_UPLOAD_V1\\t', upload)
+        self.assertIn("trap cleanup_upload EXIT HUP INT TERM", upload)
+        self.assertIn("Reconnect under the same absolute deadline", upload)
+        self.assertIn("reconcileCommand", upload)
+        reconcile = upload[upload.index("const QString reconcileCommand"):]
+        self.assertIn('test -d \\"$upload_parent\\" && ! test -L \\"$upload_parent\\"', reconcile)
+        self.assertIn('sync -f -- \\"$sync_path\\"', reconcile)
+        self.assertIn('fsync \\"$sync_path\\" || exit 74', reconcile)
+        self.assertIn('durable_sync \\"$upload_parent\\"', reconcile)
+        self.assertLess(
+            reconcile.index('durable_sync \\"$upload_parent\\"'),
+            reconcile.index("printf '%%s\\\\n'"),
+        )
+        self.assertIn("overwriteMode != ScpOverwriteExisting", upload)
+        self.assertIn("ErrorCode::NotImplementedError", upload)
+        close_channel = ssh_client[
+            ssh_client.index("ErrorCode Client::closeChannel"):
+            ssh_client.index("ErrorCode Client::scpFileCopy")
+        ]
+        self.assertIn("detail::teardownMode", close_channel)
+        self.assertIn("abortSession()", close_channel)
+        self.assertIn("ssh_silent_disconnect(m_session)", ssh_client)
+
+        # This executable test includes the production state decisions instead
+        # of duplicating them in a Python-only fake.
+        self.assertIn("AMNEZIA_SSH_CLIENT_STATE_ONLY", focused_state_test)
+        self.assertIn("boundedWriteSize(0, 4096, 2048) == 0", focused_state_test)
+        self.assertIn("ExitState::MissingStatus", focused_state_test)
+        self.assertIn("BoundaryState::Cancelled", focused_state_test)
+        single_shell = ssh_session[
+            ssh_session.index("ErrorCode SshSession::runScriptInSingleShell"):
+            ssh_session.index("ErrorCode SshSession::runContainerScript")
+        ]
+        self.assertIn("m_sshClient.executeScript(script", single_shell)
+        self.assertNotIn('script.split("\\n"', single_shell)
+        self.assertLess(single_shell.index("beginOperation(timeoutMs)"), single_shell.index("connectToHost(credentials)"))
+        self.assertLess(single_shell.index("connectToHost(credentials)"), single_shell.index("executeScript(script"))
+        self.assertLess(single_shell.index("executeScript(script"), single_shell.index("finishOperation(error)"))
+        verifier = bootstrapper[
+            bootstrapper.index("const auto verifyRemoteUpdateHost"):
+            bootstrapper.index("QByteArray publishMetadata")
+        ]
+        self.assertIn("sshSession.runScriptInSingleShell", verifier)
+
+    def test_bootstrapper_install_and_verification_output_is_bounded_and_not_logged(self) -> None:
+        bootstrapper = (
+            REPO_ROOT / "client/core/controllers/selfhosted/selfHostedUpdateBootstrapper.cpp"
+        ).read_text(encoding="utf-8")
+        bootstrapper_header = (
+            REPO_ROOT / "client/core/controllers/selfhosted/selfHostedUpdateBootstrapper.h"
+        ).read_text(encoding="utf-8")
+        focused_state_test = (
+            REPO_ROOT
+            / "client/tests/selfhosted_update_bootstrapper_path/tst_selfhosted_update_bootstrapper_path.cpp"
+        ).read_text(encoding="utf-8")
+
+        installer = bootstrapper[
+            bootstrapper.index("const auto installOrRefreshUpdateHost"):
+            bootstrapper.index("const auto verifyRemoteUpdateHost")
+        ]
+        verifier = bootstrapper[
+            bootstrapper.index("const auto verifyRemoteUpdateHost"):
+            bootstrapper.index("QByteArray publishMetadata")
+        ]
+
+        self.assertIn("maximumBootstrapPhaseOutputBytes = 64 * 1024", bootstrapper_header)
+        self.assertIn("accountBoundedRemoteOutput", bootstrapper_header)
+        self.assertIn("chunkBytes > maximumBytes - acceptedBytes", bootstrapper_header)
+        for phase in (installer, verifier):
+            self.assertIn("accountBoundedRemoteOutput", phase)
+            self.assertIn("ErrorCode::ReadError", phase)
+            self.assertIn('<< "phase"', phase)
+            self.assertIn('<< "errorCode"', phase)
+        self.assertNotIn("installOutput +=", installer)
+        self.assertNotIn("verifyOutput +=", verifier)
+        self.assertNotIn("installOutput.trimmed()", installer)
+        self.assertNotIn("verifyOutput.trimmed()", verifier)
+        self.assertIn("acceptedRemoteOutputBytes == maximumBootstrapPhaseOutputBytes", focused_state_test)
+        self.assertIn("!accountBoundedRemoteOutput", focused_state_test)
+        self.assertIn("multibyteRemoteOutputBytes == 3", focused_state_test)
+
+    def test_ssh_host_key_pinning_is_fail_closed_before_auth_and_reaches_all_builds(self) -> None:
+        ssh_client = (REPO_ROOT / "client/core/utils/selfhosted/sshClient.cpp").read_text(encoding="utf-8")
+        pin_policy = (REPO_ROOT / "client/core/utils/selfhosted/sshHostKeyPin.cpp").read_text(encoding="utf-8")
+        common_structs = (REPO_ROOT / "client/core/utils/commonStructs.h").read_text(encoding="utf-8")
+        admin_config = (
+            REPO_ROOT / "client/core/models/selfhosted/selfHostedAdminServerConfig.cpp"
+        ).read_text(encoding="utf-8")
+        client_cmake = (REPO_ROOT / "client/CMakeLists.txt").read_text(encoding="utf-8")
+        local_release = (SCRIPT_DIR / "local_release.ps1").read_text(encoding="utf-8")
+        setup_release = (SCRIPT_DIR / "setup_release_workstation.ps1").read_text(encoding="utf-8")
+        setup_qml = (REPO_ROOT / "client/ui/qml/Pages2/PageSetupWizardCredentials.qml").read_text(
+            encoding="utf-8"
+        )
+        install_ui = (REPO_ROOT / "client/ui/controllers/selfhosted/installUiController.cpp").read_text(
+            encoding="utf-8"
+        )
+        install_controller = (
+            REPO_ROOT / "client/core/controllers/selfhosted/installController.cpp"
+        ).read_text(encoding="utf-8")
+
+        connect = ssh_client[
+            ssh_client.index("ErrorCode Client::connectToHost"):
+            ssh_client.index("void Client::abortSession")
+        ]
+        pin_resolution = connect.index("sshHostKeyPin::resolve")
+        dns_resolution = connect.index("resolveHostName")
+        network_connect = connect.index("ssh_connect")
+        key_verification = connect.index("verifyServerHostKey", network_connect)
+        private_key_import = connect.index("ssh_pki_import_privkey_base64")
+        password_auth = connect.index("ssh_userauth_password")
+        self.assertLess(pin_resolution, dns_resolution)
+        self.assertLess(dns_resolution, network_connect)
+        self.assertLess(network_connect, key_verification)
+        self.assertLess(key_verification, private_key_import)
+        self.assertLess(key_verification, password_auth)
+        self.assertIn("SshHostKeyMissingError", ssh_client)
+        self.assertIn("SshHostKeyMalformedError", ssh_client)
+        self.assertIn("SshHostKeyMismatchError", ssh_client)
+        self.assertIn("m_credentials.sshHostKeyFingerprint == effectiveCredentials.sshHostKeyFingerprint", connect)
+        self.assertIn("ssh_get_server_publickey", ssh_client)
+        self.assertIn("SSH_PUBLICKEY_HASH_SHA256", ssh_client)
+        self.assertIn("matchesFingerprint", ssh_client)
+        self.assertNotIn("ssh_session_update_known_hosts", ssh_client)
+        self.assertNotIn("ssh_session_is_known_server", ssh_client)
+        self.assertIn("AbortOnBase64DecodingErrors", pin_policy)
+        self.assertIn("difference |=", pin_policy)
+
+        self.assertIn("QString sshHostKeyFingerprint", common_structs)
+        self.assertIn("creds.sshHostKeyFingerprint = sshHostKeyFingerprint", admin_config)
+        self.assertIn("configKey::sshHostKeyFingerprint", admin_config)
+        self.assertIn("SELFHOSTED_SSH_TRUSTED_HOST and SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 must be supplied together", client_cmake)
+        self.assertIn("add_compile_definitions(", client_cmake)
+        for script in (local_release, setup_release):
+            self.assertIn("Assert-SshHostKeyPinPair", script)
+            self.assertIn("SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256", script)
+        self.assertIn("export SELFHOSTED_SSH_TRUSTED_HOST=$(Quote-Sh $SshTrustedHost)", local_release)
+        self.assertIn("export SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256=$(Quote-Sh $SshTrustedHostKeySha256)", local_release)
+        self.assertIn("Remove-Item Env:\\SELFHOSTED_SSH_TRUSTED_HOST", local_release)
+        self.assertIn("Remove-Item Env:\\SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256", local_release)
+        self.assertIn("SSH server host key fingerprint", setup_qml)
+        self.assertIn("independent trusted channel", setup_qml)
+        self.assertIn("m_processedServerCredentials.sshHostKeyFingerprint = sshHostKeyFingerprint", install_ui)
+        self.assertEqual(
+            install_controller.count(
+                "serverConfig.sshHostKeyFingerprint = credentials.sshHostKeyFingerprint"
+            ),
+            2,
+        )
+        self.assertIn("StrictHostKeyChecking=yes", install_controller)
+        self.assertNotIn("StrictHostKeyChecking=no", install_controller)
+        self.assertNotIn("UserKnownHostsFile=/dev/null", install_controller)
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh is required for durability injection")
+    def test_ssh_upload_refuses_rename_without_durable_sync_primitive(self) -> None:
+        sh = find_sh()
+        real_mv = shutil.which("mv")
+        assert sh is not None
+        if not real_mv:
+            self.skipTest("mv is required")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_path = root / "fake-path"
+            fake_path.mkdir()
+            source = root / "source"
+            target = root / "target"
+            source.write_bytes(b"must remain staged\n")
+            durable_sync = extract_ssh_upload_durable_sync_function()
+            attempted = subprocess.run(
+                [
+                    sh,
+                    "-c",
+                    "set -eu\n"
+                    + durable_sync
+                    + '\ndurable_sync "$1"\n'
+                    + publish_release.sh_quote(real_mv)
+                    + ' -f -- "$1" "$2"\n',
+                    "durability-test",
+                    str(source),
+                    str(target),
+                ],
+                env={**os.environ, "PATH": str(fake_path)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(attempted.returncode, 69, attempted.stderr)
+            self.assertTrue(source.exists())
+            self.assertFalse(target.exists())
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh is required for durability injection")
+    def test_ssh_upload_reconcile_requires_durable_parent_sync_before_receipt(self) -> None:
+        sh = find_sh()
+        assert sh is not None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            parent = root / "upload-parent"
+            parent.mkdir()
+            target = parent / "payload.bin"
+            payload = b"rename-completed-before-ack\n"
+            target.write_bytes(payload)
+            expected_sha = hashlib.sha256(payload).hexdigest()
+            expected_receipt = f"AMNEZIA_UPLOAD_V1\t{len(payload)}\t{expected_sha}"
+            reconcile_template = extract_ssh_upload_shell_command("reconcileCommand")
+
+            def render_reconcile(target_path: Path) -> str:
+                rendered = reconcile_template
+                replacements = (
+                    publish_release.sh_quote(str(target_path)),
+                    str(len(payload)),
+                    expected_sha,
+                    publish_release.sh_quote(expected_receipt),
+                )
+                for index, replacement in reversed(tuple(enumerate(replacements, start=1))):
+                    rendered = rendered.replace(f"%{index}", replacement)
+                return rendered.replace("%%", "%")
+
+            fake_bin = root / "fake-bin"
+            fake_bin.mkdir()
+            allow_sync = root / "allow-sync"
+            fake_sync = fake_bin / "sync"
+            fake_sync.write_text(
+                "#!/bin/sh\n"
+                "if [ \"${1-}\" = --help ]; then\n"
+                "    printf '%s\\n' 'usage: sync -f FILE'\n"
+                "    exit 0\n"
+                "fi\n"
+                "test -f \"$AMNEZIA_TEST_ALLOW_SYNC\"\n",
+                encoding="utf-8",
+            )
+            fake_sync.chmod(0o700)
+            env = {
+                **os.environ,
+                "PATH": str(fake_bin) + os.pathsep + os.environ.get("PATH", ""),
+                "AMNEZIA_TEST_ALLOW_SYNC": str(allow_sync),
+            }
+
+            failed = subprocess.run(
+                [sh, "-c", render_reconcile(target)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(failed.returncode, 74, failed.stderr)
+            self.assertEqual(failed.stdout, "")
+            self.assertEqual(target.read_bytes(), payload)
+
+            allow_sync.touch()
+            reconciled = subprocess.run(
+                [sh, "-c", render_reconcile(target)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(reconciled.returncode, 0, reconciled.stderr)
+            self.assertEqual(reconciled.stdout, expected_receipt + "\n")
+
+            linked_parent = root / "linked-parent"
+            linked_parent.symlink_to(parent, target_is_directory=True)
+            unsafe_parent = subprocess.run(
+                [sh, "-c", render_reconcile(linked_parent / target.name)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(unsafe_parent.returncode, 65, unsafe_parent.stderr)
+            self.assertEqual(unsafe_parent.stdout, "")
+
+    @unittest.skipUnless(find_sh(), "sh is required to exercise the verified installer runner")
+    def test_verified_installer_runner_rejects_tampered_remote_upload(self) -> None:
+        sh = find_sh()
+        assert sh
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "sudo").write_text(
+                '#!/bin/sh\n[ "$1" = -n ] && shift\n[ "$1" = -- ] && shift\nexec "$@"\n',
+                encoding="utf-8",
+            )
+            os.chmod(bin_dir / "sudo", 0o755)
+
+            host_dir = tmp_path / "updates"
+            host_dir.mkdir()
+            uploaded = tmp_path / "install_server_update_host.sh"
+            sealed = tmp_path / "sealed-installer.sh"
+            expected_installer = b'#!/bin/sh\nprintf \'safe\\n\' > "$1/executed"\n'
+            tampered_installer = b'#!/bin/sh\nprintf \'evil\\n\' > "$1/executed"\n'
+            self.assertEqual(len(expected_installer), len(tampered_installer))
+            expected_sha256 = hashlib.sha256(expected_installer).hexdigest()
+            uploaded.write_bytes(expected_installer)
+            uploaded.write_bytes(tampered_installer)
+
+            env = os.environ.copy()
+            env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+            rejected = subprocess.run(
+                [
+                    sh,
+                    str(SCRIPT_DIR / "run_verified_update_host_installer.sh"),
+                    shell_absolute_path(uploaded),
+                    shell_absolute_path(sealed),
+                    expected_sha256,
+                    str(len(expected_installer)),
+                    shell_absolute_path(host_dir),
+                ],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("Uploaded installer sha256 mismatch", rejected.stderr)
+            self.assertFalse((host_dir / "executed").exists())
+            self.assertFalse(sealed.exists())
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh is required for timeout injection")
+    def test_verified_installer_runner_propagates_timeout_and_removes_sealed_copy(self) -> None:
+        sh = find_sh()
+        assert sh
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "sudo").write_text(
+                textwrap.dedent(
+                    '''\
+                    #!/bin/sh
+                    [ "$1" = -n ] && shift
+                    [ "$1" = -- ] && shift
+                    if [ "$1" = install ]; then
+                        shift 8
+                        cp "$1" "$2" && chmod 0444 "$2"
+                        exit $?
+                    fi
+                    if [ "$1" = stat ] && [ "$3" = %u:%g:%a ]; then
+                        printf '0:0:444\\n'
+                        exit 0
+                    fi
+                    exec "$@"
+                    '''
+                ),
+                encoding="utf-8",
+            )
+            (bin_dir / "timeout").write_text(
+                '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$FAKE_TIMEOUT_LOG"\nexit 124\n',
+                encoding="utf-8",
+            )
+            os.chmod(bin_dir / "sudo", 0o755)
+            os.chmod(bin_dir / "timeout", 0o755)
+
+            host_dir = tmp_path / "updates"
+            host_dir.mkdir()
+            uploaded = tmp_path / "install_server_update_host.sh"
+            sealed = tmp_path / "sealed-installer.sh"
+            installer_data = b'#!/bin/sh\nprintf \'unexpected\\n\' > "$1/executed"\n'
+            uploaded.write_bytes(installer_data)
+            timeout_log = tmp_path / "timeout-args.txt"
+            env = os.environ.copy()
+            env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+            env["FAKE_TIMEOUT_LOG"] = str(timeout_log)
+            timed_out = subprocess.run(
+                [
+                    sh,
+                    str(SCRIPT_DIR / "run_verified_update_host_installer.sh"),
+                    shell_absolute_path(uploaded),
+                    shell_absolute_path(sealed),
+                    hashlib.sha256(installer_data).hexdigest(),
+                    str(len(installer_data)),
+                    shell_absolute_path(host_dir),
+                ],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(timed_out.returncode, 124, timed_out.stderr)
+            timeout_arguments = timeout_log.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(
+                timeout_arguments[:3],
+                ["--signal=TERM", "--kill-after=60s", "900s"],
+            )
+            self.assertFalse((host_dir / "executed").exists())
+            self.assertFalse(sealed.exists())
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh is required for bundled publisher behavior")
+    def test_bundled_publisher_initial_and_idempotent_publish(self) -> None:
+        sh = find_sh()
+        assert sh is not None
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root.chmod(0o755)
+            channel = root / "channel"
+            publisher_source, upload_prefix = bundled_publisher_harness_source(channel)
+            publisher_path = root / "publish_bundled_release.sh"
+            publisher_path.write_text(publisher_source, encoding="utf-8")
+            publisher_path.chmod(0o700)
+
+            def invoke(*arguments: object) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [sh, str(publisher_path), *(str(argument) for argument in arguments)],
+                    cwd=root,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+            probe = invoke("probe", channel)
+            if probe.returncode == 69:
+                self.skipTest(probe.stderr.strip())
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            self.assertEqual(probe.stdout, "ABSENT\n")
+
+            artifact_data = b"signed bundled artifact\n"
+            artifact_digest = hashlib.sha256(artifact_data).hexdigest()
+            artifact_name = "artifact-$(touch SHOULD_NOT_EXIST)-'quoted'.bin"
+            artifact_path = f"files/artifacts/{artifact_digest}/{artifact_name}"
+            manifest_data = b'{"candidate":"initial"}\n'
+            run_id = "1" * 48
+            stage, candidate_sha, metadata_sha = write_bundled_publisher_stage(
+                upload_prefix,
+                run_id,
+                manifest_data,
+                "4.9.1.0",
+                1,
+                0,
+                [("A", artifact_path, artifact_data)],
+            )
+            prepared = invoke("prepare", channel, run_id, "absent", candidate_sha, metadata_sha, 1)
+            self.assertEqual(prepared.returncode, 0, prepared.stderr)
+            self.assertEqual(
+                prepared.stdout,
+                bundled_publisher_receipt(
+                    "AMNEZIA_PUBLISH_PREPARE_V1",
+                    run_id,
+                    "absent",
+                    candidate_sha,
+                    metadata_sha,
+                    1,
+                    "READY",
+                    "prepared",
+                ),
+            )
+            committed = invoke("commit", channel, run_id, "absent", candidate_sha, metadata_sha, 1)
+            self.assertEqual(committed.returncode, 0, committed.stderr)
+            self.assertEqual(
+                committed.stdout,
+                bundled_publisher_receipt(
+                    "AMNEZIA_PUBLISH_COMMIT_V1",
+                    run_id,
+                    "absent",
+                    candidate_sha,
+                    metadata_sha,
+                    1,
+                    "APPLIED",
+                    "committed",
+                ),
+            )
+            self.assertEqual((channel / "manifest.json").read_bytes(), manifest_data)
+            self.assertEqual(channel.joinpath(*PurePosixPath(artifact_path).parts).read_bytes(), artifact_data)
+            self.assertEqual(
+                (channel / ".amnezia-update-channel-v1").read_text(encoding="utf-8"),
+                "amnezia-selfhosted-update-channel-v1\n",
+            )
+            self.assertTrue(stage.exists(), "commit must retain rollback state until endpoint verification")
+            finalized = invoke(
+                "finalize", channel, run_id, "absent", candidate_sha, metadata_sha, 1
+            )
+            self.assertEqual(finalized.returncode, 0, finalized.stderr)
+            self.assertEqual(
+                finalized.stdout,
+                bundled_publisher_receipt(
+                    "AMNEZIA_PUBLISH_FINALIZE_V1",
+                    run_id,
+                    "absent",
+                    candidate_sha,
+                    metadata_sha,
+                    1,
+                    "APPLIED",
+                    "finalized",
+                ),
+            )
+            self.assertFalse(stage.exists())
+            self.assertIn(
+                "\tfinalized\n",
+                (channel / f".publish-state.{run_id}").read_text(encoding="utf-8"),
+            )
+            self.assertFalse((root / "SHOULD_NOT_EXIST").exists())
+
+            outside = root / "outside.txt"
+            outside.write_text("must not be exposed\n", encoding="utf-8")
+            unsafe_link = channel / "files/leak"
+            unsafe_link.symlink_to(outside)
+            rejected_probe = invoke("probe", channel)
+            self.assertEqual(rejected_probe.returncode, 64, rejected_probe.stderr)
+            self.assertIn("contains a link or special file", rejected_probe.stderr)
+            self.assertEqual((channel / "manifest.json").read_bytes(), manifest_data)
+            unsafe_link.unlink()
+
+            replay_run_id = "2" * 48
+            replay_stage, replay_candidate_sha, replay_metadata_sha = write_bundled_publisher_stage(
+                upload_prefix,
+                replay_run_id,
+                manifest_data,
+                "4.9.1.0",
+                1,
+                0,
+                [("A", artifact_path, artifact_data)],
+            )
+            self.assertEqual(replay_candidate_sha, candidate_sha)
+            prepared = invoke(
+                "prepare",
+                channel,
+                replay_run_id,
+                candidate_sha,
+                candidate_sha,
+                replay_metadata_sha,
+                1,
+            )
+            self.assertEqual(prepared.returncode, 0, prepared.stderr)
+            committed = invoke(
+                "commit", channel, replay_run_id, candidate_sha, candidate_sha, replay_metadata_sha, 1
+            )
+            self.assertEqual(committed.returncode, 0, committed.stderr)
+            self.assertEqual(
+                committed.stdout,
+                bundled_publisher_receipt(
+                    "AMNEZIA_PUBLISH_COMMIT_V1",
+                    replay_run_id,
+                    candidate_sha,
+                    candidate_sha,
+                    replay_metadata_sha,
+                    1,
+                    "APPLIED",
+                    "committed",
+                ),
+            )
+            self.assertEqual((channel / "manifest.json").read_bytes(), manifest_data)
+            self.assertTrue(replay_stage.exists())
+            finalized = invoke(
+                "finalize",
+                channel,
+                replay_run_id,
+                candidate_sha,
+                replay_candidate_sha,
+                replay_metadata_sha,
+                1,
+            )
+            self.assertEqual(finalized.returncode, 0, finalized.stderr)
+            self.assertEqual(
+                finalized.stdout,
+                bundled_publisher_receipt(
+                    "AMNEZIA_PUBLISH_FINALIZE_V1",
+                    replay_run_id,
+                    candidate_sha,
+                    replay_candidate_sha,
+                    replay_metadata_sha,
+                    1,
+                    "APPLIED",
+                    "finalized",
+                ),
+            )
+            self.assertFalse(replay_stage.exists())
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh is required for bundled publisher behavior")
+    def test_bundled_publisher_rejects_rollback_rebinding_and_stale_cas(self) -> None:
+        sh = find_sh()
+        assert sh is not None
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root.chmod(0o755)
+            channel = root / "channel"
+            publisher_source, upload_prefix = bundled_publisher_harness_source(channel)
+            publisher_path = root / "publish_bundled_release.sh"
+            publisher_path.write_text(publisher_source, encoding="utf-8")
+            publisher_path.chmod(0o700)
+
+            def invoke(*arguments: object) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [sh, str(publisher_path), *(str(argument) for argument in arguments)],
+                    cwd=root,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+            probe = invoke("probe", channel)
+            if probe.returncode == 69:
+                self.skipTest(probe.stderr.strip())
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+
+            baseline_artifact = b"baseline artifact\n"
+            baseline_digest = hashlib.sha256(baseline_artifact).hexdigest()
+            baseline_path = f"files/artifacts/{baseline_digest}/baseline.bin"
+            baseline_manifest = b'{"candidate":"baseline"}\n'
+            baseline_run_id = "3" * 48
+            baseline_stage, baseline_sha, baseline_metadata_sha = write_bundled_publisher_stage(
+                upload_prefix,
+                baseline_run_id,
+                baseline_manifest,
+                "4.9.1.0",
+                1,
+                0,
+                [("A", baseline_path, baseline_artifact)],
+            )
+            self.assertEqual(
+                invoke(
+                    "prepare",
+                    channel,
+                    baseline_run_id,
+                    "absent",
+                    baseline_sha,
+                    baseline_metadata_sha,
+                    1,
+                ).returncode,
+                0,
+            )
+            baseline_commit = invoke(
+                "commit", channel, baseline_run_id, "absent", baseline_sha, baseline_metadata_sha, 1
+            )
+            self.assertEqual(baseline_commit.returncode, 0, baseline_commit.stderr)
+            self.assertTrue(baseline_stage.exists())
+            self.assertEqual(
+                invoke(
+                    "finalize",
+                    channel,
+                    baseline_run_id,
+                    "absent",
+                    baseline_sha,
+                    baseline_metadata_sha,
+                    1,
+                ).returncode,
+                0,
+            )
+
+            failed_verify_run_id = "7" * 48
+            failed_verify_artifact = b"candidate awaiting endpoint verification\n"
+            failed_verify_digest = hashlib.sha256(failed_verify_artifact).hexdigest()
+            failed_verify_path = f"files/artifacts/{failed_verify_digest}/candidate.bin"
+            failed_verify_manifest = b'{"candidate":"failed-endpoint-verification"}\n'
+            failed_verify_stage, failed_verify_sha, failed_verify_metadata_sha = (
+                write_bundled_publisher_stage(
+                    upload_prefix,
+                    failed_verify_run_id,
+                    failed_verify_manifest,
+                    "4.9.1.1",
+                    2,
+                    40,
+                    [("A", failed_verify_path, failed_verify_artifact)],
+                )
+            )
+            (failed_verify_stage / "previous-manifest.json").write_bytes(baseline_manifest)
+            self.assertEqual(
+                invoke(
+                    "prepare",
+                    channel,
+                    failed_verify_run_id,
+                    baseline_sha,
+                    failed_verify_sha,
+                    failed_verify_metadata_sha,
+                    1,
+                ).returncode,
+                0,
+            )
+            failed_verify_commit = invoke(
+                "commit",
+                channel,
+                failed_verify_run_id,
+                baseline_sha,
+                failed_verify_sha,
+                failed_verify_metadata_sha,
+                1,
+            )
+            self.assertEqual(failed_verify_commit.returncode, 0, failed_verify_commit.stderr)
+            self.assertEqual((channel / "manifest.json").read_bytes(), failed_verify_manifest)
+            rolled_back = invoke(
+                "rollback",
+                channel,
+                failed_verify_run_id,
+                baseline_sha,
+                failed_verify_sha,
+                failed_verify_metadata_sha,
+                1,
+            )
+            self.assertEqual(rolled_back.returncode, 0, rolled_back.stderr)
+            self.assertEqual(
+                rolled_back.stdout,
+                bundled_publisher_receipt(
+                    "AMNEZIA_PUBLISH_ROLLBACK_V1",
+                    failed_verify_run_id,
+                    baseline_sha,
+                    failed_verify_sha,
+                    failed_verify_metadata_sha,
+                    1,
+                    "APPLIED",
+                    "rolled_back",
+                ),
+            )
+            self.assertEqual((channel / "manifest.json").read_bytes(), baseline_manifest)
+            self.assertTrue(
+                failed_verify_stage.exists(),
+                "rollback must retain evidence until its receipt is acknowledged",
+            )
+            # Simulate a lost rollback stdout ACK. Reconciliation is bound to
+            # the full durable identity under the publisher lock.
+            rollback_ack_loss_probe = invoke(
+                "reconcile-rollback",
+                channel,
+                failed_verify_run_id,
+                baseline_sha,
+                failed_verify_sha,
+                failed_verify_metadata_sha,
+                1,
+            )
+            self.assertEqual(rollback_ack_loss_probe.returncode, 0, rollback_ack_loss_probe.stderr)
+            self.assertEqual(
+                rollback_ack_loss_probe.stdout,
+                bundled_publisher_receipt(
+                    "AMNEZIA_PUBLISH_RECONCILE_ROLLBACK_V1",
+                    failed_verify_run_id,
+                    baseline_sha,
+                    failed_verify_sha,
+                    failed_verify_metadata_sha,
+                    1,
+                    "APPLIED",
+                    "rolled_back",
+                ),
+            )
+            rollback_finalized = invoke(
+                "finalize-rollback",
+                channel,
+                failed_verify_run_id,
+                baseline_sha,
+                failed_verify_sha,
+                failed_verify_metadata_sha,
+                1,
+            )
+            self.assertEqual(rollback_finalized.returncode, 0, rollback_finalized.stderr)
+            self.assertEqual(
+                rollback_finalized.stdout,
+                bundled_publisher_receipt(
+                    "AMNEZIA_PUBLISH_FINALIZE_ROLLBACK_V1",
+                    failed_verify_run_id,
+                    baseline_sha,
+                    failed_verify_sha,
+                    failed_verify_metadata_sha,
+                    1,
+                    "APPLIED",
+                    "rollback_finalized",
+                ),
+            )
+            self.assertFalse(failed_verify_stage.exists())
+
+            rollback_cas_run_id = "8" * 48
+            rollback_cas_manifest = b'{"candidate":"rollback-cas-guard"}\n'
+            rollback_cas_artifact = b"rollback cas artifact\n"
+            rollback_cas_digest = hashlib.sha256(rollback_cas_artifact).hexdigest()
+            rollback_cas_stage, rollback_cas_sha, rollback_cas_metadata_sha = (
+                write_bundled_publisher_stage(
+                    upload_prefix,
+                    rollback_cas_run_id,
+                    rollback_cas_manifest,
+                    "4.9.1.1",
+                    2,
+                    41,
+                    [("A", f"files/artifacts/{rollback_cas_digest}/cas.bin", rollback_cas_artifact)],
+                )
+            )
+            (rollback_cas_stage / "previous-manifest.json").write_bytes(baseline_manifest)
+            self.assertEqual(
+                invoke(
+                    "prepare",
+                    channel,
+                    rollback_cas_run_id,
+                    baseline_sha,
+                    rollback_cas_sha,
+                    rollback_cas_metadata_sha,
+                    1,
+                ).returncode,
+                0,
+            )
+            self.assertEqual(
+                invoke(
+                    "commit",
+                    channel,
+                    rollback_cas_run_id,
+                    baseline_sha,
+                    rollback_cas_sha,
+                    rollback_cas_metadata_sha,
+                    1,
+                ).returncode,
+                0,
+            )
+            post_commit_concurrent_manifest = b'{"candidate":"post-commit-concurrent"}\n'
+            published_manifest = channel / "manifest.json"
+            published_manifest.chmod(0o644)
+            published_manifest.write_bytes(post_commit_concurrent_manifest)
+            published_manifest.chmod(0o444)
+            rollback_conflict = invoke(
+                "rollback",
+                channel,
+                rollback_cas_run_id,
+                baseline_sha,
+                rollback_cas_sha,
+                rollback_cas_metadata_sha,
+                1,
+            )
+            self.assertEqual(rollback_conflict.returncode, 75, rollback_conflict.stderr)
+            self.assertIn("manifest CAS conflict during rollback", rollback_conflict.stderr)
+            self.assertEqual(published_manifest.read_bytes(), post_commit_concurrent_manifest)
+            self.assertTrue(rollback_cas_stage.exists(), "failed rollback must retain retry evidence")
+
+            published_manifest.chmod(0o644)
+            published_manifest.write_bytes(baseline_manifest)
+            published_manifest.chmod(0o444)
+
+            marker_run_id = "6" * 48
+            marker_artifact = b"marker guard candidate\n"
+            marker_digest = hashlib.sha256(marker_artifact).hexdigest()
+            marker_path = f"files/artifacts/{marker_digest}/marker.bin"
+            marker_manifest = b'{"candidate":"marker-removed"}\n'
+            marker_stage, marker_sha, marker_metadata_sha = write_bundled_publisher_stage(
+                upload_prefix,
+                marker_run_id,
+                marker_manifest,
+                "4.9.1.1",
+                2,
+                41,
+                [("A", marker_path, marker_artifact)],
+            )
+            prepared = invoke(
+                "prepare",
+                channel,
+                marker_run_id,
+                baseline_sha,
+                marker_sha,
+                marker_metadata_sha,
+                1,
+            )
+            self.assertEqual(prepared.returncode, 0, prepared.stderr)
+            (channel / ".amnezia-update-channel-v1").unlink()
+            rejected = invoke(
+                "commit", channel, marker_run_id, baseline_sha, marker_sha, marker_metadata_sha, 1
+            )
+            self.assertEqual(rejected.returncode, 64, rejected.stderr)
+            self.assertIn("update channel marker is not a regular file", rejected.stderr)
+            self.assertEqual((channel / "manifest.json").read_bytes(), baseline_manifest)
+            self.assertTrue(marker_stage.exists(), "failed commit must retain durable recovery evidence")
+
+            rollback_target = channel / "files/rollback/42/4.9.0.0/old.bin"
+            rollback_target.parent.mkdir(parents=True)
+            rollback_target.write_bytes(b"permanently bound rollback\n")
+            rollback_target.chmod(0o444)
+            rollback_target.parent.chmod(0o755)
+            rollback_target.parent.parent.chmod(0o755)
+
+            rollback_run_id = "4" * 48
+            rebound_data = b"different rollback bytes\n"
+            rebound_path = "files/rollback/42/4.9.0.0/old.bin"
+            rebound_manifest = b'{"candidate":"rollback-rebind"}\n'
+            rebound_stage, rebound_sha, rebound_metadata_sha = write_bundled_publisher_stage(
+                upload_prefix,
+                rollback_run_id,
+                rebound_manifest,
+                "4.9.1.1",
+                2,
+                42,
+                [("R", rebound_path, rebound_data)],
+            )
+            prepared = invoke(
+                "prepare",
+                channel,
+                rollback_run_id,
+                baseline_sha,
+                rebound_sha,
+                rebound_metadata_sha,
+                1,
+            )
+            self.assertEqual(prepared.returncode, 0, prepared.stderr)
+            rejected = invoke(
+                "commit", channel, rollback_run_id, baseline_sha, rebound_sha, rebound_metadata_sha, 1
+            )
+            self.assertEqual(rejected.returncode, 65, rejected.stderr)
+            self.assertIn("already exists with different content", rejected.stderr)
+            self.assertEqual((channel / "manifest.json").read_bytes(), baseline_manifest)
+            self.assertEqual(rollback_target.read_bytes(), b"permanently bound rollback\n")
+            self.assertTrue(rebound_stage.exists(), "failed commit must retain durable recovery evidence")
+
+            cas_run_id = "5" * 48
+            cas_artifact = b"cas candidate artifact\n"
+            cas_digest = hashlib.sha256(cas_artifact).hexdigest()
+            cas_path = f"files/artifacts/{cas_digest}/cas.bin"
+            cas_manifest = b'{"candidate":"stale-cas"}\n'
+            cas_stage, cas_sha, cas_metadata_sha = write_bundled_publisher_stage(
+                upload_prefix,
+                cas_run_id,
+                cas_manifest,
+                "4.9.1.2",
+                2,
+                43,
+                [("A", cas_path, cas_artifact)],
+            )
+            prepared = invoke(
+                "prepare",
+                channel,
+                cas_run_id,
+                baseline_sha,
+                cas_sha,
+                cas_metadata_sha,
+                1,
+            )
+            self.assertEqual(prepared.returncode, 0, prepared.stderr)
+            concurrent_manifest = b'{"candidate":"concurrent"}\n'
+            published_manifest = channel / "manifest.json"
+            published_manifest.chmod(0o644)
+            published_manifest.write_bytes(concurrent_manifest)
+            published_manifest.chmod(0o444)
+            rejected = invoke("commit", channel, cas_run_id, baseline_sha, cas_sha, cas_metadata_sha, 1)
+            self.assertEqual(rejected.returncode, 75, rejected.stderr)
+            self.assertIn("manifest CAS conflict", rejected.stderr)
+            self.assertEqual(published_manifest.read_bytes(), concurrent_manifest)
+            self.assertTrue(cas_stage.exists(), "indeterminate CAS conflict must preserve evidence")
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX flock is required for lock fencing")
+    def test_bundled_publisher_lock_fences_identity_and_rejects_late_commit(self) -> None:
+        import fcntl
+
+        sh = find_sh()
+        assert sh is not None
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root.chmod(0o755)
+            channel = root / "channel"
+            publisher_source, upload_prefix = bundled_publisher_harness_source(channel)
+            publisher_path = root / "publish_bundled_release.sh"
+            publisher_path.write_text(publisher_source, encoding="utf-8")
+            publisher_path.chmod(0o700)
+
+            def invoke(*arguments: object) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [sh, str(publisher_path), *(str(argument) for argument in arguments)],
+                    cwd=root,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+            self.assertEqual(invoke("probe", channel).returncode, 0)
+            run_id = "9" * 48
+            artifact = b"lock-fenced artifact\n"
+            digest = hashlib.sha256(artifact).hexdigest()
+            stage, candidate_sha, metadata_sha = write_bundled_publisher_stage(
+                upload_prefix,
+                run_id,
+                b'{"candidate":"lock-fenced"}\n',
+                "4.9.2.0",
+                1,
+                0,
+                [("A", f"files/artifacts/{digest}/lock.bin", artifact)],
+            )
+            identity = (channel, run_id, "absent", candidate_sha, metadata_sha, 1)
+            prepared = invoke("prepare", *identity)
+            self.assertEqual(prepared.returncode, 0, prepared.stderr)
+
+            wrong_metadata = "f" * 64
+            mismatched = invoke(
+                "reconcile",
+                channel,
+                run_id,
+                "absent",
+                candidate_sha,
+                wrong_metadata,
+                1,
+            )
+            self.assertEqual(mismatched.returncode, 0, mismatched.stderr)
+            self.assertEqual(
+                mismatched.stdout,
+                bundled_publisher_receipt(
+                    "AMNEZIA_PUBLISH_RECONCILE_V1",
+                    run_id,
+                    "absent",
+                    candidate_sha,
+                    wrong_metadata,
+                    1,
+                    "INDETERMINATE",
+                    "identity_mismatch",
+                ),
+            )
+            self.assertIn(
+                "\tprepared\n",
+                (channel / f".publish-state.{run_id}").read_text(encoding="utf-8"),
+            )
+
+            lock_path = channel / ".manifest-publish.lock"
+            with lock_path.open("rb") as lock_handle:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                delayed_commit = subprocess.Popen(
+                    [sh, str(publisher_path), "commit", *(str(value) for value in identity)],
+                    cwd=root,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                time.sleep(0.2)
+                self.assertIsNone(delayed_commit.poll(), "commit bypassed the global publisher lock")
+                (stage / "manifest.json").write_bytes(b'{"candidate":"tampered-while-waiting"}\n')
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                delayed_stdout, delayed_stderr = delayed_commit.communicate(timeout=10)
+
+            self.assertEqual(delayed_stdout, "")
+            self.assertEqual(delayed_commit.returncode, 65, delayed_stderr)
+            self.assertIn("candidate manifest hash mismatch", delayed_stderr)
+            self.assertIn(
+                "\tcommitting\n",
+                (channel / f".publish-state.{run_id}").read_text(encoding="utf-8"),
+            )
+            reconciled = invoke("reconcile", *identity)
+            self.assertEqual(reconciled.returncode, 0, reconciled.stderr)
+            self.assertEqual(
+                reconciled.stdout,
+                bundled_publisher_receipt(
+                    "AMNEZIA_PUBLISH_RECONCILE_V1",
+                    run_id,
+                    "absent",
+                    candidate_sha,
+                    metadata_sha,
+                    1,
+                    "NOT_APPLIED",
+                    "aborted",
+                ),
+            )
+            late_commit = invoke("commit", *identity)
+            self.assertEqual(late_commit.returncode, 75, late_commit.stderr)
+            self.assertIn("rejects commit from phase aborted", late_commit.stderr)
+            finalized = invoke("finalize-abort", *identity)
+            self.assertEqual(finalized.returncode, 0, finalized.stderr)
+            self.assertFalse(stage.exists())
+            self.assertFalse((channel / "manifest.json").exists())
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX signals are required for crash recovery")
+    def test_bundled_publisher_reconciles_sigkill_after_manifest_switch(self) -> None:
+        sh = find_sh()
+        real_sync = shutil.which("sync")
+        real_sha256sum = shutil.which("sha256sum")
+        real_grep = shutil.which("grep")
+        assert sh is not None
+        if not real_sync or not real_sha256sum or not real_grep:
+            self.skipTest("sync, sha256sum, and grep are required")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root.chmod(0o755)
+            channel = root / "channel"
+            publisher_source, upload_prefix = bundled_publisher_harness_source(channel)
+            publisher_path = root / "publish_bundled_release.sh"
+            publisher_path.write_text(publisher_source, encoding="utf-8")
+            publisher_path.chmod(0o700)
+
+            def invoke(
+                *arguments: object,
+                env: dict[str, str] | None = None,
+            ) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [sh, str(publisher_path), *(str(argument) for argument in arguments)],
+                    cwd=root,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+            self.assertEqual(invoke("probe", channel).returncode, 0)
+            run_id = "a" * 48
+            artifact = b"crash-reconciled artifact\n"
+            digest = hashlib.sha256(artifact).hexdigest()
+            manifest_data = b'{"candidate":"crash-reconciled"}\n'
+            stage, candidate_sha, metadata_sha = write_bundled_publisher_stage(
+                upload_prefix,
+                run_id,
+                manifest_data,
+                "4.9.2.1",
+                1,
+                0,
+                [("A", f"files/artifacts/{digest}/crash.bin", artifact)],
+            )
+            identity = (channel, run_id, "absent", candidate_sha, metadata_sha, 1)
+            self.assertEqual(invoke("prepare", *identity).returncode, 0)
+
+            fake_bin = root / "fake-bin"
+            fake_bin.mkdir()
+            kill_marker = root / "sync-kill-triggered"
+            sync_wrapper = fake_bin / "sync"
+            sync_wrapper.write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/bin/sh
+                    {publish_release.sh_quote(real_sync)} "$@" || exit $?
+                    last=
+                    for argument do last=$argument; done
+                    if [ "$last" = "$KILL_SYNC_ROOT" ] \\
+                        && [ -f "$KILL_SYNC_ROOT/manifest.json" ] \\
+                        && [ "$({publish_release.sh_quote(real_sha256sum)} "$KILL_SYNC_ROOT/manifest.json")" != "" ]; then
+                        digest=$({publish_release.sh_quote(real_sha256sum)} "$KILL_SYNC_ROOT/manifest.json")
+                        digest=${{digest%% *}}
+                        if [ "$digest" = "$KILL_SYNC_SHA256" ] \\
+                            && {publish_release.sh_quote(real_grep)} -Eq "$(printf '\\t')committing$" "$KILL_SYNC_STATE"; then
+                            : > "$KILL_SYNC_MARKER"
+                            kill -KILL "$PPID"
+                            exit 137
+                        fi
+                    fi
+                    """
+                ),
+                encoding="utf-8",
+            )
+            sync_wrapper.chmod(0o700)
+            crash_env = os.environ.copy()
+            crash_env.update(
+                {
+                    "PATH": str(fake_bin) + os.pathsep + crash_env.get("PATH", ""),
+                    "KILL_SYNC_ROOT": str(channel),
+                    "KILL_SYNC_SHA256": candidate_sha,
+                    "KILL_SYNC_STATE": str(channel / f".publish-state.{run_id}"),
+                    "KILL_SYNC_MARKER": str(kill_marker),
+                }
+            )
+            crashed = invoke("commit", *identity, env=crash_env)
+            self.assertNotEqual(crashed.returncode, 0)
+            self.assertTrue(kill_marker.exists(), crashed.stderr)
+            self.assertEqual((channel / "manifest.json").read_bytes(), manifest_data)
+            self.assertIn(
+                "\tcommitting\n",
+                (channel / f".publish-state.{run_id}").read_text(encoding="utf-8"),
+            )
+            self.assertTrue(stage.exists())
+
+            reconciled = invoke("reconcile", *identity)
+            self.assertEqual(reconciled.returncode, 0, reconciled.stderr)
+            self.assertEqual(
+                reconciled.stdout,
+                bundled_publisher_receipt(
+                    "AMNEZIA_PUBLISH_RECONCILE_V1",
+                    run_id,
+                    "absent",
+                    candidate_sha,
+                    metadata_sha,
+                    1,
+                    "APPLIED",
+                    "committed",
+                ),
+            )
+            finalized = invoke("finalize", *identity)
+            self.assertEqual(finalized.returncode, 0, finalized.stderr)
+            self.assertFalse(stage.exists())
+            self.assertFalse((channel / "files" / f".publish.{run_id}").exists())
+
     def test_publish_rejects_unsafe_server_directories_before_remote_writes(self) -> None:
         self.assertEqual(
             publish_release.validate_server_dir("/opt/amnezia/client-updates"),
@@ -2237,7 +4513,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('HOST_DIRECTORY must be an absolute path', script)
         self.assertIn('AMNEZIA_UPDATE_BRIDGE_HOST must be a single IPv4 address, not a CIDR route', script)
         self.assertIn('AMNEZIA_UPDATE_HOST_BIND must be a single IPv4 address', script)
-        self.assertIn('AMNEZIA_UPDATE_HOST_CONTAINER_NAME must not be empty', script)
+        self.assertIn('AMNEZIA_UPDATE_HOST_CONTAINER_NAME is invalid', script)
         self.assertIn('is_ipv4_address "$BRIDGE_HOST"', script)
         self.assertIn('is_ipv4_address "$HOST_BIND"', script)
         self.assertIn('case "$candidate" in', script)
@@ -2248,27 +4524,82 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('NETWORK_NAME="${CONTAINER_NAME}-net"', script)
         self.assertIn('AUTO_VPN_CONTAINERS="amnezia-awg2 amnezia-awg amnezia-wireguard amnezia-openvpn"', script)
         self.assertIn('AMNEZIA_UPDATE_VPN_CONTAINER must name a running VPN container', script)
-        self.assertIn('--network "container:$VPN_CONTAINER"', script)
+        self.assertIn('--network "container:$vpn_id"', script)
+        self.assertIn('--cidfile "$main_cidfile"', script)
+        self.assertIn('--label "${TRANSACTION_LABEL_KEY}=${TRANSACTION_ID}"', script)
+        self.assertIn('--label "${ROLE_LABEL_KEY}=bridge"', script)
+        self.assertIn("assert_name_maps_to_id()", script)
+        self.assertIn("assert_transaction_container_identity()", script)
         self.assertIn("wait_http_ready()", script)
         self.assertIn("wait_host_http_ready()", script)
-        self.assertIn("open_host_firewall_port()", script)
-        self.assertIn("ufw allow", script)
-        self.assertIn("firewall-cmd --add-port", script)
-        self.assertIn("iptables -C INPUT -p tcp --dport", script)
-        self.assertIn("iptables -I INPUT -p tcp --dport", script)
+        self.assertIn("reconcile_firewall_rules()", script)
+        self.assertIn("rollback_firewall()", script)
+        self.assertIn("ufw allow proto tcp", script)
+        self.assertIn("firewall-cmd --add-rich-rule", script)
+        self.assertIn("firewall-cmd --permanent --add-rich-rule", script)
+        self.assertNotIn("runtime-to-permanent", script)
+        self.assertIn("iptables -C INPUT -p tcp -d", script)
+        self.assertIn("iptables -I INPUT 1 -p tcp -d", script)
         self.assertIn("--network host", script)
-        self.assertIn("busybox wget -S -O /dev/null", script)
-        self.assertIn("grep -q 'HTTP/'", script)
-        self.assertIn("Bridge update endpoint did not become ready", script)
-        self.assertIn("Tunnel update endpoint did not become ready", script)
-        self.assertIn("Host update endpoint did not become ready", script)
-        self.assertIn("docker.io/library/busybox:1.36.1", script)
+        self.assertIn("busybox wget -q -O -", script)
+        self.assertIn("HEALTH_SENTINEL_CONTENT", script)
+        self.assertNotIn("grep -q 'HTTP/'", script)
+        self.assertIn("Bridge update endpoint did not serve the exact health sentinel", script)
+        self.assertIn("Tunnel update endpoint did not serve the exact health sentinel", script)
+        self.assertIn("Host update endpoint did not serve the exact health sentinel", script)
+        self.assertIn('IMAGE_REPOSITORY="docker.io/library/busybox"', script)
+        self.assertIn(
+            'IMAGE_DIGEST="sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"',
+            script,
+        )
+        self.assertIn('IMAGE="${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"', script)
+        self.assertIn('docker image inspect "$1"', script)
+        self.assertIn('Docker failed while querying pinned image identity', script)
+        self.assertIn('Docker failed while querying $query_description', script)
+        self.assertIn('Docker failed while querying $network_description', script)
+        self.assertIn('docker pull "$IMAGE"', script)
+        self.assertIn("Pinned update image identity verification failed", script)
+        self.assertIn("registry-1.docker.io/v2/library/busybox/manifests/1.36.1", script)
+        self.assertIn("Content-Type: application/vnd.oci.image.index.v1+json", script)
+        self.assertIn("Docker-Content-Digest: sha256:73aaf090", script)
+        self.assertNotIn("AMNEZIA_UPDATE_IMAGE", script)
+        self.assertNotIn("docker.io/library/busybox:1.36.1", script)
         self.assertNotIn("busybox:latest", script)
-        self.assertIn('sudo docker rm -f "$HOST_CONTAINER_NAME"', script)
-        self.assertIn('grep "^${CONTAINER_NAME}-vpn-"', script)
+        self.assertIn("LOCK_PATH=", script)
+        self.assertIn('flock -x -w "$LOCK_WAIT_SECONDS" 9', script)
+        self.assertIn("backup_container()", script)
+        self.assertIn("rollback_transaction()", script)
+        self.assertIn('docker rename "$original_id" "$backup_name"', script)
+        self.assertIn('docker network disconnect "$disconnect_network" "$original_id"', script)
+        self.assertIn('docker network connect --ip "$prior_ip" "$prior_network" "$original_id"', script)
+        self.assertIn('restore_running_state "$original_id" "$original_name"', script)
+        self.assertIn("TRANSACTION_COMMITTED=1", script)
+        self.assertIn("cleanup_backups", script)
+        self.assertNotIn('docker rm -f "$HOST_CONTAINER_NAME"', script)
+        self.assertIn('sudo -n -- "$@"', script)
+        self.assertIn('JOURNAL_PATH=', script)
+        self.assertIn('persist_transaction_journal active', script)
+        self.assertIn('persist_transaction_journal committed_pending_cleanup', script)
+        self.assertIn('recover_incomplete_transaction', script)
 
-    @unittest.skipUnless(find_sh(), "sh is required to exercise the update host setup script")
-    def test_update_host_setup_validates_inputs_before_docker_run(self) -> None:
+        lock_index = script.index('flock -x -w "$LOCK_WAIT_SECONDS" 9')
+        image_mutation_index = script.index('docker pull "$IMAGE"', lock_index)
+        network_mutation_index = script.index("docker network create", lock_index)
+        backup_record_index = script.index("append_backup_record", script.index("backup_container()"))
+        rename_index = script.index('docker rename "$original_id" "$backup_name"', backup_record_index)
+        health_index = script.index('wait_host_http_ready || die "Host update endpoint did not serve the exact health sentinel"')
+        durable_commit_index = script.index("persist_transaction_journal committed_pending_cleanup", health_index)
+        commit_index = script.index("TRANSACTION_COMMITTED=1", health_index)
+        cleanup_index = script.index("cleanup_backups || die", commit_index)
+        self.assertLess(lock_index, image_mutation_index)
+        self.assertLess(lock_index, network_mutation_index)
+        self.assertLess(backup_record_index, rename_index)
+        self.assertLess(health_index, commit_index)
+        self.assertLess(durable_commit_index, commit_index)
+        self.assertLess(commit_index, cleanup_index)
+
+    @unittest.skipUnless(find_sh(), "sh is required to exercise update-host input validation")
+    def test_update_host_setup_validates_inputs_before_any_mutation(self) -> None:
         sh = find_sh()
         assert sh
         with tempfile.TemporaryDirectory() as tmp:
@@ -2278,49 +4609,18 @@ class SourceContractTests(unittest.TestCase):
             log_path = tmp_path / "docker.log"
             host_dir = tmp_path / "updates"
             host_dir_arg = shell_absolute_path(host_dir)
-
-            (bin_dir / "sudo").write_text(
-                "#!/bin/sh\nexec \"$@\"\n",
-                encoding="utf-8",
-            )
             (bin_dir / "docker").write_text(
-                textwrap.dedent(
-                    f"""\
-                    #!/bin/sh
-                    printf '%s\\n' "$*" >> {log_path.as_posix()!r}
-                    if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then
-                        if [ "$3" = "-f" ]; then
-                            printf '%s\\n' "172.29.172.0/24"
-                        fi
-                        exit 0
-                    fi
-                    if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
-                        exit 0
-                    fi
-                    if [ "$1" = "ps" ]; then
-                        if [ -n "$AMNEZIA_FAKE_RUNNING_CONTAINERS" ]; then
-                            for name in $AMNEZIA_FAKE_RUNNING_CONTAINERS; do
-                                printf '%s\\n' "$name"
-                            done
-                        else
-                            printf '%s\\n' "amnezia-client-updates"
-                            printf '%s\\n' "amnezia-client-updates-host"
-                        fi
-                        exit 0
-                    fi
-                    exit 0
-                    """
-                ),
+                f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log_path.as_posix()!r}\nexit 99\n",
                 encoding="utf-8",
             )
-            os.chmod(bin_dir / "sudo", 0o755)
             os.chmod(bin_dir / "docker", 0o755)
 
             env = os.environ.copy()
             env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+            script = str(SCRIPT_DIR / "install_server_update_host.sh")
 
             relative_host_dir = subprocess.run(
-                [sh, str(REPO_ROOT / "deploy/selfhosted_updates/install_server_update_host.sh"), "relative-updates"],
+                [sh, script, "relative-updates"],
                 env=env,
                 text=True,
                 capture_output=True,
@@ -2331,7 +4631,7 @@ class SourceContractTests(unittest.TestCase):
 
             env["AMNEZIA_UPDATE_BRIDGE_HOST"] = "10.8.1.0/1"
             invalid = subprocess.run(
-                [sh, str(REPO_ROOT / "deploy/selfhosted_updates/install_server_update_host.sh"), host_dir_arg],
+                [sh, script, host_dir_arg],
                 env=env,
                 text=True,
                 capture_output=True,
@@ -2343,7 +4643,7 @@ class SourceContractTests(unittest.TestCase):
             env["AMNEZIA_UPDATE_BRIDGE_HOST"] = "172.29.172.252"
             env["AMNEZIA_UPDATE_HOST_BIND"] = "0.0.0.0 --privileged"
             invalid_bind = subprocess.run(
-                [sh, str(REPO_ROOT / "deploy/selfhosted_updates/install_server_update_host.sh"), host_dir_arg],
+                [sh, script, host_dir_arg],
                 env=env,
                 text=True,
                 capture_output=True,
@@ -2353,49 +4653,694 @@ class SourceContractTests(unittest.TestCase):
             self.assertFalse(log_path.exists(), "invalid host bind must fail before any docker command is called")
 
             env["AMNEZIA_UPDATE_HOST_BIND"] = "0.0.0.0"
-            env["AMNEZIA_UPDATE_VPN_CONTAINER"] = "missing-vpn"
-            missing_vpn = subprocess.run(
-                [sh, str(REPO_ROOT / "deploy/selfhosted_updates/install_server_update_host.sh"), host_dir_arg],
+            env["AMNEZIA_UPDATE_CONTAINER_NAME"] = "invalid name"
+            invalid_name = subprocess.run(
+                [sh, script, host_dir_arg],
                 env=env,
                 text=True,
                 capture_output=True,
             )
-            self.assertNotEqual(missing_vpn.returncode, 0)
-            self.assertIn("must name a running VPN container", missing_vpn.stderr)
-            self.assertNotIn("--ip 172.29.172.252", log_path.read_text(encoding="utf-8"))
+            self.assertNotEqual(invalid_name.returncode, 0)
+            self.assertIn("AMNEZIA_UPDATE_CONTAINER_NAME is invalid", invalid_name.stderr)
+            self.assertFalse(log_path.exists(), "invalid container name must fail before any docker command is called")
 
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_setup_does_not_trust_poisoned_preexisting_tag(self) -> None:
+        sh = find_sh()
+        assert sh
+        poisoned_tag = "docker.io/library/busybox:1.36.1"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state = initial_transactional_docker_state(image_present=False)
+            installer, host_dir, state_path, env = prepare_transactional_installer_harness(tmp_path, state)
+            env["AMNEZIA_UPDATE_IMAGE"] = poisoned_tag
+
+            rejected = subprocess.run(
+                [sh, str(installer), str(host_dir)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            rejected_log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+            self.assertIn(f"image inspect {PINNED_UPDATE_HOST_IMAGE}", rejected_log)
+            self.assertIn(f"pull {PINNED_UPDATE_HOST_IMAGE}", rejected_log)
+            self.assertNotIn(poisoned_tag, rejected_log)
+            self.assertFalse(any("|run-" in line for line in rejected_log.splitlines()))
+            self.assertEqual(json.loads(state_path.read_text(encoding="utf-8"))["containers"], state["containers"])
+
+            (tmp_path / "docker.log").unlink()
+            env["FAKE_DOCKER_ALLOW_PULL"] = "1"
+            accepted = subprocess.run(
+                [sh, str(installer), str(host_dir)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            accepted_log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+            self.assertIn(f"pull {PINNED_UPDATE_HOST_IMAGE}", accepted_log)
+            run_lines = [
+                line
+                for line in accepted_log.splitlines()
+                if "|run-" in line or "|candidate-preflight|" in line
+            ]
+            self.assertTrue(run_lines)
+            self.assertTrue(all(PINNED_UPDATE_HOST_IMAGE in line for line in run_lines))
+            self.assertNotIn(poisoned_tag, accepted_log)
+
+            final_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertTrue(final_state["containers"]["amnezia-client-updates"]["running"])
+            self.assertEqual(final_state["containers"]["amnezia-client-updates"]["ip"], "172.29.172.252")
+            self.assertEqual(final_state["containers"]["amnezia-client-updates-host"]["network"], "host")
+            self.assertEqual(
+                final_state["containers"]["amnezia-client-updates-vpn-amnezia-awg"]["network"],
+                "container:vpn-awg-id",
+            )
+            self.assertFalse(any(".amnezia-backup." in name for name in final_state["containers"]))
+            health_positions = [index for index, line in enumerate(accepted_log.splitlines()) if "|health-" in line]
+            cleanup_positions = [index for index, line in enumerate(accepted_log.splitlines()) if "|cleanup-backup-" in line]
+            self.assertTrue(health_positions and cleanup_positions)
+            self.assertLess(max(health_positions), min(cleanup_positions))
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_query_errors_never_mean_absent(self) -> None:
+        sh = find_sh()
+        assert sh
+        cases = (
+            ("image-inspect", "Docker failed while querying pinned image identity", False),
+            ("container-inspect", "Docker failed while querying container", False),
+            ("network-inspect", "Docker failed while querying network ID", False),
+            ("network-ls", "Docker failed while resolving the transaction network", True),
+        )
+        for phase, expected_error, remove_default_network in cases:
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                initial = initial_transactional_docker_state()
+                if remove_default_network:
+                    initial["networks"] = {}
+                expected_containers = json.loads(json.dumps(initial["containers"]))
+                expected_networks = json.loads(json.dumps(initial["networks"]))
+                installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                    tmp_path, initial
+                )
+                env["FAKE_DOCKER_FAIL_PHASE"] = phase
+                env["FAKE_DOCKER_FAIL_MARKER"] = str(tmp_path / "query-failure-injected")
+                rejected = subprocess.run(
+                    [sh, str(installer), str(host_dir)],
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=45,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(expected_error, rejected.stderr)
+                final_state = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertEqual(final_state["containers"], expected_containers)
+                self.assertEqual(final_state["networks"], expected_networks)
+                self.assertFalse(
+                    (tmp_path / "trust-anchor/amnezia/.client-update-host-transaction").exists()
+                )
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_journal_sync_and_remove_failures_are_explicit(self) -> None:
+        sh = find_sh()
+        assert sh
+        real_sync = shutil.which("sync")
+        real_rm = shutil.which("rm")
+        assert real_sync and real_rm
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            initial = initial_transactional_docker_state()
+            expected_containers = json.loads(json.dumps(initial["containers"]))
+            installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                tmp_path, initial
+            )
+            fake_sync = tmp_path / "bin/sync"
+            fake_sync.write_text(
+                "#!/bin/sh\n"
+                "case \"$*\" in *client-update-host-transaction*) exit 76 ;; esac\n"
+                f"exec {publish_release.sh_quote(real_sync)} \"$@\"\n",
+                encoding="utf-8",
+            )
+            fake_sync.chmod(0o700)
+            rejected = subprocess.run(
+                [sh, str(installer), str(host_dir)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=45,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("Unable to persist update-host transaction journal", rejected.stderr)
+            self.assertEqual(
+                json.loads(state_path.read_text(encoding="utf-8"))["containers"],
+                expected_containers,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            installer, host_dir, _state_path, env = prepare_transactional_installer_harness(
+                tmp_path, initial_transactional_docker_state()
+            )
+            journal_path = tmp_path / "trust-anchor/amnezia/.client-update-host-transaction"
+            fake_rm = tmp_path / "bin/rm"
+            fake_rm.write_text(
+                "#!/bin/sh\n"
+                f"blocked={publish_release.sh_quote(str(journal_path))}\n"
+                "for candidate do test \"$candidate\" = \"$blocked\" && exit 76; done\n"
+                f"exec {publish_release.sh_quote(real_rm)} \"$@\"\n",
+                encoding="utf-8",
+            )
+            fake_rm.chmod(0o700)
+            rejected = subprocess.run(
+                [sh, str(installer), str(host_dir)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=45,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("durable transaction journal cleanup failed", rejected.stderr)
+            self.assertTrue(journal_path.is_file())
+            self.assertIn("phase=committed_pending_cleanup", journal_path.read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_transaction_rolls_back_after_each_destructive_phase(self) -> None:
+        sh = find_sh()
+        assert sh
+        failure_phases = (
+            "rename-main",
+            "stop-main",
+            "disconnect-main",
+            "rename-host",
+            "stop-host",
+            "rename-sidecar-running",
+            "stop-sidecar-running",
+            "run-main",
+            "run-sidecar",
+            "run-host",
+            "health-main",
+            "health-sidecar",
+            "health-host",
+        )
+        for failure_phase in failure_phases:
+            with self.subTest(failure_phase=failure_phase), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                initial_state = initial_transactional_docker_state()
+                expected_containers = json.loads(json.dumps(initial_state["containers"]))
+                installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                    tmp_path, initial_state
+                )
+                env["FAKE_DOCKER_FAIL_PHASE"] = failure_phase
+                env["FAKE_DOCKER_FAIL_MARKER"] = str(tmp_path / "failure-injected")
+                result = subprocess.run(
+                    [sh, str(installer), str(host_dir)],
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=30,
+                )
+                self.assertNotEqual(result.returncode, 0, failure_phase)
+                self.assertIn("Previous update host containers restored", result.stderr, failure_phase)
+                final_state = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertEqual(final_state["containers"], expected_containers, failure_phase)
+                self.assertFalse(
+                    any(".amnezia-backup." in name for name in final_state["containers"]),
+                    failure_phase,
+                )
+                log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+                self.assertIn(f"|{failure_phase}|", log, failure_phase)
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_transaction_confirms_backup_cleanup_postconditions(self) -> None:
+        sh = find_sh()
+        assert sh
+        cleanup_phases = (
+            "cleanup-backup-main",
+            "cleanup-backup-host",
+            "cleanup-backup-sidecar-running",
+        )
+        for cleanup_phase in cleanup_phases:
+            with self.subTest(cleanup_phase=cleanup_phase), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                    tmp_path, initial_transactional_docker_state()
+                )
+                env["FAKE_DOCKER_FAIL_PHASE"] = cleanup_phase
+                env["FAKE_DOCKER_FAIL_MARKER"] = str(tmp_path / "failure-injected")
+                result = subprocess.run(
+                    [sh, str(installer), str(host_dir)],
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                final_state = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertFalse(
+                    any(".amnezia-backup." in name for name in final_state["containers"]),
+                    cleanup_phase,
+                )
+                self.assertTrue(final_state["containers"]["amnezia-client-updates"]["running"])
+                log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+                self.assertIn(f"|{cleanup_phase}|", log, cleanup_phase)
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_readiness_uses_custom_bind_2xx_and_exact_sentinel(self) -> None:
+        sh = find_sh()
+        assert sh
+        custom_bind = "192.0.2.44"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                tmp_path, initial_transactional_docker_state()
+            )
+            env["AMNEZIA_UPDATE_HOST_BIND"] = custom_bind
+            env["FAKE_EXPECT_HOST_PROBE_ADDRESS"] = custom_bind
+            accepted = subprocess.run(
+                [sh, str(installer), str(host_dir)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=45,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+            self.assertIn(f"-p {custom_bind}:17865", log)
+            self.assertIn(f"http://{custom_bind}:17865/amnezia-update-health-", log)
+            self.assertIn("amnezia-update-health-v1:", log)
+            self.assertFalse(list(host_dir.glob("amnezia-update-health-*")))
+
+        for failure_env in (
+            {"FAKE_HTTP_STATUS": "404"},
+            {"FAKE_HTTP_STATUS": "500"},
+            {"FAKE_SENTINEL_MATCH": "0"},
+            {"FAKE_EXPECT_HOST_PROBE_ADDRESS": "198.51.100.9"},
+        ):
+            with self.subTest(failure_env=failure_env), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                initial = initial_transactional_docker_state()
+                expected_containers = json.loads(json.dumps(initial["containers"]))
+                installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                    tmp_path, initial
+                )
+                env["AMNEZIA_UPDATE_HOST_BIND"] = custom_bind
+                env.update(failure_env)
+                rejected = subprocess.run(
+                    [sh, str(installer), str(host_dir)],
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=45,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                final = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertEqual(final["containers"], expected_containers)
+                self.assertFalse(list(host_dir.glob("amnezia-update-health-*")))
+                self.assertFalse(
+                    (tmp_path / "trust-anchor/amnezia/.client-update-host-transaction").exists()
+                )
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_aba_never_deletes_or_restores_foreign_container(self) -> None:
+        sh = find_sh()
+        assert sh
+        for aba_phase in ("rename-main", "run-main"):
+            with self.subTest(aba_phase=aba_phase), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                    tmp_path, initial_transactional_docker_state()
+                )
+                env["FAKE_DOCKER_ABA_PHASE"] = aba_phase
+                result = subprocess.run(
+                    [sh, str(installer), str(host_dir)],
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=45,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("CRITICAL: update host container rollback was incomplete", result.stderr)
+                containers = json.loads(state_path.read_text(encoding="utf-8"))["containers"]
+                self.assertEqual(containers["amnezia-client-updates"]["id"], "foreign-container-id")
+                self.assertEqual(containers["amnezia-client-updates"]["role"], "foreign")
+                self.assertTrue(
+                    any(
+                        name.startswith("amnezia-client-updates.amnezia-backup.")
+                        and container["id"] == "old-main-id"
+                        for name, container in containers.items()
+                    )
+                )
+                self.assertFalse(
+                    any(
+                        container.get("labels", {}).get(
+                            "org.amnezia.client-update-host.transaction"
+                        )
+                        for container in containers.values()
+                    )
+                )
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_auto_mode_preserves_and_serves_all_running_vpns(self) -> None:
+        sh = find_sh()
+        assert sh
+
+        def multi_vpn_state() -> dict[str, object]:
+            state = initial_transactional_docker_state()
+            containers = state["containers"]
+            assert isinstance(containers, dict)
+            containers["amnezia-wireguard"] = {
+                "id": "vpn-wireguard-id",
+                "role": "vpn-wireguard",
+                "running": True,
+                "network": "bridge",
+                "ip": "172.17.0.3",
+            }
+            containers["amnezia-client-updates-vpn-amnezia-wireguard"] = {
+                "id": "old-wireguard-sidecar-id",
+                "role": "sidecar-wireguard-running",
+                "running": True,
+                "network": "container:amnezia-wireguard",
+                "ip": "",
+            }
+            return state
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                tmp_path, multi_vpn_state()
+            )
             env.pop("AMNEZIA_UPDATE_VPN_CONTAINER")
-            valid = subprocess.run(
-                [sh, str(REPO_ROOT / "deploy/selfhosted_updates/install_server_update_host.sh"), host_dir_arg],
+            result = subprocess.run(
+                [sh, str(installer), str(host_dir)],
                 env=env,
                 text=True,
                 capture_output=True,
+                check=False,
+                timeout=45,
             )
-            self.assertEqual(valid.returncode, 0, valid.stderr)
-            docker_log = log_path.read_text(encoding="utf-8")
-            self.assertIn("--ip 172.29.172.252", docker_log)
-            self.assertNotIn("-p 0.0.0.0:17865:17865", docker_log)
-            self.assertIn("--name amnezia-client-updates-host", docker_log)
-            self.assertIn("exec amnezia-client-updates sh -c", docker_log)
-            self.assertIn("http://127.0.0.1:17865/", docker_log)
-            self.assertIn("--network host", docker_log)
-            self.assertTrue((host_dir / "files").is_dir())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            containers = json.loads(state_path.read_text(encoding="utf-8"))["containers"]
+            self.assertEqual(
+                containers["amnezia-client-updates-vpn-amnezia-awg"]["network"],
+                "container:vpn-awg-id",
+            )
+            self.assertEqual(
+                containers["amnezia-client-updates-vpn-amnezia-wireguard"]["network"],
+                "container:vpn-wireguard-id",
+            )
+            self.assertEqual(
+                containers["amnezia-client-updates-vpn-amnezia-wireguard"]["labels"][
+                    "org.amnezia.client-update-host.role"
+                ],
+                "tunnel-amnezia-wireguard",
+            )
+            self.assertEqual(containers["amnezia-client-updates-vpn-retired"]["id"], "retired-sidecar-id")
+            self.assertEqual(
+                (tmp_path / "docker.log").read_text(encoding="utf-8").count("|run-sidecar|"),
+                2,
+            )
 
-            log_path.unlink()
-            env["AMNEZIA_FAKE_RUNNING_CONTAINERS"] = "amnezia-awg amnezia-client-updates amnezia-client-updates-host amnezia-client-updates-vpn-amnezia-awg"
-            host_dir_with_vpn = tmp_path / "updates-with-vpn"
-            host_dir_with_vpn_arg = shell_absolute_path(host_dir_with_vpn)
-            valid_with_vpn = subprocess.run(
-                [sh, str(REPO_ROOT / "deploy/selfhosted_updates/install_server_update_host.sh"), host_dir_with_vpn_arg],
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            initial = multi_vpn_state()
+            expected_containers = json.loads(json.dumps(initial["containers"]))
+            installer, host_dir, state_path, env = prepare_transactional_installer_harness(tmp_path, initial)
+            env.pop("AMNEZIA_UPDATE_VPN_CONTAINER")
+            env["FAKE_DOCKER_FAIL_ROLE"] = "tunnel-amnezia-wireguard"
+            result = subprocess.run(
+                [sh, str(installer), str(host_dir)],
                 env=env,
                 text=True,
                 capture_output=True,
+                check=False,
+                timeout=45,
             )
-            self.assertEqual(valid_with_vpn.returncode, 0, valid_with_vpn.stderr)
-            docker_log = log_path.read_text(encoding="utf-8")
-            self.assertIn("--network container:amnezia-awg", docker_log)
-            self.assertIn("--name amnezia-client-updates-vpn-amnezia-awg", docker_log)
-            self.assertIn("exec amnezia-client-updates-vpn-amnezia-awg sh -c", docker_log)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(
+                json.loads(state_path.read_text(encoding="utf-8"))["containers"],
+                expected_containers,
+            )
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_firewall_rolls_back_exact_rules_and_reconciles_disabled_publish(self) -> None:
+        sh = find_sh()
+        assert sh
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            initial = initial_transactional_docker_state()
+            expected_containers = json.loads(json.dumps(initial["containers"]))
+            installer, host_dir, state_path, env = prepare_transactional_installer_harness(tmp_path, initial)
+            env["FAKE_FIREWALL_FAIL_AFTER"] = "iptables-add"
+            env["FAKE_FIREWALL_FAIL_MARKER"] = str(tmp_path / "firewall-failure-injected")
+            rejected = subprocess.run(
+                [sh, str(installer), str(host_dir)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=45,
+            )
+            firewall_debug = (
+                (tmp_path / "firewall.log").read_text(encoding="utf-8")
+                if (tmp_path / "firewall.log").exists()
+                else "<no firewall log>"
+            )
+            self.assertNotEqual(rejected.returncode, 0, rejected.stderr + "\n" + firewall_debug)
+            self.assertEqual(
+                json.loads(state_path.read_text(encoding="utf-8"))["containers"],
+                expected_containers,
+            )
+            firewall_state = json.loads((tmp_path / "firewall-state.json").read_text(encoding="utf-8"))
+            self.assertTrue(all(not rules for rules in firewall_state.values()))
+            firewall_log = (tmp_path / "firewall.log").read_text(encoding="utf-8")
+            self.assertIn("iptables-add|", firewall_log)
+            self.assertIn("iptables-remove|", firewall_log)
+            self.assertIn("firewalld_permanent-remove|", firewall_log)
+            self.assertIn("ufw-remove|", firewall_log)
+            self.assertNotIn("runtime-to-permanent", firewall_log)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                tmp_path, initial_transactional_docker_state()
+            )
+            enabled = subprocess.run(
+                [sh, str(installer), str(host_dir)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=45,
+            )
+            self.assertEqual(enabled.returncode, 0, enabled.stderr)
+            enabled_state = json.loads((tmp_path / "firewall-state.json").read_text(encoding="utf-8"))
+            self.assertTrue(all(len(rules) == 1 for rules in enabled_state.values()))
+            env["AMNEZIA_UPDATE_PUBLISH_HOST_PORT"] = "0"
+            disabled = subprocess.run(
+                [sh, str(installer), str(host_dir)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=45,
+            )
+            self.assertEqual(disabled.returncode, 0, disabled.stderr)
+            disabled_state = json.loads((tmp_path / "firewall-state.json").read_text(encoding="utf-8"))
+            self.assertTrue(all(not rules for rules in disabled_state.values()))
+            containers = json.loads(state_path.read_text(encoding="utf-8"))["containers"]
+            self.assertNotIn("amnezia-client-updates-host", containers)
+            self.assertFalse(
+                (tmp_path / "trust-anchor/amnezia/.client-update-host-firewall-state").exists()
+            )
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_persistent_cleanup_failure_recovers_from_durable_journal(self) -> None:
+        sh = find_sh()
+        assert sh
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                tmp_path, initial_transactional_docker_state()
+            )
+            env["FAKE_DOCKER_FAIL_BEFORE_PHASE"] = "cleanup-backup-main"
+            first = subprocess.run(
+                [sh, str(installer), str(host_dir)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=45,
+            )
+            self.assertNotEqual(first.returncode, 0)
+            self.assertIn("transactional backup cleanup failed", first.stderr)
+            journal = tmp_path / "trust-anchor/amnezia/.client-update-host-transaction"
+            self.assertTrue(journal.is_file())
+            self.assertIn("phase=committed_pending_cleanup", journal.read_text(encoding="utf-8"))
+            first_log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+            self.assertEqual(first_log.count("|run-main|"), 1)
+
+            env.pop("FAKE_DOCKER_FAIL_BEFORE_PHASE")
+            recovered = subprocess.run(
+                [sh, str(installer), str(host_dir)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=45,
+            )
+            self.assertEqual(recovered.returncode, 0, recovered.stderr)
+            self.assertIn("Recovered committed update-host transaction", recovered.stdout)
+            self.assertFalse(journal.exists())
+            containers = json.loads(state_path.read_text(encoding="utf-8"))["containers"]
+            self.assertFalse(any(".amnezia-backup." in name for name in containers))
+            self.assertEqual(
+                (tmp_path / "docker.log").read_text(encoding="utf-8").count("|run-main|"),
+                1,
+            )
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_sigkill_recovery_rolls_back_by_durable_ids(self) -> None:
+        sh = find_sh()
+        assert sh
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            initial = initial_transactional_docker_state()
+            expected_containers = json.loads(json.dumps(initial["containers"]))
+            installer, host_dir, state_path, env = prepare_transactional_installer_harness(tmp_path, initial)
+            entered = tmp_path / "entered-run-main"
+            release = tmp_path / "release-run-main"
+            env.update(
+                {
+                    "FAKE_DOCKER_HOLD_PHASE": "run-main",
+                    "FAKE_DOCKER_HOLD_ENTERED": str(entered),
+                    "FAKE_DOCKER_HOLD_RELEASE": str(release),
+                }
+            )
+            process = subprocess.Popen(
+                [sh, str(installer), str(host_dir)],
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                deadline = time.monotonic() + 20
+                while not entered.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(entered.exists(), "installer did not reach the journaled run-main phase")
+                process.kill()
+                release.touch()
+                process.communicate(timeout=10)
+                time.sleep(0.2)
+            finally:
+                release.touch(exist_ok=True)
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+
+            journal = tmp_path / "trust-anchor/amnezia/.client-update-host-transaction"
+            self.assertTrue(journal.is_file())
+            recovery_env = env.copy()
+            for key in ("FAKE_DOCKER_HOLD_PHASE", "FAKE_DOCKER_HOLD_ENTERED", "FAKE_DOCKER_HOLD_RELEASE"):
+                recovery_env.pop(key, None)
+            recovered = subprocess.run(
+                [sh, str(installer), str(host_dir)],
+                env=recovery_env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=45,
+            )
+            self.assertEqual(recovered.returncode, 0, recovered.stderr)
+            self.assertIn("Recovered and rolled back incomplete update-host transaction", recovered.stderr)
+            self.assertEqual(
+                json.loads(state_path.read_text(encoding="utf-8"))["containers"],
+                expected_containers,
+            )
+            self.assertFalse(journal.exists())
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_installer_serializes_concurrent_runs(self) -> None:
+        sh = find_sh()
+        assert sh
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            installer, host_dir, state_path, base_env = prepare_transactional_installer_harness(
+                tmp_path, initial_transactional_docker_state()
+            )
+            entered = tmp_path / "first-entered-docker"
+            release = tmp_path / "release-first"
+            first_env = base_env.copy()
+            first_env.update(
+                {
+                    "FAKE_DOCKER_INVOCATION": "first",
+                    "FAKE_DOCKER_HOLD_PHASE": "candidate-preflight",
+                    "FAKE_DOCKER_HOLD_ENTERED": str(entered),
+                    "FAKE_DOCKER_HOLD_RELEASE": str(release),
+                }
+            )
+            second_env = base_env.copy()
+            second_env["FAKE_DOCKER_INVOCATION"] = "second"
+
+            first = subprocess.Popen(
+                [sh, str(installer), str(host_dir)],
+                env=first_env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            second: subprocess.Popen[str] | None = None
+            try:
+                deadline = time.monotonic() + 10
+                while not entered.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(entered.exists(), "first installer did not reach the locked preflight")
+                second = subprocess.Popen(
+                    [sh, str(installer), str(host_dir)],
+                    env=second_env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                time.sleep(0.4)
+                locked_log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+                self.assertNotIn("second|", locked_log)
+                self.assertIsNone(second.poll(), "second installer bypassed the host-level lock")
+                release.touch()
+                first_stdout, first_stderr = first.communicate(timeout=30)
+                second_stdout, second_stderr = second.communicate(timeout=30)
+                self.assertEqual(first.returncode, 0, first_stderr + first_stdout)
+                self.assertEqual(second.returncode, 0, second_stderr + second_stdout)
+            finally:
+                release.touch(exist_ok=True)
+                if first.poll() is None:
+                    first.kill()
+                    first.communicate()
+                if second is not None and second.poll() is None:
+                    second.kill()
+                    second.communicate()
+
+            final_log = (tmp_path / "docker.log").read_text(encoding="utf-8")
+            first_last = max(index for index, line in enumerate(final_log.splitlines()) if line.startswith("first|"))
+            second_first = min(index for index, line in enumerate(final_log.splitlines()) if line.startswith("second|"))
+            self.assertLess(first_last, second_first)
+            final_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertTrue(final_state["containers"]["amnezia-client-updates"]["running"])
+            self.assertFalse(any(".amnezia-backup." in name for name in final_state["containers"]))
 
 
 class ManifestReleasePolicyTests(unittest.TestCase):
@@ -2602,6 +5547,10 @@ class ManifestPublisherTests(unittest.TestCase):
         self.previous_path = os.environ.get("PATH", "")
         os.environ["PATH"] = str(Path(self.openssl).parent) + os.pathsep + self.previous_path
         self.env = os.environ.copy()
+        self.env["SELFHOSTED_SSH_TRUSTED_HOST"] = "85.208.87.69"
+        self.env[
+            "SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256"
+        ] = "SHA256:2UtHIoVd4Lft+s4E/LZlA8+reysEexYyhkt03rg8Rdg"
 
     def tearDown(self) -> None:
         os.environ["PATH"] = self.previous_path
@@ -4114,6 +7063,51 @@ class ManifestPublisherTests(unittest.TestCase):
         self.assertIn("Published manifest platforms: android-arm64-v8a, linux-x64, windows-x64", result.stdout)
 
     @unittest.skipUnless(find_powershell(), "PowerShell is required for the local release wrapper smoke test")
+    def test_local_release_preflight_rejects_missing_unpaired_and_malformed_ssh_pins(self) -> None:
+        powershell = find_powershell()
+        assert powershell
+
+        command = [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(SCRIPT_DIR / "local_release.ps1"),
+            "-Version",
+            "9.9.9.9",
+            "-Preflight",
+            "-BuildPlatform",
+            "windows",
+            "-BaseUrl",
+            "http://172.29.172.252:17865",
+            "-PrivateKey",
+            str(self.private_key),
+            "-PublicKeyBase64",
+            self.public_key_base64,
+        ]
+        cases = []
+
+        missing = self.env.copy()
+        missing.pop("SELFHOSTED_SSH_TRUSTED_HOST", None)
+        missing.pop("SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256", None)
+        cases.append(("missing", missing, "are both required"))
+
+        unpaired = self.env.copy()
+        unpaired.pop("SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256", None)
+        cases.append(("unpaired", unpaired, "are both required"))
+
+        malformed = self.env.copy()
+        malformed["SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256"] += "="
+        cases.append(("malformed", malformed, "canonical SHA256"))
+
+        for name, environment, expected_error in cases:
+            with self.subTest(case=name):
+                result = subprocess.run(command, env=environment, text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0, result.stderr + result.stdout)
+                self.assertIn(expected_error, result.stderr + result.stdout)
+
+    @unittest.skipUnless(find_powershell(), "PowerShell is required for the local release wrapper smoke test")
     def test_local_release_preflight_validates_local_inputs_without_building(self) -> None:
         powershell = find_powershell()
         assert powershell
@@ -4325,6 +7319,11 @@ class ManifestPublisherTests(unittest.TestCase):
         self.assertIn("SELFHOSTED_UPDATE_PRIVATE_KEY_PATH", env_text)
         self.assertIn("SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64", env_text)
         self.assertIn("SELFHOSTED_UPDATE_SYNC_HOST = '10.8.1.0'", env_text)
+        self.assertIn("SELFHOSTED_SSH_TRUSTED_HOST = '85.208.87.69'", env_text)
+        self.assertIn(
+            "SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 = 'SHA256:2UtHIoVd4Lft+s4E/LZlA8+reysEexYyhkt03rg8Rdg'",
+            env_text,
+        )
         self.assertIn("SELFHOSTED_UPDATE_PAYLOAD_SCHEMA = '1'", env_text)
         self.assertIn("SELFHOSTED_UPDATE_CHANNEL = 'stable'", env_text)
         self.assertIn("SELFHOSTED_UPDATE_ROLLOUT_PERCENTAGE = '100'", env_text)
@@ -4752,35 +7751,59 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
 
         self.assertRegex(vpn_connection_h, r"\bQString\s+serverId\(\)\s+const;")
         self.assertIn("QString m_serverId", vpn_connection_h)
-        self.assertIn("indexOfServerId(m_serverId)", server_index)
+        self.assertIn("return m_serverIndex", server_index)
         self.assertIn("m_serverId = serverId", connect_to_vpn)
+        self.assertIn("m_serverIndex = serverIndex", connect_to_vpn)
         self.assertIn("currentConnectionServerId", connection_controller)
         self.assertIn("isCurrentConnectionServerId(serverId)", connection_controller)
-        self.assertIn("indexOfServerId(serverId)", connection_controller)
+        current_index = self.function_body(
+            connection_controller,
+            "int ConnectionController::currentConnectionServerIndex() const",
+        )
+        self.assertIn("indexOfServerId(serverId)", current_index)
+        self.assertNotIn("m_serversRepository", server_index)
 
     def test_managed_dns_resolution_has_a_small_concurrency_cap(self) -> None:
-        vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
-        concurrency_cap = re.search(
-            r"maxConcurrentManagedRouteLookups\s*=\s*(\d+)",
-            vpn_connection,
+        connection_controller = (
+            REPO_ROOT / "client/core/controllers/connectionController.cpp"
+        ).read_text(encoding="utf-8")
+        connection_controller_h = (
+            REPO_ROOT / "client/core/controllers/connectionController.h"
+        ).read_text(encoding="utf-8")
+        resolve_next = self.function_body(
+            connection_controller,
+            "void ConnectionController::resolveNextClientManagedSite()",
         )
-        self.assertIsNotNone(concurrency_cap, "managed DNS resolution must have an explicit concurrency cap")
-        assert concurrency_cap
-        self.assertGreater(int(concurrency_cap.group(1)), 0)
-        self.assertLessEqual(int(concurrency_cap.group(1)), 8)
-        self.assertRegex(
-            vpn_connection,
-            r"while\s*\([^)]*<\s*maxConcurrentManagedRouteLookups",
-        )
-        self.assertIn("QHostInfo::lookupHost", vpn_connection)
+
+        # The queue now dispatches exactly one lookup. Every terminal callback
+        # either cancels or advances the queue, which is a stricter concurrency
+        # bound than the former small parallel pool.
+        self.assertIn("QStringList m_clientManagedSitesResolveQueue", connection_controller_h)
+        self.assertIn("m_clientManagedSitesResolveQueue.takeFirst()", resolve_next)
+        self.assertEqual(resolve_next.count("QHostInfo::lookupHost"), 1)
+        self.assertGreaterEqual(resolve_next.count("resolveNextClientManagedSite()"), 3)
+        self.assertNotIn("while (", resolve_next)
 
     def test_incomplete_managed_dns_preserves_lkg_before_runtime_reconcile(self) -> None:
         connection_controller = (
             REPO_ROOT / "client/core/controllers/connectionController.cpp"
         ).read_text(encoding="utf-8")
+        vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
         finish_resolve = self.function_body(
             connection_controller,
             "void ConnectionController::finishClientManagedSitesResolve()",
+        )
+        request_reconcile = self.function_body(
+            connection_controller,
+            "void ConnectionController::requestManagedRouteReconciliation(",
+        )
+        dispatch_reconcile = self.function_body(
+            connection_controller,
+            "void ConnectionController::dispatchManagedRouteReconciliation(",
+        )
+        worker_reconcile = self.function_body(
+            vpn_connection,
+            "void VpnConnection::reconcileManagedSplitTunnelRoutes(",
         )
 
         failure_gate = finish_resolve.index("if (m_clientManagedSitesResolveHadFailure)")
@@ -4796,8 +7819,7 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
         )
         persist = finish_resolve.index("m_serversRepository->editServerJson")
         publish = finish_resolve.index("emit serverRoutingRulesChanged")
-        runtime_reconcile = finish_resolve.index("updateManagedSplitTunnelRoutes")
-        reconnect = finish_resolve.index("&VpnConnection::reconnectToVpn")
+        request = finish_resolve.index("requestManagedRouteReconciliation")
         failure_block = finish_resolve[failure_gate : early_return + len("return;")]
 
         self.assertLess(early_return, cache_write)
@@ -4805,31 +7827,56 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
         self.assertLess(failure_gate, persist)
         self.assertLess(early_return, persist)
         self.assertLess(early_return, publish)
-        self.assertLess(early_return, runtime_reconcile)
-        self.assertLess(early_return, reconnect)
+        self.assertLess(early_return, request)
         self.assertEqual(failure_block.count("scheduleClientManagedSitesResolveRetry(serverIndex)"), 1)
         self.assertEqual(failure_block.count("return;"), 1)
         self.assertIn("preserving last-known-good routes", failure_block)
         self.assertNotIn("m_clientManagedSitesResolveRetryCount", failure_block)
         self.assertNotIn("editServerJson", failure_block)
+        self.assertNotIn("requestManagedRouteReconciliation", failure_block)
         self.assertNotIn("reconnectToVpn", failure_block)
 
+        self.assertIn("dispatchManagedRouteReconciliation(desired, reason)", request_reconcile)
+        self.assertNotIn("emit managedRouteReconcileRequested", request_reconcile)
+        self.assertIn("emit managedRouteReconcileRequested", dispatch_reconcile)
+        self.assertRegex(
+            connection_controller,
+            r"(?s)connect\s*\(\s*this\s*,\s*&ConnectionController::managedRouteReconcileRequested"
+            r".*?&VpnConnection::reconcileManagedSplitTunnelRoutes\s*,\s*Qt::QueuedConnection\s*\)",
+        )
+        thread_guard = worker_reconcile.index("QThread::currentThread() != thread()")
+        binding_gate = worker_reconcile.index("const bool bindingMatches")
+        runtime_update = worker_reconcile.index("updateManagedSplitTunnelRoutes")
+        reconnect = worker_reconcile.index("reconnectToVpn()")
+        self.assertLess(thread_guard, binding_gate)
+        self.assertLess(binding_gate, runtime_update)
+        self.assertLess(runtime_update, reconnect)
+        self.assertIn("expectedConnectionEpoch == m_connectionEpoch", worker_reconcile)
+        self.assertIn("expectedServerId == m_serverId", worker_reconcile)
+
     def test_route_dns_logs_do_not_disclose_site_hostnames(self) -> None:
-        vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
+        connection_controller = (
+            REPO_ROOT / "client/core/controllers/connectionController.cpp"
+        ).read_text(encoding="utf-8")
         dns_route_logs = [
             statement
             for statement in re.findall(
-                r"q(?:Info|Warning|Critical)\(\)\s*<<.*?;",
-                vpn_connection,
+                r"q(?:Debug|Info|Warning|Critical)\(\)\s*<<.*?;",
+                connection_controller,
                 re.S,
             )
-            if "DNS" in statement and "route" in statement
+            if "managed site resolve" in statement or "managed DNS" in statement
         ]
 
         self.assertTrue(dns_route_logs, "expected at least one route-DNS diagnostic")
         for statement in dns_route_logs:
             self.assertNotRegex(statement, r"<<\s*(?:site|domain)\b")
             self.assertNotIn("hostInfo.hostName()", statement)
+            self.assertNotIn("hostInfo.errorString()", statement)
+        self.assertIn(
+            '<< "errorCode" << static_cast<int>(hostInfo.error())',
+            connection_controller,
+        )
 
     def test_service_readiness_probes_ipc_reachability_not_process_name(self) -> None:
         connection_controller = (
@@ -4885,7 +7932,15 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
         self.assertIn("0xa9fe0000u, 16", managed_policy)
         self.assertIn("ipv4RouteIsWithinRange(address, prefixLength, 0x0a000000u, 8)", managed_policy)
         self.assertIn("validatedManagedRoutes(managedIps", vpn_connection)
-        self.assertIn("maximumTotalRouteCount", vpn_connection)
+        normalized_runtime = self.function_body(
+            vpn_connection,
+            "QStringList VpnConnection::normalizedManagedRoutesForRuntime(",
+        )
+        self.assertGreaterEqual(
+            normalized_runtime.count("managedRoutePolicy::validatedManagedRoutes"),
+            2,
+        )
+        self.assertIn("const QSet<QString> localSet", normalized_runtime)
         self.assertIn("mobile managed route snapshot failed its safety boundary", vpn_connection)
         self.assertIn("managed DNS cache reached its safety boundary", connection_controller)
         self.assertIn("canonicalMergedSites", repository)

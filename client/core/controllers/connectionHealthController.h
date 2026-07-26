@@ -48,6 +48,8 @@ class ConnectionHealthController final : public QObject
     Q_PROPERTY(bool probeRunning READ probeRunning NOTIFY probeRunningChanged)
     Q_PROPERTY(bool recoveryPending READ recoveryPending NOTIFY recoveryPolicyChanged)
     Q_PROPERTY(QString pendingRecoveryAction READ pendingRecoveryAction NOTIFY recoveryPolicyChanged)
+    Q_PROPERTY(quint64 pendingRecoveryEpoch READ pendingRecoveryEpoch NOTIFY recoveryPolicyChanged)
+    Q_PROPERTY(bool recoveryRequestDispatched READ recoveryRequestDispatched NOTIFY recoveryPolicyChanged)
     Q_PROPERTY(int recoveryAttempts READ recoveryAttempts NOTIFY recoveryPolicyChanged)
     Q_PROPERTY(int recoveryBudgetRemaining READ recoveryBudgetRemaining NOTIFY recoveryPolicyChanged)
     Q_PROPERTY(int recoveryCooldownRemainingMs READ recoveryCooldownRemainingMs NOTIFY recoveryPolicyChanged)
@@ -95,6 +97,8 @@ public:
 
     bool recoveryPending() const;
     QString pendingRecoveryAction() const;
+    quint64 pendingRecoveryEpoch() const;
+    bool recoveryRequestDispatched() const;
     int recoveryAttempts() const;
     int recoveryBudgetRemaining() const;
     int recoveryCooldownRemainingMs() const;
@@ -140,7 +144,9 @@ public slots:
     // Returns an accepted/action/reason decision and emits recoverySuggested() when accepted.
     // The controller never performs the suggested action itself.
     QVariantMap evaluateRecovery(const QString &triggerReason = QString());
-    void acknowledgeRecoveryResult(bool success, const QString &reason = QString());
+    Q_INVOKABLE bool requestPendingRecovery();
+    void acknowledgeRecoveryResult(bool success, const QString &reason = QString(),
+                                   quint64 expectedRecoveryEpoch = 0);
     void resetRecoveryPolicy();
     void configureRecoveryPolicy(int cooldownMs, int maxAttempts, int budgetWindowMs);
     void setFlightRecorderCapacity(int capacity);
@@ -151,6 +157,9 @@ signals:
     void probeRunningChanged();
     void recoveryPolicyChanged();
     void recoverySuggested(ConnectionHealthController::RecoveryAction action, const QString &reasonCode, int attempt);
+    void recoveryActionRequested(ConnectionHealthController::RecoveryAction action,
+                                 const QString &reasonCode, int attempt,
+                                 quint64 recoveryEpoch);
 
 private:
     struct HealthSnapshotData
@@ -166,6 +175,10 @@ private:
         double packetLossPercent = -1.0;
         bool originAuthenticated = false;
         bool tunnelPathVerified = false;
+        HealthState lastProbeObservedState = HealthState::Unknown;
+        QString lastProbeObservedReason = QStringLiteral("not_observed");
+        int probeFailureStreak = 0;
+        int probeRecoveryStreak = 0;
     };
 
     struct RecoveryPolicyData
@@ -175,6 +188,11 @@ private:
         int budgetWindowMs = 10 * 60 * 1000;
         int nextActionIndex = 0;
         RecoveryAction pendingAction = RecoveryAction::None;
+        QString pendingReason;
+        int pendingAttempt = 0;
+        quint64 pendingEpoch = 0;
+        quint64 nextEpoch = 1;
+        bool executionRequested = false;
         QDateTime lastDecisionAt;
         QList<QDateTime> attempts;
     };

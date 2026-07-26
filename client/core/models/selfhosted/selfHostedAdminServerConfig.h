@@ -30,6 +30,7 @@ struct SelfHostedAdminServerConfig {
 
     QString userName;
     QString password;
+    QString sshHostKeyFingerprint;
     int port = 0;
 
     bool hasCredentials() const;

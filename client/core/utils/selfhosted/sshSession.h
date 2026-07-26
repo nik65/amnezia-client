@@ -33,7 +33,13 @@ public:
 
     ErrorCode runScript(const ServerCredentials &credentials, QString script,
                         const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdOut = nullptr,
-                        const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdErr = nullptr);
+                        const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdErr = nullptr,
+                        int timeoutMs = libssh::Client::DefaultCommandTimeoutMs);
+    ErrorCode runScriptInSingleShell(
+            const ServerCredentials &credentials, QString script,
+            const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdOut = nullptr,
+            const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdErr = nullptr,
+            int timeoutMs = libssh::Client::DefaultCommandTimeoutMs);
 
     ErrorCode runContainerScript(const ServerCredentials &credentials, DockerContainer container, QString script,
                                  const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdOut = nullptr,
@@ -45,9 +51,12 @@ public:
                                      const std::function<QString()> &callback);
 
     ErrorCode uploadFileToHost(const ServerCredentials &credentials, const QByteArray &data, const QString &remotePath,
-                               libssh::ScpOverwriteMode overwriteMode = libssh::ScpOverwriteMode::ScpOverwriteExisting);
+                               libssh::ScpOverwriteMode overwriteMode = libssh::ScpOverwriteMode::ScpOverwriteExisting,
+                               int timeoutMs = libssh::Client::DefaultScpTimeoutMs);
     ErrorCode uploadLocalFileToHost(const ServerCredentials &credentials, const QString &localPath, const QString &remotePath,
-                                    libssh::ScpOverwriteMode overwriteMode = libssh::ScpOverwriteMode::ScpOverwriteExisting);
+                                    libssh::ScpOverwriteMode overwriteMode = libssh::ScpOverwriteMode::ScpOverwriteExisting,
+                                    int timeoutMs = libssh::Client::DefaultScpTimeoutMs);
+    void cancelCurrentOperation();
 
 private:
     libssh::Client m_sshClient;

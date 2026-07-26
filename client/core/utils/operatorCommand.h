@@ -228,6 +228,7 @@ struct RouteRuntimeDecision {
 inline RouteRuntimeDecision assessRouteRuntime(const QString &policyRoute,
                                                bool snapshotAvailable,
                                                bool connected,
+                                               bool snapshotConfirmed,
                                                bool literalTarget,
                                                bool ipv6Target,
                                                bool splitMode,
@@ -243,9 +244,13 @@ inline RouteRuntimeDecision assessRouteRuntime(const QString &policyRoute,
         decision.warning = QStringLiteral("vpn_not_connected");
         return decision;
     }
+    if (!snapshotConfirmed) {
+        decision.warning = QStringLiteral("runtime_route_snapshot_unconfirmed");
+        return decision;
+    }
 
     decision.runtimeApplied = true;
-    decision.inspectionBasis = QStringLiteral("effectivePolicyWhileConnected");
+    decision.inspectionBasis = QStringLiteral("confirmedClientRouteSnapshot");
     if (!appliedModeMatchesPolicy) {
         decision.warning = QStringLiteral("runtime_policy_mode_diverged");
         return decision;
@@ -263,7 +268,7 @@ inline RouteRuntimeDecision assessRouteRuntime(const QString &policyRoute,
         return decision;
     }
     if (splitMode) {
-        decision.warning = QStringLiteral("split_route_not_runtime_verified");
+        decision.warning = QStringLiteral("split_route_not_os_verified");
         return decision;
     }
     if (policyRoute != QStringLiteral("vpn") && policyRoute != QStringLiteral("direct")) {

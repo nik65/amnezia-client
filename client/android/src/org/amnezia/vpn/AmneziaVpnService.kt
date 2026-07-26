@@ -108,10 +108,11 @@ private const val PREFS_REMOTE_LOG_ORIGIN_NONCE = "REMOTE_LOG_ORIGIN_NONCE_V1"
 private const val PREFS_REMOTE_LOG_TOKEN_PREFIX = "REMOTE_LOG_TOKEN_"
 private const val PREFS_REMOTE_LOG_CURSOR_PREFIX = "REMOTE_LOG_CURSOR_V1_"
 private const val PREFS_REMOTE_LOG_CURSOR_INDEX = "REMOTE_LOG_CURSOR_INDEX_V1"
-private const val CLIENT_LOGS_CURSOR_SCHEMA = 4
+private const val CLIENT_LOGS_CURSOR_SCHEMA = 7
 private const val CLIENT_LOGS_CURSOR_FINGERPRINT_BYTES = 64 * 1024
 private const val CLIENT_LOGS_CURSOR_ANCHOR_BYTES = 4 * 1024
 private const val CLIENT_LOGS_MAX_CURSOR_TARGETS = 8
+private const val CLIENT_LOGS_MAX_RECOVERY_CHECKPOINT_ATTEMPTS = 4
 private const val CLIENT_LOGS_KIND_ANDROID = "android"
 private const val CLIENT_LOGS_BATCH_ACCEPTED_HEADER = "X-Amnezia-Batch-Accepted"
 private const val CLIENT_LOGS_BATCH_ID_HEADER = "X-Amnezia-Batch-Id"
@@ -219,10 +220,17 @@ private data class RemoteLogAttempt(
 )
 
 private data class RemoteLogCursor(
+    val initialized: Boolean = false,
     val offset: Int = 0,
     val fingerprint: String = "",
     val fingerprintBytes: Int = 0,
     val anchor: String = "",
+    val sanitizerRecoveryQuarantine: Boolean = false,
+    val sanitizerRecoveryOriginOffset: Int = 0,
+    val sanitizerRecoveryCheckpointAttempts: Int = 0,
+    val sanitizerRecoveryNonce: String = "",
+    val sanitizerSecretTransitionEndOffset: Int = 0,
+    val sanitizerAwaitingStableSource: Boolean = false,
     val pendingEndOffset: Int = 0,
     val pendingBodySha256: String = "",
     val pendingBatchId: String = "",
@@ -232,7 +240,13 @@ private data class RemoteLogCursor(
     val sanitizerSecretQuote: String = "",
     val sanitizerSecretEscaped: Boolean = false,
     val sanitizerStructuredClosers: String = "",
-    val sanitizerExplicitSecretsSha256: String = ""
+    val sanitizerExplicitSecretsSha256: String = "",
+    val sanitizerAcceptedSecretsSha256: String = ""
+)
+
+private data class RemoteLogExplicitSecretSet(
+    val values: List<String> = emptyList(),
+    val overflowed: Boolean = false
 )
 
 private data class RemoteLogSanitizerState(
@@ -265,7 +279,7 @@ private data class RemoteLogPayload(
     val cursorBeforeUpload: RemoteLogCursor,
     val cursorAfterUpload: RemoteLogCursor,
     val batchId: String,
-    val sanitizerExplicitSecrets: List<String>
+    val sanitizerExplicitSecrets: RemoteLogExplicitSecretSet
 )
 
 private enum class RemoteLogUploadResult {
@@ -1056,7 +1070,7 @@ open class AmneziaVpnService : VpnService() {
 
     private fun uploadRemoteLogsOnce(
         allowTokenRefreshRetry: Boolean = true,
-        sanitizerExplicitSecrets: List<String>? = null,
+        sanitizerExplicitSecrets: RemoteLogExplicitSecretSet? = null,
         requiredInitialAttempt: RemoteLogAttempt? = null
     ): RemoteLogUploadOutcome {
         var connection: HttpURLConnection? = null
@@ -1121,14 +1135,16 @@ open class AmneziaVpnService : VpnService() {
             if (!isRemoteLogAttemptActive(attempt)) return RemoteLogUploadOutcome(RemoteLogUploadResult.IDLE)
 
             val logBytes = Log.getAppLogs(CLIENT_LOGS_MAX_PAYLOAD_BYTES).toByteArray(Charsets.UTF_8)
+            val payloadSecrets = remoteLogSanitizerSecretsForAttempt(
+                inheritedSecrets = sanitizerExplicitSecrets,
+                currentToken = target.token,
+                installationId = remoteLogInstallationId(),
+                originNonce = loadRemoteLogOriginNonce().orEmpty()
+            )
             val payload = prepareRemoteLogPayload(
                 target = target,
                 logBytes = logBytes,
-                explicitSecrets = sanitizerExplicitSecrets ?: listOf(
-                    target.token,
-                    remoteLogInstallationId(),
-                    loadRemoteLogOriginNonce().orEmpty()
-                )
+                explicitSecrets = payloadSecrets
             ) ?: return RemoteLogUploadOutcome(RemoteLogUploadResult.IDLE)
             if (!saveRemoteLogCursorForAttempt(attempt, payload.cursorBeforeUpload)) {
                 Log.w(TAG, "Remote log cursor could not be persisted; upload postponed")
@@ -1221,13 +1237,20 @@ open class AmneziaVpnService : VpnService() {
                 if (statusCode <= 0) {
                     Log.w(TAG, "Remote log upload returned no valid HTTP status")
                     RemoteLogUploadOutcome(RemoteLogUploadResult.RETRY)
-                } else if (statusCode == 429 || statusCode == 503) {
-                    val retryAfterMs = remoteLogRetryAfterMs(connection.getHeaderField("Retry-After"))
-                    Log.w(TAG, "Remote log upload throttled: status=$statusCode retryAfterMs=$retryAfterMs")
+                } else if (isRemoteLogRetryableHttpStatus(
+                        statusCode,
+                        retryAuthorization = target.bootstrap
+                    )
+                ) {
+                    val retryAfterMs = if (statusCode == 401 || statusCode == 403 ||
+                        statusCode == 429 || statusCode == 503
+                    ) {
+                        remoteLogRetryAfterMs(connection.getHeaderField("Retry-After"))
+                    } else {
+                        null
+                    }
+                    Log.w(TAG, "Remote log upload failed transiently: status=$statusCode retryAfterMs=$retryAfterMs")
                     RemoteLogUploadOutcome(RemoteLogUploadResult.RETRY, retryAfterMs)
-                } else if (statusCode == 408 || statusCode == 425 || statusCode in 500..599) {
-                    Log.w(TAG, "Remote log upload failed transiently: status=$statusCode")
-                    RemoteLogUploadOutcome(RemoteLogUploadResult.RETRY)
                 } else if (pauseRemoteLogAttempt(attempt)) {
                     Log.w(TAG, "Remote log uploader paused after non-retryable response: status=$statusCode")
                     RemoteLogUploadOutcome(RemoteLogUploadResult.PAUSED)
@@ -1241,7 +1264,7 @@ open class AmneziaVpnService : VpnService() {
             if (!isRemoteLogAttemptActive(attempt)) {
                 RemoteLogUploadOutcome(RemoteLogUploadResult.IDLE)
             } else {
-                Log.w(TAG, "Remote log upload failed: $e")
+                Log.w(TAG, "Remote log upload failed: ${e.javaClass.simpleName}")
                 RemoteLogUploadOutcome(RemoteLogUploadResult.RETRY)
             }
         } finally {
@@ -1276,14 +1299,19 @@ open class AmneziaVpnService : VpnService() {
             val statusCode = connection.responseCode
             if (!isRemoteLogAttemptActive(attempt)) return RemoteLogBootstrapOutcome()
             if (statusCode !in 200..299) {
-                Log.w(TAG, "Remote log bootstrap failed: status=$statusCode endpoint=$CLIENT_LOGS_BOOTSTRAP_ENDPOINT clientId=${target.clientId}")
+                Log.w(TAG, "Remote log bootstrap failed: status=$statusCode")
                 return when {
                     statusCode <= 0 -> RemoteLogBootstrapOutcome()
-                    statusCode == 429 || statusCode == 503 -> RemoteLogBootstrapOutcome(
-                        retryAfterMs = remoteLogRetryAfterMs(connection.getHeaderField("Retry-After"))
-                    )
-                    statusCode == 408 || statusCode == 425 || statusCode in 500..599 ->
-                        RemoteLogBootstrapOutcome()
+                    isRemoteLogRetryableHttpStatus(statusCode, retryAuthorization = true) ->
+                        RemoteLogBootstrapOutcome(
+                            retryAfterMs = if (statusCode == 401 || statusCode == 403 ||
+                                statusCode == 429 || statusCode == 503
+                            ) {
+                                remoteLogRetryAfterMs(connection.getHeaderField("Retry-After"))
+                            } else {
+                                null
+                            }
+                        )
                     else -> RemoteLogBootstrapOutcome(permanentFailure = true)
                 }
             }
@@ -1309,7 +1337,7 @@ open class AmneziaVpnService : VpnService() {
             Log.w(TAG, "Remote log bootstrap returned invalid JSON")
             RemoteLogBootstrapOutcome(permanentFailure = true)
         } catch (e: Exception) {
-            Log.w(TAG, "Remote log bootstrap failed: $e")
+            Log.w(TAG, "Remote log bootstrap failed: ${e.javaClass.simpleName}")
             RemoteLogBootstrapOutcome()
         } finally {
             connection?.let {
@@ -1344,15 +1372,15 @@ open class AmneziaVpnService : VpnService() {
         }
     }
 
-    private fun writeRemoteLogOriginCheckpoint(): Boolean = synchronized(remoteLogOriginLock) {
+    private fun writeRemoteLogOriginCheckpoint(): String? = synchronized(remoteLogOriginLock) {
         val nonce = UUID.randomUUID().toString()
         val stored = Prefs.prefs.edit().putString(PREFS_REMOTE_LOG_ORIGIN_NONCE, nonce).commit()
         if (!stored) {
             Log.w(TAG, "Remote log origin checkpoint could not be persisted")
-            false
+            null
         } else {
             Log.i(TAG, "$CLIENT_LOGS_ORIGIN_MARKER $nonce")
-            true
+            nonce
         }
     }
 
@@ -1387,20 +1415,141 @@ open class AmneziaVpnService : VpnService() {
         return null
     }
 
-    private fun freshRemoteLogCursorAtOrigin(
+    private fun freshRemoteLogRecoveryCursor(
         logBytes: ByteArray,
-        explicitSecretsSha256: String
-    ): RemoteLogCursor? {
-        val nonce = loadRemoteLogOriginNonce() ?: return null
-        val offset = remoteLogOriginCheckpointOffset(logBytes, nonce) ?: return null
+        explicitSecretsSha256: String,
+        acceptedSecretsSha256: String,
+        recoveryNonce: String?
+    ): RemoteLogCursor {
         val fingerprintBytes = minOf(CLIENT_LOGS_CURSOR_FINGERPRINT_BYTES, logBytes.size)
         return RemoteLogCursor(
-            offset = offset,
+            initialized = true,
+            offset = 0,
             fingerprint = sha256Hex(logBytes.copyOfRange(0, fingerprintBytes)),
             fingerprintBytes = fingerprintBytes,
-            anchor = remoteLogAnchor(logBytes, offset),
-            sanitizerExplicitSecretsSha256 = explicitSecretsSha256
+            sanitizerRecoveryQuarantine = true,
+            sanitizerRecoveryCheckpointAttempts = 1,
+            sanitizerRecoveryNonce = recoveryNonce.orEmpty(),
+            sanitizerExplicitSecretsSha256 = explicitSecretsSha256,
+            sanitizerAcceptedSecretsSha256 = acceptedSecretsSha256
         )
+    }
+
+    private fun beginRemoteLogRecovery(
+        target: RemoteLogTarget,
+        logBytes: ByteArray,
+        explicitSecretsSha256: String,
+        acceptedSecretsSha256: String
+    ): Boolean {
+        // Generate a fresh record after the discontinuity. The cursor is stored
+        // before returning so a process restart waits for this exact checkpoint
+        // instead of treating the current aggregate end as a safe boundary.
+        val recoveryNonce = writeRemoteLogOriginCheckpoint()
+        return saveRemoteLogCursor(
+            target,
+            freshRemoteLogRecoveryCursor(
+                logBytes,
+                explicitSecretsSha256,
+                acceptedSecretsSha256,
+                recoveryNonce
+            )
+        )
+    }
+
+    private fun remoteLogBatchEndOffset(
+        logBytes: ByteArray,
+        offset: Int,
+        pendingEndOffset: Int,
+        preferCompleteRecord: Boolean
+    ): Int {
+        if (pendingEndOffset > offset) return pendingEndOffset
+        val boundedEnd = minOf(
+            logBytes.size.toLong(),
+            offset.toLong() + CLIENT_LOGS_MAX_BATCH_RAW_BYTES
+        ).toInt()
+        if (!preferCompleteRecord || boundedEnd >= logBytes.size) return boundedEnd
+        for (candidate in boundedEnd - 1 downTo offset) {
+            if (isRemoteLogRecordDelimiter(logBytes[candidate])) return candidate + 1
+        }
+        return boundedEnd
+    }
+
+    private fun isRemoteLogRecordDelimiter(value: Byte): Boolean =
+        value == '\n'.code.toByte() || value == '\r'.code.toByte()
+
+    private fun remoteLogRecoveryMayExit(
+        originOffset: Int,
+        nextOffset: Int,
+        completeRecord: Boolean,
+        state: RemoteLogSanitizerState
+    ): Boolean {
+        return originOffset > 0 && nextOffset >= originOffset && completeRecord &&
+            state == RemoteLogSanitizerState()
+    }
+
+    private fun remoteLogRecoveryCheckpointCanRetry(attempts: Int): Boolean =
+        attempts in 0 until CLIENT_LOGS_MAX_RECOVERY_CHECKPOINT_ATTEMPTS
+
+    private fun remoteLogSecretTransitionHighWater(
+        acceptedSecretsSha256: String,
+        explicitSecretsSha256: String,
+        previousHighWater: Int,
+        sourceSize: Int
+    ): Int = if (acceptedSecretsSha256 != explicitSecretsSha256) {
+        maxOf(previousHighWater, sourceSize)
+    } else {
+        previousHighWater
+    }
+
+    private fun remoteLogStableSourceCanConfirm(
+        awaitingStableSource: Boolean,
+        sourceIdentityMatches: Boolean,
+        cursorAnchorMatches: Boolean,
+        armedSecretsSha256: String,
+        explicitSecretsSha256: String,
+        capturedSize: Int,
+        cursorOffset: Int,
+        transitionHighWater: Int
+    ): Boolean = awaitingStableSource && sourceIdentityMatches && cursorAnchorMatches &&
+        SHA256_HEX_PATTERN.matches(armedSecretsSha256) &&
+        armedSecretsSha256 == explicitSecretsSha256 &&
+        capturedSize == cursorOffset && cursorOffset == transitionHighWater
+
+    private fun advanceRemoteLogRecoveryCheckpoint(
+        target: RemoteLogTarget,
+        logBytes: ByteArray,
+        cursor: RemoteLogCursor
+    ): RemoteLogCursor? {
+        if (!cursor.sanitizerRecoveryQuarantine || cursor.sanitizerRecoveryOriginOffset > 0) {
+            return cursor
+        }
+
+        val nonce = cursor.sanitizerRecoveryNonce
+        if (nonce.isNotEmpty()) {
+            val originOffset = remoteLogOriginCheckpointOffset(logBytes, nonce)
+            if (originOffset != null) {
+                return cursor.copy(sanitizerRecoveryOriginOffset = originOffset)
+            }
+        }
+        if (!remoteLogRecoveryCheckpointCanRetry(cursor.sanitizerRecoveryCheckpointAttempts)) {
+            return cursor
+        }
+
+        val retryNonce = if (nonce.isEmpty()) {
+            writeRemoteLogOriginCheckpoint()
+        } else {
+            // Re-emit the marker bound to this durable recovery cursor. The
+            // origin remains a minimum checkpoint even if log aggregation is
+            // delayed; it never resets the streaming sanitizer state.
+            Log.i(TAG, "$CLIENT_LOGS_ORIGIN_MARKER $nonce")
+            nonce
+        }
+        val next = cursor.copy(
+            sanitizerRecoveryCheckpointAttempts =
+                cursor.sanitizerRecoveryCheckpointAttempts + 1,
+            sanitizerRecoveryNonce = retryNonce.orEmpty()
+        )
+        return if (saveRemoteLogCursor(target, next)) next else null
     }
 
     private fun remoteLogTokenPrefsKey(hostName: String, clientId: String): String =
@@ -1409,50 +1558,160 @@ open class AmneziaVpnService : VpnService() {
     private fun prepareRemoteLogPayload(
         target: RemoteLogTarget,
         logBytes: ByteArray,
-        explicitSecrets: List<String>
+        explicitSecrets: RemoteLogExplicitSecretSet
     ): RemoteLogPayload? {
-        if (logBytes.isEmpty() || !remoteLogSanitizerContractVerified) return null
+        if (!remoteLogSanitizerContractVerified) return null
 
-        val sanitizerSecrets = normalizedRemoteLogExplicitSecrets(explicitSecrets)
-        val explicitSecretsSha256 = remoteLogExplicitSecretsSha256(sanitizerSecrets)
+        val sanitizerSecrets = explicitSecrets.values
+        val explicitSecretsSha256 = remoteLogExplicitSecretsSha256(explicitSecrets)
         val storedCursor = loadRemoteLogCursor(target)
         var cursor = storedCursor
-        val cursorFingerprintMatches = cursor.fingerprintBytes in 1..logBytes.size &&
-            cursor.fingerprint == sha256Hex(logBytes.copyOfRange(0, cursor.fingerprintBytes))
+        val cursorFingerprintMatches = if (logBytes.isEmpty()) {
+            cursor.fingerprintBytes == 0 &&
+                cursor.fingerprint == sha256Hex(ByteArray(0))
+        } else {
+            cursor.fingerprintBytes in 1..logBytes.size &&
+                cursor.fingerprint == sha256Hex(
+                    logBytes.copyOfRange(0, cursor.fingerprintBytes)
+                )
+        }
         val cursorOffsetMatches = cursor.offset in 0..logBytes.size &&
             (cursor.offset == 0 || cursor.anchor == remoteLogAnchor(logBytes, cursor.offset))
-        if (!cursorFingerprintMatches || !cursorOffsetMatches) {
-            cursor = freshRemoteLogCursorAtOrigin(logBytes, explicitSecretsSha256) ?: run {
-                writeRemoteLogOriginCheckpoint()
+        val cursorRecoveryMatches = !cursor.sanitizerRecoveryQuarantine ||
+            cursor.sanitizerRecoveryOriginOffset in 0..logBytes.size
+        val cursorTransitionMatches = if (cursor.sanitizerSecretTransitionEndOffset == 0) {
+            !cursor.sanitizerAwaitingStableSource
+        } else {
+            cursor.sanitizerSecretTransitionEndOffset in cursor.offset..logBytes.size
+        }
+        if (!cursorFingerprintMatches || !cursorOffsetMatches || !cursorRecoveryMatches ||
+            !cursorTransitionMatches
+        ) {
+            if (storedCursor.initialized) {
+                // Rotation/truncation after enrolment starts at byte zero. The
+                // unknown prefix is scanned through the structural sanitizer
+                // and whole-redacted until a durable marker and a safe record
+                // boundary have both been acknowledged.
+                val acceptedSecretsSha256 = storedCursor.sanitizerAcceptedSecretsSha256
+                    .takeIf { SHA256_HEX_PATTERN.matches(it) }
+                    ?: explicitSecretsSha256
+                beginRemoteLogRecovery(
+                    target,
+                    logBytes,
+                    explicitSecretsSha256,
+                    acceptedSecretsSha256
+                )
+                return null
+            } else {
+                // First enrolment uses the same stateful recovery scan. A log
+                // marker is only a minimum checkpoint; skipping directly to it
+                // could reset an open PEM/static/<secret>/structured state.
+                beginRemoteLogRecovery(
+                    target,
+                    logBytes,
+                    explicitSecretsSha256,
+                    explicitSecretsSha256
+                )
                 return null
             }
         }
 
-        var offset = cursor.offset
-        var retryingPendingPayload = cursor.pendingEndOffset > offset
+        cursor = advanceRemoteLogRecoveryCheckpoint(target, logBytes, cursor) ?: return null
+
+        val offset = cursor.offset
+        val retryingPendingPayload = cursor.pendingEndOffset > offset
         if (retryingPendingPayload) {
             val pendingBodyMatches = cursor.pendingEndOffset <= logBytes.size &&
                 cursor.pendingBodySha256 == sha256Hex(logBytes.copyOfRange(offset, cursor.pendingEndOffset))
             if (!pendingBodyMatches) {
-                cursor = freshRemoteLogCursorAtOrigin(logBytes, explicitSecretsSha256) ?: run {
-                    writeRemoteLogOriginCheckpoint()
-                    return null
-                }
-                offset = cursor.offset
-                retryingPendingPayload = false
+                val acceptedSecretsSha256 = cursor.sanitizerAcceptedSecretsSha256
+                    .takeIf { SHA256_HEX_PATTERN.matches(it) }
+                    ?: explicitSecretsSha256
+                beginRemoteLogRecovery(
+                    target,
+                    logBytes,
+                    explicitSecretsSha256,
+                    acceptedSecretsSha256
+                )
+                return null
             }
         }
 
-        val endOffset = if (retryingPendingPayload) {
-            cursor.pendingEndOffset
-        } else {
-            minOf(logBytes.size.toLong(), offset.toLong() + CLIENT_LOGS_MAX_BATCH_RAW_BYTES).toInt()
+        var transitionEndOffset = remoteLogSecretTransitionHighWater(
+            acceptedSecretsSha256 = cursor.sanitizerAcceptedSecretsSha256,
+            explicitSecretsSha256 = explicitSecretsSha256,
+            previousHighWater = cursor.sanitizerSecretTransitionEndOffset,
+            sourceSize = logBytes.size
+        )
+        val stableExtentMatches = cursor.sanitizerAwaitingStableSource &&
+            cursorFingerprintMatches && cursorOffsetMatches &&
+            logBytes.size == cursor.offset && cursor.offset == transitionEndOffset
+        if (stableExtentMatches &&
+            cursor.sanitizerExplicitSecretsSha256 != explicitSecretsSha256
+        ) {
+            // Rebind an already armed, whole-redacted extent to the current
+            // opaque secret-set hash, but keep quarantine for one more
+            // independent scan before accepting it.
+            val reboundCursor = cursor.copy(
+                sanitizerExplicitSecretsSha256 = explicitSecretsSha256
+            )
+            if (!saveRemoteLogCursor(target, reboundCursor)) {
+                Log.w(TAG, "Remote log stable-source secret hash could not be persisted")
+            }
+            return null
         }
-        if (offset >= endOffset) return null
+        val stableSourceConfirmed = remoteLogStableSourceCanConfirm(
+            awaitingStableSource = cursor.sanitizerAwaitingStableSource,
+            sourceIdentityMatches = cursorFingerprintMatches,
+            cursorAnchorMatches = cursorOffsetMatches,
+            armedSecretsSha256 = cursor.sanitizerExplicitSecretsSha256,
+            explicitSecretsSha256 = explicitSecretsSha256,
+            capturedSize = logBytes.size,
+            cursorOffset = cursor.offset,
+            transitionHighWater = transitionEndOffset
+        )
+        if (stableSourceConfirmed) {
+            // This independent scan is phase two. Persist the accepted secret
+            // hash and marker removal before any empty-source early return.
+            val confirmedCursor = cursor.copy(
+                sanitizerSecretTransitionEndOffset = 0,
+                sanitizerAwaitingStableSource = false,
+                sanitizerAcceptedSecretsSha256 = explicitSecretsSha256
+            )
+            if (!saveRemoteLogCursor(target, confirmedCursor)) {
+                Log.w(TAG, "Remote log stable-source confirmation could not be persisted")
+                return null
+            }
+            cursor = confirmedCursor
+            transitionEndOffset = 0
+        } else {
+            val stablePhaseStillArmed = cursor.sanitizerAwaitingStableSource &&
+                cursor.sanitizerSecretTransitionEndOffset == transitionEndOffset &&
+                cursor.sanitizerExplicitSecretsSha256 == explicitSecretsSha256 &&
+                logBytes.size == cursor.offset && cursor.offset == transitionEndOffset
+            if (transitionEndOffset != cursor.sanitizerSecretTransitionEndOffset ||
+                cursor.sanitizerAwaitingStableSource != stablePhaseStillArmed
+            ) {
+                // Growth, a new secret set, or more unacknowledged bytes resets
+                // phase two and keeps whole-redaction enabled.
+                cursor = cursor.copy(
+                    sanitizerSecretTransitionEndOffset = transitionEndOffset,
+                    sanitizerAwaitingStableSource = stablePhaseStillArmed
+                )
+            }
+        }
+        val transitionQuarantine = transitionEndOffset > offset
+        val batchEndOffset = remoteLogBatchEndOffset(
+            logBytes = logBytes,
+            offset = offset,
+            pendingEndOffset = if (retryingPendingPayload) cursor.pendingEndOffset else 0,
+            preferCompleteRecord = cursor.sanitizerRecoveryQuarantine
+        )
+        if (offset >= batchEndOffset) return null
 
-        val body = logBytes.copyOfRange(offset, endOffset)
+        val body = logBytes.copyOfRange(offset, batchEndOffset)
         val rawBodySha256 = sha256Hex(body)
-        val explicitSecretSetChanged = retryingPendingPayload &&
+        val pendingSecretSetChanged = retryingPendingPayload &&
             cursor.sanitizerExplicitSecretsSha256 != explicitSecretsSha256
         if (!retryingPendingPayload) {
             cursor = cursor.copy(sanitizerExplicitSecretsSha256 = explicitSecretsSha256)
@@ -1468,7 +1727,8 @@ open class AmneziaVpnService : VpnService() {
                 secretEscaped = cursor.sanitizerSecretEscaped,
                 structuredClosers = cursor.sanitizerStructuredClosers
             ),
-            forceRedactedOutput = explicitSecretSetChanged
+            forceRedactedOutput = cursor.sanitizerRecoveryQuarantine || transitionQuarantine ||
+                pendingSecretSetChanged || explicitSecrets.overflowed
         )
         val uploadBody = sanitizedPayload.data
         val bodyBoundFingerprint = "${cursor.fingerprint}:$rawBodySha256:${sha256Hex(uploadBody)}"
@@ -1479,31 +1739,66 @@ open class AmneziaVpnService : VpnService() {
             offset = offset,
             length = uploadBody.size
         )
-        val batchId = if (retryingPendingPayload) cursor.pendingBatchId else candidateBatchId
+        // A batch id is bound to the exact sanitized body. A changed secret set
+        // intentionally produces a new fail-closed body, so reusing the old id
+        // would cause the collector to reject the request as a conflicting replay.
+        val batchId = if (retryingPendingPayload && !pendingSecretSetChanged) {
+            cursor.pendingBatchId
+        } else {
+            candidateBatchId
+        }
         val cursorBeforeUpload = cursor.copy(
-            pendingEndOffset = endOffset,
+            sanitizerExplicitSecretsSha256 = explicitSecretsSha256,
+            pendingEndOffset = batchEndOffset,
             pendingBodySha256 = rawBodySha256,
             pendingBatchId = batchId
         )
+        val recoveryComplete = cursor.sanitizerRecoveryQuarantine && remoteLogRecoveryMayExit(
+            originOffset = cursor.sanitizerRecoveryOriginOffset,
+            nextOffset = batchEndOffset,
+            completeRecord = body.lastOrNull()?.let {
+                isRemoteLogRecordDelimiter(it)
+            } == true,
+            state = sanitizedPayload.state
+        )
         val cursorAfterUpload = RemoteLogCursor(
-            offset = endOffset,
+            initialized = true,
+            offset = batchEndOffset,
             fingerprint = cursor.fingerprint,
             fingerprintBytes = cursor.fingerprintBytes,
-            anchor = remoteLogAnchor(logBytes, endOffset),
+            anchor = remoteLogAnchor(logBytes, batchEndOffset),
+            sanitizerRecoveryQuarantine = cursor.sanitizerRecoveryQuarantine && !recoveryComplete,
+            sanitizerRecoveryOriginOffset = if (recoveryComplete) {
+                0
+            } else {
+                cursor.sanitizerRecoveryOriginOffset
+            },
+            sanitizerRecoveryCheckpointAttempts = if (recoveryComplete) {
+                0
+            } else {
+                cursor.sanitizerRecoveryCheckpointAttempts
+            },
+            sanitizerRecoveryNonce = if (recoveryComplete) "" else cursor.sanitizerRecoveryNonce,
+            // The receipt is phase one only. Keep the high-water marker and
+            // arm a stable-source scan; do not accept the new secret hash in
+            // the ACK callback.
+            sanitizerSecretTransitionEndOffset = transitionEndOffset,
+            sanitizerAwaitingStableSource = transitionEndOffset > 0,
             sanitizerBlockEndMarker = sanitizedPayload.state.blockEndMarker,
             sanitizerBlockEndPrefixChars = sanitizedPayload.state.blockEndPrefixChars,
             sanitizerSecretMode = sanitizedPayload.state.secretMode,
             sanitizerSecretQuote = sanitizedPayload.state.secretQuote,
             sanitizerSecretEscaped = sanitizedPayload.state.secretEscaped,
             sanitizerStructuredClosers = sanitizedPayload.state.structuredClosers,
-            sanitizerExplicitSecretsSha256 = explicitSecretsSha256
+            sanitizerExplicitSecretsSha256 = explicitSecretsSha256,
+            sanitizerAcceptedSecretsSha256 = cursor.sanitizerAcceptedSecretsSha256
         )
         return RemoteLogPayload(
             uploadBody,
             cursorBeforeUpload,
             cursorAfterUpload,
             batchId,
-            sanitizerSecrets
+            explicitSecrets
         )
     }
 
@@ -1511,17 +1806,38 @@ open class AmneziaVpnService : VpnService() {
         value.length in 8..CLIENT_LOGS_MAX_TOKEN_CHARS &&
             value.all { it.code in 0x21..0x7e }
 
-    private fun normalizedRemoteLogExplicitSecrets(explicitSecrets: List<String>): List<String> =
-        explicitSecrets.asSequence()
+    private fun normalizedRemoteLogExplicitSecrets(
+        explicitSecrets: List<String>,
+        inheritedOverflow: Boolean = false
+    ): RemoteLogExplicitSecretSet {
+        val normalized = explicitSecrets.asSequence()
             .filter { it.length in 8..CLIENT_LOGS_SANITIZER_MAX_EXPLICIT_SECRET_CHARS }
             .filter { it != CLIENT_LOGS_REDACTED }
             .distinct()
             .sorted()
-            .take(CLIENT_LOGS_SANITIZER_MAX_EXPLICIT_SECRETS)
             .toList()
+        return RemoteLogExplicitSecretSet(
+            values = normalized.take(CLIENT_LOGS_SANITIZER_MAX_EXPLICIT_SECRETS),
+            overflowed = inheritedOverflow ||
+                normalized.size > CLIENT_LOGS_SANITIZER_MAX_EXPLICIT_SECRETS
+        )
+    }
 
-    private fun remoteLogExplicitSecretsSha256(explicitSecrets: List<String>): String =
-        sha256Hex(explicitSecrets.joinToString("\u0000"))
+    private fun remoteLogSanitizerSecretsForAttempt(
+        inheritedSecrets: RemoteLogExplicitSecretSet?,
+        currentToken: String,
+        installationId: String,
+        originNonce: String
+    ): RemoteLogExplicitSecretSet = normalizedRemoteLogExplicitSecrets(
+        inheritedSecrets?.values.orEmpty() + listOf(currentToken, installationId, originNonce),
+        inheritedOverflow = inheritedSecrets?.overflowed == true
+    )
+
+    private fun remoteLogExplicitSecretsSha256(explicitSecrets: RemoteLogExplicitSecretSet): String =
+        sha256Hex(
+            (if (explicitSecrets.overflowed) "overflow\u0000" else "bounded\u0000") +
+                explicitSecrets.values.joinToString("\u0000")
+        )
 
     private fun sanitizeRemoteLogPayload(
         payload: ByteArray,
@@ -1545,23 +1861,25 @@ open class AmneziaVpnService : VpnService() {
             budget,
             maxOutputBytes
         )
-        val trailingPartialRecord = !source.endsWith('\n')
+        val trailingPartialRecord = payload.isNotEmpty() &&
+            !isRemoteLogRecordDelimiter(payload.last())
         val lines = sanitizeRemoteLogLines(
             source = structured.text,
             budget = budget,
             redactTrailingPartialRecord = trailingPartialRecord,
             maxOutputBytes = maxOutputBytes
         )
+        val normalizedSecrets = normalizedRemoteLogExplicitSecrets(explicitSecrets)
         val exactSecretsRedacted = redactRemoteLogExplicitSecrets(
             lines.text,
-            normalizedRemoteLogExplicitSecrets(explicitSecrets),
+            normalizedSecrets.values,
             maxOutputBytes
         )
 
         val sanitizedBytes = exactSecretsRedacted.text.toByteArray(Charsets.UTF_8)
         val overflowed = structured.overflowed || lines.overflowed || exactSecretsRedacted.overflowed ||
             sanitizedBytes.size > maxOutputBytes
-        val boundedBytes = if (!forceRedactedOutput && !overflowed) {
+        val boundedBytes = if (!forceRedactedOutput && !normalizedSecrets.overflowed && !overflowed) {
             sanitizedBytes
         } else {
             "$CLIENT_LOGS_REDACTED_LINE\n".toByteArray(Charsets.UTF_8)
@@ -2081,6 +2399,72 @@ open class AmneziaVpnService : VpnService() {
     private fun verifyRemoteLogSanitizerContract(): Boolean {
         val explicitSecret = "contract-explicit-log-token-9071"
         val installationId = "123e4567-e89b-12d3-a456-426614174000"
+        val oldRetryToken = "contract-old-retry-token-9072"
+        val newRetryToken = "contract-new-retry-token-9073"
+        val retryOriginNonce = "123e4567-e89b-12d3-a456-426614174002"
+        val oldSecretHash = sha256Hex("contract-old-secret-set")
+        val newSecretHash = sha256Hex("contract-new-secret-set")
+        val firstTransitionHighWater = remoteLogSecretTransitionHighWater(
+            oldSecretHash, newSecretHash, previousHighWater = 0, sourceSize = 100
+        )
+        val acceptedDuringTransition = oldSecretHash
+        val appendedTransitionHighWater = remoteLogSecretTransitionHighWater(
+            acceptedDuringTransition,
+            newSecretHash,
+            previousHighWater = firstTransitionHighWater,
+            sourceSize = 140
+        )
+        val ackOnlyArms = !remoteLogStableSourceCanConfirm(
+            awaitingStableSource = true,
+            sourceIdentityMatches = true,
+            cursorAnchorMatches = true,
+            armedSecretsSha256 = newSecretHash,
+            explicitSecretsSha256 = newSecretHash,
+            capturedSize = 100,
+            cursorOffset = 60,
+            transitionHighWater = firstTransitionHighWater
+        )
+        val appendPreservesQuarantine = !remoteLogStableSourceCanConfirm(
+            awaitingStableSource = true,
+            sourceIdentityMatches = true,
+            cursorAnchorMatches = true,
+            armedSecretsSha256 = newSecretHash,
+            explicitSecretsSha256 = newSecretHash,
+            capturedSize = 140,
+            cursorOffset = 100,
+            transitionHighWater = appendedTransitionHighWater
+        )
+        val stableNextScanCloses = remoteLogStableSourceCanConfirm(
+            awaitingStableSource = true,
+            sourceIdentityMatches = true,
+            cursorAnchorMatches = true,
+            armedSecretsSha256 = newSecretHash,
+            explicitSecretsSha256 = newSecretHash,
+            capturedSize = 140,
+            cursorOffset = 140,
+            transitionHighWater = appendedTransitionHighWater
+        )
+        val mismatchPreservesQuarantine = !remoteLogStableSourceCanConfirm(
+            awaitingStableSource = true,
+            sourceIdentityMatches = false,
+            cursorAnchorMatches = true,
+            armedSecretsSha256 = newSecretHash,
+            explicitSecretsSha256 = newSecretHash,
+            capturedSize = 140,
+            cursorOffset = 140,
+            transitionHighWater = appendedTransitionHighWater
+        )
+        val acceptedAfterStableScan =
+            if (stableNextScanCloses) newSecretHash else acceptedDuringTransition
+        val inheritedRetrySecrets = normalizedRemoteLogExplicitSecrets(
+            listOf(oldRetryToken, installationId, retryOriginNonce)
+        )
+        val mergedRetrySecrets = remoteLogSanitizerSecretsForAttempt(
+            inheritedSecrets = inheritedRetrySecrets,
+            currentToken = newRetryToken,
+            installationId = installationId,
+            originNonce = retryOriginNonce
+        )
         val source = """
             route add 10.0.0.0/8 via 192.0.2.1
             dns vpn.example.test 203.0.113.8
@@ -2249,6 +2633,104 @@ open class AmneziaVpnService : VpnService() {
         val originPrefix =
             "07-21 12:34:56.789Z 1 2 I [main] $TAG: $CLIENT_LOGS_ORIGIN_MARKER $originNonce\n"
         val originLog = (originPrefix + "route ok\n").toByteArray(Charsets.UTF_8)
+        val emptySecretHash = remoteLogExplicitSecretsSha256(RemoteLogExplicitSecretSet())
+        val recoveryCursor = freshRemoteLogRecoveryCursor(
+            originLog,
+            emptySecretHash,
+            emptySecretHash,
+            originNonce
+        )
+        val recoveryContinuations = listOf(
+            Triple(
+                "-----BEGIN PRIVATE KEY-----\ncontract-post-origin-pem-342\n",
+                "contract-post-origin-pem-continuation-342\n-----END PRIVATE KEY-----\n",
+                "contract-post-origin-pem-continuation-342"
+            ),
+            Triple(
+                "-----BEGIN OpenVPN Static key V1-----\ncontract-post-origin-static-343\n",
+                "contract-post-origin-static-continuation-343\n-----END OpenVPN Static key V1-----\n",
+                "contract-post-origin-static-continuation-343"
+            ),
+            Triple(
+                "<secret>\ncontract-post-origin-secret-344\n",
+                "contract-post-origin-secret-continuation-344\n</secret>\n",
+                "contract-post-origin-secret-continuation-344"
+            ),
+            Triple(
+                "password={\"nested\":[\"contract-post-origin-structured-345\",\n",
+                "\"contract-post-origin-structured-continuation-345\"]}\n",
+                "contract-post-origin-structured-continuation-345"
+            )
+        )
+        val recoveryContinuationChecks = recoveryContinuations.map { (prefix, suffix, sentinel) ->
+            val bytes = (prefix + originPrefix + suffix + "health=after-recovery\n")
+                .toByteArray(Charsets.UTF_8)
+            val boundary = remoteLogOriginCheckpointOffset(bytes, originNonce) ?: -1
+            val beforeBoundary = sanitizeRemoteLogPayload(
+                bytes.copyOfRange(0, boundary),
+                forceRedactedOutput = true
+            )
+            val afterBoundary = sanitizeRemoteLogPayload(
+                bytes.copyOfRange(boundary, bytes.size),
+                initialState = beforeBoundary.state,
+                forceRedactedOutput = true
+            )
+            boundary > 0 &&
+                !remoteLogRecoveryMayExit(
+                    boundary,
+                    boundary,
+                    completeRecord = true,
+                    state = beforeBoundary.state
+                ) &&
+                remoteLogRecoveryMayExit(
+                    boundary,
+                    bytes.size,
+                    completeRecord = true,
+                    state = afterBoundary.state
+                ) &&
+                !beforeBoundary.data.toString(Charsets.UTF_8).contains(sentinel) &&
+                !afterBoundary.data.toString(Charsets.UTF_8).contains(sentinel)
+        }
+        val unknownRecoveryPrefix = (
+            "x".repeat(CLIENT_LOGS_MAX_BATCH_RAW_BYTES - 32) + "\n" + "y".repeat(64) + "\n"
+        )
+            .toByteArray(Charsets.UTF_8)
+        val recoveryLog = unknownRecoveryPrefix + originLog +
+            "health=ordinary-after-verified-boundary\n".toByteArray(Charsets.UTF_8)
+        val verifiedRecoveryBoundary = remoteLogOriginCheckpointOffset(recoveryLog, originNonce) ?: -1
+        val firstRecoveryEnd = remoteLogBatchEndOffset(
+            recoveryLog,
+            offset = 0,
+            pendingEndOffset = 0,
+            preferCompleteRecord = true
+        )
+        val secondRecoveryEnd = remoteLogBatchEndOffset(
+            recoveryLog,
+            offset = firstRecoveryEnd,
+            pendingEndOffset = 0,
+            preferCompleteRecord = true
+        )
+        val firstRecoveryPayload = sanitizeRemoteLogPayload(
+            recoveryLog.copyOfRange(0, firstRecoveryEnd),
+            forceRedactedOutput = true
+        )
+        val secondRecoveryPayload = sanitizeRemoteLogPayload(
+            recoveryLog.copyOfRange(firstRecoveryEnd, secondRecoveryEnd),
+            forceRedactedOutput = true
+        )
+        val recoveryExitAfterSecondBatch = remoteLogRecoveryMayExit(
+            verifiedRecoveryBoundary,
+            secondRecoveryEnd,
+            recoveryLog[secondRecoveryEnd - 1] == '\n'.code.toByte(),
+            secondRecoveryPayload.state
+        )
+        val overflowingExplicitSecrets = (0..CLIENT_LOGS_SANITIZER_MAX_EXPLICIT_SECRETS)
+            .map { "contract-overflow-secret-$it" }
+        val overflowSet = normalizedRemoteLogExplicitSecrets(overflowingExplicitSecrets)
+        val overflowPayload = sanitizeRemoteLogPayload(
+            "health=must-not-share-chunk contract-overflow-secret-4\n".toByteArray(Charsets.UTF_8),
+            explicitSecrets = overflowingExplicitSecrets
+        )
         val cappedRetryLow = remoteLogRetryDelayMs(31, -CLIENT_LOGS_RETRY_JITTER_PERMILLE)
         val cappedRetryMid = remoteLogRetryDelayMs(31, 0)
         val cappedRetryHigh = remoteLogRetryDelayMs(31, CLIENT_LOGS_RETRY_JITTER_PERMILLE)
@@ -2260,6 +2742,14 @@ open class AmneziaVpnService : VpnService() {
             secondArray.data.toString(Charsets.UTF_8)
         return first.data.contentEquals(second.data) &&
             first.state == second.state &&
+            firstTransitionHighWater == 100 &&
+            acceptedDuringTransition == oldSecretHash &&
+            appendedTransitionHighWater == 140 &&
+            ackOnlyArms &&
+            appendPreservesQuarantine &&
+            stableNextScanCloses &&
+            mismatchPreservesQuarantine &&
+            acceptedAfterStableScan == newSecretHash &&
             first.data.size <= CLIENT_LOGS_MAX_PAYLOAD_BYTES &&
             forbidden.none { text.contains(it) } &&
             required.all { text.contains(it) } &&
@@ -2283,6 +2773,11 @@ open class AmneziaVpnService : VpnService() {
             yamlSecret.state.secretMode == CLIENT_LOGS_SECRET_MODE_FAIL_CLOSED &&
             !yamlSecret.data.toString(Charsets.UTF_8).contains("contract-yaml-secret-334") &&
             !changedSecretSet.data.toString(Charsets.UTF_8).contains("opaque-old-token-335") &&
+            listOf(oldRetryToken, newRetryToken, installationId, retryOriginNonce)
+                .all { mergedRetrySecrets.values.contains(it) } &&
+            mergedRetrySecrets.values.count { it == installationId } == 1 &&
+            remoteLogExplicitSecretsSha256(mergedRetrySecrets) !=
+                remoteLogExplicitSecretsSha256(inheritedRetrySecrets) &&
             multilineScalar.state.secretMode == CLIENT_LOGS_SECRET_MODE_FAIL_CLOSED &&
             listOf("contract-multiline-first-337", "contract-multiline-second-338")
                 .none { multilineScalar.data.toString(Charsets.UTF_8).contains(it) } &&
@@ -2296,6 +2791,37 @@ open class AmneziaVpnService : VpnService() {
             !splitMultilineSecond.data.toString(Charsets.UTF_8).contains("contract-multiline-fourth-340") &&
             boundedOverflow.data.contentEquals("$CLIENT_LOGS_REDACTED_LINE\n".toByteArray(Charsets.UTF_8)) &&
             !repeatedBlocks.data.toString(Charsets.UTF_8).contains("contract-after-repeated-blocks-341") &&
+            recoveryCursor.sanitizerRecoveryQuarantine &&
+            recoveryCursor.sanitizerRecoveryOriginOffset == 0 &&
+            recoveryCursor.sanitizerRecoveryNonce == originNonce &&
+            recoveryContinuationChecks.all { it } &&
+            !remoteLogRecoveryMayExit(
+                verifiedRecoveryBoundary,
+                verifiedRecoveryBoundary,
+                completeRecord = false,
+                state = RemoteLogSanitizerState()
+            ) &&
+            (0 until CLIENT_LOGS_MAX_RECOVERY_CHECKPOINT_ATTEMPTS).all {
+                remoteLogRecoveryCheckpointCanRetry(it)
+            } &&
+            !remoteLogRecoveryCheckpointCanRetry(
+                CLIENT_LOGS_MAX_RECOVERY_CHECKPOINT_ATTEMPTS
+            ) &&
+            verifiedRecoveryBoundary > CLIENT_LOGS_MAX_BATCH_RAW_BYTES &&
+            firstRecoveryEnd < CLIENT_LOGS_MAX_BATCH_RAW_BYTES &&
+            secondRecoveryEnd == recoveryLog.size &&
+            firstRecoveryPayload.data.contentEquals(
+                "$CLIENT_LOGS_REDACTED_LINE\n".toByteArray(Charsets.UTF_8)
+            ) &&
+            secondRecoveryPayload.data.contentEquals(
+                "$CLIENT_LOGS_REDACTED_LINE\n".toByteArray(Charsets.UTF_8)
+            ) &&
+            recoveryExitAfterSecondBatch &&
+            overflowSet.overflowed &&
+            overflowSet.values.size == CLIENT_LOGS_SANITIZER_MAX_EXPLICIT_SECRETS &&
+            overflowPayload.data.contentEquals(
+                "$CLIENT_LOGS_REDACTED_LINE\n".toByteArray(Charsets.UTF_8)
+            ) &&
             remoteLogOriginCheckpointOffset(originLog, originNonce) ==
                 originPrefix.toByteArray(Charsets.UTF_8).size &&
             remoteLogOriginCheckpointOffset(
@@ -2330,6 +2856,12 @@ open class AmneziaVpnService : VpnService() {
             remoteLogRetryAfterMs("2", 0L) == 2000L &&
             remoteLogRetryAfterMs("999999", 0L) == CLIENT_LOGS_RETRY_MAX_DELAY &&
             remoteLogRetryAfterMs("invalid", 0L) == null &&
+            isRemoteLogRetryableHttpStatus(401, retryAuthorization = true) &&
+            isRemoteLogRetryableHttpStatus(403, retryAuthorization = true) &&
+            !isRemoteLogRetryableHttpStatus(401, retryAuthorization = false) &&
+            isRemoteLogRetryableHttpStatus(408, retryAuthorization = false) &&
+            isRemoteLogRetryableHttpStatus(503, retryAuthorization = false) &&
+            !isRemoteLogRetryableHttpStatus(400, retryAuthorization = true) &&
             crossPayloadText.contains("health=healthy") &&
             crossPayloadText.contains("route=preserved") &&
             crossPayloadText.contains("dns=preserved")
@@ -2344,6 +2876,14 @@ open class AmneziaVpnService : VpnService() {
         acceptedHeader == "1" &&
         expectedBatchId.isNotEmpty() &&
         echoedBatchId == expectedBatchId
+
+    private fun isRemoteLogRetryableHttpStatus(
+        statusCode: Int,
+        retryAuthorization: Boolean
+    ): Boolean = statusCode <= 0 ||
+        (retryAuthorization && (statusCode == 401 || statusCode == 403)) ||
+        statusCode == 408 || statusCode == 425 || statusCode == 429 ||
+        statusCode in 500..599
 
     private fun remoteLogRetryDelayMs(failureCount: Int, jitterPermille: Int): Long {
         val maxBaseDelay = CLIENT_LOGS_RETRY_MAX_DELAY * 1000 /
@@ -2422,7 +2962,8 @@ open class AmneziaVpnService : VpnService() {
         return try {
             val targetId = remoteLogTargetIdentity(target)
             val encoded = Prefs.load<String>(remoteLogCursorPrefsKey(targetId))
-            if (encoded.isBlank() || encoded.length > 2048) return RemoteLogCursor()
+            if (encoded.isBlank()) return RemoteLogCursor()
+            if (encoded.length > 2048) return RemoteLogCursor(initialized = true)
             val value = JSONObject(encoded)
             if (value.optInt("schema") != CLIENT_LOGS_CURSOR_SCHEMA) return RemoteLogCursor()
 
@@ -2430,10 +2971,22 @@ open class AmneziaVpnService : VpnService() {
             val fingerprint = value.optString("fingerprint")
             val fingerprintBytes = value.optInt("fingerprintBytes", -1)
             val anchor = value.optString("anchor")
+            val sanitizerRecoveryQuarantine =
+                value.optBoolean("sanitizerRecoveryQuarantine", false)
+            val sanitizerRecoveryOriginOffsetLong =
+                value.optLong("sanitizerRecoveryOriginOffset", 0L)
+            val sanitizerRecoveryCheckpointAttempts =
+                value.optInt("sanitizerRecoveryCheckpointAttempts", 0)
+            val sanitizerRecoveryNonce = value.optString("sanitizerRecoveryNonce")
+            val sanitizerSecretTransitionEndOffsetLong =
+                value.optLong("sanitizerSecretTransitionEndOffset", 0L)
+            val sanitizerAwaitingStableSource =
+                value.optBoolean("sanitizerAwaitingStableSource", false)
             val pendingEndOffsetLong = value.optLong("pendingEndOffset", 0L)
             val pendingBodySha256 = value.optString("pendingBodySha256")
             val pendingBatchId = value.optString("pendingBatchId")
             val sanitizerExplicitSecretsSha256 = value.optString("sanitizerExplicitSecretsSha256")
+            val sanitizerAcceptedSecretsSha256 = value.optString("sanitizerAcceptedSecretsSha256")
             val sanitizerState = RemoteLogSanitizerState(
                 blockEndMarker = value.optString("sanitizerBlockEndMarker"),
                 blockEndPrefixChars = value.optInt("sanitizerBlockEndPrefixChars", 0),
@@ -2443,11 +2996,21 @@ open class AmneziaVpnService : VpnService() {
                 structuredClosers = value.optString("sanitizerStructuredClosers")
             )
             val offsetIsValid = offsetLong in 0..Int.MAX_VALUE.toLong()
+            val recoveryOriginOffsetIsValid =
+                sanitizerRecoveryOriginOffsetLong in 0..Int.MAX_VALUE.toLong()
+            val transitionOffsetIsValid =
+                sanitizerSecretTransitionEndOffsetLong in 0..Int.MAX_VALUE.toLong()
             val pendingOffsetIsValid = pendingEndOffsetLong in 0..Int.MAX_VALUE.toLong()
             val offset = offsetLong.coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+            val sanitizerRecoveryOriginOffset = sanitizerRecoveryOriginOffsetLong
+                .coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+            val sanitizerSecretTransitionEndOffset = sanitizerSecretTransitionEndOffsetLong
+                .coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
             val pendingEndOffset = pendingEndOffsetLong.coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
-            val fingerprintIsValid = fingerprintBytes in 1..CLIENT_LOGS_CURSOR_FINGERPRINT_BYTES &&
-                SHA256_HEX_PATTERN.matches(fingerprint)
+            val fingerprintIsValid =
+                ((fingerprintBytes == 0 && fingerprint == sha256Hex(ByteArray(0))) ||
+                    fingerprintBytes in 1..CLIENT_LOGS_CURSOR_FINGERPRINT_BYTES) &&
+                    SHA256_HEX_PATTERN.matches(fingerprint)
             val anchorIsValid = (offset == 0 && anchor.isEmpty()) ||
                 (offset > 0 && SHA256_HEX_PATTERN.matches(anchor))
             val pendingIsValid = if (pendingEndOffset == 0) {
@@ -2458,17 +3021,52 @@ open class AmneziaVpnService : VpnService() {
                     SHA256_HEX_PATTERN.matches(pendingBodySha256) &&
                     SHA256_HEX_PATTERN.matches(pendingBatchId)
             }
-            if (!offsetIsValid || !pendingOffsetIsValid || !fingerprintIsValid || !anchorIsValid || !pendingIsValid ||
+            val recoveryNonceIsValid = sanitizerRecoveryNonce.isEmpty() || try {
+                UUID.fromString(sanitizerRecoveryNonce).toString() ==
+                    sanitizerRecoveryNonce.lowercase(Locale.US)
+            } catch (_: IllegalArgumentException) {
+                false
+            }
+            val recoveryIsValid = if (sanitizerRecoveryQuarantine) {
+                sanitizerRecoveryCheckpointAttempts in
+                    1..CLIENT_LOGS_MAX_RECOVERY_CHECKPOINT_ATTEMPTS &&
+                    recoveryNonceIsValid &&
+                    (sanitizerRecoveryOriginOffset == 0 || sanitizerRecoveryNonce.isNotEmpty())
+            } else {
+                sanitizerRecoveryOriginOffset == 0 &&
+                    sanitizerRecoveryCheckpointAttempts == 0 &&
+                    sanitizerRecoveryNonce.isEmpty()
+            }
+            val transitionIsValid = if (sanitizerSecretTransitionEndOffset == 0) {
+                !sanitizerAwaitingStableSource
+            } else {
+                offsetIsValid && transitionOffsetIsValid &&
+                    sanitizerSecretTransitionEndOffsetLong >= offsetLong
+            }
+            if (!offsetIsValid || !recoveryOriginOffsetIsValid || !transitionOffsetIsValid ||
+                !pendingOffsetIsValid || !fingerprintIsValid || !anchorIsValid ||
+                !pendingIsValid || !recoveryIsValid || !transitionIsValid ||
                 !SHA256_HEX_PATTERN.matches(sanitizerExplicitSecretsSha256) ||
+                !SHA256_HEX_PATTERN.matches(sanitizerAcceptedSecretsSha256) ||
                 !isValidRemoteLogSanitizerState(sanitizerState)
             ) {
-                RemoteLogCursor()
+                // A malformed current-schema cursor is an enrolled but
+                // unusable state: force recovery instead of treating arbitrary
+                // aggregate bytes as a fresh trusted origin.
+                RemoteLogCursor(initialized = true)
             } else {
                 RemoteLogCursor(
+                    initialized = true,
                     offset = offset,
                     fingerprint = fingerprint,
                     fingerprintBytes = fingerprintBytes,
                     anchor = anchor,
+                    sanitizerRecoveryQuarantine = sanitizerRecoveryQuarantine,
+                    sanitizerRecoveryOriginOffset = sanitizerRecoveryOriginOffset,
+                    sanitizerRecoveryCheckpointAttempts = sanitizerRecoveryCheckpointAttempts,
+                    sanitizerRecoveryNonce = sanitizerRecoveryNonce,
+                    sanitizerSecretTransitionEndOffset = sanitizerSecretTransitionEndOffset,
+                    sanitizerAwaitingStableSource = sanitizerAwaitingStableSource,
                     pendingEndOffset = pendingEndOffset,
                     pendingBodySha256 = pendingBodySha256,
                     pendingBatchId = pendingBatchId,
@@ -2478,12 +3076,13 @@ open class AmneziaVpnService : VpnService() {
                     sanitizerSecretQuote = sanitizerState.secretQuote,
                     sanitizerSecretEscaped = sanitizerState.secretEscaped,
                     sanitizerStructuredClosers = sanitizerState.structuredClosers,
-                    sanitizerExplicitSecretsSha256 = sanitizerExplicitSecretsSha256
+                    sanitizerExplicitSecretsSha256 = sanitizerExplicitSecretsSha256,
+                    sanitizerAcceptedSecretsSha256 = sanitizerAcceptedSecretsSha256
                 )
             }
         } catch (e: Exception) {
             Log.w(TAG, "Ignoring invalid remote log cursor: ${e.javaClass.simpleName}")
-            RemoteLogCursor()
+            RemoteLogCursor(initialized = true)
         }
     }
 
@@ -2510,6 +3109,18 @@ open class AmneziaVpnService : VpnService() {
                 put("fingerprint", cursor.fingerprint)
                 put("fingerprintBytes", cursor.fingerprintBytes)
                 put("anchor", cursor.anchor)
+                put("sanitizerRecoveryQuarantine", cursor.sanitizerRecoveryQuarantine)
+                put("sanitizerRecoveryOriginOffset", cursor.sanitizerRecoveryOriginOffset)
+                put(
+                    "sanitizerRecoveryCheckpointAttempts",
+                    cursor.sanitizerRecoveryCheckpointAttempts
+                )
+                put("sanitizerRecoveryNonce", cursor.sanitizerRecoveryNonce)
+                put(
+                    "sanitizerSecretTransitionEndOffset",
+                    cursor.sanitizerSecretTransitionEndOffset
+                )
+                put("sanitizerAwaitingStableSource", cursor.sanitizerAwaitingStableSource)
                 put("pendingEndOffset", cursor.pendingEndOffset)
                 put("pendingBodySha256", cursor.pendingBodySha256)
                 put("pendingBatchId", cursor.pendingBatchId)
@@ -2520,6 +3131,7 @@ open class AmneziaVpnService : VpnService() {
                 put("sanitizerSecretEscaped", cursor.sanitizerSecretEscaped)
                 put("sanitizerStructuredClosers", cursor.sanitizerStructuredClosers)
                 put("sanitizerExplicitSecretsSha256", cursor.sanitizerExplicitSecretsSha256)
+                put("sanitizerAcceptedSecretsSha256", cursor.sanitizerAcceptedSecretsSha256)
             }.toString()
 
             val prefs = Prefs.prefs

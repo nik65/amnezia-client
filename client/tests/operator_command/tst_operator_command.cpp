@@ -361,53 +361,60 @@ int main(int argc, char *argv[])
     }
     {
         const RouteRuntimeDecision noSnapshot = assessRouteRuntime(
-                QStringLiteral("vpn"), false, false, true, false, false, false, true);
+                QStringLiteral("vpn"), false, false, false, true, false, false, false, true);
         CHECK(!noSnapshot.runtimeApplied);
         CHECK(noSnapshot.inspectionBasis == QStringLiteral("policyPreview"));
         CHECK(noSnapshot.route == QStringLiteral("unknown"));
         CHECK(noSnapshot.warning == QStringLiteral("runtime_snapshot_unavailable"));
 
         const RouteRuntimeDecision disconnected = assessRouteRuntime(
-                QStringLiteral("direct"), true, false, true, false, true, false, true);
+                QStringLiteral("direct"), true, false, false, true, false, true, false, true);
         CHECK(!disconnected.runtimeApplied);
         CHECK(disconnected.inspectionBasis == QStringLiteral("policyPreview"));
         CHECK(disconnected.route == QStringLiteral("unknown"));
         CHECK(disconnected.warning == QStringLiteral("vpn_not_connected"));
 
+        const RouteRuntimeDecision unconfirmed = assessRouteRuntime(
+                QStringLiteral("vpn"), true, true, false, true, false, false, false, true);
+        CHECK(!unconfirmed.runtimeApplied);
+        CHECK(unconfirmed.inspectionBasis == QStringLiteral("policyPreview"));
+        CHECK(unconfirmed.route == QStringLiteral("unknown"));
+        CHECK(unconfirmed.warning == QStringLiteral("runtime_route_snapshot_unconfirmed"));
+
         const RouteRuntimeDecision hostname = assessRouteRuntime(
-                QStringLiteral("vpn"), true, true, false, false, false, false, true);
+                QStringLiteral("vpn"), true, true, true, false, false, false, false, true);
         CHECK(hostname.runtimeApplied);
-        CHECK(hostname.inspectionBasis == QStringLiteral("effectivePolicyWhileConnected"));
+        CHECK(hostname.inspectionBasis == QStringLiteral("confirmedClientRouteSnapshot"));
         CHECK(hostname.route == QStringLiteral("unknown"));
         CHECK(hostname.warning == QStringLiteral("hostname_resolution_required"));
 
         const RouteRuntimeDecision ipv6Split = assessRouteRuntime(
-                QStringLiteral("direct"), true, true, true, true, true, false, true);
+                QStringLiteral("direct"), true, true, true, true, true, true, false, true);
         CHECK(ipv6Split.runtimeApplied);
         CHECK(ipv6Split.route == QStringLiteral("unknown"));
         CHECK(ipv6Split.warning == QStringLiteral("ipv6_route_not_runtime_verified"));
 
         const RouteRuntimeDecision protectedRoute = assessRouteRuntime(
-                QStringLiteral("direct"), true, true, true, false, true, true, true);
+                QStringLiteral("direct"), true, true, true, true, false, true, true, true);
         CHECK(protectedRoute.runtimeApplied);
         CHECK(protectedRoute.route == QStringLiteral("unknown"));
         CHECK(protectedRoute.warning == QStringLiteral("protected_route_requires_runtime_verification"));
 
         const RouteRuntimeDecision diverged = assessRouteRuntime(
-                QStringLiteral("vpn"), true, true, true, false, true, false, false);
+                QStringLiteral("vpn"), true, true, true, true, false, true, false, false);
         CHECK(diverged.runtimeApplied);
         CHECK(diverged.route == QStringLiteral("unknown"));
         CHECK(diverged.warning == QStringLiteral("runtime_policy_mode_diverged"));
 
         const RouteRuntimeDecision connectedIpv4 = assessRouteRuntime(
-                QStringLiteral("direct"), true, true, true, false, true, false, true);
+                QStringLiteral("direct"), true, true, true, true, false, true, false, true);
         CHECK(connectedIpv4.runtimeApplied);
-        CHECK(connectedIpv4.inspectionBasis == QStringLiteral("effectivePolicyWhileConnected"));
+        CHECK(connectedIpv4.inspectionBasis == QStringLiteral("confirmedClientRouteSnapshot"));
         CHECK(connectedIpv4.route == QStringLiteral("unknown"));
-        CHECK(connectedIpv4.warning == QStringLiteral("split_route_not_runtime_verified"));
+        CHECK(connectedIpv4.warning == QStringLiteral("split_route_not_os_verified"));
 
         const RouteRuntimeDecision fullTunnelIpv6 = assessRouteRuntime(
-                QStringLiteral("vpn"), true, true, true, true, false, false, true);
+                QStringLiteral("vpn"), true, true, true, true, true, false, false, true);
         CHECK(fullTunnelIpv6.runtimeApplied);
         CHECK(fullTunnelIpv6.route == QStringLiteral("unknown"));
         CHECK(fullTunnelIpv6.warning == QStringLiteral("ipv6_route_not_runtime_verified"));

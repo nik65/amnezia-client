@@ -59,7 +59,8 @@ public:
 
 public slots:
     void install(DockerContainer container, int port, TransportProto transportProto, const QString &serverId);
-    void setProcessedServerCredentials(const QString &hostName, const QString &userName, const QString &secretData);
+    void setProcessedServerCredentials(const QString &hostName, const QString &userName, const QString &secretData,
+                                       const QString &sshHostKeyFingerprint);
     void clearProcessedServerCredentials();
 
     void scanServerForInstalledContainers(const QString &serverId);

@@ -89,6 +89,7 @@
 #endif
 
 class CoreSignalHandlers;
+class QNetworkAccessManager;
 
 class CoreController : public QObject
 {
@@ -154,6 +155,11 @@ private:
     void confirmRunningVersionHealthWhenReady();
     void scheduleGuardianConnectivityProbe(int delayMs = 500);
     void cancelGuardianConnectivityProbe(const QString &reason);
+    void handleGuardianRecoveryRequest(
+            ConnectionHealthController::RecoveryAction action,
+            const QString &reasonCode, int attempt, quint64 recoveryEpoch);
+    void finishGuardianRecovery(bool success, const QString &reasonCode,
+                                quint64 recoveryEpoch);
     void setQmlContextProperty(const QString &name, QObject *value);
 
     QQmlApplicationEngine *m_engine {}; // TODO use parent child system here?
@@ -210,10 +216,21 @@ private:
     ExportController* m_exportController;
     ConnectionController* m_connectionController;
     ConnectionHealthController* m_connectionHealthController = nullptr;
+    QNetworkAccessManager* m_guardianNetworkManager = nullptr;
     RouteInspectorController* m_routeInspectorController = nullptr;
     Vpn::ConnectionState m_latestConnectionState = Vpn::ConnectionState::Unknown;
     quint64 m_guardianProbeRequestGeneration = 0;
     QTimer m_guardianPeriodicProbeTimer;
+    QTimer m_guardianRecoveryDeadlineTimer;
+    quint64 m_latestConnectionEpoch = 0;
+    quint64 m_guardianSuggestedRecoveryEpoch = 0;
+    quint64 m_guardianSuggestedConnectionEpoch = 0;
+    quint64 m_guardianRecoveryConnectionEpoch = 0;
+    quint64 m_guardianInFlightRecoveryEpoch = 0;
+    ConnectionHealthController::RecoveryAction m_guardianSuggestedRecoveryAction =
+            ConnectionHealthController::RecoveryAction::None;
+    int m_guardianSuggestedRecoveryAttempt = 0;
+    bool m_guardianRecoveryInFlight = false;
     SettingsController* m_settingsController;
 
     ContainersModel* m_containersModel;

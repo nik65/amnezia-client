@@ -15,7 +15,9 @@
 
 #include "ipc.h"
 #include "core/utils/operatorCommand.h"
+#include "core/utils/remoteLogBatchHealth.h"
 #include "localpeerauthentication.h"
+#include "secureQSettings.h"
 #ifdef Q_OS_WIN
 #  include "windowsprivilegedpipe.h"
 #endif
@@ -69,6 +71,64 @@ int main(int argc, char *argv[])
     CHECK(amnezia::PrivilegedIpcProtocolVersion == 2);
     CHECK(amnezia::getIpcServiceUrl().contains(QStringLiteral("v2")));
     CHECK(amnezia::getDaemonServiceUrl().contains(QStringLiteral("v2")));
+
+    amnezia::RemoteLogSanitizerSecretSet inheritedSecrets;
+    inheritedSecrets.values = { QStringLiteral("old-token-privacy-contract") };
+    const amnezia::RemoteLogSanitizerSecretSet retrySecrets =
+            amnezia::remoteLogSanitizerSecretUnion(
+                    inheritedSecrets,
+                    { QStringLiteral("new-token-privacy-contract"),
+                      QStringLiteral("old-token-privacy-contract") });
+    CHECK(retrySecrets.values.contains(QStringLiteral("old-token-privacy-contract")));
+    CHECK(retrySecrets.values.contains(QStringLiteral("new-token-privacy-contract")));
+    CHECK(retrySecrets.values.count(QStringLiteral("old-token-privacy-contract")) == 1);
+    CHECK(!retrySecrets.forceRedacted);
+
+    QStringList overflowingSecrets;
+    for (qsizetype index = 0;
+         index <= amnezia::MaximumRemoteLogSanitizerExplicitSecrets; ++index) {
+        overflowingSecrets.append(QStringLiteral("retry-secret-%1").arg(index));
+    }
+    const amnezia::RemoteLogSanitizerSecretSet overflow =
+            amnezia::remoteLogSanitizerSecretUnion({}, overflowingSecrets);
+    CHECK(overflow.forceRedacted);
+    CHECK(overflow.values.isEmpty());
+
+    using KeychainBrokerGate = amnezia::secureSettingsPolicy::KeychainBrokerGate;
+    using KeychainBrokerStartStatus =
+            amnezia::secureSettingsPolicy::KeychainBrokerStartStatus;
+
+    KeychainBrokerGate completingBroker;
+    const auto completingFirst = completingBroker.beginOperation();
+    CHECK(completingFirst.status == KeychainBrokerStartStatus::Accepted);
+    CHECK(completingFirst.operationId != 0);
+    const auto completingConcurrent = completingBroker.beginOperation();
+    CHECK(completingConcurrent.status == KeychainBrokerStartStatus::Busy);
+    CHECK(completingBroker.startedOperationCount() == 1);
+    CHECK(completingBroker.completeOperation(completingFirst.operationId));
+    const auto completingSecond = completingBroker.beginOperation();
+    CHECK(completingSecond.status == KeychainBrokerStartStatus::Accepted);
+    CHECK(completingBroker.startedOperationCount() == 2);
+    CHECK(completingBroker.completeOperation(completingSecond.operationId));
+    CHECK(!completingBroker.hasActiveOperation());
+    CHECK(!completingBroker.isFailedClosed());
+
+    KeychainBrokerGate timedOutBroker;
+    const auto timedOutFirst = timedOutBroker.beginOperation();
+    CHECK(timedOutFirst.status == KeychainBrokerStartStatus::Accepted);
+    CHECK(timedOutBroker.deadlineExceeded(timedOutFirst.operationId));
+    CHECK(timedOutBroker.isFailedClosed());
+    CHECK(timedOutBroker.hasActiveOperation());
+    const auto rejectedAfterDeadline = timedOutBroker.beginOperation();
+    CHECK(rejectedAfterDeadline.status == KeychainBrokerStartStatus::FailedClosed);
+    CHECK(timedOutBroker.startedOperationCount() == 1);
+    CHECK(timedOutBroker.completeOperation(timedOutFirst.operationId));
+    CHECK(!timedOutBroker.hasActiveOperation());
+    CHECK(timedOutBroker.isFailedClosed());
+    const auto rejectedAfterLateCompletion = timedOutBroker.beginOperation();
+    CHECK(rejectedAfterLateCompletion.status
+          == KeychainBrokerStartStatus::FailedClosed);
+    CHECK(timedOutBroker.startedOperationCount() == 1);
 
     QSet<QString> capabilities;
     const QRegularExpression capabilityPattern(QStringLiteral("^[0-9a-f]{32}$"));

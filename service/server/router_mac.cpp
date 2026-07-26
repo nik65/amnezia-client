@@ -45,14 +45,16 @@ bool RouterMac::routeAdd(const QString &ipWithSubnet, const QString &gw)
     }
 
     // TODO refactor
-    mainRouteIface(argc, argv);
-    m_addedRoutes.append({ipWithSubnet, gw});
+    const bool added = mainRouteIface(argc, argv) == 0;
+    if (added) {
+        m_addedRoutes.append({ipWithSubnet, gw});
+    }
 
     for (int i = 0; i < argc; i++) {
         delete [] argv[i];
     }
     delete[] argv;
-    return true;
+    return added;
 }
 
 int RouterMac::routeAddList(const QString &gw, const QStringList &ips)
@@ -66,13 +68,15 @@ int RouterMac::routeAddList(const QString &gw, const QStringList &ips)
 
 bool RouterMac::clearSavedRoutes()
 {
-    int cnt = 0;
-    for (const Route &r: m_addedRoutes) {
-        if (routeDelete(r.dst, r.gw)) cnt++;
+    for (auto route = m_addedRoutes.begin(); route != m_addedRoutes.end();) {
+        if (routeDelete(route->dst, route->gw)) {
+            route = m_addedRoutes.erase(route);
+        } else {
+            ++route;
+        }
     }
-    bool ret = (cnt == m_addedRoutes.count());
-    m_addedRoutes.clear();
-    return ret;
+    // Retain failed rows for a later retry and report only an exact teardown.
+    return m_addedRoutes.isEmpty();
 }
 
 bool RouterMac::routeDelete(const QString &ipWithSubnet, const QString &gw)
@@ -112,13 +116,13 @@ bool RouterMac::routeDelete(const QString &ipWithSubnet, const QString &gw)
         strcpy(argv[i], parts.at(i).toStdString().c_str());
     }
 
-    mainRouteIface(argc, argv);
+    const bool removed = mainRouteIface(argc, argv) == 0;
 
     for (int i = 0; i < argc; i++) {
         delete [] argv[i];
     }
     delete[] argv;
-    return true;
+    return removed;
 }
 
 bool RouterMac::routeDeleteList(const QString &gw, const QStringList &ips)

@@ -12,6 +12,8 @@ param(
     [string] $OutDir = "",
     [string] $BaseUrl = $env:SELFHOSTED_UPDATE_BASE_URL,
     [string] $SyncHost = $(if ($env:SELFHOSTED_UPDATE_SYNC_HOST) { $env:SELFHOSTED_UPDATE_SYNC_HOST } else { "10.8.1.0" }),
+    [string] $SshTrustedHost = $env:SELFHOSTED_SSH_TRUSTED_HOST,
+    [string] $SshTrustedHostKeySha256 = $env:SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256,
     [string] $PrivateKey = $env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH,
     [string] $PublicKeyBase64 = $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64,
     [string] $WslAndroidHome = $(if ($env:WSL_ANDROID_HOME) { $env:WSL_ANDROID_HOME } else { "" }),
@@ -71,6 +73,32 @@ function Assert-ExistingFile([string] $Path, [string] $Label) {
     }
 }
 
+function Assert-SshHostKeyPinPair {
+    $hasHost = -not [string]::IsNullOrWhiteSpace($SshTrustedHost)
+    $hasPin = -not [string]::IsNullOrWhiteSpace($SshTrustedHostKeySha256)
+    if (-not $hasHost -or -not $hasPin) {
+        throw "SELFHOSTED_SSH_TRUSTED_HOST and SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 are both required for a local release build"
+    }
+    if ($SshTrustedHost -notmatch "^[A-Za-z0-9._:-]+$") {
+        throw "SELFHOSTED_SSH_TRUSTED_HOST must be an exact hostname or IP without whitespace, scheme, path, or brackets"
+    }
+    if ($SshTrustedHostKeySha256.Length -ne 50 -or
+        $SshTrustedHostKeySha256 -notmatch "^SHA256:[A-Za-z0-9+/]+$") {
+        throw "SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 must be a canonical SHA256: fingerprint with 43 standard Base64 characters and no padding"
+    }
+
+    try {
+        $encoded = $SshTrustedHostKeySha256.Substring(7)
+        $decoded = [Convert]::FromBase64String($encoded + "=")
+    } catch {
+        throw "SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 is not strict standard Base64"
+    }
+    if ($decoded.Length -ne 32 -or
+        ([Convert]::ToBase64String($decoded).TrimEnd([char]'=') -cne $encoded)) {
+        throw "SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 must canonically encode exactly 32 SHA-256 bytes"
+    }
+}
+
 function Resolve-BuildJobs {
     if ($BuildJobs -gt 0) {
         return $BuildJobs
@@ -126,6 +154,7 @@ function Assert-ReleaseInputs {
     if ($SyncHost -match "://|/") {
         throw "SELFHOSTED_UPDATE_SYNC_HOST must be a host or IP without scheme/path/CIDR: $SyncHost"
     }
+    Assert-SshHostKeyPinPair
     Assert-SafeFleetPolicy
 }
 
@@ -440,6 +469,8 @@ function Build-WindowsInstaller([string] $BundleDir) {
     $previousConanNoRemote = $env:CONAN_NO_REMOTE
     $previousPublicKeyBase64 = $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64
     $previousSyncHost = $env:SELFHOSTED_UPDATE_SYNC_HOST
+    $previousSshTrustedHost = $env:SELFHOSTED_SSH_TRUSTED_HOST
+    $previousSshTrustedHostKeySha256 = $env:SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256
     $previousBundleDir = $env:SELFHOSTED_UPDATE_BUNDLE_DIR
     $previousBuildJobs = $env:AMNEZIA_BUILD_JOBS
     $previousCmakeBuildParallelLevel = $env:CMAKE_BUILD_PARALLEL_LEVEL
@@ -448,6 +479,8 @@ function Build-WindowsInstaller([string] $BundleDir) {
     $env:CMAKE_BUILD_PARALLEL_LEVEL = [string] $buildJobs
     $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $PublicKeyBase64
     $env:SELFHOSTED_UPDATE_SYNC_HOST = $SyncHost
+    $env:SELFHOSTED_SSH_TRUSTED_HOST = $SshTrustedHost
+    $env:SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 = $SshTrustedHostKeySha256
     if ([string]::IsNullOrWhiteSpace($BundleDir)) {
         Remove-Item Env:\SELFHOSTED_UPDATE_BUNDLE_DIR -ErrorAction SilentlyContinue
     } else {
@@ -462,6 +495,16 @@ function Build-WindowsInstaller([string] $BundleDir) {
             Remove-Item Env:\SELFHOSTED_UPDATE_SYNC_HOST -ErrorAction SilentlyContinue
         } else {
             $env:SELFHOSTED_UPDATE_SYNC_HOST = $previousSyncHost
+        }
+        if ($null -eq $previousSshTrustedHost) {
+            Remove-Item Env:\SELFHOSTED_SSH_TRUSTED_HOST -ErrorAction SilentlyContinue
+        } else {
+            $env:SELFHOSTED_SSH_TRUSTED_HOST = $previousSshTrustedHost
+        }
+        if ($null -eq $previousSshTrustedHostKeySha256) {
+            Remove-Item Env:\SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 -ErrorAction SilentlyContinue
+        } else {
+            $env:SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 = $previousSshTrustedHostKeySha256
         }
         if ($null -eq $previousBuildJobs) {
             Remove-Item Env:\AMNEZIA_BUILD_JOBS -ErrorAction SilentlyContinue
@@ -676,6 +719,8 @@ if (-not $SkipBuild) {
         $linuxExports += "export CONAN_NO_REMOTE=1"
         $linuxExports += "export SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64=$(Quote-Sh $PublicKeyBase64)"
         $linuxExports += "export SELFHOSTED_UPDATE_SYNC_HOST=$(Quote-Sh $SyncHost)"
+        $linuxExports += "export SELFHOSTED_SSH_TRUSTED_HOST=$(Quote-Sh $SshTrustedHost)"
+        $linuxExports += "export SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256=$(Quote-Sh $SshTrustedHostKeySha256)"
         Invoke-WslBash (("{0}; cd {1} && run_repo_build_sh --source {1} --build {2} --target linux --installer IFW --jobs {3}" -f ($linuxExports -join "; "), (Quote-Sh $repoWsl), (Quote-Sh $buildWsl), $buildJobs).TrimStart("; "))
         Copy-Artifact (Join-Path $RepoRoot "deploy\build-linux") "AmneziaVPN_${Version}_linux_x64.run" $ArtifactDir
     }
@@ -699,7 +744,9 @@ if (-not $SkipBuild) {
             "export CONAN_NO_REMOTE=1",
             'export AWG_ANDROID_GRADLE_USER_HOME="$HOME/.cache/amnezia/awg-android-gradle"',
             "export SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64=$(Quote-Sh $PublicKeyBase64)",
-            "export SELFHOSTED_UPDATE_SYNC_HOST=$(Quote-Sh $SyncHost)"
+            "export SELFHOSTED_UPDATE_SYNC_HOST=$(Quote-Sh $SyncHost)",
+            "export SELFHOSTED_SSH_TRUSTED_HOST=$(Quote-Sh $SshTrustedHost)",
+            "export SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256=$(Quote-Sh $SshTrustedHostKeySha256)"
         )
         if (-not [string]::IsNullOrWhiteSpace($env:QT_ANDROID_KEYSTORE_KEY_PASS)) {
             $androidExports += "export QT_ANDROID_KEYSTORE_KEY_PASS=$(Quote-Sh $env:QT_ANDROID_KEYSTORE_KEY_PASS)"

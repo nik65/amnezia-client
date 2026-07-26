@@ -23,6 +23,7 @@
 #include "version.h"
 #include "core/utils/containerEnum.h"
 #include "core/utils/containers/containerUtils.h"
+#include "core/utils/managedRoutePolicy.h"
 #include "core/utils/networkUtilities.h"
 #include "core/utils/protocolEnum.h"
 #ifdef AMNEZIA_DESKTOP
@@ -313,6 +314,33 @@ ConnectionController::ConnectionController(SecureServersRepository* serversRepos
     connect(this, &ConnectionController::closeConnectionRequested, m_vpnConnection, &VpnConnection::disconnectFromVpn, Qt::QueuedConnection);
     connect(this, &ConnectionController::setConnectionStateRequested, m_vpnConnection, &VpnConnection::setConnectionState, Qt::QueuedConnection);
     connect(this, &ConnectionController::killSwitchModeChangedRequested, m_vpnConnection, &VpnConnection::onKillSwitchModeChanged, Qt::QueuedConnection);
+    connect(m_vpnConnection, &VpnConnection::connectionContextChanged, this,
+            &ConnectionController::onVpnConnectionContextChanged, Qt::QueuedConnection);
+    connect(this, &ConnectionController::managedRouteConnectionSnapshotPrepared, m_vpnConnection,
+            &VpnConnection::prepareManagedRouteConnectionSnapshot, Qt::QueuedConnection);
+    connect(this, &ConnectionController::managedRouteReconcileRequested, m_vpnConnection,
+            &VpnConnection::reconcileManagedSplitTunnelRoutes, Qt::QueuedConnection);
+    connect(this, &ConnectionController::managedRouteFullRebuildRequested, m_vpnConnection,
+            &VpnConnection::rebuildManagedSplitTunnelRoutes, Qt::QueuedConnection);
+    connect(m_vpnConnection, &VpnConnection::managedSplitTunnelRoutesReconciled, this,
+            &ConnectionController::onManagedRouteReconciled, Qt::QueuedConnection);
+    connect(m_vpnConnection, &VpnConnection::managedSplitTunnelRouteBaseReady, this,
+            &ConnectionController::onManagedRouteBaseReady, Qt::QueuedConnection);
+    connect(m_vpnConnection, &VpnConnection::vpnProtocolError, this,
+            [this](ErrorCode error) { m_cachedLastConnectionError = error; },
+            Qt::QueuedConnection);
+    connect(m_serversRepository, &SecureServersRepository::serverRemoved, this,
+            [this](const QString &removedServerId, int removedIndex) {
+        Q_UNUSED(removedIndex)
+        if (!removedServerId.isEmpty()
+            && removedServerId == m_cachedConnectionServerId
+            && m_cachedConnectionState != Vpn::ConnectionState::Disconnected
+            && m_cachedConnectionState != Vpn::ConnectionState::Disconnecting
+            && m_cachedConnectionState != Vpn::ConnectionState::Unknown) {
+            qWarning() << "ConnectionController: active server was removed; disconnecting its VPN session";
+            emit closeConnectionRequested();
+        }
+    });
 #ifdef Q_OS_ANDROID
     connect(this, &ConnectionController::restoreConnectionRequested, m_vpnConnection, &VpnConnection::restoreConnection, Qt::QueuedConnection);
 #endif
@@ -324,7 +352,7 @@ ConnectionController::ConnectionController(SecureServersRepository* serversRepos
 
 bool ConnectionController::isConnected() const
 {
-    return m_vpnConnection && m_vpnConnection->connectionState() == Vpn::ConnectionState::Connected;
+    return m_vpnConnection && m_cachedConnectionState == Vpn::ConnectionState::Connected;
 }
 
 void ConnectionController::setConnectionState(Vpn::ConnectionState state)
@@ -336,6 +364,14 @@ void ConnectionController::setConnectionState(Vpn::ConnectionState state)
 
 void ConnectionController::onVpnConnectionStateChanged(Vpn::ConnectionState state)
 {
+    m_cachedConnectionState = state;
+    if (state != Vpn::ConnectionState::Connected) {
+        preservePendingManagedRouteDesired();
+        ++m_managedRouteReconcileGeneration;
+        clearPendingManagedRouteReconciliation();
+        m_hasConfirmedManagedRouteState = false;
+        m_managedRouteIncrementalBlocked = true;
+    }
     switch (state) {
     case Vpn::ConnectionState::Connected:
         ++m_serverRoutingRulesSyncGeneration;
@@ -344,19 +380,20 @@ void ConnectionController::onVpnConnectionStateChanged(Vpn::ConnectionState stat
         m_serverRoutingRulesSyncFastRetryCount = 0;
         m_clientManagedSitesResolveRetryCount = 0;
         cancelClientManagedSitesResolve();
-        if (const int serverIndex = currentConnectionServerIndex();
-            serverIndex >= 0 && serverIndex < m_serversRepository->serversCount()) {
-            const bool localSplitEnabled = m_appSettingsRepository->isSitesSplitTunnelingEnabled();
-            const RouteMode localRouteMode = m_appSettingsRepository->routeMode();
-            m_appliedManagedRouteMode = m_serversRepository->effectiveSiteRouteMode(
-                    serverIndex, localSplitEnabled, localRouteMode);
-            m_appliedManagedSplitTunnelIps = m_appliedManagedRouteMode == RouteMode::VpnAllExceptSites
-                    ? managedSplitTunnelIpsForSync(serverIndex, RouteMode::VpnAllExceptSites)
-                    : QStringList();
-            m_appliedManagedContentHash = effectiveManagedRouteContentHash(serverIndex);
-            m_hasAppliedManagedRouteState = true;
-        } else {
-            m_hasAppliedManagedRouteState = false;
+        // Connected is not an installation receipt. The worker publishes the
+        // exact route base only after the initial trusted-route batch has a
+        // bounded, full-count acknowledgement (or protocol startup itself is
+        // the receipt on platforms where routes live in the tunnel config).
+        preservePendingManagedRouteDesired();
+        clearPendingManagedRouteReconciliation();
+        m_hasConfirmedManagedRouteState = false;
+        m_managedRouteIncrementalBlocked = true;
+        if (const int serverIndex = currentConnectionServerIndex(); serverIndex >= 0) {
+            // Managed-domain resolution belongs to this main-thread
+            // controller. The worker receives only immutable, already-bounded
+            // route snapshots, so its authoritative base cannot drift while
+            // asynchronous DNS answers arrive.
+            scheduleClientManagedSitesResolve(serverIndex);
         }
         scheduleServerRoutingRulesSync(serverRoutingRulesInitialSyncIntervalMs);
         break;
@@ -368,7 +405,8 @@ void ConnectionController::onVpnConnectionStateChanged(Vpn::ConnectionState stat
         m_serverRoutingRulesSyncFastRetryCount = 0;
         m_clientManagedSitesResolveRetryCount = 0;
         cancelClientManagedSitesResolve();
-        m_hasAppliedManagedRouteState = false;
+        m_coalescedManagedRouteDesired = {};
+        m_managedRouteFullRebuildAttempted = false;
         break;
     case Vpn::ConnectionState::Error:
     case Vpn::ConnectionState::Unknown:
@@ -378,13 +416,334 @@ void ConnectionController::onVpnConnectionStateChanged(Vpn::ConnectionState stat
         m_serverRoutingRulesSyncPendingRefresh = false;
         m_clientManagedSitesResolveRetryCount = 0;
         cancelClientManagedSitesResolve();
-        m_hasAppliedManagedRouteState = false;
+        m_coalescedManagedRouteDesired = {};
+        m_managedRouteFullRebuildAttempted = false;
         break;
     default:
         break;
     }
 
     emit connectionStateChanged(state);
+}
+
+void ConnectionController::onVpnConnectionContextChanged(
+        const QString &serverId, const QString &serverRoutingRulesSyncHost,
+        quint64 connectionEpoch)
+{
+    if (connectionEpoch != m_cachedConnectionEpoch
+        || serverId != m_cachedConnectionServerId) {
+        if (serverId == m_cachedConnectionServerId) {
+            preservePendingManagedRouteDesired();
+        }
+        ++m_managedRouteReconcileGeneration;
+        clearPendingManagedRouteReconciliation();
+        m_hasConfirmedManagedRouteState = false;
+        m_managedRouteIncrementalBlocked = true;
+        if (serverId != m_cachedConnectionServerId) {
+            m_coalescedManagedRouteDesired = {};
+            m_managedRouteFullRebuildAttempted = false;
+        }
+    }
+    m_cachedConnectionServerId = serverId;
+    m_cachedServerRoutingRulesSyncHost = serverRoutingRulesSyncHost;
+    m_cachedConnectionEpoch = connectionEpoch;
+}
+
+void ConnectionController::onManagedRouteReconciled(
+        quint64 generation, quint64 connectionEpoch, const QString &serverId,
+        bool requestAccepted, bool updated, bool reconnectScheduled,
+        int appliedModeValue, const QStringList &appliedRoutes,
+        quint64 appliedBaseRevision,
+        const QString &appliedPolicyRevision,
+        const QString &appliedPolicyContentHash)
+{
+    if (generation != m_managedRouteReconcileGeneration
+        || connectionEpoch != m_cachedConnectionEpoch
+        || serverId != m_cachedConnectionServerId
+        || generation != m_pendingManagedRouteReconcileGeneration
+        || serverId != m_pendingManagedRouteReconcileServerId) {
+        return;
+    }
+    ManagedRouteDesiredSnapshot acknowledgedDesired;
+    acknowledgedDesired.valid = true;
+    acknowledgedDesired.serverId = m_pendingManagedRouteReconcileServerId;
+    acknowledgedDesired.routeMode = m_pendingManagedRouteMode;
+    acknowledgedDesired.managedIps = m_pendingManagedRouteIps;
+    acknowledgedDesired.policyRevision = m_pendingManagedRoutePolicyRevision;
+    acknowledgedDesired.contentHash = m_pendingManagedRouteContentHash;
+    acknowledgedDesired.localSites = m_pendingManagedRouteLocalSites;
+    const auto appliedMode = static_cast<RouteMode>(appliedModeValue);
+    const bool modeValid = appliedMode == RouteMode::VpnAllSites
+            || appliedMode == RouteMode::VpnOnlyForwardSites
+            || appliedMode == RouteMode::VpnAllExceptSites;
+    bool routesValid = false;
+    const QStringList canonicalAppliedRoutes =
+            managedRoutePolicy::validatedManagedRoutes(appliedRoutes, &routesValid);
+    const bool appliedReceiptValid = modeValid && routesValid
+            && canonicalAppliedRoutes == appliedRoutes
+            && (appliedMode == RouteMode::VpnAllExceptSites
+                || appliedRoutes.isEmpty())
+            && managedRoutePolicy::isCanonicalPolicyIdentity(
+                    appliedPolicyRevision, appliedPolicyContentHash)
+            && (appliedRoutes.isEmpty() || !appliedPolicyRevision.isEmpty());
+    const bool reconciliationConfirmed = requestAccepted && updated
+            && !reconnectScheduled && appliedReceiptValid
+            && appliedMode == m_pendingManagedRouteMode
+            && appliedPolicyRevision == m_pendingManagedRoutePolicyRevision
+            && appliedPolicyContentHash == m_pendingManagedRouteContentHash;
+    const bool needsExplicitFullRebuild = !reconciliationConfirmed
+            && !reconnectScheduled;
+
+    if (reconciliationConfirmed) {
+        // Commit the exact normalized state acknowledged by the worker. Do not
+        // substitute either the raw request or mutable repository state: the
+        // worker may have removed protected hosts or canonicalized the batch.
+        m_confirmedManagedRouteMode = appliedMode;
+        m_confirmedManagedSplitTunnelIps = appliedRoutes;
+        m_confirmedManagedPolicyRevision = appliedPolicyRevision;
+        m_confirmedManagedContentHash = appliedPolicyContentHash;
+        m_confirmedManagedRouteBaseRevision = appliedBaseRevision;
+        m_hasConfirmedManagedRouteState = true;
+        m_managedRouteIncrementalBlocked = false;
+        qInfo() << "ConnectionController: worker completed managed route reconciliation";
+    } else {
+        // Deferred, reconnect-required and rejected requests all leave the
+        // runtime base unconfirmed. Preserve the newest desired snapshot, but
+        // never project it into applied state while reconnect is pending.
+        if (!m_coalescedManagedRouteDesired.valid) {
+            preserveLatestManagedRouteDesired(acknowledgedDesired);
+        }
+        m_hasConfirmedManagedRouteState = false;
+        m_managedRouteIncrementalBlocked = true;
+        qInfo() << (reconnectScheduled
+                            ? "ConnectionController: worker scheduled a full managed-route rebuild"
+                            : "ConnectionController: managed-route request was not confirmed");
+    }
+    clearPendingManagedRouteReconciliation();
+    if (needsExplicitFullRebuild) {
+        requestManagedRouteFullRebuild();
+    }
+
+    if (m_hasConfirmedManagedRouteState && m_coalescedManagedRouteDesired.valid) {
+        const ManagedRouteDesiredSnapshot desired = m_coalescedManagedRouteDesired;
+        m_coalescedManagedRouteDesired = {};
+        dispatchManagedRouteReconciliation(desired, QStringLiteral("coalesced managed-route policy"));
+    }
+}
+
+void ConnectionController::onManagedRouteBaseReady(
+        quint64 connectionEpoch, const QString &serverId, int modeValue,
+        const QStringList &managedRoutes, quint64 baseRevision,
+        const QString &policyRevision, const QString &policyContentHash,
+        bool confirmed)
+{
+    const auto mode = static_cast<RouteMode>(modeValue);
+    const bool modeValid = mode == RouteMode::VpnAllSites
+            || mode == RouteMode::VpnOnlyForwardSites
+            || mode == RouteMode::VpnAllExceptSites;
+    bool routesValid = false;
+    const QStringList canonicalRoutes =
+            managedRoutePolicy::validatedManagedRoutes(managedRoutes, &routesValid);
+    const bool receiptValid = modeValid && routesValid
+            && canonicalRoutes == managedRoutes
+            && (mode == RouteMode::VpnAllExceptSites || managedRoutes.isEmpty())
+            && managedRoutePolicy::isCanonicalPolicyIdentity(
+                    policyRevision, policyContentHash)
+            && (managedRoutes.isEmpty() || !policyRevision.isEmpty());
+    if (!isConnected() || connectionEpoch != m_cachedConnectionEpoch
+        || serverId.isEmpty() || serverId != m_cachedConnectionServerId) {
+        return;
+    }
+
+    preservePendingManagedRouteDesired();
+    clearPendingManagedRouteReconciliation();
+    m_confirmedManagedRouteBaseRevision = baseRevision;
+    if (!confirmed || !receiptValid) {
+        m_hasConfirmedManagedRouteState = false;
+        m_managedRouteIncrementalBlocked = true;
+        const ManagedRouteDesiredSnapshot desired = managedRouteDesiredSnapshot(serverId);
+        preserveLatestManagedRouteDesired(desired);
+        requestManagedRouteFullRebuild();
+        return;
+    }
+
+    m_confirmedManagedRouteMode = mode;
+    m_confirmedManagedSplitTunnelIps = managedRoutes;
+    m_confirmedManagedPolicyRevision = policyRevision;
+    m_confirmedManagedContentHash = policyContentHash;
+    m_hasConfirmedManagedRouteState = true;
+    m_managedRouteIncrementalBlocked = false;
+    m_managedRouteFullRebuildAttempted = false;
+
+    if (m_coalescedManagedRouteDesired.valid) {
+        const ManagedRouteDesiredSnapshot desired = m_coalescedManagedRouteDesired;
+        m_coalescedManagedRouteDesired = {};
+        dispatchManagedRouteReconciliation(desired, QStringLiteral("confirmed connected route base"));
+    } else {
+        scheduleServerRoutingRulesSync(0);
+    }
+}
+
+ConnectionController::ManagedRouteDesiredSnapshot
+ConnectionController::managedRouteDesiredSnapshot(const QString &serverId) const
+{
+    ManagedRouteDesiredSnapshot desired;
+    const int serverIndex = m_serversRepository->indexOfServerId(serverId);
+    if (serverId.isEmpty() || serverIndex < 0
+        || serverIndex >= m_serversRepository->serversCount()) {
+        return desired;
+    }
+
+    desired.valid = true;
+    desired.serverId = serverId;
+    const bool localSplitEnabled = m_appSettingsRepository->isSitesSplitTunnelingEnabled();
+    const RouteMode localRouteMode = m_appSettingsRepository->routeMode();
+    desired.routeMode = m_serversRepository->effectiveSiteRouteMode(
+            serverIndex, localSplitEnabled, localRouteMode);
+    desired.managedIps = desired.routeMode == RouteMode::VpnAllExceptSites
+            ? managedSplitTunnelIpsForSync(serverIndex, RouteMode::VpnAllExceptSites)
+            : QStringList();
+    desired.policyRevision = effectiveManagedRoutePolicyRevision(serverIndex);
+    desired.contentHash = effectiveManagedRouteContentHash(serverIndex);
+    desired.localSites = m_appSettingsRepository->vpnSites(desired.routeMode);
+    if (!managedRoutePolicy::isCanonicalPolicyIdentity(
+                desired.policyRevision, desired.contentHash)
+        || (!desired.managedIps.isEmpty()
+            && desired.policyRevision.isEmpty())) {
+        desired = {};
+    }
+    return desired;
+}
+
+void ConnectionController::prepareManagedRouteConnectionSnapshot(const QString &serverId)
+{
+    const ManagedRouteDesiredSnapshot desired = managedRouteDesiredSnapshot(serverId);
+    if (!desired.valid) {
+        return;
+    }
+    emit managedRouteConnectionSnapshotPrepared(
+            m_managedRouteReconcileGeneration, desired.serverId,
+            static_cast<int>(desired.routeMode),
+            desired.managedIps, desired.policyRevision,
+            desired.contentHash, desired.localSites);
+}
+
+void ConnectionController::preserveLatestManagedRouteDesired(
+        const ManagedRouteDesiredSnapshot &desired)
+{
+    if (desired.valid && desired.serverId == m_cachedConnectionServerId) {
+        m_coalescedManagedRouteDesired = desired;
+        // Coalescing suppresses a second mutation request, but a reconnect
+        // triggered by the in-flight request must rebuild from the newest
+        // immutable desired snapshot rather than from mutable repositories.
+        emit managedRouteConnectionSnapshotPrepared(
+                m_managedRouteReconcileGeneration, desired.serverId,
+                static_cast<int>(desired.routeMode),
+                desired.managedIps, desired.policyRevision,
+                desired.contentHash, desired.localSites);
+    }
+}
+
+void ConnectionController::clearPendingManagedRouteReconciliation()
+{
+    m_managedRouteReconcileInFlight = false;
+    m_pendingManagedRouteReconcileGeneration = 0;
+    m_pendingManagedRouteReconcileServerId.clear();
+    m_pendingManagedRouteMode = RouteMode::VpnAllSites;
+    m_pendingManagedRouteIps.clear();
+    m_pendingManagedRoutePolicyRevision.clear();
+    m_pendingManagedRouteContentHash.clear();
+    m_pendingManagedRouteLocalSites.clear();
+    m_pendingManagedRouteExpectedBaseRevision = 0;
+}
+
+void ConnectionController::preservePendingManagedRouteDesired()
+{
+    if (!m_managedRouteReconcileInFlight
+        || m_pendingManagedRouteReconcileServerId.isEmpty()
+        || m_coalescedManagedRouteDesired.valid) {
+        return;
+    }
+
+    ManagedRouteDesiredSnapshot pendingDesired;
+    pendingDesired.valid = true;
+    pendingDesired.serverId = m_pendingManagedRouteReconcileServerId;
+    pendingDesired.routeMode = m_pendingManagedRouteMode;
+    pendingDesired.managedIps = m_pendingManagedRouteIps;
+    pendingDesired.policyRevision = m_pendingManagedRoutePolicyRevision;
+    pendingDesired.contentHash = m_pendingManagedRouteContentHash;
+    pendingDesired.localSites = m_pendingManagedRouteLocalSites;
+    preserveLatestManagedRouteDesired(pendingDesired);
+}
+
+void ConnectionController::dispatchManagedRouteReconciliation(
+        const ManagedRouteDesiredSnapshot &desired, const QString &reason)
+{
+    if (!desired.valid || !isConnected()
+        || desired.serverId != m_cachedConnectionServerId) {
+        return;
+    }
+    if (m_managedRouteReconcileInFlight) {
+        preserveLatestManagedRouteDesired(desired);
+        return;
+    }
+    if (!m_hasConfirmedManagedRouteState || m_managedRouteIncrementalBlocked) {
+        preserveLatestManagedRouteDesired(desired);
+        return;
+    }
+    if (desired.routeMode == m_confirmedManagedRouteMode
+        && desired.managedIps == m_confirmedManagedSplitTunnelIps
+        && desired.policyRevision == m_confirmedManagedPolicyRevision
+        && desired.contentHash == m_confirmedManagedContentHash) {
+        return;
+    }
+
+    ++m_managedRouteReconcileGeneration;
+    m_managedRouteReconcileInFlight = true;
+    m_pendingManagedRouteReconcileGeneration = m_managedRouteReconcileGeneration;
+    m_pendingManagedRouteReconcileServerId = desired.serverId;
+    m_pendingManagedRouteMode = desired.routeMode;
+    m_pendingManagedRouteIps = desired.managedIps;
+    m_pendingManagedRoutePolicyRevision = desired.policyRevision;
+    m_pendingManagedRouteContentHash = desired.contentHash;
+    m_pendingManagedRouteLocalSites = desired.localSites;
+    m_pendingManagedRouteExpectedBaseRevision = m_confirmedManagedRouteBaseRevision;
+    qInfo() << "ConnectionController: queued managed route reconciliation:" << reason;
+    emit managedRouteReconcileRequested(
+            m_managedRouteReconcileGeneration, m_cachedConnectionEpoch,
+            desired.serverId, m_pendingManagedRouteExpectedBaseRevision,
+            m_confirmedManagedPolicyRevision, m_confirmedManagedContentHash,
+            static_cast<int>(desired.routeMode), m_confirmedManagedSplitTunnelIps,
+            desired.managedIps, desired.policyRevision,
+            desired.contentHash, desired.localSites);
+}
+
+void ConnectionController::requestManagedRouteReconciliation(
+        const QString &serverId, const QString &reason)
+{
+    const ManagedRouteDesiredSnapshot desired = managedRouteDesiredSnapshot(serverId);
+    if (!desired.valid || !isConnected() || serverId != m_cachedConnectionServerId) {
+        return;
+    }
+    if (m_managedRouteReconcileInFlight
+        || !m_hasConfirmedManagedRouteState
+        || m_managedRouteIncrementalBlocked) {
+        preserveLatestManagedRouteDesired(desired);
+        return;
+    }
+    dispatchManagedRouteReconciliation(desired, reason);
+}
+
+void ConnectionController::requestManagedRouteFullRebuild()
+{
+    if (!isConnected() || m_cachedConnectionServerId.isEmpty()
+        || m_managedRouteFullRebuildAttempted) {
+        return;
+    }
+    m_managedRouteFullRebuildAttempted = true;
+    qWarning() << "ConnectionController: initial managed-route base is unknown; requesting one full rebuild";
+    emit managedRouteFullRebuildRequested(
+            m_cachedConnectionEpoch, m_cachedConnectionServerId);
 }
 
 ErrorCode ConnectionController::defaultContainerForServer(const QString &serverId, DockerContainer &container) const
@@ -572,7 +931,15 @@ ErrorCode ConnectionController::openConnection(const QString &serverId)
         }
     }
 
-    emit openConnectionRequested(serverId, container, vpnConfiguration);
+    ++m_managedRouteReconcileGeneration;
+    clearPendingManagedRouteReconciliation();
+    m_coalescedManagedRouteDesired = {};
+    m_hasConfirmedManagedRouteState = false;
+    m_managedRouteIncrementalBlocked = true;
+    m_managedRouteFullRebuildAttempted = false;
+    m_cachedLastConnectionError = ErrorCode::NoError;
+    prepareManagedRouteConnectionSnapshot(serverId);
+    emit openConnectionRequested(serverId, serverIndex, container, vpnConfiguration);
     return ErrorCode::NoError;
 }
 
@@ -604,7 +971,14 @@ void ConnectionController::restoreConnection(Vpn::ConnectionState state, int ser
         return;
     }
 
-    emit restoreConnectionRequested(serverIndex, container, vpnConfiguration, state);
+    ++m_managedRouteReconcileGeneration;
+    clearPendingManagedRouteReconciliation();
+    m_coalescedManagedRouteDesired = {};
+    m_hasConfirmedManagedRouteState = false;
+    m_managedRouteIncrementalBlocked = true;
+    m_managedRouteFullRebuildAttempted = false;
+    prepareManagedRouteConnectionSnapshot(serverId);
+    emit restoreConnectionRequested(serverId, serverIndex, container, vpnConfiguration, state);
 }
 #endif
 
@@ -631,7 +1005,7 @@ void ConnectionController::onManagedSplitTunnelingRulesPublished(int serverIndex
 
 ErrorCode ConnectionController::lastConnectionError() const
 {
-    return m_vpnConnection->lastError();
+    return m_cachedLastConnectionError;
 }
 
 QJsonObject ConnectionController::createConnectionConfiguration(int serverIndex,
@@ -705,6 +1079,36 @@ QJsonObject ConnectionController::createConnectionConfiguration(int serverIndex,
             }
         }
     }
+
+    // VpnConnection lives on its worker thread. Copy every repository-backed
+    // runtime setting into the immutable connection context before queuing the
+    // start so the worker never dereferences main-thread repositories.
+    vpnConfiguration.insert(
+            configKey::killSwitchOption,
+            QVariant(m_appSettingsRepository->isKillSwitchEnabled()).toString());
+    vpnConfiguration.insert(
+            configKey::allowedDnsServers,
+            QVariant(m_appSettingsRepository->getAllowedDnsServers()).toJsonValue());
+
+    amnezia::AppsRouteMode appsRouteMode = amnezia::AppsRouteMode::VpnAllApps;
+    QJsonArray appsJsonArray;
+    if (m_appSettingsRepository->isAppsSplitTunnelingEnabled()) {
+        appsRouteMode = m_appSettingsRepository->appsRouteMode();
+        const auto apps = m_appSettingsRepository->vpnApps(appsRouteMode);
+        for (const auto &app : apps) {
+            appsJsonArray.append(app.appPath.isEmpty() ? app.packageName : app.appPath);
+        }
+        if (appsRouteMode == amnezia::AppsRouteMode::VpnOnlyForwardApps
+            && !vpnConfiguration.value(configKey::clientLogs).toObject().isEmpty()) {
+            appsJsonArray.append(QStringLiteral("org.amnezia.vpn"));
+        }
+        if (appsJsonArray.isEmpty()) {
+            appsRouteMode = amnezia::AppsRouteMode::VpnAllApps;
+        }
+    }
+    vpnConfiguration.insert(configKey::appSplitTunnelType,
+                            static_cast<int>(appsRouteMode));
+    vpnConfiguration.insert(configKey::splitTunnelApps, appsJsonArray);
 
     return vpnConfiguration;
 }
@@ -812,19 +1216,22 @@ QStringList ConnectionController::managedSplitTunnelIpsForSync(int serverIndex, 
     return ips;
 }
 
+QString ConnectionController::effectiveManagedRoutePolicyRevision(int serverIndex) const
+{
+    if (serverIndex < 0 || serverIndex >= m_serversRepository->serversCount()) {
+        return {};
+    }
+    return managedRoutePolicy::effectiveRevision(
+            m_serversRepository->serverJson(serverIndex));
+}
+
 QString ConnectionController::effectiveManagedRouteContentHash(int serverIndex) const
 {
     if (serverIndex < 0 || serverIndex >= m_serversRepository->serversCount()) {
         return {};
     }
-    const QJsonObject serverConfig = m_serversRepository->serverJson(serverIndex);
-    if (!managedRoutePolicy::isEffective(serverConfig)) {
-        return {};
-    }
-    return managedRoutePolicy::derivedRevision(
-            canonicalManagedRoutePolicyContent(
-                    serverRoutingRulesSourceSites(serverConfig),
-                    serverConfig.value(configKey::managedSplitTunnelForceEnabled).toBool(false)));
+    return managedRoutePolicy::effectiveContentHash(
+            m_serversRepository->serverJson(serverIndex));
 }
 
 bool ConnectionController::reconcileManagedRouteState(
@@ -837,59 +1244,42 @@ bool ConnectionController::reconcileManagedRouteState(
         return true;
     }
 
+    const ManagedRouteDesiredSnapshot desired = managedRouteDesiredSnapshot(serverId);
+    if (!desired.valid) {
+        m_isServerRoutingRulesSyncInProgress = false;
+        return true;
+    }
     const bool currentLocalSplitEnabled = m_appSettingsRepository->isSitesSplitTunnelingEnabled();
     const RouteMode currentLocalRouteMode = m_appSettingsRepository->routeMode();
-    const RouteMode newRouteMode = m_serversRepository->effectiveSiteRouteMode(
-            serverIndex, currentLocalSplitEnabled, currentLocalRouteMode);
-    const QStringList newManagedIps = newRouteMode == RouteMode::VpnAllExceptSites
-            ? managedSplitTunnelIpsForSync(serverIndex, RouteMode::VpnAllExceptSites)
-            : QStringList();
-    const QString newContentHash = effectiveManagedRouteContentHash(serverIndex);
     const bool localSettingsChanged = currentLocalSplitEnabled != routeSnapshot.localSplitEnabled
             || currentLocalRouteMode != routeSnapshot.localRouteMode;
-    const bool managedContentChanged = newManagedIps != routeSnapshot.appliedManagedIps
-            || newContentHash != routeSnapshot.appliedContentHash;
+    const bool managedContentChanged = !routeSnapshot.hasConfirmedAppliedState
+            || desired.managedIps != routeSnapshot.appliedManagedIps
+            || desired.policyRevision != routeSnapshot.appliedPolicyRevision
+            || desired.contentHash != routeSnapshot.appliedContentHash;
 
-    if (localSettingsChanged && !managedContentChanged) {
+    if (routeSnapshot.hasConfirmedAppliedState
+        && localSettingsChanged && !managedContentChanged) {
         qInfo() << "ConnectionController: local routing changed while reconciling managed policy;"
                    " leaving it to the local routing owner";
         return false;
     }
-    if (newRouteMode == routeSnapshot.appliedRouteMode
-        && newManagedIps == routeSnapshot.appliedManagedIps) {
-        m_hasAppliedManagedRouteState = true;
-        m_appliedManagedRouteMode = newRouteMode;
-        m_appliedManagedSplitTunnelIps = newManagedIps;
-        m_appliedManagedContentHash = newContentHash;
+    if (routeSnapshot.hasConfirmedAppliedState
+        && desired.routeMode == routeSnapshot.appliedRouteMode
+        && desired.managedIps == routeSnapshot.appliedManagedIps
+        && desired.policyRevision == routeSnapshot.appliedPolicyRevision
+        && desired.contentHash == routeSnapshot.appliedContentHash) {
         return false;
     }
 
     cancelClientManagedSitesResolve();
-    if (newRouteMode != routeSnapshot.appliedRouteMode) {
-        qInfo() << "ConnectionController: managed route mode requires immediate reconnect:" << reason;
+    requestManagedRouteReconciliation(serverId, reason);
+    if (routeSnapshot.hasConfirmedAppliedState
+        && desired.routeMode != routeSnapshot.appliedRouteMode) {
         m_isServerRoutingRulesSyncInProgress = false;
         m_serverRoutingRulesSyncPendingRefresh = false;
-        QTimer::singleShot(0, m_vpnConnection, &VpnConnection::reconnectToVpn);
         return true;
     }
-    if (newRouteMode == RouteMode::VpnAllExceptSites
-        && newManagedIps != routeSnapshot.appliedManagedIps) {
-        if (!m_vpnConnection->updateManagedSplitTunnelRoutes(
-                    newRouteMode, routeSnapshot.appliedManagedIps, newManagedIps)) {
-            qInfo() << "ConnectionController: managed route removal/change requires immediate reconnect:"
-                    << reason;
-            m_isServerRoutingRulesSyncInProgress = false;
-            m_serverRoutingRulesSyncPendingRefresh = false;
-            QTimer::singleShot(0, m_vpnConnection, &VpnConnection::reconnectToVpn);
-            return true;
-        }
-        qInfo() << "ConnectionController: reconciled managed route delta before remote refresh:" << reason;
-    }
-
-    m_hasAppliedManagedRouteState = true;
-    m_appliedManagedRouteMode = newRouteMode;
-    m_appliedManagedSplitTunnelIps = newManagedIps;
-    m_appliedManagedContentHash = newContentHash;
     return false;
 }
 
@@ -901,7 +1291,7 @@ int ConnectionController::currentConnectionServerIndex() const
 
 QString ConnectionController::currentConnectionServerId() const
 {
-    return m_vpnConnection ? m_vpnConnection->serverId() : QString();
+    return m_vpnConnection ? m_cachedConnectionServerId : QString();
 }
 
 bool ConnectionController::isCurrentConnectionServerIndex(int serverIndex) const
@@ -935,17 +1325,13 @@ void ConnectionController::syncServerRoutingRules()
     ManagedRouteSyncSnapshot routeSnapshot;
     routeSnapshot.localSplitEnabled = m_appSettingsRepository->isSitesSplitTunnelingEnabled();
     routeSnapshot.localRouteMode = m_appSettingsRepository->routeMode();
-    if (m_hasAppliedManagedRouteState) {
-        routeSnapshot.appliedRouteMode = m_appliedManagedRouteMode;
-        routeSnapshot.appliedManagedIps = m_appliedManagedSplitTunnelIps;
-        routeSnapshot.appliedContentHash = m_appliedManagedContentHash;
-    } else {
-        routeSnapshot.appliedRouteMode = m_serversRepository->effectiveSiteRouteMode(
-                serverIndex, routeSnapshot.localSplitEnabled, routeSnapshot.localRouteMode);
-        routeSnapshot.appliedManagedIps = routeSnapshot.appliedRouteMode == RouteMode::VpnAllExceptSites
-                ? managedSplitTunnelIpsForSync(serverIndex, RouteMode::VpnAllExceptSites)
-                : QStringList();
-        routeSnapshot.appliedContentHash = effectiveManagedRouteContentHash(serverIndex);
+    routeSnapshot.hasConfirmedAppliedState = m_hasConfirmedManagedRouteState;
+    if (routeSnapshot.hasConfirmedAppliedState) {
+        routeSnapshot.appliedBaseRevision = m_confirmedManagedRouteBaseRevision;
+        routeSnapshot.appliedRouteMode = m_confirmedManagedRouteMode;
+        routeSnapshot.appliedManagedIps = m_confirmedManagedSplitTunnelIps;
+        routeSnapshot.appliedPolicyRevision = m_confirmedManagedPolicyRevision;
+        routeSnapshot.appliedContentHash = m_confirmedManagedContentHash;
     }
     m_isServerRoutingRulesSyncInProgress = true;
     const int syncGeneration = ++m_serverRoutingRulesSyncGeneration;
@@ -954,13 +1340,18 @@ void ConnectionController::syncServerRoutingRules()
                 QStringLiteral("stored policy expired or no longer matches its declaration"))) {
         return;
     }
-    routeSnapshot.appliedRouteMode = m_appliedManagedRouteMode;
-    routeSnapshot.appliedManagedIps = m_appliedManagedSplitTunnelIps;
-    routeSnapshot.appliedContentHash = m_appliedManagedContentHash;
+    routeSnapshot.hasConfirmedAppliedState = m_hasConfirmedManagedRouteState;
+    if (routeSnapshot.hasConfirmedAppliedState) {
+        routeSnapshot.appliedBaseRevision = m_confirmedManagedRouteBaseRevision;
+        routeSnapshot.appliedRouteMode = m_confirmedManagedRouteMode;
+        routeSnapshot.appliedManagedIps = m_confirmedManagedSplitTunnelIps;
+        routeSnapshot.appliedPolicyRevision = m_confirmedManagedPolicyRevision;
+        routeSnapshot.appliedContentHash = m_confirmedManagedContentHash;
+    }
     routeSnapshot.localSplitEnabled = m_appSettingsRepository->isSitesSplitTunnelingEnabled();
     routeSnapshot.localRouteMode = m_appSettingsRepository->routeMode();
 
-    const QList<QUrl> syncUrls = serverRoutingRulesSyncUrls(m_vpnConnection->serverRoutingRulesSyncHost());
+    const QList<QUrl> syncUrls = serverRoutingRulesSyncUrls(m_cachedServerRoutingRulesSyncHost);
     if (syncUrls.isEmpty()) {
         finishServerRoutingRulesSync(false);
         return;
@@ -1213,11 +1604,15 @@ void ConnectionController::syncServerRoutingRulesFromUrls(const QList<QUrl> &syn
                 const QStringList newManagedSplitTunnelIps = newRouteMode == RouteMode::VpnAllExceptSites
                         ? managedSplitTunnelIpsForSync(serverIndex, RouteMode::VpnAllExceptSites)
                         : QStringList();
+                const QString effectivePolicyRevision =
+                        effectiveManagedRoutePolicyRevision(serverIndex);
                 const bool localSettingsChanged =
                         currentLocalSplitEnabled != routeSnapshot.localSplitEnabled
                         || currentLocalRouteMode != routeSnapshot.localRouteMode;
                 const bool managedRuntimeChanged =
                         newManagedSplitTunnelIps != routeSnapshot.appliedManagedIps
+                        || effectivePolicyRevision
+                                != routeSnapshot.appliedPolicyRevision
                         || effectiveContentHash != routeSnapshot.appliedContentHash;
                 if (localSettingsChanged && !managedRuntimeChanged) {
                     qInfo() << "ConnectionController: local routing changed during policy sync;"
@@ -1227,30 +1622,19 @@ void ConnectionController::syncServerRoutingRulesFromUrls(const QList<QUrl> &syn
                 }
 
                 if (newRouteMode != routeSnapshot.appliedRouteMode) {
-                    qInfo() << "ConnectionController: server routing rules changed route mode, reconnecting VPN";
+                    requestManagedRouteReconciliation(
+                            serverId,
+                            QStringLiteral("server routing rules changed route mode"));
                     m_isServerRoutingRulesSyncInProgress = false;
                     m_serverRoutingRulesSyncPendingRefresh = false;
-                    QTimer::singleShot(0, m_vpnConnection, &VpnConnection::reconnectToVpn);
                     return;
                 }
                 if (newRouteMode == RouteMode::VpnAllExceptSites
                     && managedRuntimeChanged) {
-                    if (m_vpnConnection->updateManagedSplitTunnelRoutes(
-                                newRouteMode, routeSnapshot.appliedManagedIps, newManagedSplitTunnelIps)) {
-                        qInfo() << "ConnectionController: applied server routing rule IP delta without reconnect";
-                    } else {
-                        qInfo() << "ConnectionController: active route delta requires reconnect on this platform/protocol";
-                        m_isServerRoutingRulesSyncInProgress = false;
-                        m_serverRoutingRulesSyncPendingRefresh = false;
-                        QTimer::singleShot(0, m_vpnConnection, &VpnConnection::reconnectToVpn);
-                        return;
-                    }
+                    requestManagedRouteReconciliation(
+                            serverId,
+                            QStringLiteral("server routing rule IP delta"));
                 }
-
-                m_hasAppliedManagedRouteState = true;
-                m_appliedManagedRouteMode = newRouteMode;
-                m_appliedManagedSplitTunnelIps = newManagedSplitTunnelIps;
-                m_appliedManagedContentHash = effectiveContentHash;
 
                 finishServerRoutingRulesSync(true);
             });
@@ -1435,20 +1819,15 @@ void ConnectionController::startClientManagedSitesResolve()
     m_clientManagedSitesResolveOldLocalSplitEnabled =
             m_appSettingsRepository->isSitesSplitTunnelingEnabled();
     m_clientManagedSitesResolveOldLocalRouteMode = m_appSettingsRepository->routeMode();
-    if (m_hasAppliedManagedRouteState) {
-        m_clientManagedSitesResolveOldRouteMode = m_appliedManagedRouteMode;
-        m_clientManagedSitesResolveOldManagedSplitTunnelIps = m_appliedManagedSplitTunnelIps;
-        m_clientManagedSitesResolveOldContentHash = m_appliedManagedContentHash;
-    } else {
-        m_clientManagedSitesResolveOldRouteMode = m_serversRepository->effectiveSiteRouteMode(
-                serverIndex, m_clientManagedSitesResolveOldLocalSplitEnabled,
-                m_clientManagedSitesResolveOldLocalRouteMode);
-        m_clientManagedSitesResolveOldManagedSplitTunnelIps =
-                m_clientManagedSitesResolveOldRouteMode == RouteMode::VpnAllExceptSites
-                ? managedSplitTunnelIpsForSync(serverIndex, RouteMode::VpnAllExceptSites)
-                : QStringList();
-        m_clientManagedSitesResolveOldContentHash = effectiveManagedRouteContentHash(serverIndex);
-    }
+    m_clientManagedSitesResolveOldStateConfirmed = m_hasConfirmedManagedRouteState;
+    m_clientManagedSitesResolveOldRouteMode = m_hasConfirmedManagedRouteState
+            ? m_confirmedManagedRouteMode : RouteMode::VpnAllSites;
+    m_clientManagedSitesResolveOldManagedSplitTunnelIps = m_hasConfirmedManagedRouteState
+            ? m_confirmedManagedSplitTunnelIps : QStringList();
+    m_clientManagedSitesResolveOldPolicyRevision = m_hasConfirmedManagedRouteState
+            ? m_confirmedManagedPolicyRevision : QString();
+    m_clientManagedSitesResolveOldContentHash = m_hasConfirmedManagedRouteState
+            ? m_confirmedManagedContentHash : QString();
     m_isClientManagedSitesResolveInProgress = true;
     qInfo() << "ConnectionController: starting client-side managed site resolve for server" << serverIndex
             << "domains" << m_clientManagedSitesResolveQueue.size();
@@ -1485,7 +1864,7 @@ void ConnectionController::resolveNextClientManagedSite()
 
         if (hostInfo.error() != QHostInfo::NoError) {
             qDebug() << "ConnectionController: client-side managed site resolve failed"
-                     << hostInfo.errorString();
+                     << "errorCode" << static_cast<int>(hostInfo.error());
             m_clientManagedSitesResolveHadFailure = true;
             resolveNextClientManagedSite();
             return;
@@ -1589,36 +1968,32 @@ void ConnectionController::finishClientManagedSitesResolve()
             ? managedSplitTunnelIpsForSync(serverIndex, RouteMode::VpnAllExceptSites)
             : QStringList();
     const QString newContentHash = effectiveManagedRouteContentHash(serverIndex);
+    const QString newPolicyRevision = effectiveManagedRoutePolicyRevision(serverIndex);
     const bool localSettingsChanged =
             currentLocalSplitEnabled != m_clientManagedSitesResolveOldLocalSplitEnabled
             || currentLocalRouteMode != m_clientManagedSitesResolveOldLocalRouteMode;
     const bool managedRuntimeChanged =
-            newManagedSplitTunnelIps != m_clientManagedSitesResolveOldManagedSplitTunnelIps
+            !m_clientManagedSitesResolveOldStateConfirmed
+            || newManagedSplitTunnelIps != m_clientManagedSitesResolveOldManagedSplitTunnelIps
+            || newPolicyRevision != m_clientManagedSitesResolveOldPolicyRevision
             || newContentHash != m_clientManagedSitesResolveOldContentHash;
-    if (localSettingsChanged && !managedRuntimeChanged) {
+    if (m_clientManagedSitesResolveOldStateConfirmed
+        && localSettingsChanged && !managedRuntimeChanged) {
         qInfo() << "ConnectionController: local routing changed during managed DNS resolve;"
                    " no managed runtime delta to reconcile";
         return;
     }
-    if (newRouteMode != m_clientManagedSitesResolveOldRouteMode) {
-        qInfo() << "ConnectionController: client-side managed site resolve changed route mode, reconnecting VPN";
-        QTimer::singleShot(0, m_vpnConnection, &VpnConnection::reconnectToVpn);
+    if (!m_clientManagedSitesResolveOldStateConfirmed
+        || newRouteMode != m_clientManagedSitesResolveOldRouteMode) {
+        requestManagedRouteReconciliation(
+                serverId,
+                QStringLiteral("client-side managed site resolve changed route mode"));
         return;
     } else if (newManagedSplitTunnelIps != m_clientManagedSitesResolveOldManagedSplitTunnelIps) {
-        if (m_vpnConnection->updateManagedSplitTunnelRoutes(
-                    newRouteMode, m_clientManagedSitesResolveOldManagedSplitTunnelIps,
-                    newManagedSplitTunnelIps)) {
-            qInfo() << "ConnectionController: applied client-resolved managed route delta without reconnect";
-        } else {
-            qInfo() << "ConnectionController: client-resolved route delta requires reconnect on this platform/protocol";
-            QTimer::singleShot(0, m_vpnConnection, &VpnConnection::reconnectToVpn);
-            return;
-        }
+        requestManagedRouteReconciliation(
+                serverId,
+                QStringLiteral("client-resolved managed route delta"));
     }
-    m_hasAppliedManagedRouteState = true;
-    m_appliedManagedRouteMode = newRouteMode;
-    m_appliedManagedSplitTunnelIps = newManagedSplitTunnelIps;
-    m_appliedManagedContentHash = newContentHash;
 }
 
 bool ConnectionController::isServiceReady() const

@@ -4,19 +4,32 @@
 #include <QElapsedTimer>
 #include <QHostAddress>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkProxy>
+#include <QNetworkProxyFactory>
 #include <QPointer>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
 #include <QTimer>
+#include <QStringList>
 
 #include <functional>
+#include <cstdio>
 
 namespace
 {
+QStringList *g_capturedMessages = nullptr;
+
+void captureQtMessage(QtMsgType, const QMessageLogContext &, const QString &message)
+{
+    if (g_capturedMessages) {
+        g_capturedMessages->append(message);
+    }
+}
+
 class LocalHeadServer final : public QObject
 {
 public:
@@ -72,6 +85,23 @@ private:
     QByteArray m_request;
 };
 
+class RejectingApplicationProxyFactory final : public QNetworkProxyFactory
+{
+public:
+    static void resetQueryCount() { s_queryCount = 0; }
+    static int queryCount() { return s_queryCount; }
+
+    QList<QNetworkProxy> queryProxy(const QNetworkProxyQuery &) override
+    {
+        ++s_queryCount;
+        return { QNetworkProxy(QNetworkProxy::HttpProxy,
+                               QStringLiteral("127.0.0.1"), 1) };
+    }
+
+private:
+    inline static int s_queryCount = 0;
+};
+
 bool waitUntil(const std::function<bool()> &condition, int timeoutMs)
 {
     QElapsedTimer timer;
@@ -87,6 +117,8 @@ bool waitUntil(const std::function<bool()> &condition, int timeoutMs)
 bool require(bool condition, const char *message)
 {
     if (!condition) {
+        std::fprintf(stderr, "FAILED: %s\n", message);
+        std::fflush(stderr);
         qCritical("FAILED: %s", message);
     }
     return condition;
@@ -96,9 +128,59 @@ bool require(bool condition, const char *message)
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
-    QNetworkAccessManager manager;
-    manager.setProxy(QNetworkProxy::NoProxy);
+    QNetworkAccessManager guardianManager;
+    guardianManager.setProxy(QNetworkProxy::NoProxy);
     ConnectionHealthController health;
+
+    ConnectionHealthController manualRecovery;
+    bool recoveryRequestObserved = false;
+    quint64 requestedRecoveryEpoch = 0;
+    QObject::connect(
+            &manualRecovery,
+            &ConnectionHealthController::recoveryActionRequested,
+            &manualRecovery,
+            [&](ConnectionHealthController::RecoveryAction,
+                const QString &, int, quint64 recoveryEpoch) {
+                recoveryRequestObserved = true;
+                requestedRecoveryEpoch = recoveryEpoch;
+            });
+    manualRecovery.recordHealthState(
+            ConnectionHealthController::HealthState::Unhealthy,
+            QStringLiteral("tunnel_error"));
+    manualRecovery.evaluateRecovery(QStringLiteral("tunnel_error"));
+    const quint64 pendingRecoveryEpoch =
+            manualRecovery.pendingRecoveryEpoch();
+    if (!require(pendingRecoveryEpoch != 0,
+                 "accepted recovery has a nonzero epoch")
+        || !require(manualRecovery.requestPendingRecovery(),
+                    "explicit user request dispatches pending recovery")
+        || !require(recoveryRequestObserved
+                            && requestedRecoveryEpoch == pendingRecoveryEpoch,
+                    "recovery request preserves its epoch")
+        || !require(manualRecovery.recoveryRequestDispatched(),
+                    "recovery request is single-dispatch")
+        || !require(!manualRecovery.requestPendingRecovery(),
+                    "duplicate explicit request is rejected")) {
+        return 1;
+    }
+    manualRecovery.acknowledgeRecoveryResult(
+            false, QStringLiteral("recovery_stale_epoch"),
+            pendingRecoveryEpoch + 1);
+    if (!require(manualRecovery.recoveryPending(),
+                 "stale acknowledgement cannot consume a newer recovery")
+        || !require(manualRecovery.recoveryRequestDispatched(),
+                    "stale acknowledgement preserves in-flight state")) {
+        return 1;
+    }
+    manualRecovery.acknowledgeRecoveryResult(
+            true, QStringLiteral("recovery_succeeded"),
+            pendingRecoveryEpoch);
+    if (!require(!manualRecovery.recoveryPending(),
+                 "matching acknowledgement consumes pending recovery")
+        || !require(!manualRecovery.recoveryRequestDispatched(),
+                    "matching acknowledgement clears dispatch state")) {
+        return 1;
+    }
 
     health.recordProbeResult(true, true, true, 10.0, -1.0, QString(), true, false);
     const QVariantMap unverifiedPathSnapshot = health.healthSnapshot();
@@ -184,6 +266,56 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    QStringList guardianLogMessages;
+    g_capturedMessages = &guardianLogMessages;
+    const QtMessageHandler previousMessageHandler = qInstallMessageHandler(captureQtMessage);
+    {
+        ConnectionHealthController loggedGuardian;
+        loggedGuardian.recordHealthState(
+                ConnectionHealthController::HealthState::Unknown,
+                QStringLiteral("guardian-secret-reason C:\\Users\\Secret\\profile.json"));
+        loggedGuardian.recordEvent(
+                QStringLiteral("guardian"), QStringLiteral("observed"),
+                { { QStringLiteral("endpoint"),
+                    QStringLiteral("https://private.guardian.invalid/sensitive-path?token=secret") },
+                  { QStringLiteral("reason_code"),
+                    QStringLiteral("guardian-secret-reason C:\\Users\\Secret\\profile.json") } });
+        loggedGuardian.recordProbeResult(
+                false, false, false, -1.0, -1.0,
+                QStringLiteral("https://private.guardian.invalid/sensitive-path?token=secret"));
+    }
+    qInstallMessageHandler(previousMessageHandler);
+    g_capturedMessages = nullptr;
+
+    int structuredGuardianEvents = 0;
+    bool guardianEventsAreStructured = true;
+    for (const QString &message : guardianLogMessages) {
+        if (!message.startsWith(QStringLiteral("GuardianEvent "))) {
+            continue;
+        }
+        ++structuredGuardianEvents;
+        const int jsonStart = message.indexOf(QLatin1Char('{'));
+        const QJsonDocument document = QJsonDocument::fromJson(message.mid(jsonStart).toUtf8());
+        guardianEventsAreStructured = guardianEventsAreStructured
+                && jsonStart > 0 && document.isObject()
+                && document.object().contains(QStringLiteral("sequence"))
+                && document.object().contains(QStringLiteral("category"));
+    }
+    const QString combinedGuardianLog = guardianLogMessages.join(QLatin1Char('\n'));
+    if (!require(structuredGuardianEvents >= 4,
+                 "each flight-recorder append is persisted as a GuardianEvent")
+        || !require(guardianEventsAreStructured,
+                    "GuardianEvent payloads are compact structured JSON")
+        || !require(!combinedGuardianLog.contains(QStringLiteral("guardian-secret-reason")),
+                    "arbitrary reasons never leak to the Qt log")
+        || !require(!combinedGuardianLog.contains(QStringLiteral("private.guardian.invalid")),
+                    "URLs never leak to the Qt log")
+        || !require(!combinedGuardianLog.contains(QStringLiteral("sensitive-path"))
+                            && !combinedGuardianLog.contains(QStringLiteral("Users\\Secret")),
+                    "paths never leak to the Qt log")) {
+        return 1;
+    }
+
     health.recordProbeResult(true, true, true, 10.0, -1.0, QString(), false, true);
     if (!require(health.healthState() == ConnectionHealthController::HealthState::Degraded,
                  "unverified egress cannot be healthy")
@@ -212,12 +344,147 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    ConnectionHealthController hysteresis;
+    hysteresis.recordProbeResult(false, false, false, -1.0, -1.0,
+                                 QStringLiteral("handshake_probe_failed"));
+    QVariantMap hysteresisSnapshot = hysteresis.healthSnapshot();
+    QVariantMap hysteresisEventDetails =
+            hysteresis.flightRecorder().last().toMap().value(QStringLiteral("details")).toMap();
+    if (!require(hysteresis.healthState() == ConnectionHealthController::HealthState::Degraded,
+                 "one raw unhealthy probe is not enough to enter unhealthy")
+        || !require(hysteresis.lastReason() == QStringLiteral("probe_failure_unconfirmed"),
+                    "first failure is explicitly unconfirmed")
+        || !require(hysteresisSnapshot.value(QStringLiteral("observed_probe_state")).toString()
+                            == QStringLiteral("unhealthy"),
+                    "snapshot preserves the raw unhealthy observation")
+        || !require(hysteresisSnapshot.value(QStringLiteral("observed_probe_reason")).toString()
+                            == QStringLiteral("handshake_probe_failed"),
+                    "snapshot preserves the sanitized root cause")
+        || !require(hysteresisSnapshot.value(QStringLiteral("probe_failure_streak")).toInt() == 1,
+                    "snapshot exposes the first bounded failure streak")
+        || !require(hysteresisEventDetails.value(QStringLiteral("observed_reason_code")).toString()
+                            == QStringLiteral("handshake_probe_failed"),
+                    "event preserves the sanitized root cause")
+        || !require(hysteresisEventDetails.value(QStringLiteral("probe_failure_streak")).toInt() == 1,
+                    "event exposes the bounded failure streak")) {
+        return 1;
+    }
+
+    hysteresis.recordProbeResult(false, false, false, -1.0, -1.0,
+                                 QStringLiteral("handshake_probe_failed"));
+    const QVariantMap firstRecoveryDecision =
+            hysteresis.evaluateRecovery(QStringLiteral("handshake_probe_failed"));
+    const QString pendingAction = hysteresis.pendingRecoveryAction();
+    if (!require(hysteresis.healthState() == ConnectionHealthController::HealthState::Unhealthy,
+                 "two consecutive raw unhealthy probes enter unhealthy")
+        || !require(hysteresis.healthSnapshot().value(QStringLiteral("probe_failure_streak")).toInt() == 2,
+                    "failure streak is bounded at the confirmation threshold")
+        || !require(firstRecoveryDecision.value(QStringLiteral("accepted")).toBool(),
+                    "confirmed unhealthy can create one recovery recommendation")
+        || !require(hysteresis.recoveryAttempts() == 1 && hysteresis.recoveryPending(),
+                    "one recovery attempt is pending")) {
+        return 1;
+    }
+
+    hysteresis.recordProbeResult(false, false, false, -1.0, -1.0,
+                                 QStringLiteral("egress_probe_failed"));
+    const QVariantMap repeatedFailureDecision =
+            hysteresis.evaluateRecovery(QStringLiteral("egress_probe_failed"));
+    if (!require(hysteresis.recoveryPending()
+                            && hysteresis.pendingRecoveryAction() == pendingAction,
+                    "another unhealthy probe preserves the pending action")
+        || !require(hysteresis.recoveryAttempts() == 1,
+                    "another unhealthy probe does not spend recovery budget")
+        || !require(!repeatedFailureDecision.value(QStringLiteral("accepted")).toBool()
+                            && repeatedFailureDecision.value(QStringLiteral("reason")).toString()
+                                    == QStringLiteral("recovery_result_pending"),
+                    "another unhealthy probe cannot loop the first recovery action")) {
+        return 1;
+    }
+
+    hysteresis.recordProbeResult(true, true, true, 10.0, -1.0, QString(), true, true);
+    hysteresisSnapshot = hysteresis.healthSnapshot();
+    const QVariantMap firstRecoveryConfirmation = hysteresis.evaluateRecovery();
+    if (!require(hysteresis.healthState() == ConnectionHealthController::HealthState::Unhealthy,
+                 "one raw recovery observation is not enough to leave unhealthy")
+        || !require(hysteresis.lastReason() == QStringLiteral("probe_recovery_unconfirmed"),
+                    "first recovery is explicitly unconfirmed")
+        || !require(hysteresisSnapshot.value(QStringLiteral("observed_probe_state")).toString()
+                            == QStringLiteral("healthy"),
+                    "snapshot preserves the raw recovery observation")
+        || !require(hysteresisSnapshot.value(QStringLiteral("probe_recovery_streak")).toInt() == 1,
+                    "snapshot exposes the first bounded recovery streak")
+        || !require(hysteresis.recoveryPending() && hysteresis.recoveryAttempts() == 1,
+                    "unconfirmed recovery preserves the pending action and budget")
+        || !require(!firstRecoveryConfirmation.value(QStringLiteral("accepted")).toBool(),
+                    "unconfirmed recovery cannot create another action")) {
+        return 1;
+    }
+
+    hysteresis.recordProbeResult(true, true, true, 10.0, -1.0, QString(), true, true);
+    hysteresisSnapshot = hysteresis.healthSnapshot();
+    if (!require(hysteresis.healthState() == ConnectionHealthController::HealthState::Healthy,
+                 "two consecutive raw recovery observations leave unhealthy")
+        || !require(!hysteresis.recoveryPending(),
+                    "confirmed recovery supersedes the stale recommendation")
+        || !require(hysteresisSnapshot.value(QStringLiteral("probe_recovery_streak")).toInt() == 2,
+                    "recovery streak is bounded at the confirmation threshold")) {
+        return 1;
+    }
+
+    hysteresis.recordHealthState(ConnectionHealthController::HealthState::Unknown,
+                                 QStringLiteral("awaiting_probe"));
+    hysteresisSnapshot = hysteresis.healthSnapshot();
+    if (!require(hysteresisSnapshot.value(QStringLiteral("probe_failure_streak")).toInt() == 0
+                            && hysteresisSnapshot.value(QStringLiteral("probe_recovery_streak")).toInt() == 0,
+                    "state-only epoch resets both probe streaks")
+        || !require(hysteresisSnapshot.value(QStringLiteral("observed_probe_state")).toString()
+                            == QStringLiteral("unknown"),
+                    "state-only epoch clears prior raw probe evidence")) {
+        return 1;
+    }
+    hysteresis.recordProbeResult(false, false, false, -1.0, -1.0,
+                                 QStringLiteral("handshake_probe_failed"));
+    if (!require(hysteresis.healthState() == ConnectionHealthController::HealthState::Degraded
+                            && hysteresis.healthSnapshot()
+                                       .value(QStringLiteral("probe_failure_streak")).toInt() == 1,
+                    "failure confirmation restarts after a state-only epoch")) {
+        return 1;
+    }
+
+    ConnectionHealthController epochSupersession;
+    epochSupersession.recordHealthState(ConnectionHealthController::HealthState::Unhealthy,
+                                        QStringLiteral("tunnel_error"));
+    epochSupersession.evaluateRecovery(QStringLiteral("tunnel_error"));
+    epochSupersession.recordHealthState(ConnectionHealthController::HealthState::Unhealthy,
+                                        QStringLiteral("tunnel_error"));
+    if (!require(!epochSupersession.recoveryPending(),
+                 "a state-only epoch supersedes a pending recommendation even at the same state")) {
+        return 1;
+    }
+
     LocalHeadServer healthyServer(true);
     if (!require(healthyServer.listen(), "healthy server listen")) {
         return 1;
     }
-    health.startConnectivityProbe(&manager, healthyServer.url(QStringLiteral("user:password@")), true, 1000);
-    if (!require(waitUntil([&health]() { return !health.probeRunning(); }, 2000), "healthy probe completed")
+    RejectingApplicationProxyFactory::resetQueryCount();
+    QNetworkProxyFactory::setApplicationProxyFactory(
+            new RejectingApplicationProxyFactory);
+    const bool guardianPolicyRemainsDirect = guardianManager.proxyFactory() == nullptr
+            && guardianManager.proxy().type() == QNetworkProxy::NoProxy;
+    health.startConnectivityProbe(&guardianManager,
+                                  healthyServer.url(QStringLiteral("user:password@")),
+                                  true, 1000);
+    const bool healthyProbeCompleted =
+            waitUntil([&health]() { return !health.probeRunning(); }, 2000);
+    const int applicationProxyFactoryQueries =
+            RejectingApplicationProxyFactory::queryCount();
+    QNetworkProxyFactory::setApplicationProxyFactory(nullptr);
+    if (!require(guardianPolicyRemainsDirect,
+                 "Guardian manager keeps its explicit NoProxy policy")
+        || !require(healthyProbeCompleted, "healthy probe completed")
+        || !require(applicationProxyFactoryQueries == 0,
+                    "Guardian request bypasses the dynamic application proxy factory")
         || !require(health.healthState() == ConnectionHealthController::HealthState::Degraded,
                     "plain HTTP reachability cannot be healthy")
         || !require(health.lastReason() == QStringLiteral("egress_unverified"),
@@ -231,11 +498,51 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    LocalHeadServer reentrantProxyServer(true);
+    if (!require(reentrantProxyServer.listen(), "reentrant proxy server listen")) {
+        return 1;
+    }
+    QNetworkAccessManager reentrantManager;
+    reentrantManager.setProxy(QNetworkProxy::NoProxy);
+    ConnectionHealthController reentrantProxyHealth;
+    bool reentrantMutationApplied = false;
+    QObject::connect(
+            &reentrantProxyHealth,
+            &ConnectionHealthController::probeRunningChanged,
+            &reentrantProxyHealth,
+            [&]() {
+                if (reentrantProxyHealth.probeRunning()
+                    && !reentrantMutationApplied) {
+                    reentrantMutationApplied = true;
+                    reentrantManager.setProxy(QNetworkProxy(
+                            QNetworkProxy::HttpProxy,
+                            QStringLiteral("127.0.0.1"), 1));
+                }
+            },
+            Qt::DirectConnection);
+    reentrantProxyHealth.startConnectivityProbe(
+            &reentrantManager, reentrantProxyServer.url(), true, 1000, true);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    if (!require(reentrantMutationApplied,
+                 "hostile same-thread slot changed the manager policy")
+        || !require(!reentrantProxyHealth.probeRunning(),
+                    "reentrant proxy mutation fails closed before dispatch")
+        || !require(reentrantProxyHealth.healthState()
+                            == ConnectionHealthController::HealthState::Unknown,
+                    "reentrant proxy mutation remains unknown")
+        || !require(reentrantProxyHealth.lastReason()
+                            == QStringLiteral("probe_proxy_path_unverified"),
+                    "reentrant proxy mutation has a stable reason")
+        || !require(reentrantProxyServer.request().isEmpty(),
+                    "reentrant proxy mutation sends no HTTP request")) {
+        return 1;
+    }
+
     LocalHeadServer errorResponseServer(true, 503);
     if (!require(errorResponseServer.listen(), "error response server listen")) {
         return 1;
     }
-    health.startConnectivityProbe(&manager, errorResponseServer.url(), true, 1000);
+    health.startConnectivityProbe(&guardianManager, errorResponseServer.url(), true, 1000);
     if (!require(waitUntil([&health]() { return !health.probeRunning(); }, 2000), "HTTP 503 probe completed")
         || !require(health.healthState() == ConnectionHealthController::HealthState::Degraded,
                     "HTTP status is reachability-only, never authenticated")) {
@@ -246,12 +553,22 @@ int main(int argc, char **argv)
     if (!require(hangingServer.listen(), "hanging server listen")) {
         return 1;
     }
-    health.startConnectivityProbe(&manager, hangingServer.url(), true, 300);
-    if (!require(waitUntil([&health]() { return !health.probeRunning(); }, 1500), "timeout probe completed")
+    health.startConnectivityProbe(&guardianManager, hangingServer.url(), true, 300);
+    if (!require(waitUntil([&health]() { return !health.probeRunning(); }, 1500), "first timeout probe completed")
+        || !require(health.healthState() == ConnectionHealthController::HealthState::Degraded,
+                    "one timeout remains an unconfirmed failure")
+        || !require(health.lastReason() == QStringLiteral("probe_failure_unconfirmed"),
+                    "first timeout is explicitly unconfirmed")
+        || !require(!health.recoveryPending(),
+                    "one timeout does not create a recovery recommendation")) {
+        return 1;
+    }
+    health.startConnectivityProbe(&guardianManager, hangingServer.url(), true, 300);
+    if (!require(waitUntil([&health]() { return !health.probeRunning(); }, 1500), "second timeout probe completed")
         || !require(health.healthState() == ConnectionHealthController::HealthState::Unhealthy,
-                    "timeout classified unhealthy")
-        || !require(health.lastReason() == QStringLiteral("probe_timeout"), "timeout reason retained")
-        || !require(health.recoveryPending(), "timeout only creates a recovery recommendation")) {
+                    "two timeouts confirm unhealthy")
+        || !require(health.lastReason() == QStringLiteral("probe_timeout"), "timeout root cause retained")
+        || !require(health.recoveryPending(), "confirmed timeout creates one recovery recommendation")) {
         return 1;
     }
 
@@ -259,12 +576,20 @@ int main(int argc, char **argv)
     if (!require(recoveredServer.listen(), "recovered server listen")) {
         return 1;
     }
-    health.startConnectivityProbe(&manager, recoveredServer.url(), true, 1000);
-    if (!require(waitUntil([&health]() { return !health.probeRunning(); }, 2000), "recovery probe completed")
+    health.startConnectivityProbe(&guardianManager, recoveredServer.url(), true, 1000);
+    if (!require(waitUntil([&health]() { return !health.probeRunning(); }, 2000), "first recovery probe completed")
+        || !require(health.healthState() == ConnectionHealthController::HealthState::Unhealthy,
+                    "one degraded recovery observation keeps unhealthy")
+        || !require(health.recoveryPending(),
+                    "one degraded recovery observation preserves the recommendation")) {
+        return 1;
+    }
+    health.startConnectivityProbe(&guardianManager, recoveredServer.url(), true, 1000);
+    if (!require(waitUntil([&health]() { return !health.probeRunning(); }, 2000), "second recovery probe completed")
         || !require(health.healthState() == ConnectionHealthController::HealthState::Degraded,
-                    "plain HTTP recovery remains degraded")
+                    "two degraded recovery observations leave unhealthy")
         || !require(!health.recoveryPending(),
-                    "a completed degraded probe expires the stale recommendation")) {
+                    "confirmed degraded recovery expires the stale recommendation")) {
         return 1;
     }
 
@@ -275,8 +600,8 @@ int main(int argc, char **argv)
         || !require(replacementServer.listen(), "replacement server listen")) {
         return 1;
     }
-    health.startConnectivityProbe(&manager, staleServer.url(), true, 300);
-    health.startConnectivityProbe(&manager, replacementServer.url(), true, 1000);
+    health.startConnectivityProbe(&guardianManager, staleServer.url(), true, 300);
+    health.startConnectivityProbe(&guardianManager, replacementServer.url(), true, 1000);
     if (!require(waitUntil([&health]() { return !health.probeRunning(); }, 2000), "replacement probe completed")
         || !require(health.healthState() == ConnectionHealthController::HealthState::Degraded,
                     "new generation wins")) {
@@ -288,7 +613,9 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    health.startConnectivityProbe(&manager, QUrl(QStringLiteral("file:///tmp/not-network")), true, 1000);
+    health.startConnectivityProbe(&guardianManager,
+                                  QUrl(QStringLiteral("file:///tmp/not-network")),
+                                  true, 1000);
     if (!require(!health.probeRunning(), "invalid scheme never starts network work")
         || !require(health.healthState() == ConnectionHealthController::HealthState::Unknown,
                     "unobservable endpoint remains unknown")) {
