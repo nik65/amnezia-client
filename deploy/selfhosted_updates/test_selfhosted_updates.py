@@ -2772,8 +2772,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.3)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2137)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.4)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2138)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -8018,6 +8018,9 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         cls.service_main = (REPO_ROOT / "service/server/main.cpp").read_text(
             encoding="utf-8"
         )
+        cls.system_service = (
+            REPO_ROOT / "service/server/systemservice.cpp"
+        ).read_text(encoding="utf-8")
         cls.post_uninstall = (
             REPO_ROOT / "deploy/data/windows/post_uninstall.cmd"
         ).read_text(encoding="utf-8")
@@ -8353,6 +8356,104 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertGreater(prepare_return, acl_verify)
         self.assertNotIn("/COPYALL", self.post_uninstall)
         self.assertNotIn(" /SEC", self.post_uninstall)
+
+    def test_wireguard_tunneldaemon_exits_without_starting_privileged_daemon(self) -> None:
+        run_application = self.function_body(
+            "int runApplication(int argc, char** argv)", self.service_main
+        )
+        tunnel_dispatch = run_application.find(
+            'if (!tokens.empty() && tokens[0] == "tunneldaemon")'
+        )
+        tunnel_return = run_application.find("return daemon.run(tokens);", tunnel_dispatch)
+        privileged_server = run_application.find("LocalServer localServer;")
+
+        self.assertGreaterEqual(tunnel_dispatch, 0)
+        self.assertGreater(tunnel_return, tunnel_dispatch)
+        self.assertGreater(privileged_server, tunnel_return)
+        self.assertIn("WindowsDaemonTunnel daemon;", run_application)
+        self.assertNotIn("new WindowsDaemonTunnel", run_application)
+        self.assertNotIn("tunneldaemon", self.system_service)
+
+    def test_qif_closes_windows_client_and_waits_for_async_service_delete(self) -> None:
+        close_client = self.function_body(
+            "function requestWindowsDesktopAppExit", self.qif_control_script
+        )
+        process_gate = self.function_body(
+            "isDesktopAppProcessRunningMessageLoop = function",
+            self.qif_control_script,
+        )
+        controller = self.function_body(
+            "function Controller ()", self.qif_control_script
+        )
+        service_check = self.function_body(
+            "function windowsServiceIsAbsent", self.qif_control_script
+        )
+
+        self.assertIn('var systemTaskkill = "C:/Windows/System32/taskkill.exe"', close_client)
+        self.assertIn(
+            '"C:/Program Files/AmneziaVPN/AmneziaVPN.exe"', close_client
+        )
+        self.assertIn(
+            '"C:/Program Files (x86)/AmneziaVPN/AmneziaVPN.exe"', close_client
+        )
+        disconnect = close_client.find(
+            'installer.execute(clientPath, ["--disconnect", "--json"])'
+        )
+        receipt_parse = close_client.find("JSON.parse(disconnectResult[0])")
+        receipt_schema = close_client.find(
+            'disconnectReceipt.schema === "amnezia.operator.disconnect.v1"'
+        )
+        receipt_ok = close_client.find("disconnectReceipt.ok === true")
+        receipt_completed = close_client.find("disconnectReceipt.completed === true")
+        receipt_state = close_client.find(
+            'disconnectReceipt.state === "disconnected"'
+        )
+        disconnect_confirmed = close_client.find("disconnectConfirmed = true")
+        disconnect_gate = close_client.find("if (!disconnectConfirmed)")
+        graceful = close_client.find(
+            'installer.execute(systemTaskkill, ["/IM", "AmneziaVPN.exe"])'
+        )
+        exact_path_fallback = close_client.find(
+            "installer.killProcess(installedClientPaths[killIndex])"
+        )
+        self.assertGreaterEqual(disconnect, 0)
+        self.assertGreater(receipt_parse, disconnect)
+        self.assertGreater(receipt_schema, receipt_parse)
+        self.assertGreater(receipt_ok, receipt_schema)
+        self.assertGreater(receipt_completed, receipt_ok)
+        self.assertGreater(receipt_state, receipt_completed)
+        self.assertGreater(disconnect_confirmed, receipt_state)
+        self.assertGreater(disconnect_gate, disconnect)
+        self.assertGreater(graceful, disconnect_gate)
+        self.assertGreater(exact_path_fallback, graceful)
+        self.assertIn("gracefulAttempt < 100", close_client)
+        self.assertIn("forcedAttempt < 50", close_client)
+        self.assertIn("sleep(100)", close_client)
+        self.assertNotIn("installer.environmentVariable", close_client)
+        self.assertNotIn('["/F", "/IM", "AmneziaVPN.exe"]', close_client)
+
+        automatic_close = process_gate.find("requestWindowsDesktopAppExit()")
+        manual_fallback = process_gate.find("could not be closed automatically")
+        self.assertGreaterEqual(automatic_close, 0)
+        self.assertGreater(manual_fallback, automatic_close)
+
+        installer_dispatch = controller.find("if (installer.isInstaller())")
+        replace_consent = controller.find("if (QMessageBox.Ok === QMessageBox.information")
+        close_after_consent = controller.find(
+            "isDesktopAppProcessRunningMessageLoop()", replace_consent
+        )
+        self.assertGreaterEqual(installer_dispatch, 0)
+        self.assertGreater(replace_consent, installer_dispatch)
+        self.assertGreater(close_after_consent, replace_consent)
+        self.assertNotIn(
+            "isDesktopAppProcessRunningMessageLoop()",
+            controller[installer_dispatch:replace_consent],
+        )
+
+        self.assertIn("attempt < 150", service_check)
+        self.assertIn("exitCode === 1060", service_check)
+        self.assertIn("exitCode !== 0 && exitCode !== 1072", service_check)
+        self.assertIn("sleep(100)", service_check)
 
     def test_qif_cli_install_starts_service_before_reporting_success(self) -> None:
         create_body = self.function_body(

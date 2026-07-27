@@ -14,9 +14,6 @@
 #include "platforms/windows/daemon/windowssplittunnel.h"
 
 namespace {
-int s_argc = 0;
-char** s_argv = nullptr;
-
 constexpr auto CleanupServiceActiveExitCode = 2;
 
 enum class CleanupServiceState {
@@ -84,17 +81,19 @@ int runApplication(int argc, char** argv)
     Logger::init(true);
 
 #ifdef Q_OS_WIN
-    if(argc > 2){
-        s_argc = argc;
-        s_argv = argv;
+    if (argc > 2) {
         QStringList tokens;
         for (int i = 1; i < argc; ++i) {
-            tokens.append(QString(argv[i]));
+            tokens.append(QString::fromLocal8Bit(argv[i]));
         }
 
         if (!tokens.empty() && tokens[0] == "tunneldaemon") {
-            WindowsDaemonTunnel *daemon = new WindowsDaemonTunnel();
-            daemon->run(tokens);
+            // WireGuardTunnelService owns this process until the tunnel stops.
+            // Once it returns the tunnel service must exit immediately: falling
+            // through to LocalServer creates a second privileged daemon, keeps
+            // the tunnel service registered and retains split-tunnel resources.
+            WindowsDaemonTunnel daemon;
+            return daemon.run(tokens);
         }
     }
 #endif

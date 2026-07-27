@@ -61,10 +61,21 @@ function windowsServiceIsAbsent(serviceName)
     // proves the previous kernel/service registration is gone.  Treat access
     // failures and every other result as unsafe instead of guessing.
     var systemSc = "C:/Windows/System32/sc.exe";
-    var result = installer.execute(systemSc, ["query", serviceName]);
-    var exitCode = Number(result[1]);
-    if (exitCode === 1060) {
-        return true;
+    var exitCode = -1;
+    for (var attempt = 0; attempt < 150; ++attempt) {
+        var result = installer.execute(systemSc, ["query", serviceName]);
+        exitCode = Number(result[1]);
+        if (exitCode === 1060) {
+            return true;
+        }
+        // Service deletion is asynchronous. Exit 0 means SCM can still query
+        // the old entry and 1072 means deletion is already pending; both may
+        // become 1060 as soon as the last legacy process handle closes. Other
+        // results (notably access denied) remain immediately fail-closed.
+        if (exitCode !== 0 && exitCode !== 1072) {
+            break;
+        }
+        sleep(100);
     }
 
     console.log("Previous Windows service cleanup is incomplete for "
@@ -143,6 +154,78 @@ function appProcessIsRunning()
     }
 
     return false;
+}
+
+function requestWindowsDesktopAppExit()
+{
+    if (!runningOnWindows() || !appProcessIsRunning()) {
+        return true;
+    }
+
+    // Confirm VPN teardown through the authenticated operator endpoint before
+    // asking the GUI to exit. Both supported legacy install roots are literals:
+    // InstallerValue and environment overrides must not select executable code.
+    var installedClientPaths = [
+        "C:/Program Files/AmneziaVPN/AmneziaVPN.exe",
+        "C:/Program Files (x86)/AmneziaVPN/AmneziaVPN.exe"
+    ];
+    var disconnectConfirmed = false;
+    for (var clientIndex = 0; clientIndex < installedClientPaths.length; ++clientIndex) {
+        var clientPath = installedClientPaths[clientIndex];
+        if (!installer.fileExists(clientPath)) {
+            continue;
+        }
+        var disconnectResult = installer.execute(clientPath, ["--disconnect", "--json"]);
+        var disconnectReceipt = null;
+        if (Number(disconnectResult[1]) === 0) {
+            try {
+                disconnectReceipt = JSON.parse(disconnectResult[0]);
+            } catch (error) {
+                console.log("AmneziaVPN disconnect returned an invalid JSON receipt");
+            }
+        }
+        if (disconnectReceipt !== null
+                && disconnectReceipt.schema === "amnezia.operator.disconnect.v1"
+                && disconnectReceipt.ok === true
+                && disconnectReceipt.completed === true
+                && disconnectReceipt.state === "disconnected") {
+            disconnectConfirmed = true;
+            break;
+        }
+    }
+    if (!disconnectConfirmed) {
+        console.log("AmneziaVPN disconnect was not confirmed; refusing forced desktop shutdown");
+        return false;
+    }
+
+    // taskkill without /F asks GUI processes to close and lets AmneziaVPN run
+    // its ordinary application teardown after the VPN is already disconnected.
+    var systemTaskkill = "C:/Windows/System32/taskkill.exe";
+    console.log("Requesting graceful AmneziaVPN desktop shutdown");
+    installer.execute(systemTaskkill, ["/IM", "AmneziaVPN.exe"]);
+    for (var gracefulAttempt = 0; gracefulAttempt < 100; ++gracefulAttempt) {
+        if (!appProcessIsRunning()) {
+            return true;
+        }
+        sleep(100);
+    }
+
+    // A tray-only or wedged legacy client may not own a responsive top-level
+    // window. Qt IFW scopes killProcess to an exact absolute executable path;
+    // this fallback is allowed only after the disconnect command succeeded.
+    console.log("Graceful AmneziaVPN shutdown timed out; applying exact-path fallback");
+    for (var killIndex = 0; killIndex < installedClientPaths.length; ++killIndex) {
+        if (installer.fileExists(installedClientPaths[killIndex])) {
+            installer.killProcess(installedClientPaths[killIndex]);
+        }
+    }
+    for (var forcedAttempt = 0; forcedAttempt < 50; ++forcedAttempt) {
+        if (!appProcessIsRunning()) {
+            return true;
+        }
+        sleep(100);
+    }
+    return !appProcessIsRunning();
 }
 
 function checkProcessIsRunning(arg)
@@ -323,13 +406,6 @@ function Controller () {
         installer.setDefaultPageVisible(QInstaller.StartMenuDirectoryPage, false);
         installer.setDefaultPageVisible(QInstaller.LicenseCheck, false);
 
-        isDesktopAppProcessRunningMessageLoop();
-
-        if (requestToQuitFromApp === true) {
-            requestToQuit(installer, gui);
-            return;
-        }
-
         if (runningOnMacOS()) {
             installer.setMessageBoxAutomaticAnswer("OverwriteTargetDirectory", QMessageBox.Yes);
         }
@@ -340,6 +416,13 @@ function Controller () {
                                                            qsTr("We need to remove the old installation first. Do you wish to proceed?"),
                                                            QMessageBox.Ok | QMessageBox.Cancel)) {
 
+                // The user has consented to replace the existing installation.
+                // Only now may Windows disconnect and close the running client.
+                isDesktopAppProcessRunningMessageLoop();
+                if (requestToQuitFromApp === true) {
+                    requestToQuit(installer, gui);
+                    return;
+                }
 
                 if (appInstalled()) {
                     var installedUninstallers = [
@@ -433,9 +516,14 @@ isDesktopAppProcessRunningMessageLoop = function ()
     }
     desktopAppProcessRunning = appProcessIsRunning();
 
+    if (desktopAppProcessRunning && runningOnWindows()) {
+        requestWindowsDesktopAppExit();
+        desktopAppProcessRunning = appProcessIsRunning();
+    }
+
     if (desktopAppProcessRunning) {
         var result = QMessageBox.warning("QMessageBox", appName() + " installer",
-                                         appName() + " is active. Close the app and press \"Retry\" button to continue installation. Press \"Abort\" button to abort the installer and exit.",
+                                         appName() + " could not be closed automatically. Close the app and press \"Retry\" button to continue installation. Press \"Abort\" button to abort the installer and exit.",
                                          QMessageBox.Retry | QMessageBox.Abort);
         if (result === QMessageBox.Retry) {
             isDesktopAppProcessRunningMessageLoop();
