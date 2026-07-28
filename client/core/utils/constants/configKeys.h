@@ -130,13 +130,6 @@ namespace amnezia
         constexpr QLatin1String clientLogsToken("token");
         constexpr QLatin1String clientLogsBootstrap("bootstrap");
 
-        constexpr QLatin1String sendPayload("send_payload");
-        constexpr QLatin1String sendPayloadEndpoint("endpoint");
-        constexpr QLatin1String sendPayloadProtocol("protocol");
-        constexpr QLatin1String sendPayloadTimeoutMs("timeout_ms");
-        constexpr QLatin1String sendPayloadData("data");
-        constexpr QLatin1String sendPayloadExpectedResponse("expected_response");
-
         constexpr QLatin1String splitTunnelApps("splitTunnelApps");
         constexpr QLatin1String appSplitTunnelType("appSplitTunnelType");
 

@@ -83,7 +83,7 @@ QStringList TapController::getTapList()
     tapInstallProc.waitForFinished();
     QString output = QString( tapInstallProc.readAll() );
     output.replace("\r", "");
-    if (output.contains("No matched devices found")) {
+    if (output.contains("No matching devices found")) {
         qDebug() << "TapController: No matching device instances found";
         return QStringList();
     }

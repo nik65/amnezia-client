@@ -20,19 +20,6 @@ PageType {
     id: root
 
     property var containersDropDownRef: null
-    property var apiAvailableProtocols: ServersUiController.defaultServerAvailableProtocols
-    property string apiCurrentProtocol: ServersUiController.defaultServerServiceProtocol
-
-    readonly property bool isApiProtocolSelectionVisible: ServersUiController.isDefaultServerFromApi
-        && root.apiAvailableProtocols.length > 0
-
-    function protocolDisplayName(protocol) {
-        switch (protocol) {
-        case "awg": return "AmneziaWG"
-        case "vless": return "VLESS"
-        default: return protocol
-        }
-    }
 
     property var apiAvailableProtocols: []
     property string apiCurrentProtocol: ""

@@ -42,6 +42,13 @@ MarketplaceUpdateController::MarketplaceUpdateController(QObject *parent) : QObj
 
 void MarketplaceUpdateController::start()
 {
+#if defined(AMNEZIA_SELFHOSTED_BUILD)
+    // A self-hosted release has its own signed update channel and intentionally
+    // independent version line. Store checks would compare it with public
+    // marketplace versions and direct users out of the managed update path.
+    return;
+#endif
+
 #if defined(Q_OS_IOS) || defined(Q_OS_ANDROID)
     // Cover the app immediately so the store UI is not visible before the check
     // resolves (avoids a flash of the main window before the update screen).

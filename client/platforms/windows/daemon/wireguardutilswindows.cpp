@@ -207,9 +207,10 @@ bool WireguardUtilsWindows::updatePeer(const InterfaceConfig& config) {
   out << config.m_serverPort << "\n";
 
   out << "replace_allowed_ips=true\n";
-  if (!config.m_persistentKeepalive.isEmpty()) {
-    out << "persistent_keepalive_interval=" << config.m_persistentKeepalive << "\n";
-  }
+  const QString persistentKeepalive = config.m_persistentKeepalive.isEmpty()
+                                        ? QStringLiteral("60")
+                                        : config.m_persistentKeepalive;
+  out << "persistent_keepalive_interval=" << persistentKeepalive << "\n";
   for (const IPAddress& ip : config.m_allowedIPAddressRanges) {
     out << "allowed_ip=" << ip.toString() << "\n";
   }

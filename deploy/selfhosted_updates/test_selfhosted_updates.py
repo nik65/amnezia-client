@@ -2793,6 +2793,73 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("selfhosted_rebuild_", rebuild)
         self.assertIn("local_release.ps1", rebuild)
 
+    def test_upstream_5_0_0_5_port_keeps_runtime_regressions_fixed(self) -> None:
+        page_home = (REPO_ROOT / "client/ui/qml/Pages2/PageHome.qml").read_text(encoding="utf-8")
+        tap_controller = (REPO_ROOT / "service/server/tapcontroller_win.cpp").read_text(encoding="utf-8")
+        wireguard_windows = (
+            REPO_ROOT / "client/platforms/windows/daemon/wireguardutilswindows.cpp"
+        ).read_text(encoding="utf-8")
+        client_cmake = (REPO_ROOT / "client/CMakeLists.txt").read_text(encoding="utf-8")
+        marketplace_updates = (
+            REPO_ROOT / "client/ui/controllers/marketplaceUpdateController.cpp"
+        ).read_text(encoding="utf-8")
+        tun2socks_recipe = (REPO_ROOT / "recipes/tun2socks/conanfile.py").read_text(encoding="utf-8")
+        libxray_recipe = (REPO_ROOT / "recipes/amnezia-libxray/conanfile.py").read_text(encoding="utf-8")
+        libxray_conandata = (REPO_ROOT / "recipes/amnezia-libxray/conandata.yml").read_text(encoding="utf-8")
+        config_keys = (REPO_ROOT / "client/core/utils/constants/configKeys.h").read_text(encoding="utf-8")
+
+        self.assertEqual(page_home.count("property var apiAvailableProtocols:"), 1)
+        self.assertEqual(page_home.count("property string apiCurrentProtocol:"), 1)
+        self.assertEqual(page_home.count("isApiProtocolSelectionVisible:"), 1)
+        self.assertEqual(page_home.count("function protocolDisplayName(protocol)"), 1)
+        self.assertIn("function updateApiProtocolState()", page_home)
+        self.assertIn("SubscriptionUiController.availableProtocols", page_home)
+
+        self.assertIn('output.contains("No matching devices found")', tap_controller)
+        self.assertNotIn('output.contains("No matched devices found")', tap_controller)
+
+        self.assertIn(
+            "const QString persistentKeepalive = config.m_persistentKeepalive.isEmpty()",
+            wireguard_windows,
+        )
+        self.assertIn('? QStringLiteral("60")', wireguard_windows)
+        self.assertNotIn("WG_KEEPALIVE_PERIOD", wireguard_windows)
+        self.assertIn(
+            'out << "persistent_keepalive_interval=" << persistentKeepalive << "\\n";',
+            wireguard_windows,
+        )
+
+        self.assertIn("add_compile_definitions(AMNEZIA_SELFHOSTED_BUILD)", client_cmake)
+        self.assertIn(
+            "#if defined(AMNEZIA_SELFHOSTED_BUILD)\n"
+            "    // A self-hosted release has its own signed update channel",
+            marketplace_updates,
+        )
+        self.assertIn("    return;\n#endif\n\n#if defined(Q_OS_IOS) || defined(Q_OS_ANDROID)", marketplace_updates)
+
+        self.assertIn('go_tmp_dir = os.path.join(self.build_folder, "gotmp")', tun2socks_recipe)
+        self.assertIn("os.makedirs(go_tmp_dir, exist_ok=True)", tun2socks_recipe)
+        self.assertIn('env.define("GOTMPDIR", go_tmp_dir)', tun2socks_recipe)
+        self.assertIn('env.define("TMP", go_tmp_dir)', tun2socks_recipe)
+        self.assertIn('env.define("TEMP", go_tmp_dir)', tun2socks_recipe)
+        self.assertIn("GO111MODULE=on", tun2socks_recipe)
+        self.assertIn("CGO_ENABLED=0", tun2socks_recipe)
+        self.assertIn("go build -v", tun2socks_recipe)
+        self.assertIn('env="conanbuild"', tun2socks_recipe)
+
+        self.assertIn('version = "1.0.2"', libxray_recipe)
+        self.assertIn('"1.0.2":', libxray_conandata)
+
+        for key in (
+            "sendPayload",
+            "sendPayloadEndpoint",
+            "sendPayloadProtocol",
+            "sendPayloadTimeoutMs",
+            "sendPayloadData",
+            "sendPayloadExpectedResponse",
+        ):
+            self.assertEqual(config_keys.count(f"constexpr QLatin1String {key}("), 1)
+
     def test_windows_split_tunnel_uses_race_fixed_driver_and_bounded_helper(self) -> None:
         firewall = (REPO_ROOT / "client/platforms/windows/daemon/windowsfirewall.cpp").read_text(encoding="utf-8")
         firewall_header = (REPO_ROOT / "client/platforms/windows/daemon/windowsfirewall.h").read_text(encoding="utf-8")

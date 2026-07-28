@@ -197,11 +197,13 @@ The current self-hosted release line is `4.9.2.5` with Android
 Release notes for `4.9.2.5`: this self-hosted port incorporates upstream
 release `5.0.0.5` while retaining the fork's server-managed split tunnel,
 always-on remote client logging, self-hosted updates, and Windows route
-hardening. It adds upstream AWG3 support, Marketplace update handling on
-mobile platforms, Android 16 KiB/shared-OpenSSL compatibility, WireGuard
-keepalive propagation, and Windows WFP/path-conversion fixes. The fork version
-remains independent of the upstream tag so installed self-hosted clients keep
-a monotonic update path.
+hardening. It adds upstream AWG3 support, Android 16 KiB/shared-OpenSSL
+compatibility, WireGuard keepalive propagation, and Windows
+WFP/path-conversion fixes. Marketplace update checks remain disabled in
+self-hosted builds so their independent version line cannot redirect clients
+away from the signed self-hosted update channel. The fork version remains
+independent of the upstream tag so installed self-hosted clients keep a
+monotonic update path.
 
 Release notes for `4.9.2.4`: the Windows WireGuard-family tunnel process now
 exits as soon as `WireGuardTunnelService` returns instead of falling through

@@ -89,6 +89,12 @@ class Tun2Socks(ConanFile):
         env.define("GOPATH", os.path.join(self.build_folder, "gopath"))
         env.define("GOMODCACHE", os.path.join(self.build_folder, "gopath", "pkg", "mod"))
         env.define("GOCACHE", os.path.join(self.build_folder, "gocache"))
+        if self._is_windows:
+            go_tmp_dir = os.path.join(self.build_folder, "gotmp")
+            os.makedirs(go_tmp_dir, exist_ok=True)
+            env.define("GOTMPDIR", go_tmp_dir)
+            env.define("TMP", go_tmp_dir)
+            env.define("TEMP", go_tmp_dir)
         env.define("GOTELEMETRY", "off")
         env.define("LDFLAGS", "")
         env.define("GOOS", self._goos)
@@ -113,15 +119,36 @@ class Tun2Socks(ConanFile):
                 env.define("CGO_LDFLAGS", " ".join(ldflags))
                 env.define("CGO_CFLAGS", " ".join(cflags))
                 with env.vars(self).apply():
-                    at = Autotools(self)
-                    at.make("tun2socks", args=[
-                        f"BUILD_DIR={build_dir.replace("\\", "/") if self._is_windows else build_dir}"
-                    ])
                     if self._is_windows:
+                        go_tmp_dir = os.path.join(self.build_folder, "gotmp").replace("\\", "/")
+                        output_path = os.path.join(build_dir, self._binary_name).replace("\\", "/")
+                        go_ldflags = (
+                            "-w -s -buildid= "
+                            "-X \"github.com/xjasonlyu/tun2socks/v2/internal/version.Version=\" "
+                            "-X \"github.com/xjasonlyu/tun2socks/v2/internal/version.GitCommit=\""
+                        )
+                        self.run(
+                            " ".join([
+                                f"TMP={shlex.quote(go_tmp_dir)}",
+                                f"TEMP={shlex.quote(go_tmp_dir)}",
+                                f"GOTMPDIR={shlex.quote(go_tmp_dir)}",
+                                "GO111MODULE=on",
+                                "CGO_ENABLED=0",
+                                "go build -v",
+                                f"-ldflags {shlex.quote(go_ldflags)}",
+                                "-tags ''",
+                                "-trimpath",
+                                f"-o {shlex.quote(output_path)}",
+                            ]),
+                            env="conanbuild",
+                        )
                         os.rename(
                             os.path.join(build_dir, self._binary_name),
                             os.path.join(build_dir, self._binary_name_ext)
                         )
+                    else:
+                        at = Autotools(self)
+                        at.make("tun2socks", args=[f"BUILD_DIR={build_dir}"])
 
         if self._is_multiarch:
             lipo = XCRun(self).find('lipo')
