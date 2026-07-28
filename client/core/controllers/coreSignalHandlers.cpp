@@ -1,6 +1,7 @@
 #include "coreSignalHandlers.h"
 
 #include <QTimer>
+#include <QtConcurrent>
 
 #include "core/utils/selfhosted/sshSession.h"
 #include "core/utils/errorCodes.h"
@@ -145,7 +146,9 @@ void CoreSignalHandlers::initExportControllerHandler()
             });
     connect(m_coreController->m_exportController, &ExportController::revokeClientRequested, this,
             [this](const QString &serverId, int row, DockerContainer container) {
-                m_coreController->m_usersController->revokeClient(serverId, row, container);
+                QtConcurrent::run([this, serverId, row, container]() {
+                    m_coreController->m_usersController->revokeClient(serverId, row, container);
+                });
             });
     connect(m_coreController->m_exportController, &ExportController::renameClientRequested, this,
             [this](const QString &serverId, int row, const QString &clientName, DockerContainer container) {
@@ -204,12 +207,12 @@ void CoreSignalHandlers::initAdminConfigRevokedHandler()
     connect(m_coreController->m_installController, &InstallController::clientRevocationRequested, this,
             [this](const QString &serverId, const ContainerConfig &containerConfig, DockerContainer container) {
                 m_coreController->m_usersController->revokeClient(serverId, containerConfig, container);
-            });
+            }, Qt::DirectConnection);
 
     connect(m_coreController->m_installController, &InstallController::clientAppendRequested, this,
             [this](const QString &serverId, const QString &clientId, const QString &clientName, DockerContainer container) {
                 m_coreController->m_usersController->appendClient(serverId, clientId, clientName, container);
-            });
+            }, Qt::DirectConnection);
 
     connect(m_coreController->m_usersController, &UsersController::adminConfigRevoked, m_coreController->m_installController,
             &InstallController::clearCachedProfile);
@@ -286,6 +289,8 @@ void CoreSignalHandlers::initClientManagementModelUpdateHandler()
             m_coreController->m_clientManagementModel, &ClientManagementModel::updateModel);
     connect(m_coreController->m_usersController, &UsersController::clientRenamed,
             m_coreController->m_clientManagementModel, &ClientManagementModel::updateClientName);
+    connect(m_coreController->m_usersController, &UsersController::revokeFinished,
+            m_coreController->m_exportController, &ExportController::revokeFinished);
 }
 
 void CoreSignalHandlers::initSitesModelUpdateHandler()
@@ -462,6 +467,7 @@ void CoreSignalHandlers::initUpdateFoundHandler()
         QTimer::singleShot(5000, m_coreController->m_updateController, &UpdateController::checkForUpdates);
     });
 
+#if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
     connect(m_coreController->m_updateUiController, &UpdateUiController::updateFound, this, [this]() {
         const QString version = m_coreController->m_updateUiController->getVersion();
         const QString updateId = version.isEmpty() ? QStringLiteral("update") : QStringLiteral("update-%1").arg(version);
@@ -469,5 +475,6 @@ void CoreSignalHandlers::initUpdateFoundHandler()
                 updateId, m_coreController->m_updateUiController->getHeaderText(), m_coreController->m_updateUiController->getChangelogText());
         emit m_coreController->m_pageController->showChangelogDrawer();
     });
+#endif
 }
 

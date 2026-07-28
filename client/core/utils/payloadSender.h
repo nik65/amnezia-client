@@ -3,7 +3,6 @@
 
 #include <QByteArray>
 #include <QJsonArray>
-#include <QJsonObject>
 #include <QString>
 
 class PayloadSender

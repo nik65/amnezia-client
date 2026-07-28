@@ -13,11 +13,11 @@
 
 #include "amneziaApplication.h"
 #include "core/configurators/configuratorBase.h"
-#include "core/payloadSender.h"
 #include "core/utils/protocolEnum.h"
 #include "core/protocols/protocolUtils.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/selfhosted/clientLogsUtils.h"
+#include "core/utils/payloadSender.h"
 #include "core/utils/utilities.h"
 #include "core/utils/serverConfigUtils.h"
 #include "version.h"
@@ -312,7 +312,6 @@ ConnectionController::ConnectionController(SecureServersRepository* serversRepos
     connect(m_vpnConnection, &VpnConnection::connectionStateChanged, this, &ConnectionController::onVpnConnectionStateChanged);
     connect(this, &ConnectionController::openConnectionRequested, m_vpnConnection, &VpnConnection::connectToVpn, Qt::QueuedConnection);
     connect(this, &ConnectionController::closeConnectionRequested, m_vpnConnection, &VpnConnection::disconnectFromVpn, Qt::QueuedConnection);
-    connect(this, &ConnectionController::setConnectionStateRequested, m_vpnConnection, &VpnConnection::setConnectionState, Qt::QueuedConnection);
     connect(this, &ConnectionController::killSwitchModeChangedRequested, m_vpnConnection, &VpnConnection::onKillSwitchModeChanged, Qt::QueuedConnection);
     connect(m_vpnConnection, &VpnConnection::connectionContextChanged, this,
             &ConnectionController::onVpnConnectionContextChanged, Qt::QueuedConnection);
@@ -357,9 +356,7 @@ bool ConnectionController::isConnected() const
 
 void ConnectionController::setConnectionState(Vpn::ConnectionState state)
 {
-    if (m_vpnConnection) {
-        emit setConnectionStateRequested(state);
-    }
+    emit connectionStateChanged(state);
 }
 
 void ConnectionController::onVpnConnectionStateChanged(Vpn::ConnectionState state)
@@ -803,7 +800,8 @@ ErrorCode ConnectionController::isConnectionSupported(const QString &serverId) c
         return ErrorCode::AmneziaServiceNotRunning;
     }
 
-    if (serverConfigUtils::isLegacyApiSubscription(m_serversRepository->serverKind(serverId))) {
+    const serverConfigUtils::ConfigType kind = m_serversRepository->serverKind(serverId);
+    if (serverConfigUtils::isLegacyApiSubscription(kind)) {
         return ErrorCode::LegacyApiV1NotSupportedError;
     }
 
@@ -814,6 +812,9 @@ ErrorCode ConnectionController::isConnectionSupported(const QString &serverId) c
     }
 
     if (container == DockerContainer::None) {
+        if (serverConfigUtils::isApiV2Subscription(kind)) {
+            return ErrorCode::NoError;
+        }
         return ErrorCode::NoInstalledContainersError;
     }
 
@@ -924,11 +925,16 @@ ErrorCode ConnectionController::openConnection(const QString &serverId)
     }
 
     const int serverIndex = m_serversRepository->indexOfServerId(serverId);
-    if (serverIndex >= 0) {
-        const QJsonArray sendPayload = m_serversRepository->serverJson(serverIndex).value(configKey::sendPayload).toArray();
-        if (!sendPayload.isEmpty()) {
-            PayloadSender::sendAll(sendPayload);
-        }
+    QJsonArray sendPayload;
+    const auto apiV2 = m_serversRepository->apiV2Config(serverId);
+    if (apiV2.has_value()) {
+        sendPayload = apiV2->sendPayload;
+    }
+    if (sendPayload.isEmpty() && serverIndex >= 0) {
+        sendPayload = m_serversRepository->serverJson(serverIndex).value(configKey::sendPayload).toArray();
+    }
+    if (!sendPayload.isEmpty()) {
+        PayloadSender::sendAll(sendPayload);
     }
 
     ++m_managedRouteReconcileGeneration;

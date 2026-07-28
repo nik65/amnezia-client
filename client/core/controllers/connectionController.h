@@ -76,7 +76,6 @@ signals:
                                  DockerContainer container,
                                  const QJsonObject &vpnConfiguration);
     void closeConnectionRequested();
-    void setConnectionStateRequested(Vpn::ConnectionState state);
     void killSwitchModeChangedRequested(bool enabled);
     void managedRouteConnectionSnapshotPrepared(quint64 generation,
                                                  const QString &serverId,

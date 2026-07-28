@@ -10,7 +10,7 @@ import shutil
 
 class AwgAndroid(ConanFile):
     name = "awg-android"
-    version = "1.1.7"
+    version = "3.0.1"
     settings = "os", "arch", "build_type", "compiler"
 
     def configure(self):

@@ -34,6 +34,41 @@ PageType {
         }
     }
 
+    property var apiAvailableProtocols: []
+    property string apiCurrentProtocol: ""
+
+    readonly property bool isApiProtocolSelectionVisible: ServersUiController.isDefaultServerFromApi && root.apiAvailableProtocols.length > 0
+
+    function updateApiProtocolState() {
+        if (ServersUiController.isDefaultServerFromApi) {
+            root.apiAvailableProtocols = SubscriptionUiController.availableProtocols(ServersUiController.defaultServerId)
+            root.apiCurrentProtocol = SubscriptionUiController.currentProtocol(ServersUiController.defaultServerId)
+        } else {
+            root.apiAvailableProtocols = []
+            root.apiCurrentProtocol = ""
+        }
+    }
+
+    function protocolDisplayName(protocol) {
+        switch (protocol) {
+        case "awg": return "AmneziaWG"
+        case "vless": return "VLESS"
+        default: return protocol
+        }
+    }
+
+    Component.onCompleted: {
+        root.updateApiProtocolState()
+    }
+
+    Connections {
+        target: ServersUiController
+
+        function onDefaultServerIdChanged() {
+            root.updateApiProtocolState()
+        }
+    }
+
     Connections {
         target: Qt.application
 
@@ -220,6 +255,10 @@ PageType {
                 spacing: 0
 
                 Component.onCompleted: {
+                    drawer.collapsedHeight = collapsed.implicitHeight
+                }
+
+                onImplicitHeightChanged: {
                     drawer.collapsedHeight = collapsed.implicitHeight
                 }
 
@@ -570,6 +609,8 @@ PageType {
                 anchors.topMargin: 16
 
                 BackButtonType {
+                    id: protocolDrawerBackButton
+
                     Layout.fillWidth: true
                     backButtonImage: "qrc:/images/controls/arrow-left.svg"
                     backButtonFunction: function() { protocolSelectionDrawer.closeTriggered() }
@@ -632,11 +673,13 @@ PageType {
 
                                 const previousProtocol = root.apiCurrentProtocol
                                 PageController.showBusyIndicator(true)
+                                ServersUiController.setProcessedServerId(ServersUiController.defaultServerId)
                                 SubscriptionUiController.setCurrentProtocol(ServersUiController.defaultServerId, modelData)
                                 if (!SubscriptionUiController.updateServiceFromGateway(ServersUiController.defaultServerId, "", "", true)) {
                                     SubscriptionUiController.setCurrentProtocol(ServersUiController.defaultServerId, previousProtocol)
                                 }
                                 ServersUiController.updateModel()
+                                root.updateApiProtocolState()
                                 PageController.showBusyIndicator(false)
                             }
 

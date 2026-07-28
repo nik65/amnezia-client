@@ -191,8 +191,17 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.4` with Android
-`versionCode` `2138`, following the `4.9.2.3` / `2137` artifact set.
+The current self-hosted release line is `4.9.2.5` with Android
+`versionCode` `2139`, following the `4.9.2.4` / `2138` artifact set.
+
+Release notes for `4.9.2.5`: this self-hosted port incorporates upstream
+release `5.0.0.5` while retaining the fork's server-managed split tunnel,
+always-on remote client logging, self-hosted updates, and Windows route
+hardening. It adds upstream AWG3 support, Marketplace update handling on
+mobile platforms, Android 16 KiB/shared-OpenSSL compatibility, WireGuard
+keepalive propagation, and Windows WFP/path-conversion fixes. The fork version
+remains independent of the upstream tag so installed self-hosted clients keep
+a monotonic update path.
 
 Release notes for `4.9.2.4`: the Windows WireGuard-family tunnel process now
 exits as soon as `WireGuardTunnelService` returns instead of falling through
@@ -329,15 +338,15 @@ Example:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.2.4 \
-  --release-date 2026-07-27 \
+  --version 4.9.2.5 \
+  --release-date 2026-07-28 \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.2.4_windows_x64.exe \
-  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.2.4_linux_x64.run \
-  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.2.4_android9+_arm64-v8a.apk \
-  --android-version-code 2138 \
+  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.2.5_windows_x64.exe \
+  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.2.5_linux_x64.run \
+  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.2.5_android9+_arm64-v8a.apk \
+  --android-version-code 2139 \
   --auto-install
 ```
 
@@ -411,7 +420,7 @@ artifact available for rollback:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.2.4 \
+  --version 4.9.2.5 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \
@@ -427,7 +436,7 @@ python deploy/selfhosted_updates/make_manifest.py \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.4_windows_x64.exe \
+  --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.5_windows_x64.exe \
   --auto-install
 ```
 
@@ -436,7 +445,7 @@ rollback artifacts:
 
 ```bash
 python deploy/selfhosted_updates/publish_release.py \
-  --version 4.9.2.4 \
+  --version 4.9.2.5 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \

@@ -124,7 +124,6 @@ QJsonObject ApiV2ServerConfig::toJson() const
     if (!sendPayload.isEmpty()) {
         obj[configKey::sendPayload] = sendPayload;
     }
-    
     if (crc > 0) {
         obj[configKey::crc] = crc;
     }

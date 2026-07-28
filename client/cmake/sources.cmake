@@ -64,11 +64,12 @@ set(HEADERS ${HEADERS}
     ${CLIENT_ROOT_DIR}/core/protocols/qmlRegisterProtocols.h
     ${CLIENT_ROOT_DIR}/ui/utils/pages.h
     ${CLIENT_ROOT_DIR}/ui/utils/qAutoStart.h
+    ${CLIENT_ROOT_DIR}/ui/utils/mtProxyPublicHostInput.h
     ${CLIENT_ROOT_DIR}/core/protocols/vpnProtocol.h
     ${CMAKE_CURRENT_BINARY_DIR}/version.h
     ${CLIENT_ROOT_DIR}/core/utils/selfhosted/sshClient.h
     ${CLIENT_ROOT_DIR}/core/utils/networkUtilities.h
-    ${CLIENT_ROOT_DIR}/core/payloadSender.h
+    ${CLIENT_ROOT_DIR}/core/utils/payloadSender.h
     ${CLIENT_ROOT_DIR}/core/utils/serialization/serialization.h
     ${CLIENT_ROOT_DIR}/core/utils/serialization/transfer.h
     ${CLIENT_ROOT_DIR}/../common/logger/logger.h
@@ -149,10 +150,11 @@ set(SOURCES ${SOURCES}
     ${CLIENT_ROOT_DIR}/core/repositories/secureServersRepository.cpp
     ${CLIENT_ROOT_DIR}/core/repositories/secureAppSettingsRepository.cpp
     ${CLIENT_ROOT_DIR}/ui/utils/qAutoStart.cpp
+    ${CLIENT_ROOT_DIR}/ui/utils/mtProxyPublicHostInput.cpp
     ${CLIENT_ROOT_DIR}/core/protocols/vpnProtocol.cpp
     ${CLIENT_ROOT_DIR}/core/utils/selfhosted/sshClient.cpp
     ${CLIENT_ROOT_DIR}/core/utils/networkUtilities.cpp
-    ${CLIENT_ROOT_DIR}/core/payloadSender.cpp
+    ${CLIENT_ROOT_DIR}/core/utils/payloadSender.cpp
     ${CLIENT_ROOT_DIR}/core/utils/serialization/outbound.cpp
     ${CLIENT_ROOT_DIR}/core/utils/serialization/inbound.cpp
     ${CLIENT_ROOT_DIR}/core/utils/serialization/ss.cpp

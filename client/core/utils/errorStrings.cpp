@@ -39,6 +39,8 @@ QString errorString(ErrorCode code) {
     case(ErrorCode::XrayRealityKeysReadFailed):
         errorMessage = QObject::tr("Server error: failed to read XRay Reality keys from the server");
         break;
+    case(ErrorCode::ServerContainerRuntimeNotSupported): errorMessage = QObject::tr("Server error: The default container runtime available for installation on this server is not supported.\n Install Docker Engine on the server manually and try again."); break;
+    case(ErrorCode::ContainerRuntimeServiceNotRunning): errorMessage = QObject::tr("Container runtime error: The container runtime service is not running.\n Check the container runtime service on the server, or wait about a minute and try again."); break;
 
     // Libssh errors
     case(ErrorCode::SshRequestDeniedError): errorMessage = QObject::tr("SSH request was denied"); break;

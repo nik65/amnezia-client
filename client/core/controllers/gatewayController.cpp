@@ -15,12 +15,11 @@
 #include <openssl/rsa.h>
 
 #include "amneziaApplication.h"
-#include "cryptoUtils.h"
 #include "core/repositories/secureAppSettingsRepository.h"
 #include "core/utils/api/apiUtils.h"
 #include "core/utils/constants/apiKeys.h"
 #include "core/utils/networkUtilities.h"
-#include "core/utils/utilities.h"
+#include "cryptoUtils.h"
 
 #ifdef AMNEZIA_DESKTOP
     #include "core/utils/ipcClient.h"
@@ -74,11 +73,10 @@ namespace
             const QByteArray encrypted = QByteArray::fromBase64(encryptedPayload);
 
             decryptedPayload = CryptoUtils::decryptAes256Cbc(encrypted, decKey, iv);
-            return !decryptedPayload.isEmpty();
+        } else {
+            decryptedPayload = encryptedPayload;
         }
-
-        decryptedPayload = encryptedPayload;
-        return true;
+        return !decryptedPayload.isEmpty();
     }
 
     QStringList readCachedProxyUrls(const QByteArray &cachedProxyUrlsEncrypted, bool isDevEnvironment)
@@ -168,7 +166,6 @@ GatewayController::EncryptedRequestData GatewayController::prepareRequest(const 
     EVP_PKEY_free(publicKey);
     const QByteArray encryptedApiPayload =
             CryptoUtils::encryptAes256Cbc(QJsonDocument(apiPayload).toJson(), encRequestData.key, encRequestData.iv);
-
     if (encryptedKeyPayload.isEmpty() || encryptedApiPayload.isEmpty()) {
         qCritical() << "error when encrypting the request body";
         encRequestData.errorCode = ErrorCode::ApiConfigDecryptionError;

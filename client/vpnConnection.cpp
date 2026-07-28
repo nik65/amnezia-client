@@ -1687,6 +1687,7 @@ void VpnConnection::appendSplitTunnelingConfig()
             const QString persistentKeepaliveString = wireGuardNativeConfigValue(nativeConfig, QStringLiteral("PersistentKeepalive"));
             if (!persistentKeepaliveString.isEmpty()) {
                 configData.insert(configKey::persistentKeepAlive, persistentKeepaliveString);
+                m_vpnConfiguration.insert(protocolName + "_config_data", configData);
             }
         }
 

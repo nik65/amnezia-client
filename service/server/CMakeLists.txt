@@ -21,6 +21,7 @@ configure_file(${CMAKE_SOURCE_DIR}/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/vers
 set(HEADERS
     ${CMAKE_CURRENT_LIST_DIR}/../../client/core/utils/managedRoutePolicy.h
     ${CMAKE_CURRENT_LIST_DIR}/../../client/core/utils/utilities.h
+    ${CMAKE_CURRENT_LIST_DIR}/../../common/crypto/cryptoUtils.h
     ${CMAKE_CURRENT_LIST_DIR}/../../client/secureQSettings.h
     ${CMAKE_CURRENT_LIST_DIR}/../../client/core/utils/networkUtilities.h
     ${CMAKE_CURRENT_LIST_DIR}/../../common/crypto/cryptoUtils.h
@@ -39,6 +40,7 @@ set(HEADERS
 
 set(SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/../../client/core/utils/utilities.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../../common/crypto/cryptoUtils.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../../client/secureQSettings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../../client/core/utils/networkUtilities.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../../common/crypto/cryptoUtils.cpp
@@ -340,6 +342,12 @@ if(APPLE)
         DESTINATION ${CMAKE_INSTALL_BINDIR}
         COMPONENT AmneziaVPN
     )
+    add_custom_command(TARGET ${PROJECT} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Debug>,copy_directory,true>
+        ${CMAKE_SOURCE_DIR}/deploy/data/macos/pf
+        "$<TARGET_FILE_DIR:${PROJECT}>/pf"
+        COMMAND_EXPAND_LISTS
+    )
 endif()
 
 # install non-linked dependencies
@@ -349,6 +357,8 @@ if(WIN32)
 
     find_package(wintun REQUIRED)
     list(APPEND CONAN_BINS $<TARGET_FILE:zx2c4::wintun>)
+
+    list(APPEND CONAN_BINS $<TARGET_FILE:OpenSSL::SSL> $<TARGET_FILE:OpenSSL::Crypto>)
 else()
     find_package(awg-go REQUIRED)
     list(APPEND CONAN_EXECS $<TARGET_FILE:amnezia::awg-go>)

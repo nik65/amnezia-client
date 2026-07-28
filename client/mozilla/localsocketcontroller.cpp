@@ -197,6 +197,10 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
   if (canUseIpFamily(rawConfig.value(amnezia::configKey::dns1).toString(), serverIpv6Available)) {
     json.insert("primaryDnsServer", rawConfig.value(amnezia::configKey::dns1));
   }
+  if (wgConfig.contains(amnezia::configKey::persistentKeepAlive)) {
+    json.insert("persistentKeepalive",
+                wgConfig.value(amnezia::configKey::persistentKeepAlive).toString());
+  }
 
   // We don't use secondary DNS if primary DNS is AmneziaDNS
   if (!rawConfig.value(amnezia::configKey::dns1).toString().
@@ -324,6 +328,13 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
     json.insert(amnezia::configKey::specialJunk3, wgConfig.value(amnezia::configKey::specialJunk3));
     json.insert(amnezia::configKey::specialJunk4, wgConfig.value(amnezia::configKey::specialJunk4));
     json.insert(amnezia::configKey::specialJunk5, wgConfig.value(amnezia::configKey::specialJunk5));
+    json.insert(amnezia::configKey::headerProtectionKey, wgConfig.value(amnezia::configKey::headerProtectionKey));
+    json.insert(amnezia::configKey::contentPaddingAddition, wgConfig.value(amnezia::configKey::contentPaddingAddition));
+    json.insert(amnezia::configKey::rekeyAfterTime, wgConfig.value(amnezia::configKey::rekeyAfterTime));
+    json.insert(amnezia::configKey::rekeyTimeout, wgConfig.value(amnezia::configKey::rekeyTimeout));
+    json.insert(amnezia::configKey::rejectAfterTime, wgConfig.value(amnezia::configKey::rejectAfterTime));
+    json.insert(amnezia::configKey::keepaliveTimeout, wgConfig.value(amnezia::configKey::keepaliveTimeout));
+    json.insert(amnezia::configKey::maxHandshakeAttempts, wgConfig.value(amnezia::configKey::maxHandshakeAttempts));
   } else if (!wgConfig.value(amnezia::configKey::junkPacketCount).isUndefined()
              && !wgConfig.value(amnezia::configKey::junkPacketMinSize).isUndefined()
              && !wgConfig.value(amnezia::configKey::junkPacketMaxSize).isUndefined()
@@ -351,6 +362,13 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
     json.insert(amnezia::configKey::specialJunk3, wgConfig.value(amnezia::configKey::specialJunk3));
     json.insert(amnezia::configKey::specialJunk4, wgConfig.value(amnezia::configKey::specialJunk4));
     json.insert(amnezia::configKey::specialJunk5, wgConfig.value(amnezia::configKey::specialJunk5));
+    json.insert(amnezia::configKey::headerProtectionKey, wgConfig.value(amnezia::configKey::headerProtectionKey));
+    json.insert(amnezia::configKey::contentPaddingAddition, wgConfig.value(amnezia::configKey::contentPaddingAddition));
+    json.insert(amnezia::configKey::rekeyAfterTime, wgConfig.value(amnezia::configKey::rekeyAfterTime));
+    json.insert(amnezia::configKey::rekeyTimeout, wgConfig.value(amnezia::configKey::rekeyTimeout));
+    json.insert(amnezia::configKey::rejectAfterTime, wgConfig.value(amnezia::configKey::rejectAfterTime));
+    json.insert(amnezia::configKey::keepaliveTimeout, wgConfig.value(amnezia::configKey::keepaliveTimeout));
+    json.insert(amnezia::configKey::maxHandshakeAttempts, wgConfig.value(amnezia::configKey::maxHandshakeAttempts));
   }
 
   write(json);

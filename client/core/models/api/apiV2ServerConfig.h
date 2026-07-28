@@ -1,6 +1,7 @@
 #ifndef APIV2SERVERCONFIG_H
 #define APIV2SERVERCONFIG_H
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QMap>
 #include <QPair>
