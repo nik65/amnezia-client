@@ -4,11 +4,14 @@ set "AmneziaPath=%~dp0"
 set "MaxCleanupAttempts=6"
 set "MaxDeleteAttempts=6"
 set "MaxDriverDeleteAttempts=6"
+set "MaxServiceStopAttempts=15"
+set "MaxRegistrationChecks=30"
 set "CleanupAttempts=0"
 set "MainDeleteAttempts=0"
 set "TunnelDeleteAttempts=0"
 set "DriverDeleteAttempts=0"
 set "CleanupExitCode=not-run"
+set "RecoveryActionsDisarmed=0"
 
 rem Define directories for logs
 set "ORG_DIR=%AppData%\AmneziaVPN.ORG"
@@ -48,6 +51,16 @@ if not exist "%AmneziaPath%AmneziaVPN-service.exe" (
 
 rem Disable the registered service before stopping it. This prevents SCM or a
 rem concurrent client from restarting the reconciler between stop and cleanup.
+rem Clear the configured restart/2000 failure actions first. start= disabled
+rem does not cancel an SCM recovery action that was already armed by a forced
+rem or late service exit.
+call :clear_service_failure_actions AmneziaVPN-service
+if errorlevel 1 (
+    set "CleanupExitCode=main-service-failure-actions-still-enabled"
+    echo Unable to disable AmneziaVPN-service recovery actions; retrying without removing files. 1>&2
+    call :wait_before_retry
+    goto cleanup_firewall
+)
 sc config AmneziaVPN-service start= disabled >nul 2>&1
 if errorlevel 1 (
     sc query AmneziaVPN-service >nul 2>&1
@@ -66,7 +79,19 @@ rem explicitly so old service binaries with a broken ControlService call can
 rem still be removed by a repaired uninstaller.
 sc stop AmneziaVPNSplitTunnel >nul 2>&1
 call :wait_for_service_stop
-taskkill /IM "AmneziaVPN-service.exe" /F >nul 2>&1
+if errorlevel 1 (
+    rem A legacy service can ignore SERVICE_CONTROL_STOP. The recovery actions
+    rem are already disabled, so this bounded exact-image fallback cannot arm
+    rem an SCM restart while uninstall is deleting registrations.
+    taskkill /IM "AmneziaVPN-service.exe" /F >nul 2>&1
+    call :wait_for_service_stop
+    if errorlevel 1 (
+        set "CleanupExitCode=main-service-stop-timeout"
+        echo AmneziaVPN-service did not stop after the bounded forced fallback. 1>&2
+        call :wait_before_retry
+        goto cleanup_firewall
+    )
+)
 
 "%AmneziaPath%AmneziaVPN-service.exe" cleanup-firewall
 set "CleanupExitCode=%errorlevel%"
@@ -87,22 +112,12 @@ goto cleanup_failure_cleanup
 :cleanup_succeeded
 
 rem cleanup-firewall calls WindowsSplitTunnel::removeForUninstall(), which
-rem stops and deletes the Amnezia-owned driver. Do not let SCM's asynchronous
-rem deletion leave the installer guessing: wait a bounded amount of time for
-rem the service name to disappear before deleting the remaining services.
+rem stops and deletes the Amnezia-owned driver. Only SCM's exact
+rem ERROR_SERVICE_DOES_NOT_EXIST result proves that asynchronous deletion is
+rem complete; access errors and unrelated failures remain fail-closed.
 :verify_split_tunnel_driver_deleted
-set /a DriverDeleteAttempts+=1 >nul
-sc query AmneziaVPNSplitTunnel >nul 2>&1
-if not errorlevel 1 (
-    if %DriverDeleteAttempts% GEQ %MaxDriverDeleteAttempts% (
-        echo Split-tunnel driver service still exists after %MaxDriverDeleteAttempts% checks. 1>&2
-        set "CleanupFailureStage=split-tunnel-driver-delete"
-        set "CleanupExitCode=driver-registration-still-present"
-        goto cleanup_failure_cleanup
-    )
-    call :wait_before_retry
-    goto verify_split_tunnel_driver_deleted
-)
+call :wait_for_service_absent AmneziaVPNSplitTunnel split-tunnel-driver-delete driver-registration-still-present
+if errorlevel 1 goto cleanup_failure_cleanup
 
 rem Remove service registrations only after persistent policy cleanup succeeds.
 :delete_main_service
@@ -122,6 +137,8 @@ if errorlevel 1 (
         goto delete_main_service
     )
 )
+call :wait_for_service_absent AmneziaVPN-service main-service-delete main-service-registration-still-present
+if errorlevel 1 goto cleanup_failure_cleanup
 
 :delete_tunnel_service
 set /a TunnelDeleteAttempts+=1 >nul
@@ -140,6 +157,8 @@ if errorlevel 1 (
         goto delete_tunnel_service
     )
 )
+call :wait_for_service_absent AmneziaWGTunnel$AmneziaVPN wireguard-tunnel-service-delete wireguard-tunnel-registration-still-present
+if errorlevel 1 goto cleanup_failure_cleanup
 
 rem Delete stale recovery receipts only after proving that their parent is the
 rem protected, non-reparse recovery root. Never follow a user-created junction
@@ -178,15 +197,19 @@ echo Persistent cleanup failed at %CleanupFailureStage%; preparing recovery bund
 call :create_recovery_bundle
 if not "%RecoveryValidated%"=="1" call :write_emergency_marker
 call :write_failure_receipt "%CleanupFailureStage%" "%CleanupExitCode%"
-sc config AmneziaVPN-service start= disabled >nul 2>&1
 taskkill /IM "AmneziaVPN.exe" /F >nul 2>&1
-taskkill /IM "AmneziaVPN-service.exe" /F >nul 2>&1
 sc stop AmneziaWGTunnel$AmneziaVPN >nul 2>&1
 sc stop AmneziaVPNSplitTunnel >nul 2>&1
-sc stop AmneziaVPN-service >nul 2>&1
 sc delete AmneziaWGTunnel$AmneziaVPN >nul 2>&1
 sc delete AmneziaVPNSplitTunnel >nul 2>&1
-sc delete AmneziaVPN-service >nul 2>&1
+if "%RecoveryActionsDisarmed%"=="1" (
+    sc config AmneziaVPN-service start= disabled >nul 2>&1
+    sc stop AmneziaVPN-service >nul 2>&1
+    taskkill /IM "AmneziaVPN-service.exe" /F >nul 2>&1
+    sc delete AmneziaVPN-service >nul 2>&1
+) else (
+    echo Main service recovery actions were not proven disabled; leaving its process and registration intact. 1>&2
+)
 exit /b 1
 
 :create_recovery_bundle
@@ -400,6 +423,44 @@ exit /b 0
 "%SystemRoot%\System32\eventcreate.exe" /T ERROR /ID 100 /L APPLICATION /SO AmneziaVPN /D "AmneziaVPN uninstall cleanup failed; reinstall a fixed package and run its uninstaller elevated." >nul 2>&1
 exit /b 0
 
+:clear_service_failure_actions
+"%SystemRoot%\System32\sc.exe" failure "%~1" reset= 0 actions= "" >nul 2>&1
+set "ServiceFailureActionsExitCode=%errorlevel%"
+if "%ServiceFailureActionsExitCode%"=="0" (
+    set "RecoveryActionsDisarmed=1"
+    exit /b 0
+)
+"%SystemRoot%\System32\sc.exe" query "%~1" >nul 2>&1
+set "ServiceQueryExitCode=%errorlevel%"
+if "%ServiceQueryExitCode%"=="1060" (
+    set "RecoveryActionsDisarmed=1"
+    exit /b 0
+)
+exit /b 1
+
+:wait_for_service_absent
+set "WaitServiceName=%~1"
+set "WaitFailureStage=%~2"
+set "WaitFailureCode=%~3"
+set "RegistrationChecks=0"
+:wait_for_service_absent_loop
+set /a RegistrationChecks+=1 >nul
+"%SystemRoot%\System32\sc.exe" query "%WaitServiceName%" >nul 2>&1
+set "ServiceQueryExitCode=%errorlevel%"
+if "%ServiceQueryExitCode%"=="1060" exit /b 0
+if not "%ServiceQueryExitCode%"=="0" if not "%ServiceQueryExitCode%"=="1072" (
+    set "CleanupFailureStage=%WaitFailureStage%"
+    set "CleanupExitCode=%WaitFailureCode%-query-%ServiceQueryExitCode%"
+    exit /b 1
+)
+if %RegistrationChecks% GEQ %MaxRegistrationChecks% (
+    set "CleanupFailureStage=%WaitFailureStage%"
+    set "CleanupExitCode=%WaitFailureCode%"
+    exit /b 1
+)
+call :wait_for_short_poll
+goto wait_for_service_absent_loop
+
 :wait_before_retry
 rem timeout.exe fails immediately when Qt IFW redirects stdin. ping.exe keeps
 rem the retry delay effective in both interactive and elevated QProcess runs.
@@ -407,5 +468,19 @@ rem the retry delay effective in both interactive and elevated QProcess runs.
 exit /b 0
 
 :wait_for_service_stop
-"%SystemRoot%\System32\ping.exe" -n 3 127.0.0.1 >nul 2>&1
+set "ServiceStopAttempts=0"
+:wait_for_service_stop_loop
+set /a ServiceStopAttempts+=1 >nul
+"%SystemRoot%\System32\sc.exe" query AmneziaVPN-service >nul 2>&1
+set "ServiceQueryExitCode=%errorlevel%"
+if "%ServiceQueryExitCode%"=="1060" exit /b 0
+if not "%ServiceQueryExitCode%"=="0" exit /b 1
+"%SystemRoot%\System32\sc.exe" query AmneziaVPN-service 2>nul | "%SystemRoot%\System32\findstr.exe" /R /C:"STATE *: *1 " >nul
+if not errorlevel 1 exit /b 0
+if %ServiceStopAttempts% GEQ %MaxServiceStopAttempts% exit /b 1
+call :wait_for_short_poll
+goto wait_for_service_stop_loop
+
+:wait_for_short_poll
+"%SystemRoot%\System32\ping.exe" -n 2 127.0.0.1 >nul 2>&1
 exit /b 0

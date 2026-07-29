@@ -2772,8 +2772,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.5)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2139)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.6)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2140)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -8423,6 +8423,178 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertGreater(prepare_return, acl_verify)
         self.assertNotIn("/COPYALL", self.post_uninstall)
         self.assertNotIn(" /SEC", self.post_uninstall)
+
+    def test_qif_uninstall_disarms_recovery_and_proves_service_deletion(self) -> None:
+        self.assertIn('set "MaxServiceStopAttempts=15"', self.post_uninstall)
+        self.assertIn('set "MaxRegistrationChecks=30"', self.post_uninstall)
+        self.assertIn('set "RecoveryActionsDisarmed=0"', self.post_uninstall)
+        self.assertIn(
+            'call :clear_service_failure_actions AmneziaVPN-service',
+            self.post_uninstall,
+        )
+        self.assertIn(
+            '"%SystemRoot%\\System32\\sc.exe" failure "%~1" reset= 0 actions= ""',
+            self.post_uninstall,
+        )
+
+        clear_recovery = self.post_uninstall.find(
+            "call :clear_service_failure_actions AmneziaVPN-service"
+        )
+        disable_start = self.post_uninstall.find(
+            "sc config AmneziaVPN-service start= disabled"
+        )
+        stop_service = self.post_uninstall.find("sc stop AmneziaVPN-service")
+        wait_for_stop = self.post_uninstall.find("call :wait_for_service_stop", stop_service)
+        forced_fallback = self.post_uninstall.find(
+            'taskkill /IM "AmneziaVPN-service.exe" /F', wait_for_stop
+        )
+        second_wait = self.post_uninstall.find(
+            "call :wait_for_service_stop", forced_fallback
+        )
+        self.assertGreaterEqual(clear_recovery, 0)
+        self.assertGreater(disable_start, clear_recovery)
+        self.assertGreater(stop_service, disable_start)
+        self.assertGreater(wait_for_stop, stop_service)
+        self.assertGreater(forced_fallback, wait_for_stop)
+        self.assertGreater(second_wait, forced_fallback)
+
+        failure_cleanup = self.post_uninstall[
+            self.post_uninstall.index("\n:cleanup_failure_cleanup\n") :
+            self.post_uninstall.index("\n:create_recovery_bundle\n")
+        ]
+        disarm_gate = failure_cleanup.find('if "%RecoveryActionsDisarmed%"=="1"')
+        forced_failure_kill = failure_cleanup.find(
+            'taskkill /IM "AmneziaVPN-service.exe" /F'
+        )
+        forced_failure_delete = failure_cleanup.find(
+            "sc delete AmneziaVPN-service"
+        )
+        failure_stop = failure_cleanup.find("sc stop AmneziaVPN-service")
+        self.assertGreaterEqual(disarm_gate, 0)
+        self.assertGreater(failure_stop, disarm_gate)
+        self.assertGreater(forced_failure_kill, disarm_gate)
+        self.assertGreater(forced_failure_delete, disarm_gate)
+        self.assertIn(
+            "leaving its process and registration intact",
+            failure_cleanup,
+        )
+
+        clear_helper = self.post_uninstall[
+            self.post_uninstall.index("\n:clear_service_failure_actions\n") :
+            self.post_uninstall.index("\n:wait_for_service_absent\n")
+        ]
+        self.assertGreaterEqual(clear_helper.count('set "RecoveryActionsDisarmed=1"'), 2)
+
+        for service_name, failure_stage, failure_code in (
+            (
+                "AmneziaVPNSplitTunnel",
+                "split-tunnel-driver-delete",
+                "driver-registration-still-present",
+            ),
+            (
+                "AmneziaVPN-service",
+                "main-service-delete",
+                "main-service-registration-still-present",
+            ),
+            (
+                "AmneziaWGTunnel$AmneziaVPN",
+                "wireguard-tunnel-service-delete",
+                "wireguard-tunnel-registration-still-present",
+            ),
+        ):
+            self.assertIn(
+                f"call :wait_for_service_absent {service_name} "
+                f"{failure_stage} {failure_code}",
+                self.post_uninstall,
+            )
+
+        absent_helper = self.post_uninstall[
+            self.post_uninstall.index("\n:wait_for_service_absent\n") :
+            self.post_uninstall.index("\n:wait_before_retry\n")
+        ]
+        self.assertIn('if "%ServiceQueryExitCode%"=="1060" exit /b 0', absent_helper)
+        self.assertIn('if not "%ServiceQueryExitCode%"=="0"', absent_helper)
+        self.assertIn('if not "%ServiceQueryExitCode%"=="1072"', absent_helper)
+        self.assertIn("call :wait_for_short_poll", absent_helper)
+        self.assertIn("set \"CleanupFailureStage=%WaitFailureStage%\"", absent_helper)
+        self.assertIn("set \"CleanupExitCode=%WaitFailureCode%\"", absent_helper)
+
+        install_recovery = self.qif_component_script.find(
+            'component.addElevatedOperation("Execute", systemSc, "failure", serviceName()'
+        )
+        install_start = self.qif_component_script.find(
+            'component.addElevatedOperation("Execute", "{0,1056}", systemSc, "start", serviceName()'
+        )
+        self.assertGreaterEqual(install_recovery, 0)
+        self.assertGreater(install_start, install_recovery)
+
+        prepare_legacy = self.function_body(
+            "function prepareWindowsMainServiceForUpgrade", self.qif_control_script
+        )
+        self.assertIn(
+            '["failure", serviceName, "reset=", "0", "actions=", ""]',
+            prepare_legacy,
+        )
+        self.assertIn('["query", serviceName]', prepare_legacy)
+        self.assertIn("queryExitCode === 1060", prepare_legacy)
+        self.assertIn("queryExitCode !== 0", prepare_legacy)
+        self.assertIn(
+            '["config", serviceName, "start=", "disabled"]',
+            prepare_legacy,
+        )
+        self.assertIn("failureExitCode !== 0", prepare_legacy)
+        self.assertIn("disableExitCode !== 0", prepare_legacy)
+        self.assertNotIn("failureExitCode !== 1060", prepare_legacy)
+        self.assertNotIn("disableExitCode !== 1060", prepare_legacy)
+        self.assertIn("windowsMainServicePrepared = true", prepare_legacy)
+        self.assertIn("restoreWindowsMainServiceAfterAbortedUpgrade()", prepare_legacy)
+
+        restore_legacy = self.function_body(
+            "function restoreWindowsMainServiceAfterAbortedUpgrade",
+            self.qif_control_script,
+        )
+        self.assertIn(
+            '["failure", serviceName, "reset=", "100", "actions=",',
+            restore_legacy,
+        )
+        self.assertIn(
+            '"restart/2000/restart/2000/restart/2000"]',
+            restore_legacy,
+        )
+        self.assertIn(
+            '["config", serviceName, "start=", "auto"]',
+            restore_legacy,
+        )
+        self.assertIn("failureExitCode !== 0", restore_legacy)
+        self.assertIn("startExitCode !== 0", restore_legacy)
+        self.assertNotIn("1060", restore_legacy)
+        self.assertIn("windowsMainServicePrepared = false", restore_legacy)
+
+        controller = self.function_body(
+            "function Controller ()", self.qif_control_script
+        )
+        close_client = controller.find("isDesktopAppProcessRunningMessageLoop()")
+        prepare_service = controller.find("prepareWindowsMainServiceForUpgrade()")
+        launch_uninstaller = controller.find("installer.execute(uninstallerPath)")
+        self.assertGreaterEqual(close_client, 0)
+        self.assertGreater(prepare_service, close_client)
+        self.assertGreater(launch_uninstaller, prepare_service)
+        prepare_failure = controller[
+            prepare_service : controller.find("var installedUninstallers", prepare_service)
+        ]
+        self.assertIn("installer.setCancelled()", prepare_failure)
+        self.assertIn("return;", prepare_failure)
+        uninstaller_failure = controller[
+            launch_uninstaller : controller.find("for (var i = 0; i < 300; i++)", launch_uninstaller)
+        ]
+        confirm_still_installed = uninstaller_failure.find("appInstalled()")
+        restore_service = uninstaller_failure.find(
+            "restoreWindowsMainServiceAfterAbortedUpgrade()"
+        )
+        cancel_install = uninstaller_failure.find("installer.setCancelled()")
+        self.assertGreaterEqual(confirm_still_installed, 0)
+        self.assertGreater(restore_service, confirm_still_installed)
+        self.assertGreater(cancel_install, restore_service)
 
     def test_wireguard_tunneldaemon_exits_without_starting_privileged_daemon(self) -> None:
         run_application = self.function_body(

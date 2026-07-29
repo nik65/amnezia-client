@@ -3,6 +3,7 @@ var updaterCompleted = 0;
 var desktopAppProcessRunning = false;
 var appInstalledUninstallerPath;
 var appInstalledUninstallerPath_x86;
+var windowsMainServicePrepared = false;
 
 function appName()
 {
@@ -116,6 +117,80 @@ function windowsUpgradeCleanupIsComplete()
             return false;
         }
     }
+    return true;
+}
+
+function prepareWindowsMainServiceForUpgrade()
+{
+    // The full offline installer invokes the maintenance tool from the
+    // currently installed package. Older uninstallers can force-terminate the
+    // service while restart/2000 failure actions are still armed. Disarm that
+    // recovery path in the outer, newer installer before handing control to
+    // the legacy uninstaller. A fresh install restores the intended recovery
+    // actions before it starts the newly registered service.
+    var systemSc = "C:/Windows/System32/sc.exe";
+    var serviceName = "AmneziaVPN-service";
+    windowsMainServicePrepared = false;
+
+    var queryResult = installer.execute(systemSc, ["query", serviceName]);
+    var queryExitCode = Number(queryResult[1]);
+    if (queryExitCode === 1060) {
+        return true;
+    }
+    if (queryExitCode !== 0) {
+        console.log("Unable to query previous AmneziaVPN service; sc.exe exit code: "
+                    + queryExitCode);
+        return false;
+    }
+
+    var failureResult = installer.execute(
+        systemSc,
+        ["failure", serviceName, "reset=", "0", "actions=", ""]);
+    var failureExitCode = Number(failureResult[1]);
+    if (failureExitCode !== 0) {
+        console.log("Unable to disarm previous AmneziaVPN service recovery; sc.exe exit code: "
+                    + failureExitCode);
+        return false;
+    }
+    windowsMainServicePrepared = true;
+
+    var disableResult = installer.execute(
+        systemSc,
+        ["config", serviceName, "start=", "disabled"]);
+    var disableExitCode = Number(disableResult[1]);
+    if (disableExitCode !== 0) {
+        console.log("Unable to disable previous AmneziaVPN service; sc.exe exit code: "
+                    + disableExitCode);
+        restoreWindowsMainServiceAfterAbortedUpgrade();
+        return false;
+    }
+    return true;
+}
+
+function restoreWindowsMainServiceAfterAbortedUpgrade()
+{
+    // If the legacy maintenance tool is cancelled or fails before removing
+    // the installed product, undo the outer preflight. Do not leave an
+    // otherwise usable installation without automatic startup or recovery.
+    var systemSc = "C:/Windows/System32/sc.exe";
+    var serviceName = "AmneziaVPN-service";
+    var failureResult = installer.execute(
+        systemSc,
+        ["failure", serviceName, "reset=", "100", "actions=",
+         "restart/2000/restart/2000/restart/2000"]);
+    var failureExitCode = Number(failureResult[1]);
+
+    var startResult = installer.execute(
+        systemSc,
+        ["config", serviceName, "start=", "auto"]);
+    var startExitCode = Number(startResult[1]);
+
+    if (failureExitCode !== 0 || startExitCode !== 0) {
+        console.log("Unable to restore the previous AmneziaVPN service after an aborted upgrade; "
+                    + "failure/config exit codes: " + failureExitCode + "/" + startExitCode);
+        return false;
+    }
+    windowsMainServicePrepared = false;
     return true;
 }
 
@@ -425,6 +500,14 @@ function Controller () {
                 }
 
                 if (appInstalled()) {
+                    if (runningOnWindows() && !prepareWindowsMainServiceForUpgrade()) {
+                        QMessageBox.critical(
+                            "windows.service.upgrade.prepare.failed",
+                            appName(),
+                            qsTr("The existing AmneziaVPN Windows service could not be prepared for a safe upgrade. The upgrade did not start. Restart Windows, then run this full offline installer again."));
+                        installer.setCancelled();
+                        return;
+                    }
                     var installedUninstallers = [
                         appInstalledUninstallerPath_x86,
                         appInstalledUninstallerPath
@@ -441,6 +524,14 @@ function Controller () {
                         console.log("Uninstaller finished with code: " + resultArray[1]);
                         if (Number(resultArray[1]) !== 0) {
                             console.log("Uninstallation aborted by user");
+                            if (runningOnWindows() && windowsMainServicePrepared
+                                    && appInstalled()
+                                    && !restoreWindowsMainServiceAfterAbortedUpgrade()) {
+                                QMessageBox.warning(
+                                    "windows.service.upgrade.restore.failed",
+                                    appName(),
+                                    qsTr("The previous AmneziaVPN installation remains, but its Windows service settings could not be fully restored. Restart Windows before using or upgrading it."));
+                            }
                             installer.setCancelled();
                             return;
                         }
