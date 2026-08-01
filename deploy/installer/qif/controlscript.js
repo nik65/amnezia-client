@@ -112,14 +112,25 @@ function windowsUpgradeCleanupIsComplete()
         "C:/Program Files/AmneziaVPN-Recovery/uninstall-cleanup-failed.txt",
         "C:/Program Files/AmneziaVPN-Recovery/uninstall-recovery-required.txt"
     ];
-    for (var residueIndex = 0; residueIndex < forbiddenResidues.length; ++residueIndex) {
-        if (installer.fileExists(forbiddenResidues[residueIndex])) {
-            console.log("Previous Windows cleanup residue blocks installation: "
-                        + forbiddenResidues[residueIndex]);
-            return false;
+    var blockingResidue = "";
+    for (var residueAttempt = 0; residueAttempt < 150; ++residueAttempt) {
+        blockingResidue = "";
+        for (var residueIndex = 0; residueIndex < forbiddenResidues.length; ++residueIndex) {
+            if (installer.fileExists(forbiddenResidues[residueIndex])) {
+                blockingResidue = forbiddenResidues[residueIndex];
+                break;
+            }
+        }
+        if (blockingResidue === "") {
+            return true;
+        }
+        if (residueAttempt < 149) {
+            sleep(100);
         }
     }
-    return true;
+    console.log("Previous Windows cleanup residue blocks installation: "
+                + blockingResidue);
+    return false;
 }
 
 function ensureWindowsUpgradeAdminRights()

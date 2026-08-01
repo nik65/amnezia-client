@@ -2772,8 +2772,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.7)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2141)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.8)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2142)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -8820,6 +8820,7 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         ):
             self.assertIn(service_name, cleanup_check)
         for residue in (
+            "C:/Program Files/AmneziaVPN",
             "maintenancetool.exe",
             "AmneziaVPN-service.exe",
             "mullvad-split-tunnel.sys",
@@ -8827,6 +8828,17 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
             "uninstall-recovery-required.txt",
         ):
             self.assertIn(residue, cleanup_check)
+        self.assertIn(
+            "for (var residueAttempt = 0; residueAttempt < 150; ++residueAttempt)",
+            cleanup_check,
+        )
+        self.assertIn("if (residueAttempt < 149)", cleanup_check)
+        self.assertIn("sleep(100)", cleanup_check)
+        self.assertIn('if (blockingResidue === "")', cleanup_check)
+        self.assertIn(
+            'console.log("Previous Windows cleanup residue blocks installation: "',
+            cleanup_check,
+        )
 
         uninstall_launch = controller.find(
             "var resultArray = installer.execute(uninstallerPath);"
