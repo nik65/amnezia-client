@@ -2772,8 +2772,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.6)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2140)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.7)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2141)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -8531,6 +8531,34 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         prepare_legacy = self.function_body(
             "function prepareWindowsMainServiceForUpgrade", self.qif_control_script
         )
+        ensure_admin = self.function_body(
+            "function ensureWindowsUpgradeAdminRights", self.qif_control_script
+        )
+        release_admin = self.function_body(
+            "function releaseWindowsUpgradeAdminRights", self.qif_control_script
+        )
+        prepare_failure_message = self.function_body(
+            "function windowsUpgradePrepareFailureMessage", self.qif_control_script
+        )
+        self.assertIn("installer.hasAdminRights()", ensure_admin)
+        self.assertIn("installer.gainAdminRights()", ensure_admin)
+        self.assertIn("windowsUpgradeAdminRightsAcquired = true", ensure_admin)
+        self.assertIn("installer.dropAdminRights()", release_admin)
+        self.assertIn("windowsUpgradeAdminRightsAcquired = false", release_admin)
+        self.assertIn('=== "administrator-approval-required"', prepare_failure_message)
+        self.assertIn('=== "service-deletion-pending"', prepare_failure_message)
+        self.assertIn("Approve the Windows UAC prompt", prepare_failure_message)
+        self.assertIn("still pending deletion", prepare_failure_message)
+        acquire_admin = prepare_legacy.find("ensureWindowsUpgradeAdminRights()")
+        disarm_recovery = prepare_legacy.find(
+            '["failure", serviceName, "reset=", "0", "actions=", ""]'
+        )
+        self.assertGreaterEqual(acquire_admin, 0)
+        self.assertGreater(disarm_recovery, acquire_admin)
+        self.assertGreaterEqual(prepare_legacy.count("queryExitCode === 1072"), 2)
+        self.assertGreaterEqual(
+            prepare_legacy.count("windowsServiceIsAbsent(serviceName)"), 2
+        )
         self.assertIn(
             '["failure", serviceName, "reset=", "0", "actions=", ""]',
             prepare_legacy,
@@ -8595,6 +8623,15 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertGreaterEqual(confirm_still_installed, 0)
         self.assertGreater(restore_service, confirm_still_installed)
         self.assertGreater(cancel_install, restore_service)
+        self.assertIn("releaseWindowsUpgradeAdminRights()", prepare_failure)
+        self.assertIn("releaseWindowsUpgradeAdminRights()", uninstaller_failure)
+        cleanup_failure = controller[
+            controller.find("windowsUpgradeCleanupIsComplete()") :
+            controller.find("} else if (installer.isUninstaller())")
+        ]
+        self.assertGreaterEqual(
+            cleanup_failure.count("releaseWindowsUpgradeAdminRights()"), 2
+        )
 
     def test_wireguard_tunneldaemon_exits_without_starting_privileged_daemon(self) -> None:
         run_application = self.function_body(

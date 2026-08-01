@@ -191,8 +191,15 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.6` with Android
-`versionCode` `2140`, following the `4.9.2.5` / `2139` artifact set.
+The current self-hosted release line is `4.9.2.7` with Android
+`versionCode` `2141`, following the `4.9.2.6` / `2140` artifact set.
+
+Release notes for `4.9.2.7`: the Windows full offline installer now obtains
+Qt IFW administrator rights before its early SCM recovery-action preflight,
+rechecks pending service deletion after UAC, retains elevation across the
+legacy uninstaller rollback window, and drops only the admin session it
+acquired. This fixes the ordinary double-click upgrade failure where `sc.exe`
+returned access denied before uninstall began.
 
 Release notes for `4.9.2.6`: the Windows full offline installer now disarms
 the installed service's SCM recovery actions before handing control to a
@@ -351,15 +358,15 @@ Example:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.2.6 \
-  --release-date 2026-07-29 \
+  --version 4.9.2.7 \
+  --release-date 2026-08-01 \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.2.6_windows_x64.exe \
-  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.2.6_linux_x64.run \
-  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.2.6_android9+_arm64-v8a.apk \
-  --android-version-code 2140 \
+  --artifact windows-x64=deploy/build/AmneziaVPN_4.9.2.7_windows_x64.exe \
+  --artifact linux-x64=deploy/build/AmneziaVPN_4.9.2.7_linux_x64.run \
+  --artifact android-arm64-v8a=deploy/build-android-arm64-v8a/client/android-build/AmneziaVPN_4.9.2.7_android9+_arm64-v8a.apk \
+  --android-version-code 2141 \
   --auto-install
 ```
 
@@ -433,7 +440,7 @@ artifact available for rollback:
 
 ```bash
 python deploy/selfhosted_updates/make_manifest.py \
-  --version 4.9.2.6 \
+  --version 4.9.2.7 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \
@@ -449,7 +456,7 @@ python deploy/selfhosted_updates/make_manifest.py \
   --base-url http://172.29.172.252:17865 \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
-  --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.6_windows_x64.exe \
+  --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.7_windows_x64.exe \
   --auto-install
 ```
 
@@ -458,7 +465,7 @@ rollback artifacts:
 
 ```bash
 python deploy/selfhosted_updates/publish_release.py \
-  --version 4.9.2.6 \
+  --version 4.9.2.7 \
   --payload-schema 2 \
   --channel canary \
   --rollout-percentage 10 \

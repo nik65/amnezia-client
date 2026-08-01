@@ -4,6 +4,8 @@ var desktopAppProcessRunning = false;
 var appInstalledUninstallerPath;
 var appInstalledUninstallerPath_x86;
 var windowsMainServicePrepared = false;
+var windowsUpgradeAdminRightsAcquired = false;
+var windowsUpgradePrepareFailureReason = "";
 
 function appName()
 {
@@ -120,6 +122,44 @@ function windowsUpgradeCleanupIsComplete()
     return true;
 }
 
+function ensureWindowsUpgradeAdminRights()
+{
+    if (installer.hasAdminRights()) {
+        return true;
+    }
+
+    if (!installer.gainAdminRights() || !installer.hasAdminRights()) {
+        windowsUpgradePrepareFailureReason = "administrator-approval-required";
+        console.log("Unable to acquire administrator rights for the Windows service upgrade preflight");
+        return false;
+    }
+
+    windowsUpgradeAdminRightsAcquired = true;
+    return true;
+}
+
+function releaseWindowsUpgradeAdminRights()
+{
+    if (!windowsUpgradeAdminRightsAcquired) {
+        return;
+    }
+
+    installer.dropAdminRights();
+    windowsUpgradeAdminRightsAcquired = false;
+}
+
+function windowsUpgradePrepareFailureMessage()
+{
+    if (windowsUpgradePrepareFailureReason === "administrator-approval-required") {
+        return qsTr("Administrator approval is required to prepare the existing AmneziaVPN Windows service for a safe upgrade. The upgrade did not start. Approve the Windows UAC prompt, then run this full offline installer again.");
+    }
+    if (windowsUpgradePrepareFailureReason === "service-deletion-pending") {
+        return qsTr("The previous AmneziaVPN Windows service is still pending deletion after the bounded wait. The upgrade did not start. Restart Windows, then run this full offline installer again.");
+    }
+    return qsTr("The existing AmneziaVPN Windows service could not be prepared for a safe upgrade even with administrator rights. The upgrade did not start. Details: ")
+        + windowsUpgradePrepareFailureReason;
+}
+
 function prepareWindowsMainServiceForUpgrade()
 {
     // The full offline installer invokes the maintenance tool from the
@@ -131,14 +171,53 @@ function prepareWindowsMainServiceForUpgrade()
     var systemSc = "C:/Windows/System32/sc.exe";
     var serviceName = "AmneziaVPN-service";
     windowsMainServicePrepared = false;
+    windowsUpgradePrepareFailureReason = "";
 
     var queryResult = installer.execute(systemSc, ["query", serviceName]);
     var queryExitCode = Number(queryResult[1]);
     if (queryExitCode === 1060) {
         return true;
     }
+    if (queryExitCode === 1072) {
+        if (windowsServiceIsAbsent(serviceName)) {
+            return true;
+        }
+        windowsUpgradePrepareFailureReason = "service-deletion-pending";
+        return false;
+    }
     if (queryExitCode !== 0) {
+        windowsUpgradePrepareFailureReason = "service-query-failed-" + queryExitCode;
         console.log("Unable to query previous AmneziaVPN service; sc.exe exit code: "
+                    + queryExitCode);
+        return false;
+    }
+
+    // The controller runs before component operations request elevation. The
+    // service DACL only grants SERVICE_CHANGE_CONFIG to administrators and
+    // LocalSystem, so acquire Qt IFW's internal admin session before spawning
+    // sc.exe. Keep it through the legacy uninstaller and rollback path.
+    if (!ensureWindowsUpgradeAdminRights()) {
+        return false;
+    }
+
+    // Re-query after the UAC round trip: another cleanup may have completed or
+    // moved the registration into asynchronous deletion while consent was
+    // pending.
+    queryResult = installer.execute(systemSc, ["query", serviceName]);
+    queryExitCode = Number(queryResult[1]);
+    if (queryExitCode === 1060) {
+        return true;
+    }
+    if (queryExitCode === 1072) {
+        if (windowsServiceIsAbsent(serviceName)) {
+            return true;
+        }
+        windowsUpgradePrepareFailureReason = "service-deletion-pending";
+        return false;
+    }
+    if (queryExitCode !== 0) {
+        windowsUpgradePrepareFailureReason = "elevated-service-query-failed-" + queryExitCode;
+        console.log("Unable to query previous AmneziaVPN service after elevation; sc.exe exit code: "
                     + queryExitCode);
         return false;
     }
@@ -148,6 +227,7 @@ function prepareWindowsMainServiceForUpgrade()
         ["failure", serviceName, "reset=", "0", "actions=", ""]);
     var failureExitCode = Number(failureResult[1]);
     if (failureExitCode !== 0) {
+        windowsUpgradePrepareFailureReason = "recovery-disarm-failed-" + failureExitCode;
         console.log("Unable to disarm previous AmneziaVPN service recovery; sc.exe exit code: "
                     + failureExitCode);
         return false;
@@ -159,6 +239,7 @@ function prepareWindowsMainServiceForUpgrade()
         ["config", serviceName, "start=", "disabled"]);
     var disableExitCode = Number(disableResult[1]);
     if (disableExitCode !== 0) {
+        windowsUpgradePrepareFailureReason = "service-disable-failed-" + disableExitCode;
         console.log("Unable to disable previous AmneziaVPN service; sc.exe exit code: "
                     + disableExitCode);
         restoreWindowsMainServiceAfterAbortedUpgrade();
@@ -501,10 +582,11 @@ function Controller () {
 
                 if (appInstalled()) {
                     if (runningOnWindows() && !prepareWindowsMainServiceForUpgrade()) {
+                        releaseWindowsUpgradeAdminRights();
                         QMessageBox.critical(
                             "windows.service.upgrade.prepare.failed",
                             appName(),
-                            qsTr("The existing AmneziaVPN Windows service could not be prepared for a safe upgrade. The upgrade did not start. Restart Windows, then run this full offline installer again."));
+                            windowsUpgradePrepareFailureMessage());
                         installer.setCancelled();
                         return;
                     }
@@ -532,6 +614,7 @@ function Controller () {
                                     appName(),
                                     qsTr("The previous AmneziaVPN installation remains, but its Windows service settings could not be fully restored. Restart Windows before using or upgrading it."));
                             }
+                            releaseWindowsUpgradeAdminRights();
                             installer.setCancelled();
                             return;
                         }
@@ -560,12 +643,16 @@ function Controller () {
         // extract the new driver.  This also rejects stale service remnants on
         // machines where the maintenance tool is already missing.
         if (runningOnWindows() && !windowsUpgradeCleanupIsComplete()) {
+            releaseWindowsUpgradeAdminRights();
             QMessageBox.critical(
                 "windows.driver.cleanup.incomplete",
                 appName(),
                 qsTr("The previous AmneziaVPN Windows services were not fully removed. Restart Windows, then run the full offline installer again. No new files were installed."));
             installer.setCancelled();
             return;
+        }
+        if (runningOnWindows()) {
+            releaseWindowsUpgradeAdminRights();
         }
 
     } else if (installer.isUninstaller()) {
