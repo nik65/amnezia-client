@@ -191,8 +191,15 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.8` with Android
-`versionCode` `2142`, following the `4.9.2.7` / `2141` artifact set.
+The current self-hosted release line is `4.9.2.9` with Android
+`versionCode` `2143`, following the `4.9.2.8` / `2142` artifact set.
+
+Release notes for `4.9.2.9`: after the user approves replacing an existing
+Windows installation and the legacy uninstaller plus fail-closed cleanup checks
+finish successfully, the outer full offline installer now automatically
+continues through Ready for Installation and starts extraction. This fixes both
+ordinary and self-hosted installers appearing to stop after removing the old
+version.
 
 Release notes for `4.9.2.8`: after the Windows uninstaller proves all owned
 service registrations absent, the full offline installer now waits for up to

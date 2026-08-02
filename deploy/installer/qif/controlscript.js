@@ -6,6 +6,8 @@ var appInstalledUninstallerPath_x86;
 var windowsMainServicePrepared = false;
 var windowsUpgradeAdminRightsAcquired = false;
 var windowsUpgradePrepareFailureReason = "";
+var windowsUpgradeReplacementRequested = false;
+var windowsUpgradeContinuationRequested = false;
 
 function appName()
 {
@@ -468,7 +470,9 @@ Controller.prototype.ComponentSelectionPageCallback = function()
 
 Controller.prototype.ReadyForInstallationPageCallback = function()
 {
-    if (installer.isUpdater()) {
+    if (installer.isUpdater()
+            || (installer.isInstaller() && runningOnWindows()
+                && windowsUpgradeContinuationRequested)) {
         gui.clickButton(buttons.CommitButton);
     }
 }
@@ -499,6 +503,18 @@ Controller.prototype.IntroductionPageCallback = function ()
             widget.findChild("PackageManagerRadioButton").visible = false;
             widget.findChild("UpdaterRadioButton").visible = false;
         }
+    }
+
+    // A supported Windows upgrade is a full offline installer which has
+    // already received explicit replacement consent and synchronously waited
+    // for the legacy maintenance tool to finish. Continue that same workflow
+    // instead of leaving the outer installer hidden behind the old
+    // uninstaller and waiting for a second user action.
+    if (installer.isInstaller() && runningOnWindows()
+            && windowsUpgradeContinuationRequested) {
+        console.log("Continuing Windows installation after successful legacy uninstall");
+        gui.clickButton(buttons.NextButton);
+        return;
     }
 
     if (installer.isUpdater()) {
@@ -583,6 +599,10 @@ function Controller () {
                                                            qsTr("We need to remove the old installation first. Do you wish to proceed?"),
                                                            QMessageBox.Ok | QMessageBox.Cancel)) {
 
+                if (runningOnWindows()) {
+                    windowsUpgradeReplacementRequested = true;
+                }
+
                 // The user has consented to replace the existing installation.
                 // Only now may Windows disconnect and close the running client.
                 isDesktopAppProcessRunningMessageLoop();
@@ -664,6 +684,9 @@ function Controller () {
         }
         if (runningOnWindows()) {
             releaseWindowsUpgradeAdminRights();
+            if (windowsUpgradeReplacementRequested) {
+                windowsUpgradeContinuationRequested = true;
+            }
         }
 
     } else if (installer.isUninstaller()) {
