@@ -2772,8 +2772,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.10)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2144)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.11)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2145)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -8664,10 +8664,10 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         )
         self.assertIn("windowsUpgradeNextRequested", continuation)
         self.assertIn("windowsUpgradeNextRequested = true", continuation)
-        self.assertEqual(continuation.count("gui.clickButton(buttons.NextButton)"), 1)
+        self.assertEqual(continuation.count("gui.clickButton(buttons.NextButton, 250)"), 1)
         self.assertIn("windowsUpgradeCommitRequested", commit)
         self.assertIn("windowsUpgradeCommitRequested = true", commit)
-        self.assertEqual(commit.count("gui.clickButton(buttons.CommitButton)"), 1)
+        self.assertEqual(commit.count("gui.clickButton(buttons.CommitButton, 250)"), 1)
 
     def test_qif_windows_upgrade_log_is_private_bounded_and_survives_old_uninstall(self) -> None:
         log_writer = self.function_body(
@@ -8677,11 +8677,9 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
             REPO_ROOT / "deploy/data/windows/post_uninstall.cmd"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("C:/Program Files/AmneziaVPN-InstallerLogs", log_writer)
+        self.assertIn("$env:LOCALAPPDATA", log_writer)
+        self.assertIn("AmneziaVPN-InstallerLogs", log_writer)
         self.assertIn("[IO.FileAttributes]::ReparsePoint", log_writer)
-        self.assertIn("C:/Windows/System32/icacls.exe", log_writer)
-        self.assertIn("*S-1-5-18:(OI)(CI)F", log_writer)
-        self.assertIn("*S-1-5-32-544:(OI)(CI)F", log_writer)
         self.assertIn("installer-*.jsonl", log_writer)
         self.assertIn("256KB", log_writer)
         self.assertIn("5MB", log_writer)

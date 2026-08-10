@@ -18,18 +18,19 @@ function writeWindowsInstallerLog(phase, detail)
         return;
     }
 
-    // Keep this diagnostic in a protected sibling of TargetDir: the legacy
+    // Keep this diagnostic in the interactive user's local profile: the legacy
     // uninstaller intentionally removes the application and its log directory. The
     // arguments are reduced to a fixed phase plus a short sanitized value;
     // command output, configuration, addresses and credentials never enter
     // this journal. Logging is best-effort and must never affect installation.
     var safePhase = String(phase).replace(/[^A-Za-z0-9._-]/g, "-").substr(0, 64);
     var safeDetail = String(detail || "").replace(/[^A-Za-z0-9._:-]/g, "-").substr(0, 160);
-    var script = "& { param($Root,$Session,$Phase,$Detail) "
+    var script = "& { param($Session,$Phase,$Detail) "
         + "$ErrorActionPreference='Stop'; try { "
+        + "$Base=$env:LOCALAPPDATA; if ([string]::IsNullOrWhiteSpace($Base)) { $Base=Join-Path $env:USERPROFILE 'AppData/Local' }; "
+        + "if ([string]::IsNullOrWhiteSpace($Base)) { return }; $Root=Join-Path $Base 'AmneziaVPN-InstallerLogs'; "
         + "if (Test-Path -LiteralPath $Root) { $RootItem=Get-Item -LiteralPath $Root -Force; if (-not $RootItem.PSIsContainer -or ($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return } } "
         + "else { New-Item -ItemType Directory -Path $Root | Out-Null }; "
-        + "& 'C:/Windows/System32/icacls.exe' $Root '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null; if ($LASTEXITCODE -ne 0) { return }; "
         + "$Path=Join-Path $Root ($Session+'.jsonl'); "
         + "$Files=@(Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending); "
         + "$Files | Where-Object LastWriteTimeUtc -lt ([DateTime]::UtcNow.AddDays(-14)) | Remove-Item -Force -ErrorAction SilentlyContinue; "
@@ -45,7 +46,6 @@ function writeWindowsInstallerLog(phase, detail)
     installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
                       ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
                        "-Command", script,
-                       "C:/Program Files/AmneziaVPN-InstallerLogs",
                        windowsInstallerLogSession, safePhase, safeDetail]);
 }
 
@@ -60,7 +60,10 @@ function continueWindowsUpgradeInstallation(source)
     windowsUpgradeNextRequested = true;
     writeWindowsInstallerLog("continuation-next", source);
     console.log("Continuing Windows installation after successful legacy uninstall");
-    gui.clickButton(buttons.NextButton);
+    // Qt IFW documents the second argument as an event-loop delay. A direct
+    // synchronous click from Controller() is ignored after the nested legacy
+    // maintenance tool exits because the constructor has not returned yet.
+    gui.clickButton(buttons.NextButton, 250);
     return true;
 }
 
@@ -74,7 +77,7 @@ function commitWindowsUpgradeInstallation(source)
 
     windowsUpgradeCommitRequested = true;
     writeWindowsInstallerLog("continuation-commit", source);
-    gui.clickButton(buttons.CommitButton);
+    gui.clickButton(buttons.CommitButton, 250);
     return true;
 }
 

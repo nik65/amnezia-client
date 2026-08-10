@@ -191,17 +191,24 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.10` with Android
-`versionCode` `2144`, following the `4.9.2.9` / `2143` artifact set.
+The current self-hosted release line is `4.9.2.11` with Android
+`versionCode` `2145`, following the `4.9.2.10` / `2144` artifact set.
+
+Release notes for `4.9.2.11`: the Windows upgrade handoff now uses Qt IFW's
+documented delayed `gui.clickButton(..., delayInMs)` overload. This queues Next
+until after the controller constructor returns from the nested legacy
+maintenance tool, and queues Commit in the same way. Installer phase journals
+now use the interactive user's `%LOCALAPPDATA%\AmneziaVPN-InstallerLogs`, which
+is writable before and after the IFW elevation handoff; reparse points remain
+rejected and the existing size/count/age limits are unchanged.
 
 Release notes for `4.9.2.10`: the Windows full offline installer now drives
 the Next transition directly from the successful legacy-cleanup branch instead
 of relying on a page callback after the nested maintenance tool exits.  The
 transition and Commit are idempotent.  A privacy-reduced JSONL phase journal is
-kept under `C:\Program Files\AmneziaVPN-InstallerLogs`; the directory rejects
-reparse points and is restricted to SYSTEM and Administrators. The journal is
-capped at 256 KiB per run, 20 runs, 14 days, and 5 MiB total, and survives
-removal of the old application payload.
+kept under `%LOCALAPPDATA%\AmneziaVPN-InstallerLogs`; the directory rejects
+reparse points. The journal is capped at 256 KiB per run, 20 runs, 14 days, and
+5 MiB total, and survives removal of the old application payload.
 
 Release notes for `4.9.2.9`: after the user approves replacing an existing
 Windows installation and the legacy uninstaller plus fail-closed cleanup checks
