@@ -191,8 +191,17 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.9` with Android
-`versionCode` `2143`, following the `4.9.2.8` / `2142` artifact set.
+The current self-hosted release line is `4.9.2.10` with Android
+`versionCode` `2144`, following the `4.9.2.9` / `2143` artifact set.
+
+Release notes for `4.9.2.10`: the Windows full offline installer now drives
+the Next transition directly from the successful legacy-cleanup branch instead
+of relying on a page callback after the nested maintenance tool exits.  The
+transition and Commit are idempotent.  A privacy-reduced JSONL phase journal is
+kept under `C:\Program Files\AmneziaVPN-InstallerLogs`; the directory rejects
+reparse points and is restricted to SYSTEM and Administrators. The journal is
+capped at 256 KiB per run, 20 runs, 14 days, and 5 MiB total, and survives
+removal of the old application payload.
 
 Release notes for `4.9.2.9`: after the user approves replacing an existing
 Windows installation and the legacy uninstaller plus fail-closed cleanup checks

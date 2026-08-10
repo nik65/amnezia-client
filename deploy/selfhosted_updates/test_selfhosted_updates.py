@@ -2772,8 +2772,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.9)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2143)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.10)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2144)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -8643,18 +8643,60 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         consent = controller.find("windowsUpgradeReplacementRequested = true")
         launch_uninstaller = controller.find("installer.execute(uninstallerPath)")
         cleanup_succeeded = controller.find("windowsUpgradeContinuationRequested = true")
+        direct_continuation = controller.find(
+            'continueWindowsUpgradeInstallation("cleanup-success")'
+        )
         self.assertGreaterEqual(consent, 0)
         self.assertLess(consent, launch_uninstaller)
         self.assertGreater(cleanup_succeeded, launch_uninstaller)
         self.assertGreater(
             cleanup_succeeded, controller.find("!windowsUpgradeCleanupIsComplete()")
         )
-        self.assertIn("installer.isInstaller() && runningOnWindows()", introduction)
-        self.assertIn("windowsUpgradeContinuationRequested", introduction)
-        self.assertIn("gui.clickButton(buttons.NextButton)", introduction)
-        self.assertIn("installer.isInstaller() && runningOnWindows()", ready)
-        self.assertIn("windowsUpgradeContinuationRequested", ready)
-        self.assertIn("gui.clickButton(buttons.CommitButton)", ready)
+        self.assertGreater(direct_continuation, cleanup_succeeded)
+        self.assertIn('continueWindowsUpgradeInstallation("introduction-callback")', introduction)
+        self.assertIn('commitWindowsUpgradeInstallation("ready-callback")', ready)
+
+        continuation = self.function_body(
+            "function continueWindowsUpgradeInstallation", self.qif_control_script
+        )
+        commit = self.function_body(
+            "function commitWindowsUpgradeInstallation", self.qif_control_script
+        )
+        self.assertIn("windowsUpgradeNextRequested", continuation)
+        self.assertIn("windowsUpgradeNextRequested = true", continuation)
+        self.assertEqual(continuation.count("gui.clickButton(buttons.NextButton)"), 1)
+        self.assertIn("windowsUpgradeCommitRequested", commit)
+        self.assertIn("windowsUpgradeCommitRequested = true", commit)
+        self.assertEqual(commit.count("gui.clickButton(buttons.CommitButton)"), 1)
+
+    def test_qif_windows_upgrade_log_is_private_bounded_and_survives_old_uninstall(self) -> None:
+        log_writer = self.function_body(
+            "function writeWindowsInstallerLog", self.qif_control_script
+        )
+        post_uninstall = (
+            REPO_ROOT / "deploy/data/windows/post_uninstall.cmd"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("C:/Program Files/AmneziaVPN-InstallerLogs", log_writer)
+        self.assertIn("[IO.FileAttributes]::ReparsePoint", log_writer)
+        self.assertIn("C:/Windows/System32/icacls.exe", log_writer)
+        self.assertIn("*S-1-5-18:(OI)(CI)F", log_writer)
+        self.assertIn("*S-1-5-32-544:(OI)(CI)F", log_writer)
+        self.assertIn("installer-*.jsonl", log_writer)
+        self.assertIn("256KB", log_writer)
+        self.assertIn("5MB", log_writer)
+        self.assertIn("AddDays(-14)", log_writer)
+        self.assertIn("Select-Object -Skip 20", log_writer)
+        self.assertIn("ConvertTo-Json -Compress", log_writer)
+        self.assertIn("[^A-Za-z0-9._:-]", log_writer)
+        self.assertNotIn("resultArray[0]", self.qif_control_script)
+        self.assertNotIn("AmneziaVPN-InstallerLogs", post_uninstall)
+        controller = self.function_body(
+            "function Controller ()", self.qif_control_script
+        )
+        self.assertIn("installer.installationStarted.connect", controller)
+        self.assertIn("installer.installationFinished.connect", controller)
+        self.assertIn("installer.installationInterrupted.connect", controller)
 
     def test_wireguard_tunneldaemon_exits_without_starting_privileged_daemon(self) -> None:
         run_application = self.function_body(

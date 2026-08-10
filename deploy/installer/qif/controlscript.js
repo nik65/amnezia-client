@@ -8,6 +8,75 @@ var windowsUpgradeAdminRightsAcquired = false;
 var windowsUpgradePrepareFailureReason = "";
 var windowsUpgradeReplacementRequested = false;
 var windowsUpgradeContinuationRequested = false;
+var windowsUpgradeNextRequested = false;
+var windowsUpgradeCommitRequested = false;
+var windowsInstallerLogSession = "installer-" + new Date().getTime();
+
+function writeWindowsInstallerLog(phase, detail)
+{
+    if (!runningOnWindows()) {
+        return;
+    }
+
+    // Keep this diagnostic in a protected sibling of TargetDir: the legacy
+    // uninstaller intentionally removes the application and its log directory. The
+    // arguments are reduced to a fixed phase plus a short sanitized value;
+    // command output, configuration, addresses and credentials never enter
+    // this journal. Logging is best-effort and must never affect installation.
+    var safePhase = String(phase).replace(/[^A-Za-z0-9._-]/g, "-").substr(0, 64);
+    var safeDetail = String(detail || "").replace(/[^A-Za-z0-9._:-]/g, "-").substr(0, 160);
+    var script = "& { param($Root,$Session,$Phase,$Detail) "
+        + "$ErrorActionPreference='Stop'; try { "
+        + "if (Test-Path -LiteralPath $Root) { $RootItem=Get-Item -LiteralPath $Root -Force; if (-not $RootItem.PSIsContainer -or ($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return } } "
+        + "else { New-Item -ItemType Directory -Path $Root | Out-Null }; "
+        + "& 'C:/Windows/System32/icacls.exe' $Root '/inheritance:r' '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null; if ($LASTEXITCODE -ne 0) { return }; "
+        + "$Path=Join-Path $Root ($Session+'.jsonl'); "
+        + "$Files=@(Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending); "
+        + "$Files | Where-Object LastWriteTimeUtc -lt ([DateTime]::UtcNow.AddDays(-14)) | Remove-Item -Force -ErrorAction SilentlyContinue; "
+        + "if ((Test-Path -LiteralPath $Path) -and (Get-Item -LiteralPath $Path).Length -ge 256KB) { return }; "
+        + "$Line=[ordered]@{schema=1;utc=[DateTime]::UtcNow.ToString('o');phase=$Phase;detail=$Detail} | ConvertTo-Json -Compress; "
+        + "Add-Content -LiteralPath $Path -Value $Line -Encoding UTF8; "
+        + "$Files=@(Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending); "
+        + "if ($Files.Count -gt 20) { $Files | Select-Object -Skip 20 | Remove-Item -Force -ErrorAction SilentlyContinue }; "
+        + "$Files=@(Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc); "
+        + "$Total=($Files | Measure-Object Length -Sum).Sum; "
+        + "foreach ($File in $Files) { if ($Total -le 5MB) { break }; if ($File.FullName -eq $Path) { continue }; $Total-=$File.Length; Remove-Item -LiteralPath $File.FullName -Force -ErrorAction SilentlyContinue } "
+        + "} catch { } }";
+    installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                      ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                       "-Command", script,
+                       "C:/Program Files/AmneziaVPN-InstallerLogs",
+                       windowsInstallerLogSession, safePhase, safeDetail]);
+}
+
+function continueWindowsUpgradeInstallation(source)
+{
+    if (!installer.isInstaller() || !runningOnWindows()
+            || !windowsUpgradeContinuationRequested
+            || windowsUpgradeNextRequested) {
+        return false;
+    }
+
+    windowsUpgradeNextRequested = true;
+    writeWindowsInstallerLog("continuation-next", source);
+    console.log("Continuing Windows installation after successful legacy uninstall");
+    gui.clickButton(buttons.NextButton);
+    return true;
+}
+
+function commitWindowsUpgradeInstallation(source)
+{
+    if (!installer.isInstaller() || !runningOnWindows()
+            || !windowsUpgradeContinuationRequested
+            || windowsUpgradeCommitRequested) {
+        return false;
+    }
+
+    windowsUpgradeCommitRequested = true;
+    writeWindowsInstallerLog("continuation-commit", source);
+    gui.clickButton(buttons.CommitButton);
+    return true;
+}
 
 function appName()
 {
@@ -470,9 +539,10 @@ Controller.prototype.ComponentSelectionPageCallback = function()
 
 Controller.prototype.ReadyForInstallationPageCallback = function()
 {
-    if (installer.isUpdater()
-            || (installer.isInstaller() && runningOnWindows()
-                && windowsUpgradeContinuationRequested)) {
+    if (commitWindowsUpgradeInstallation("ready-callback")) {
+        return;
+    }
+    if (installer.isUpdater()) {
         gui.clickButton(buttons.CommitButton);
     }
 }
@@ -510,10 +580,7 @@ Controller.prototype.IntroductionPageCallback = function ()
     // for the legacy maintenance tool to finish. Continue that same workflow
     // instead of leaving the outer installer hidden behind the old
     // uninstaller and waiting for a second user action.
-    if (installer.isInstaller() && runningOnWindows()
-            && windowsUpgradeContinuationRequested) {
-        console.log("Continuing Windows installation after successful legacy uninstall");
-        gui.clickButton(buttons.NextButton);
+    if (continueWindowsUpgradeInstallation("introduction-callback")) {
         return;
     }
 
@@ -584,6 +651,18 @@ function Controller () {
     }
 
     if (installer.isInstaller()) {
+        if (runningOnWindows()) {
+            writeWindowsInstallerLog("installer-start", "installer");
+            installer.installationStarted.connect(function() {
+                writeWindowsInstallerLog("installation-started", "1");
+            });
+            installer.installationFinished.connect(function() {
+                writeWindowsInstallerLog("installation-finished", "1");
+            });
+            installer.installationInterrupted.connect(function() {
+                writeWindowsInstallerLog("installation-interrupted", "1");
+            });
+        }
         installer.setDefaultPageVisible(QInstaller.ComponentSelection, false);
         installer.setDefaultPageVisible(QInstaller.TargetDirectory, false);
         installer.setDefaultPageVisible(QInstaller.StartMenuDirectoryPage, false);
@@ -594,6 +673,7 @@ function Controller () {
         }
 
         if (appInstalled()) {
+            writeWindowsInstallerLog("existing-install-detected", "1");
             if (QMessageBox.Ok === QMessageBox.information("os.information", appName(),
                                                            qsTr("The application is already installed.") + " " +
                                                            qsTr("We need to remove the old installation first. Do you wish to proceed?"),
@@ -601,6 +681,7 @@ function Controller () {
 
                 if (runningOnWindows()) {
                     windowsUpgradeReplacementRequested = true;
+                    writeWindowsInstallerLog("replacement-consent", "accepted");
                 }
 
                 // The user has consented to replace the existing installation.
@@ -613,6 +694,7 @@ function Controller () {
 
                 if (appInstalled()) {
                     if (runningOnWindows() && !prepareWindowsMainServiceForUpgrade()) {
+                        writeWindowsInstallerLog("service-preflight", windowsUpgradePrepareFailureReason);
                         releaseWindowsUpgradeAdminRights();
                         QMessageBox.critical(
                             "windows.service.upgrade.prepare.failed",
@@ -620,6 +702,9 @@ function Controller () {
                             windowsUpgradePrepareFailureMessage());
                         installer.setCancelled();
                         return;
+                    }
+                    if (runningOnWindows()) {
+                        writeWindowsInstallerLog("service-preflight", "complete");
                     }
                     var installedUninstallers = [
                         appInstalledUninstallerPath_x86,
@@ -633,8 +718,10 @@ function Controller () {
                             continue;
                         }
                         console.log("Starting uninstallation " + uninstallerPath);
+                        writeWindowsInstallerLog("legacy-uninstaller-start", "1");
                         var resultArray = installer.execute(uninstallerPath);
                         console.log("Uninstaller finished with code: " + resultArray[1]);
+                        writeWindowsInstallerLog("legacy-uninstaller-exit", String(Number(resultArray[1])));
                         if (Number(resultArray[1]) !== 0) {
                             console.log("Uninstallation aborted by user");
                             if (runningOnWindows() && windowsMainServicePrepared
@@ -674,6 +761,7 @@ function Controller () {
         // extract the new driver.  This also rejects stale service remnants on
         // machines where the maintenance tool is already missing.
         if (runningOnWindows() && !windowsUpgradeCleanupIsComplete()) {
+            writeWindowsInstallerLog("cleanup-verdict", "blocked");
             releaseWindowsUpgradeAdminRights();
             QMessageBox.critical(
                 "windows.driver.cleanup.incomplete",
@@ -683,9 +771,14 @@ function Controller () {
             return;
         }
         if (runningOnWindows()) {
+            writeWindowsInstallerLog("cleanup-verdict", "complete");
             releaseWindowsUpgradeAdminRights();
             if (windowsUpgradeReplacementRequested) {
                 windowsUpgradeContinuationRequested = true;
+                // Drive the transition from the same successful branch.  The
+                // page callback remains an idempotent fallback, but no longer
+                // owns the only handoff after the nested maintenance tool.
+                continueWindowsUpgradeInstallation("cleanup-success");
             }
         }
 
