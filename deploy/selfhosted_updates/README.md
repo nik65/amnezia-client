@@ -191,8 +191,21 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.11` with Android
-`versionCode` `2145`, following the `4.9.2.10` / `2144` artifact set.
+The current self-hosted release line is `4.9.2.12` with Android
+`versionCode` `2146`, following the `4.9.2.11` / `2145` artifact set.
+
+Release notes for `4.9.2.12`: Windows replacement now treats the legacy
+maintenance-tool process exit code as diagnostic because its unelevated
+bootstrap can return `1` while the elevated child continues a successful
+removal. The outer installer waits up to ten minutes for both the maintenance
+tool path and process to become quiescent, rejects duplicate x86/x64 legacy
+installations instead of launching two uninstallers, and only restores the old
+service after a positively verified cancellation. It then verifies service/file
+cleanup before proceeding. The delayed Next transition is owned by
+`IntroductionPageCallback`, after the live page is entered. Installer JSONL
+logging no longer contains PowerShell at-sign array/hash syntax that Qt IFW
+interprets as variable placeholders; writes use UTF-8 without a BOM and retain
+the same privacy and retention bounds.
 
 Release notes for `4.9.2.11`: the Windows upgrade handoff now uses Qt IFW's
 documented delayed `gui.clickButton(..., delayInMs)` overload. This queues Next

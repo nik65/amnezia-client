@@ -81,6 +81,19 @@ def find_powershell() -> str | None:
     return None
 
 
+def find_windows_powershell() -> str | None:
+    if os.name != "nt":
+        return None
+    candidate = (
+        Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    return str(candidate) if candidate.is_file() else None
+
+
 def find_wsl() -> str | None:
     return shutil.which("wsl.exe") or shutil.which("wsl")
 
@@ -2772,8 +2785,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.11)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2145)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.12)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2146)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -8612,19 +8625,48 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         ]
         self.assertIn("installer.setCancelled()", prepare_failure)
         self.assertIn("return;", prepare_failure)
-        uninstaller_failure = controller[
-            launch_uninstaller : controller.find("for (var i = 0; i < 300; i++)", launch_uninstaller)
+        wait_for_uninstall = controller.find(
+            "var uninstallerOutcome = waitForWindowsLegacyUninstaller();",
+            launch_uninstaller,
+        )
+        uninstaller_launch = controller[launch_uninstaller:wait_for_uninstall]
+        postcondition = controller[
+            wait_for_uninstall : controller.find(
+                "windowsUpgradeCleanupIsComplete()", wait_for_uninstall
+            )
         ]
-        confirm_still_installed = uninstaller_failure.find("appInstalled()")
-        restore_service = uninstaller_failure.find(
+        confirm_still_installed = postcondition.find("appInstalled()")
+        restore_service = postcondition.find(
             "restoreWindowsMainServiceAfterAbortedUpgrade()"
         )
-        cancel_install = uninstaller_failure.find("installer.setCancelled()")
+        cancel_install = postcondition.find("installer.setCancelled()")
+        self.assertIn("uninstallerExitCode", uninstaller_launch)
+        self.assertIn('writeWindowsInstallerLog("legacy-uninstaller-exit"', uninstaller_launch)
+        self.assertNotIn("uninstallerExitCode !== 0", controller)
+        self.assertNotIn("uninstallerExitCode === 0", controller)
+        self.assertNotIn("installer.setCancelled()", uninstaller_launch)
+        self.assertNotIn("return;", uninstaller_launch)
+        self.assertIn("availableUninstallers.length > 1", controller)
+        self.assertIn("availableUninstallers.length === 1", controller)
+        self.assertEqual(controller.count("installer.execute(uninstallerPath)"), 1)
+        self.assertIn('uninstallerPostcondition !== "removed"', postcondition)
         self.assertGreaterEqual(confirm_still_installed, 0)
         self.assertGreater(restore_service, confirm_still_installed)
         self.assertGreater(cancel_install, restore_service)
+        self.assertIn('uninstallerPostcondition === "present-stopped"', postcondition)
+        self.assertIn("freshOldInstallationPresent = appInstalled()", postcondition)
+        self.assertIn(
+            "freshUninstallerProcessState = windowsLegacyMaintenanceToolProcessState()",
+            postcondition,
+        )
+        self.assertIn("&& freshUninstallerProcessState === 0", postcondition)
+        self.assertIn("&& freshOldInstallationPresent", postcondition)
+        self.assertIn("windowsMainServicePrepared && safeToRestoreOldService", postcondition)
+        self.assertIn('"windows.upgrade.uninstaller.still.running"', postcondition)
+        self.assertIn('? "present-stopped" : "timeout-active"', postcondition)
+        self.assertIn('"legacy-uninstaller-postcondition", "removed"', postcondition)
         self.assertIn("releaseWindowsUpgradeAdminRights()", prepare_failure)
-        self.assertIn("releaseWindowsUpgradeAdminRights()", uninstaller_failure)
+        self.assertIn("releaseWindowsUpgradeAdminRights()", postcondition)
         cleanup_failure = controller[
             controller.find("windowsUpgradeCleanupIsComplete()") :
             controller.find("} else if (installer.isUninstaller())")
@@ -8632,6 +8674,37 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertGreaterEqual(
             cleanup_failure.count("releaseWindowsUpgradeAdminRights()"), 2
         )
+
+        wait_helper = self.function_body(
+            "function waitForWindowsLegacyUninstaller",
+            self.qif_control_script,
+        )
+        self.assertIn("for (var i = 0; i < 1200; i++)", wait_helper)
+        self.assertIn("sleep(500)", wait_helper)
+        self.assertIn("removedQuiescentChecks++", wait_helper)
+        self.assertIn("presentQuiescentChecks++", wait_helper)
+        self.assertIn("removedQuiescentChecks = 0", wait_helper)
+        self.assertIn("presentQuiescentChecks = 0", wait_helper)
+        self.assertIn("removedQuiescentChecks >= 4", wait_helper)
+        self.assertIn("presentQuiescentChecks >= 20", wait_helper)
+
+        process_probe = self.function_body(
+            "function windowsLegacyMaintenanceToolProcessState",
+            self.qif_control_script,
+        )
+        self.assertIn("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", process_probe)
+        self.assertIn("Get-Process -Name 'maintenancetool'", process_probe)
+        self.assertIn("appInstalledUninstallerPath", process_probe)
+        self.assertIn("appInstalledUninstallerPath_x86", process_probe)
+        self.assertIn("[StringComparison]::OrdinalIgnoreCase", process_probe)
+        self.assertIn(
+            "if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { exit 97 }",
+            process_probe,
+        )
+        self.assertNotIn("tasklist.exe", process_probe)
+        self.assertNotIn("@", process_probe)
+        self.assertIn("return -1", process_probe)
+        self.assertIn("exitCode === 10", process_probe)
 
         introduction = self.function_body(
             "Controller.prototype.IntroductionPageCallback", self.qif_control_script
@@ -8652,7 +8725,7 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertGreater(
             cleanup_succeeded, controller.find("!windowsUpgradeCleanupIsComplete()")
         )
-        self.assertGreater(direct_continuation, cleanup_succeeded)
+        self.assertEqual(direct_continuation, -1)
         self.assertIn('continueWindowsUpgradeInstallation("introduction-callback")', introduction)
         self.assertIn('commitWindowsUpgradeInstallation("ready-callback")', ready)
 
@@ -8664,10 +8737,133 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         )
         self.assertIn("windowsUpgradeNextRequested", continuation)
         self.assertIn("windowsUpgradeNextRequested = true", continuation)
+        self.assertIn("gui.isButtonEnabled(buttons.NextButton)", continuation)
         self.assertEqual(continuation.count("gui.clickButton(buttons.NextButton, 250)"), 1)
         self.assertIn("windowsUpgradeCommitRequested", commit)
         self.assertIn("windowsUpgradeCommitRequested = true", commit)
+        self.assertIn("gui.isButtonEnabled(buttons.CommitButton)", commit)
         self.assertEqual(commit.count("gui.clickButton(buttons.CommitButton, 250)"), 1)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required")
+    def test_qif_windows_legacy_wait_requires_consecutive_combined_states(self) -> None:
+        helper = self.function_body(
+            "function waitForWindowsLegacyUninstaller",
+            self.qif_control_script,
+        )
+        harness = f"""
+function waitForWindowsLegacyUninstaller()
+{{
+{helper}
+}}
+var presentStates = JSON.parse(process.argv[1]);
+var processStates = JSON.parse(process.argv[2]);
+var sample = 0;
+function sleep(milliseconds) {{}}
+function appInstalled() {{
+    return presentStates[Math.min(sample, presentStates.length - 1)];
+}}
+function windowsLegacyMaintenanceToolProcessState() {{
+    var state = processStates[Math.min(sample, processStates.length - 1)];
+    sample++;
+    return state;
+}}
+var outcome = waitForWindowsLegacyUninstaller();
+outcome.samples = sample;
+process.stdout.write(JSON.stringify(outcome));
+"""
+
+        def run_wait(present: list[bool], processes: list[int]) -> dict[str, object]:
+            completed = subprocess.run(
+                [
+                    shutil.which("node"),
+                    "-e",
+                    harness,
+                    json.dumps(present),
+                    json.dumps(processes),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            return json.loads(completed.stdout)
+
+        removed = run_wait([True] * 3 + [False] * 4, [0])
+        self.assertEqual(removed["status"], "removed")
+        self.assertEqual(removed["samples"], 7)
+        self.assertFalse(removed["oldInstallationPresent"])
+
+        cancelled = run_wait([False] * 3 + [True] * 20, [0])
+        self.assertEqual(cancelled["status"], "present-stopped")
+        self.assertEqual(cancelled["samples"], 23)
+        self.assertTrue(cancelled["oldInstallationPresent"])
+
+        ambiguous = run_wait([False], [1])
+        self.assertEqual(ambiguous["status"], "timeout-ambiguous")
+        self.assertEqual(ambiguous["samples"], 1200)
+
+    @unittest.skipUnless(find_windows_powershell(), "Windows PowerShell 5.1 is required")
+    def test_qif_windows_legacy_process_probe_matches_exact_executable_path(self) -> None:
+        process_probe = self.function_body(
+            "function windowsLegacyMaintenanceToolProcessState",
+            self.qif_control_script,
+        )
+        script_assignment = re.search(
+            r'var script = (?P<expression>.*?);\s*var result = installer\.execute',
+            process_probe,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(script_assignment)
+        literals = re.findall(
+            r'"(?:\\.|[^"\\])*"', script_assignment.group("expression")
+        )
+        powershell_script = "".join(json.loads(value) for value in literals)
+        self.assertNotIn("@", powershell_script)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            process_path = Path(temp_dir) / "maintenancetool.exe"
+            shutil.copy2(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/ping.exe", process_path)
+            process = subprocess.Popen(
+                [str(process_path), "-n", "30", "127.0.0.1"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            try:
+                time.sleep(0.2)
+                base_command = [
+                    find_windows_powershell(),
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-Command",
+                    powershell_script,
+                ]
+                exact = subprocess.run(
+                    [*base_command, str(process_path), str(process_path)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                unrelated = subprocess.run(
+                    [
+                        *base_command,
+                        str(Path(temp_dir) / "other-maintenance.exe"),
+                        str(Path(temp_dir) / "other-maintenance-x86.exe"),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(exact.returncode, 10, exact.stderr)
+                self.assertEqual(unrelated.returncode, 0, unrelated.stderr)
+            finally:
+                process.terminate()
+                process.wait(timeout=10)
 
     def test_qif_windows_upgrade_log_is_private_bounded_and_survives_old_uninstall(self) -> None:
         log_writer = self.function_body(
@@ -8680,12 +8876,17 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertIn("$env:LOCALAPPDATA", log_writer)
         self.assertIn("AmneziaVPN-InstallerLogs", log_writer)
         self.assertIn("[IO.FileAttributes]::ReparsePoint", log_writer)
+        self.assertIn("$PathItem.PSIsContainer", log_writer)
         self.assertIn("installer-*.jsonl", log_writer)
         self.assertIn("256KB", log_writer)
         self.assertIn("5MB", log_writer)
         self.assertIn("AddDays(-14)", log_writer)
         self.assertIn("Select-Object -Skip 20", log_writer)
         self.assertIn("ConvertTo-Json -Compress", log_writer)
+        self.assertIn("[IO.File]::AppendAllText", log_writer)
+        self.assertIn("Text.UTF8Encoding($false)", log_writer)
+        self.assertIn("catch { exit 97 }", log_writer)
+        self.assertNotIn("@", log_writer)
         self.assertIn("[^A-Za-z0-9._:-]", log_writer)
         self.assertNotIn("resultArray[0]", self.qif_control_script)
         self.assertNotIn("AmneziaVPN-InstallerLogs", post_uninstall)
@@ -8695,6 +8896,78 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertIn("installer.installationStarted.connect", controller)
         self.assertIn("installer.installationFinished.connect", controller)
         self.assertIn("installer.installationInterrupted.connect", controller)
+
+    @unittest.skipUnless(find_windows_powershell(), "Windows PowerShell 5.1 is required")
+    def test_qif_windows_upgrade_log_survives_ifw_argument_replacement(self) -> None:
+        log_writer = self.function_body(
+            "function writeWindowsInstallerLog", self.qif_control_script
+        )
+        script_assignment = re.search(
+            r'var script = (?P<expression>.*?);\s*var result = installer\.execute',
+            log_writer,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(script_assignment)
+        literals = re.findall(
+            r'"(?:\\.|[^"\\])*"', script_assignment.group("expression")
+        )
+        powershell_script = "".join(json.loads(value) for value in literals)
+
+        # Qt IFW 4.7 treats every at-sign pair in execute arguments as a
+        # variable placeholder. The logging payload must therefore be stable
+        # under that preprocessing, not merely valid PowerShell source.
+        self.assertNotIn("@", powershell_script)
+        ifw_processed = re.sub(r"@[^@]*@", "", powershell_script)
+        self.assertEqual(ifw_processed, powershell_script)
+
+        with tempfile.TemporaryDirectory() as local_app_data:
+            env = {**os.environ, "LOCALAPPDATA": local_app_data}
+            log_root = Path(local_app_data) / "AmneziaVPN-InstallerLogs"
+            log_root.mkdir()
+            old_time = time.time() - (15 * 24 * 60 * 60)
+            for index in range(24):
+                retained = log_root / f"installer-retention-{index:02d}.jsonl"
+                retained.write_bytes(b"x" * (300 * 1024))
+                if index == 0:
+                    os.utime(retained, (old_time, old_time))
+            command = [
+                find_windows_powershell(),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                powershell_script,
+                "installer-smoke-session",
+            ]
+            for phase, detail in (("installer-start", "installer"), ("cleanup-verdict", "complete")):
+                completed = subprocess.run(
+                    [*command, phase, detail],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    timeout=30,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+            log_path = log_root / "installer-smoke-session.jsonl"
+            raw = log_path.read_bytes()
+            self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+            records = [json.loads(line) for line in raw.decode("utf-8").splitlines()]
+            self.assertEqual([record["phase"] for record in records], [
+                "installer-start",
+                "cleanup-verdict",
+            ])
+            self.assertEqual([record["detail"] for record in records], [
+                "installer",
+                "complete",
+            ])
+            retained_files = list(log_root.glob("installer-*.jsonl"))
+            self.assertLessEqual(len(retained_files), 20)
+            self.assertLessEqual(sum(path.stat().st_size for path in retained_files), 5 * 1024 * 1024)
+            self.assertFalse((log_root / "installer-retention-00.jsonl").exists())
 
     def test_wireguard_tunneldaemon_exits_without_starting_privileged_daemon(self) -> None:
         run_application = self.function_body(

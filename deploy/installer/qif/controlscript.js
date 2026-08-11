@@ -25,6 +25,9 @@ function writeWindowsInstallerLog(phase, detail)
     // this journal. Logging is best-effort and must never affect installation.
     var safePhase = String(phase).replace(/[^A-Za-z0-9._-]/g, "-").substr(0, 64);
     var safeDetail = String(detail || "").replace(/[^A-Za-z0-9._:-]/g, "-").substr(0, 160);
+    // Qt IFW expands every at-sign-delimited variable in installer.execute()
+    // arguments. Keep the PowerShell payload completely free of that character
+    // so array/hash syntax is not removed before PowerShell starts.
     var script = "& { param($Session,$Phase,$Detail) "
         + "$ErrorActionPreference='Stop'; try { "
         + "$Base=$env:LOCALAPPDATA; if ([string]::IsNullOrWhiteSpace($Base)) { $Base=Join-Path $env:USERPROFILE 'AppData/Local' }; "
@@ -32,21 +35,24 @@ function writeWindowsInstallerLog(phase, detail)
         + "if (Test-Path -LiteralPath $Root) { $RootItem=Get-Item -LiteralPath $Root -Force; if (-not $RootItem.PSIsContainer -or ($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return } } "
         + "else { New-Item -ItemType Directory -Path $Root | Out-Null }; "
         + "$Path=Join-Path $Root ($Session+'.jsonl'); "
-        + "$Files=@(Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending); "
+        + "$Files=[array](Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending); "
         + "$Files | Where-Object LastWriteTimeUtc -lt ([DateTime]::UtcNow.AddDays(-14)) | Remove-Item -Force -ErrorAction SilentlyContinue; "
-        + "if ((Test-Path -LiteralPath $Path) -and (Get-Item -LiteralPath $Path).Length -ge 256KB) { return }; "
-        + "$Line=[ordered]@{schema=1;utc=[DateTime]::UtcNow.ToString('o');phase=$Phase;detail=$Detail} | ConvertTo-Json -Compress; "
-        + "Add-Content -LiteralPath $Path -Value $Line -Encoding UTF8; "
-        + "$Files=@(Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending); "
+        + "if (Test-Path -LiteralPath $Path) { $PathItem=Get-Item -LiteralPath $Path -Force; if ($PathItem.PSIsContainer -or ($PathItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $PathItem.Length -ge 256KB) { return } }; "
+        + "$Record=New-Object System.Collections.Specialized.OrderedDictionary; $Record.Add('schema',1); $Record.Add('utc',[DateTime]::UtcNow.ToString('o')); $Record.Add('phase',$Phase); $Record.Add('detail',$Detail); "
+        + "$Line=$Record | ConvertTo-Json -Compress; [IO.File]::AppendAllText($Path,$Line+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false))); "
+        + "$Files=[array](Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending); "
         + "if ($Files.Count -gt 20) { $Files | Select-Object -Skip 20 | Remove-Item -Force -ErrorAction SilentlyContinue }; "
-        + "$Files=@(Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc); "
+        + "$Files=[array](Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc); "
         + "$Total=($Files | Measure-Object Length -Sum).Sum; "
         + "foreach ($File in $Files) { if ($Total -le 5MB) { break }; if ($File.FullName -eq $Path) { continue }; $Total-=$File.Length; Remove-Item -LiteralPath $File.FullName -Force -ErrorAction SilentlyContinue } "
-        + "} catch { } }";
-    installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
-                      ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-                       "-Command", script,
-                       windowsInstallerLogSession, safePhase, safeDetail]);
+        + "} catch { exit 97 } }";
+    var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                                   ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                                    "-Command", script,
+                                    windowsInstallerLogSession, safePhase, safeDetail]);
+    if (result.length < 2 || Number(result[1]) !== 0) {
+        console.log("Windows installer journal write failed for phase " + safePhase);
+    }
 }
 
 function continueWindowsUpgradeInstallation(source)
@@ -58,11 +64,12 @@ function continueWindowsUpgradeInstallation(source)
     }
 
     windowsUpgradeNextRequested = true;
-    writeWindowsInstallerLog("continuation-next", source);
+    writeWindowsInstallerLog("continuation-next",
+                             source + (gui.isButtonEnabled(buttons.NextButton)
+                                       ? "-enabled" : "-disabled"));
     console.log("Continuing Windows installation after successful legacy uninstall");
-    // Qt IFW documents the second argument as an event-loop delay. A direct
-    // synchronous click from Controller() is ignored after the nested legacy
-    // maintenance tool exits because the constructor has not returned yet.
+    // Qt IFW invokes this callback while QWizard::restart() is entering the
+    // Introduction page. Queue the click until that transition has returned.
     gui.clickButton(buttons.NextButton, 250);
     return true;
 }
@@ -76,7 +83,9 @@ function commitWindowsUpgradeInstallation(source)
     }
 
     windowsUpgradeCommitRequested = true;
-    writeWindowsInstallerLog("continuation-commit", source);
+    writeWindowsInstallerLog("continuation-commit",
+                             source + (gui.isButtonEnabled(buttons.CommitButton)
+                                       ? "-enabled" : "-disabled"));
     gui.clickButton(buttons.CommitButton, 250);
     return true;
 }
@@ -109,6 +118,79 @@ function appInstalled()
     }
 
     return installer.fileExists(appInstalledUninstallerPath) || installer.fileExists(appInstalledUninstallerPath_x86);
+}
+
+function windowsLegacyMaintenanceToolProcessState()
+{
+    if (!runningOnWindows()) {
+        return 0;
+    }
+
+    // Exit 1 from the unelevated maintenance-tool bootstrap is ambiguous: the
+    // elevated child can still be applying undo operations. Probe executable
+    // paths, not the global image name, so another product's Qt maintenance
+    // tool cannot block this upgrade. Unknown probe results fail closed.
+    var script = "& { param($Path64,$Path86) $ErrorActionPreference='Stop'; try { "
+        + "$Expected64=[IO.Path]::GetFullPath($Path64); $Expected86=[IO.Path]::GetFullPath($Path86); "
+        + "$Processes=[array](Get-Process -Name 'maintenancetool' -ErrorAction SilentlyContinue); "
+        + "foreach ($Process in $Processes) { $ExecutablePath=$Process.Path; "
+        + "if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { exit 97 }; "
+        + "$ExecutablePath=[IO.Path]::GetFullPath($ExecutablePath); "
+        + "if ([string]::Equals($ExecutablePath,$Expected64,[StringComparison]::OrdinalIgnoreCase) "
+        + "-or [string]::Equals($ExecutablePath,$Expected86,[StringComparison]::OrdinalIgnoreCase)) { exit 10 } }; "
+        + "exit 0 } catch { exit 97 } }";
+    var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                                   ["-NoLogo", "-NoProfile", "-NonInteractive",
+                                    "-WindowStyle", "Hidden", "-Command", script,
+                                    appInstalledUninstallerPath,
+                                    appInstalledUninstallerPath_x86]);
+    if (result.length < 2) {
+        return -1;
+    }
+    var exitCode = Number(result[1]);
+    if (exitCode === 10) {
+        return 1;
+    }
+    return exitCode === 0 ? 0 : -1;
+}
+
+function waitForWindowsLegacyUninstaller()
+{
+    var removedQuiescentChecks = 0;
+    var presentQuiescentChecks = 0;
+    var uninstallerProcessState = -1;
+    var oldInstallationPresent = true;
+    var uninstallerPostcondition = "timeout-ambiguous";
+    for (var i = 0; i < 1200; i++) {
+        sleep(500);
+        oldInstallationPresent = appInstalled();
+        uninstallerProcessState = windowsLegacyMaintenanceToolProcessState();
+        if (uninstallerProcessState === 0) {
+            if (oldInstallationPresent) {
+                presentQuiescentChecks++;
+                removedQuiescentChecks = 0;
+            } else {
+                removedQuiescentChecks++;
+                presentQuiescentChecks = 0;
+            }
+        } else {
+            removedQuiescentChecks = 0;
+            presentQuiescentChecks = 0;
+        }
+        if (removedQuiescentChecks >= 4) {
+            uninstallerPostcondition = "removed";
+            break;
+        }
+        if (presentQuiescentChecks >= 20) {
+            uninstallerPostcondition = "present-stopped";
+            break;
+        }
+    }
+    return {
+        status: uninstallerPostcondition,
+        processState: uninstallerProcessState,
+        oldInstallationPresent: oldInstallationPresent
+    };
 }
 
 function endsWith(str, suffix)
@@ -713,41 +795,85 @@ function Controller () {
                         appInstalledUninstallerPath_x86,
                         appInstalledUninstallerPath
                     ];
-                    for (var uninstallerIndex = 0;
-                            uninstallerIndex < installedUninstallers.length;
+                    var availableUninstallers = [];
+                    for (var uninstallerIndex = 0; uninstallerIndex < installedUninstallers.length;
                             ++uninstallerIndex) {
-                        var uninstallerPath = installedUninstallers[uninstallerIndex];
-                        if (!installer.fileExists(uninstallerPath)) {
-                            continue;
+                        if (installer.fileExists(installedUninstallers[uninstallerIndex])) {
+                            availableUninstallers.push(installedUninstallers[uninstallerIndex]);
                         }
+                    }
+                    if (availableUninstallers.length > 1) {
+                        writeWindowsInstallerLog("legacy-uninstaller-selection", "multiple");
+                        var duplicateProcessState = windowsLegacyMaintenanceToolProcessState();
+                        if (windowsMainServicePrepared && duplicateProcessState === 0
+                                && !restoreWindowsMainServiceAfterAbortedUpgrade()) {
+                            QMessageBox.warning(
+                                "windows.service.upgrade.restore.failed",
+                                appName(),
+                                qsTr("The previous AmneziaVPN installation remains, but its Windows service settings could not be fully restored. Restart Windows before using or upgrading it."));
+                        }
+                        releaseWindowsUpgradeAdminRights();
+                        QMessageBox.critical(
+                            "windows.upgrade.multiple.installations",
+                            appName(),
+                            qsTr("More than one previous AmneziaVPN maintenance tool was found. The upgrade did not start because running two uninstallers would be unsafe. Restart Windows, remove the duplicate installation, then run this full offline installer again."));
+                        installer.setCancelled();
+                        return;
+                    }
+                    if (availableUninstallers.length === 1) {
+                        var uninstallerPath = availableUninstallers[0];
                         console.log("Starting uninstallation " + uninstallerPath);
                         writeWindowsInstallerLog("legacy-uninstaller-start", "1");
                         var resultArray = installer.execute(uninstallerPath);
-                        console.log("Uninstaller finished with code: " + resultArray[1]);
-                        writeWindowsInstallerLog("legacy-uninstaller-exit", String(Number(resultArray[1])));
-                        if (Number(resultArray[1]) !== 0) {
-                            console.log("Uninstallation aborted by user");
-                            if (runningOnWindows() && windowsMainServicePrepared
-                                    && appInstalled()
-                                    && !restoreWindowsMainServiceAfterAbortedUpgrade()) {
-                                QMessageBox.warning(
-                                    "windows.service.upgrade.restore.failed",
-                                    appName(),
-                                    qsTr("The previous AmneziaVPN installation remains, but its Windows service settings could not be fully restored. Restart Windows before using or upgrading it."));
-                            }
-                            releaseWindowsUpgradeAdminRights();
-                            installer.setCancelled();
-                            return;
-                        }
+                        var uninstallerExitCode = resultArray.length >= 2
+                                ? Number(resultArray[1]) : -1;
+                        console.log("Uninstaller bootstrap finished with code: " + uninstallerExitCode);
+                        writeWindowsInstallerLog("legacy-uninstaller-exit", String(uninstallerExitCode));
                     }
 
-                    for (var i = 0; i < 300; i++) {
-                        sleep(100);
-                        if (!installer.fileExists(appInstalledUninstallerPath)
-                                && !installer.fileExists(appInstalledUninstallerPath_x86)) {
-                            break;
+                    // A legacy maintenance tool may return from its unelevated
+                    // bootstrap process with code 1 while the elevated child is
+                    // still removing files and services. The process exit code
+                    // is therefore diagnostic only. Decide success from the
+                    // bounded postcondition below. The legacy cleanup script
+                    // has a multi-minute retry budget, so allow ten minutes.
+                    // A genuine cancellation is recognized only after both the
+                    // installed path and process state have remained quiescent;
+                    // an active/unknown timeout must never re-arm the service.
+                    var uninstallerOutcome = waitForWindowsLegacyUninstaller();
+                    var uninstallerPostcondition = uninstallerOutcome.status;
+                    if (uninstallerPostcondition !== "removed") {
+                        writeWindowsInstallerLog("legacy-uninstaller-postcondition",
+                                                 uninstallerPostcondition === "present-stopped"
+                                                 ? "present-stopped" : "timeout-active");
+                        console.log("Legacy uninstallation did not reach a verified quiescent removal state");
+                        // Re-probe immediately before restoration. The
+                        // synchronous journal write above must not leave a
+                        // stale window in which a delayed elevated child can
+                        // appear after the cached polling result.
+                        var freshOldInstallationPresent = appInstalled();
+                        var freshUninstallerProcessState = windowsLegacyMaintenanceToolProcessState();
+                        var safeToRestoreOldService = uninstallerPostcondition === "present-stopped"
+                                && freshUninstallerProcessState === 0
+                                && freshOldInstallationPresent;
+                        if (windowsMainServicePrepared && safeToRestoreOldService
+                                && !restoreWindowsMainServiceAfterAbortedUpgrade()) {
+                            QMessageBox.warning(
+                                "windows.service.upgrade.restore.failed",
+                                appName(),
+                                qsTr("The previous AmneziaVPN installation remains, but its Windows service settings could not be fully restored. Restart Windows before using or upgrading it."));
                         }
+                        releaseWindowsUpgradeAdminRights();
+                        if (!safeToRestoreOldService) {
+                            QMessageBox.critical(
+                                "windows.upgrade.uninstaller.still.running",
+                                appName(),
+                                qsTr("The previous AmneziaVPN uninstaller is still active or could not be verified after the bounded wait. The old Windows service was left disabled to avoid racing the cleanup. Wait for removal to finish or restart Windows, then run this full offline installer again."));
+                        }
+                        installer.setCancelled();
+                        return;
                     }
+                    writeWindowsInstallerLog("legacy-uninstaller-postcondition", "removed");
                 }
 
                 raiseInstallerWindow();
@@ -778,10 +904,10 @@ function Controller () {
             releaseWindowsUpgradeAdminRights();
             if (windowsUpgradeReplacementRequested) {
                 windowsUpgradeContinuationRequested = true;
-                // Drive the transition from the same successful branch.  The
-                // page callback remains an idempotent fallback, but no longer
-                // owns the only handoff after the nested maintenance tool.
-                continueWindowsUpgradeInstallation("cleanup-success");
+                // IntroductionPageCallback owns the delayed Next click after
+                // QWizard::restart() has entered a live, enabled page. Calling
+                // it here would latch a request against a pre-restart button
+                // and prevent the callback from retrying.
             }
         }
 
