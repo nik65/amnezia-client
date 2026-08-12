@@ -191,8 +191,21 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.12` with Android
-`versionCode` `2146`, following the `4.9.2.11` / `2145` artifact set.
+The current self-hosted release line is `4.9.2.13` with Android
+`versionCode` `2147`, following the `4.9.2.12` / `2146` artifact set.
+
+Release notes for `4.9.2.13`: the Windows replacement handoff no longer lets
+an unreadable elevated maintenance-tool process path mask the verified
+disappearance of both fixed Amnezia installation paths. Four consecutive path
+absence checks hand control to the existing strict SCM and residue gate, while
+a present path plus an active or unknown process remains fail-closed. State
+transitions are recorded in the bounded installer journal. The shared SSH file
+uploader now renders the exact POSIX `printf '%s'` receipt instead of the
+literal `%%s` produced by the prior `QString::arg()` template; this repairs both
+bundled update publication and server-routing-rule uploads after successful
+key authentication. Automatic bundled publication makes at most three delayed
+attempts per connection cycle and can try a fresh bounded cycle after a later
+VPN connection.
 
 Release notes for `4.9.2.12`: Windows replacement now treats the legacy
 maintenance-tool process exit code as diagnostic because its unelevated

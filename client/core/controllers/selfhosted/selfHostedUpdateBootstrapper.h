@@ -25,6 +25,83 @@ namespace amnezia::selfhostedUpdates
 {
     constexpr qint64 maximumPolicyGeneration = 9007199254740991LL;
     constexpr qsizetype maximumBootstrapPhaseOutputBytes = 64 * 1024;
+    constexpr int maximumAutomaticPublishAttempts = 3;
+    constexpr int initialAutomaticPublishDelayMs = 15 * 1000;
+    constexpr int firstAutomaticPublishRetryDelayMs = 60 * 1000;
+    constexpr int secondAutomaticPublishRetryDelayMs = 5 * 60 * 1000;
+
+    struct AutomaticPublishRetryState {
+        bool scheduled = false;
+        bool inProgress = false;
+        bool succeeded = false;
+        bool exhausted = false;
+        int attemptCount = 0;
+    };
+
+    enum class AutomaticPublishStartDisposition {
+        Schedule,
+        Coalesce,
+        Disabled,
+    };
+
+    enum class AutomaticPublishCompletionDisposition {
+        Succeeded,
+        Retry,
+        Exhausted,
+    };
+
+    inline AutomaticPublishStartDisposition automaticPublishStartDisposition(
+            const AutomaticPublishRetryState &state)
+    {
+        if (state.scheduled || state.inProgress) {
+            return AutomaticPublishStartDisposition::Coalesce;
+        }
+        if (state.succeeded || state.exhausted
+            || state.attemptCount >= maximumAutomaticPublishAttempts) {
+            return AutomaticPublishStartDisposition::Disabled;
+        }
+        return AutomaticPublishStartDisposition::Schedule;
+    }
+
+    inline int automaticPublishDelayMs(const AutomaticPublishRetryState &state)
+    {
+        return state.attemptCount == 0
+                ? initialAutomaticPublishDelayMs
+                : (state.attemptCount == 1
+                           ? firstAutomaticPublishRetryDelayMs
+                           : secondAutomaticPublishRetryDelayMs);
+    }
+
+    inline void beginAutomaticPublishAttempt(AutomaticPublishRetryState &state)
+    {
+        state.scheduled = false;
+        state.inProgress = true;
+        ++state.attemptCount;
+    }
+
+    inline AutomaticPublishCompletionDisposition completeAutomaticPublishAttempt(
+            AutomaticPublishRetryState &state, bool success)
+    {
+        state.inProgress = false;
+        state.succeeded = success;
+        if (success) {
+            return AutomaticPublishCompletionDisposition::Succeeded;
+        }
+        if (state.attemptCount < maximumAutomaticPublishAttempts) {
+            return AutomaticPublishCompletionDisposition::Retry;
+        }
+
+        // Keep the exhausted latch set while publishFinished(false) is emitted,
+        // so a future direct signal receiver cannot re-enter a fourth attempt.
+        state.attemptCount = 0;
+        state.exhausted = true;
+        return AutomaticPublishCompletionDisposition::Exhausted;
+    }
+
+    inline void rearmAutomaticPublishAfterNotification(AutomaticPublishRetryState &state)
+    {
+        state.exhausted = false;
+    }
 
     inline bool accountBoundedRemoteOutput(qsizetype &acceptedBytes,
                                            const QString &chunk,
@@ -418,9 +495,7 @@ private:
     bool selectServerCredentials(amnezia::ServerCredentials &credentials) const;
     static bool publishPayload(Payload payload, amnezia::ServerCredentials credentials);
 
-    bool m_publishScheduled = false;
-    bool m_publishInProgress = false;
-    bool m_publishSucceeded = false;
+    amnezia::selfhostedUpdates::AutomaticPublishRetryState m_publishRetryState;
     SecureServersRepository *m_serversRepository = nullptr;
 };
 

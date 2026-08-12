@@ -161,21 +161,38 @@ function waitForWindowsLegacyUninstaller()
     var uninstallerProcessState = -1;
     var oldInstallationPresent = true;
     var uninstallerPostcondition = "timeout-ambiguous";
+    var lastLoggedWaitState = "";
     for (var i = 0; i < 1200; i++) {
         sleep(500);
         oldInstallationPresent = appInstalled();
-        uninstallerProcessState = windowsLegacyMaintenanceToolProcessState();
-        if (uninstallerProcessState === 0) {
-            if (oldInstallationPresent) {
-                presentQuiescentChecks++;
-                removedQuiescentChecks = 0;
-            } else {
-                removedQuiescentChecks++;
-                presentQuiescentChecks = 0;
-            }
+        var waitState = "path-absent";
+        if (!oldInstallationPresent) {
+            // The legacy maintenance-tool path is the handoff barrier owned by
+            // Qt IFW. An elevated child can make Process.Path unreadable even
+            // after that path has been deleted, so an unknown process probe
+            // must not keep a successfully removed installation in this
+            // synchronous controller loop forever. The strict SCM and residue
+            // gate below still has to pass before extraction can begin.
+            removedQuiescentChecks++;
+            presentQuiescentChecks = 0;
+            uninstallerProcessState = -1;
         } else {
             removedQuiescentChecks = 0;
-            presentQuiescentChecks = 0;
+            uninstallerProcessState = windowsLegacyMaintenanceToolProcessState();
+            if (uninstallerProcessState === 0) {
+                presentQuiescentChecks++;
+                waitState = "path-present-process-stopped";
+            } else if (uninstallerProcessState === 1) {
+                presentQuiescentChecks = 0;
+                waitState = "path-present-process-running";
+            } else {
+                presentQuiescentChecks = 0;
+                waitState = "path-present-process-unknown";
+            }
+        }
+        if (waitState !== lastLoggedWaitState) {
+            writeWindowsInstallerLog("legacy-uninstaller-wait", waitState);
+            lastLoggedWaitState = waitState;
         }
         if (removedQuiescentChecks >= 4) {
             uninstallerPostcondition = "removed";

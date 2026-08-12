@@ -1049,7 +1049,7 @@ namespace libssh
         const QString uploadSuffix = QUuid::createUuid().toString(QUuid::WithoutBraces);
         const QString temporaryPath = remotePath + QStringLiteral(".amnezia-upload.") + uploadSuffix;
         const QString receiptText = QString::fromLatin1(expectedReceipt.chopped(1));
-        const QString command = QStringLiteral(
+        const QString command = (QStringLiteral(
                 "upload_target=%1; upload_tmp=%2; expected_size=%3; expected_sha=%4; receipt=%5; "
                 "upload_parent=${upload_target%/*}; "
                 "if test -z \"$upload_parent\"; then upload_parent=/; "
@@ -1071,8 +1071,8 @@ namespace libssh
                 "chmod 0600 -- \"$upload_tmp\" || exit 73; "
                 "durable_sync \"$upload_tmp\"; "
                 "mv -fT -- \"$upload_tmp\" \"$upload_target\" || exit 73; "
-                "trap - EXIT HUP INT TERM; durable_sync \"$upload_parent\"; "
-                "printf '%%s\\n' \"$receipt\"")
+                "trap - EXIT HUP INT TERM; durable_sync \"$upload_parent\"; ")
+                                        + detail::uploadReceiptPrintCommand())
                                         .arg(shellQuote(remotePath),
                                              shellQuote(temporaryPath),
                                              QString::number(snapshotSize),
@@ -1127,7 +1127,7 @@ namespace libssh
 
         receiptOutput.clear();
         receiptError.clear();
-        const QString reconcileCommand = QStringLiteral(
+        const QString reconcileCommand = (QStringLiteral(
                 "upload_target=%1; expected_size=%2; expected_sha=%3; receipt=%4; "
                 "upload_parent=${upload_target%/*}; "
                 "if test -z \"$upload_parent\"; then upload_parent=/; "
@@ -1143,8 +1143,8 @@ namespace libssh
                 "test -f \"$upload_target\" && ! test -L \"$upload_target\" || exit 65; "
                 "test \"$(wc -c < \"$upload_target\")\" = \"$expected_size\" || exit 65; "
                 "test \"$(sha256sum -- \"$upload_target\" | awk '{print $1}')\" = \"$expected_sha\" || exit 65; "
-                "durable_sync \"$upload_parent\"; "
-                "printf '%%s\\n' \"$receipt\"")
+                "durable_sync \"$upload_parent\"; ")
+                                                 + detail::uploadReceiptPrintCommand())
                                                  .arg(shellQuote(remotePath),
                                                       QString::number(snapshotSize),
                                                       QString::fromLatin1(expectedSha256),

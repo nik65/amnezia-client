@@ -304,10 +304,13 @@ SelfHostedUpdateBootstrapper::SelfHostedUpdateBootstrapper(SecureServersReposito
 
 bool SelfHostedUpdateBootstrapper::start()
 {
-    if (m_publishScheduled || m_publishInProgress) {
+    using namespace amnezia::selfhostedUpdates;
+    const AutomaticPublishStartDisposition startDisposition =
+            automaticPublishStartDisposition(m_publishRetryState);
+    if (startDisposition == AutomaticPublishStartDisposition::Coalesce) {
         return true;
     }
-    if (m_publishSucceeded) {
+    if (startDisposition == AutomaticPublishStartDisposition::Disabled) {
         return false;
     }
 
@@ -323,10 +326,10 @@ bool SelfHostedUpdateBootstrapper::start()
         return false;
     }
 
-    m_publishScheduled = true;
-    QTimer::singleShot(15000, this, [this, payload, credentials]() {
-        m_publishScheduled = false;
-        m_publishInProgress = true;
+    m_publishRetryState.scheduled = true;
+    const int delayMs = automaticPublishDelayMs(m_publishRetryState);
+    QTimer::singleShot(delayMs, this, [this, payload, credentials]() {
+        amnezia::selfhostedUpdates::beginAutomaticPublishAttempt(m_publishRetryState);
         QPointer<SelfHostedUpdateBootstrapper> self(this);
         auto deliveryContext = amnezia::selfhostedUpdates::makeQueuedDeliveryContext();
         QThreadPool::globalInstance()->start([self, deliveryContext, payload, credentials]() {
@@ -335,9 +338,21 @@ bool SelfHostedUpdateBootstrapper::start()
                     deliveryContext,
                     self,
                     [success](SelfHostedUpdateBootstrapper *bootstrapper) {
-                        bootstrapper->m_publishInProgress = false;
-                        bootstrapper->m_publishSucceeded = success;
+                        using namespace amnezia::selfhostedUpdates;
+                        const AutomaticPublishCompletionDisposition completionDisposition =
+                                completeAutomaticPublishAttempt(
+                                        bootstrapper->m_publishRetryState, success);
                         emit bootstrapper->publishFinished(success);
+                        if (completionDisposition == AutomaticPublishCompletionDisposition::Retry) {
+                            bootstrapper->start();
+                        } else if (completionDisposition
+                                   == AutomaticPublishCompletionDisposition::Exhausted) {
+                            // A later VPN Connected transition starts a fresh
+                            // bounded cycle, but not re-entrantly from the
+                            // completion signal above.
+                            rearmAutomaticPublishAfterNotification(
+                                    bootstrapper->m_publishRetryState);
+                        }
                     });
         });
     });
@@ -715,8 +730,8 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
         if (error == amnezia::ErrorCode::NoError) {
             const QString verifiedInstallCommand = QStringLiteral(
                     "set -eu; verifier_b64=%1; verifier_sha256=%2; "
-                    "verifier=$(printf '%%s' \"$verifier_b64\" | base64 -d); "
-                    "test \"$(printf '%%s' \"$verifier\" | sha256sum | awk '{print $1}')\" = \"$verifier_sha256\"; "
+                    "verifier=$(printf '%s' \"$verifier_b64\" | base64 -d); "
+                    "test \"$(printf '%s' \"$verifier\" | sha256sum | awk '{print $1}')\" = \"$verifier_sha256\"; "
                     "sh -c \"$verifier\" amnezia-verified-installer %3 %4 %5 %6 %7")
                     .arg(shellQuote(QString::fromLatin1(verifiedRunnerBase64)),
                          shellQuote(QString::fromLatin1(verifiedRunnerSha256)),

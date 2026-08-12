@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <QString>
 
 // These small, dependency-free decisions are shared by the production SSH
 // pump and the deterministic focused test.  Defining
@@ -101,6 +102,14 @@ namespace libssh::detail
     {
         return boundary == BoundaryState::Ready
                 ? TeardownMode::Graceful : TeardownMode::AbortTransport;
+    }
+
+    inline QString uploadReceiptPrintCommand()
+    {
+        // QString::arg() replaces only numbered placeholders. A doubled
+        // percent sign is not a printf escape at that layer and would reach
+        // the remote shell unchanged, making printf emit the literal "%s".
+        return QStringLiteral("printf '%s\\n' \"$receipt\"");
     }
 }
 

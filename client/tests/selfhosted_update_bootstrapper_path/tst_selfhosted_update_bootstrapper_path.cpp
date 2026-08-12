@@ -229,6 +229,54 @@ int main(int argc, char *argv[])
     using libssh::detail::TeardownMode;
     using libssh::detail::WriteState;
 
+    const QString renderedReceiptCommand =
+            (QStringLiteral("upload_target=%1; ")
+             + libssh::detail::uploadReceiptPrintCommand()).arg(QStringLiteral("/tmp/target"));
+    CHECK(renderedReceiptCommand.contains(QStringLiteral("printf '%s\\n' \"$receipt\"")));
+    CHECK(!renderedReceiptCommand.contains(QStringLiteral("%%s")));
+
+    using amnezia::selfhostedUpdates::AutomaticPublishCompletionDisposition;
+    using amnezia::selfhostedUpdates::AutomaticPublishRetryState;
+    using amnezia::selfhostedUpdates::AutomaticPublishStartDisposition;
+    using amnezia::selfhostedUpdates::automaticPublishDelayMs;
+    using amnezia::selfhostedUpdates::automaticPublishStartDisposition;
+    using amnezia::selfhostedUpdates::beginAutomaticPublishAttempt;
+    using amnezia::selfhostedUpdates::completeAutomaticPublishAttempt;
+    using amnezia::selfhostedUpdates::rearmAutomaticPublishAfterNotification;
+
+    AutomaticPublishRetryState retryState;
+    CHECK(automaticPublishStartDisposition(retryState) == AutomaticPublishStartDisposition::Schedule);
+    CHECK(automaticPublishDelayMs(retryState) == 15 * 1000);
+    retryState.scheduled = true;
+    CHECK(automaticPublishStartDisposition(retryState) == AutomaticPublishStartDisposition::Coalesce);
+    beginAutomaticPublishAttempt(retryState);
+    CHECK(automaticPublishStartDisposition(retryState) == AutomaticPublishStartDisposition::Coalesce);
+    CHECK(completeAutomaticPublishAttempt(retryState, false)
+          == AutomaticPublishCompletionDisposition::Retry);
+    CHECK(automaticPublishDelayMs(retryState) == 60 * 1000);
+
+    retryState.scheduled = true;
+    beginAutomaticPublishAttempt(retryState);
+    CHECK(completeAutomaticPublishAttempt(retryState, false)
+          == AutomaticPublishCompletionDisposition::Retry);
+    CHECK(automaticPublishDelayMs(retryState) == 5 * 60 * 1000);
+
+    retryState.scheduled = true;
+    beginAutomaticPublishAttempt(retryState);
+    CHECK(completeAutomaticPublishAttempt(retryState, false)
+          == AutomaticPublishCompletionDisposition::Exhausted);
+    CHECK(retryState.attemptCount == 0);
+    CHECK(automaticPublishStartDisposition(retryState) == AutomaticPublishStartDisposition::Disabled);
+    rearmAutomaticPublishAfterNotification(retryState);
+    CHECK(automaticPublishStartDisposition(retryState) == AutomaticPublishStartDisposition::Schedule);
+    CHECK(automaticPublishDelayMs(retryState) == 15 * 1000);
+
+    retryState.scheduled = true;
+    beginAutomaticPublishAttempt(retryState);
+    CHECK(completeAutomaticPublishAttempt(retryState, true)
+          == AutomaticPublishCompletionDisposition::Succeeded);
+    CHECK(automaticPublishStartDisposition(retryState) == AutomaticPublishStartDisposition::Disabled);
+
     CHECK(libssh::detail::boundaryState(99, 100, false) == BoundaryState::Ready);
     CHECK(libssh::detail::boundaryState(100, 100, false) == BoundaryState::TimedOut);
     CHECK(libssh::detail::boundaryState(99, 100, true) == BoundaryState::Cancelled);

@@ -263,11 +263,14 @@ def bundled_publisher_receipt(
 
 def extract_ssh_upload_shell_command(variable_name: str) -> str:
     source = (REPO_ROOT / "client/core/utils/selfhosted/sshClient.cpp").read_text(encoding="utf-8")
-    command_start = source.index(f"const QString {variable_name} = QStringLiteral(")
+    command_start = source.index(f"const QString {variable_name} = (QStringLiteral(")
     command_end = source.index(".arg(shellQuote(remotePath)", command_start)
     command_source = source[command_start:command_end]
     literal_parts = re.findall(r'"((?:\\.|[^"\\])*)"', command_source)
-    return "".join(ast.literal_eval(f'"{part}"') for part in literal_parts)
+    return (
+        "".join(ast.literal_eval(f'"{part}"') for part in literal_parts)
+        + "printf '%s\\n' \"$receipt\""
+    )
 
 
 def extract_ssh_upload_durable_sync_function() -> str:
@@ -2417,8 +2420,12 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("scheduleUpdateCheck();", core_signal_handlers)
         self.assertIn("return;\n        }\n#endif\n\n        QTimer::singleShot(5000, m_coreController->m_updateController", core_signal_handlers)
         self.assertIn("bool start()", bootstrapper_h)
-        self.assertIn("m_publishScheduled", bootstrapper_h)
-        self.assertIn("m_publishInProgress", bootstrapper_h)
+        self.assertIn("AutomaticPublishRetryState m_publishRetryState", bootstrapper_h)
+        self.assertIn("maximumAutomaticPublishAttempts = 3", bootstrapper_h)
+        self.assertIn("firstAutomaticPublishRetryDelayMs", bootstrapper_h)
+        self.assertIn("secondAutomaticPublishRetryDelayMs", bootstrapper_h)
+        self.assertIn("beginAutomaticPublishAttempt(m_publishRetryState)", bootstrapper)
+        self.assertIn("bootstrapper->start();", bootstrapper)
         self.assertIn("publishFinished(success)", bootstrapper)
         self.assertIn("bool publishNow()", bootstrapper_h)
         self.assertIn("return publishPayload(payload, credentials);", bootstrapper)
@@ -2785,8 +2792,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.12)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2146)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.13)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2147)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -3295,10 +3302,9 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('sync -f -- \\"$sync_path\\"', reconcile)
         self.assertIn('fsync \\"$sync_path\\" || exit 74', reconcile)
         self.assertIn('durable_sync \\"$upload_parent\\"', reconcile)
-        self.assertLess(
-            reconcile.index('durable_sync \\"$upload_parent\\"'),
-            reconcile.index("printf '%%s\\\\n'"),
-        )
+        self.assertIn("detail::uploadReceiptPrintCommand()", upload)
+        self.assertNotIn("printf '%%s", upload)
+        self.assertNotIn("printf '%%s", bootstrapper)
         self.assertIn("overwriteMode != ScpOverwriteExisting", upload)
         self.assertIn("ErrorCode::NotImplementedError", upload)
         close_channel = ssh_client[
@@ -3503,7 +3509,7 @@ class SourceContractTests(unittest.TestCase):
                 )
                 for index, replacement in reversed(tuple(enumerate(replacements, start=1))):
                     rendered = rendered.replace(f"%{index}", replacement)
-                return rendered.replace("%%", "%")
+                return rendered
 
             fake_bin = root / "fake-bin"
             fake_bin.mkdir()
@@ -8757,18 +8763,25 @@ function waitForWindowsLegacyUninstaller()
 }}
 var presentStates = JSON.parse(process.argv[1]);
 var processStates = JSON.parse(process.argv[2]);
-var sample = 0;
+var pathSample = 0;
+var processSample = 0;
+var waitLogs = [];
 function sleep(milliseconds) {{}}
 function appInstalled() {{
-    return presentStates[Math.min(sample, presentStates.length - 1)];
-}}
-function windowsLegacyMaintenanceToolProcessState() {{
-    var state = processStates[Math.min(sample, processStates.length - 1)];
-    sample++;
+    var state = presentStates[Math.min(pathSample, presentStates.length - 1)];
+    pathSample++;
     return state;
 }}
+function windowsLegacyMaintenanceToolProcessState() {{
+    var state = processStates[Math.min(processSample, processStates.length - 1)];
+    processSample++;
+    return state;
+}}
+function writeWindowsInstallerLog(phase, detail) {{ waitLogs.push(phase + ":" + detail); }}
 var outcome = waitForWindowsLegacyUninstaller();
-outcome.samples = sample;
+outcome.pathSamples = pathSample;
+outcome.processSamples = processSample;
+outcome.waitLogs = waitLogs;
 process.stdout.write(JSON.stringify(outcome));
 """
 
@@ -8788,19 +8801,32 @@ process.stdout.write(JSON.stringify(outcome));
             )
             return json.loads(completed.stdout)
 
-        removed = run_wait([True] * 3 + [False] * 4, [0])
+        removed = run_wait([True] * 3 + [False] * 4, [-1])
         self.assertEqual(removed["status"], "removed")
-        self.assertEqual(removed["samples"], 7)
+        self.assertEqual(removed["pathSamples"], 7)
+        self.assertEqual(removed["processSamples"], 3)
         self.assertFalse(removed["oldInstallationPresent"])
+        self.assertIn("legacy-uninstaller-wait:path-absent", removed["waitLogs"])
 
-        cancelled = run_wait([False] * 3 + [True] * 20, [0])
+        cancelled = run_wait([True] * 20, [0])
         self.assertEqual(cancelled["status"], "present-stopped")
-        self.assertEqual(cancelled["samples"], 23)
+        self.assertEqual(cancelled["pathSamples"], 20)
+        self.assertEqual(cancelled["processSamples"], 20)
         self.assertTrue(cancelled["oldInstallationPresent"])
 
-        ambiguous = run_wait([False], [1])
+        ambiguous = run_wait([True], [1])
         self.assertEqual(ambiguous["status"], "timeout-ambiguous")
-        self.assertEqual(ambiguous["samples"], 1200)
+        self.assertEqual(ambiguous["pathSamples"], 1200)
+        self.assertEqual(ambiguous["processSamples"], 1200)
+
+        inaccessible = run_wait([True], [-1])
+        self.assertEqual(inaccessible["status"], "timeout-ambiguous")
+        self.assertEqual(inaccessible["pathSamples"], 1200)
+
+        flapped = run_wait([False] * 3 + [True] + [False] * 4, [1])
+        self.assertEqual(flapped["status"], "removed")
+        self.assertEqual(flapped["pathSamples"], 8)
+        self.assertEqual(flapped["processSamples"], 1)
 
     @unittest.skipUnless(find_windows_powershell(), "Windows PowerShell 5.1 is required")
     def test_qif_windows_legacy_process_probe_matches_exact_executable_path(self) -> None:
