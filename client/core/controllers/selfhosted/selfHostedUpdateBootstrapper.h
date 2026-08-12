@@ -454,6 +454,15 @@ namespace amnezia::selfhostedUpdates
         return true;
     }
 
+    inline QString bundledArtifactRequestPath(const QString &validatedRelativeUrl)
+    {
+        QString path = QUrl(validatedRelativeUrl, QUrl::StrictMode).path(QUrl::FullyEncoded);
+        if (!path.startsWith(u'/')) {
+            path.prepend(u'/');
+        }
+        return path;
+    }
+
 }
 
 class SelfHostedUpdateBootstrapper : public QObject

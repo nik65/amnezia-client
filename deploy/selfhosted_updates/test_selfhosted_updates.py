@@ -2498,6 +2498,9 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("mkdir -p -- %1", bootstrapper)
         self.assertIn("hasSymlinkOrReparsePoint", bootstrapper)
         self.assertIn("relativeUrlPath", bootstrapper_h)
+        self.assertIn("bundledArtifactRequestPath", bootstrapper_h)
+        self.assertIn("bundledArtifactRequestPath(urlText)", bootstrapper)
+        self.assertIn('if (!path.startsWith(u\'/\'))', bootstrapper_h)
         self.assertIn("kWindowsPlatform", bootstrapper)
         self.assertIn("platforms.value(QString::fromLatin1(kWindowsPlatform))", bootstrapper)
         self.assertIn("for (auto iterator = platforms.constBegin()", bootstrapper)
@@ -2792,8 +2795,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.14)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2148)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.15)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2149)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (

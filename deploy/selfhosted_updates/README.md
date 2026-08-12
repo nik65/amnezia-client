@@ -191,8 +191,14 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.14` with Android
-`versionCode` `2148`, following the `4.9.2.13` / `2147` artifact set.
+The current self-hosted release line is `4.9.2.15` with Android
+`versionCode` `2149`, following the `4.9.2.14` / `2148` artifact set.
+
+Release notes for `4.9.2.15`: bundled update-host verification now prefixes
+validated relative artifact paths with `/` before appending them to the local
+HTTP endpoint. The prior URL omitted the separator after the port, so manifest
+verification succeeded but the first artifact request was parsed as an invalid
+port and the transaction safely rolled back to the previous release.
 
 Release notes for `4.9.2.14`: managed server-routing policy validation and
 commit now run in one bounded remote shell. The scripts use stateful shell

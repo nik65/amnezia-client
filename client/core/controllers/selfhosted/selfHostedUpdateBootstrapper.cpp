@@ -495,7 +495,8 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
             return false;
         }
 
-        const QString relativeUrlPath = QUrl(urlText, QUrl::StrictMode).path(QUrl::FullyEncoded);
+        const QString relativeUrlPath =
+                amnezia::selfhostedUpdates::bundledArtifactRequestPath(urlText);
         files.append({ platform, filePath, relativePath, relativeUrlPath, expectedSha256, expectedSize, isRollback });
         return true;
     };

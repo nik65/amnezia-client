@@ -12,6 +12,7 @@
 #include "core/controllers/selfhosted/selfHostedUpdateBootstrapper.h"
 
 using amnezia::selfhostedUpdates::bundledArtifactRelativePath;
+using amnezia::selfhostedUpdates::bundledArtifactRequestPath;
 using amnezia::selfhostedUpdates::bundledRollbackArtifactRelativePath;
 using amnezia::selfhostedUpdates::accountBoundedRemoteOutput;
 using amnezia::selfhostedUpdates::BundledManifestIdentity;
@@ -84,10 +85,15 @@ int main(int argc, char *argv[])
     // content-addressed path must survive parsing exactly.
     CHECK(bundledArtifactRelativePath(contentAddressedPath, digest, relativePath));
     CHECK(relativePath == contentAddressedPath);
+    CHECK(bundledArtifactRequestPath(contentAddressedPath) == QStringLiteral("/") + contentAddressedPath);
     const QString encodedNamePath = QStringLiteral("files/artifacts/") + digest
             + QStringLiteral("/AmneziaVPN%20candidate.exe");
     CHECK(bundledArtifactRelativePath(encodedNamePath, digest, relativePath));
     CHECK(relativePath == QStringLiteral("files/artifacts/%1/AmneziaVPN candidate.exe").arg(digest));
+    const QString encodedPlusPath = QStringLiteral("files/artifacts/") + digest
+            + QStringLiteral("/AmneziaVPN%2Bcandidate.exe");
+    CHECK(bundledArtifactRequestPath(encodedPlusPath)
+          == QStringLiteral("/files/artifacts/%1/AmneziaVPN%2Bcandidate.exe").arg(digest));
     const QString shellCharactersPath = QStringLiteral("files/artifacts/") + digest
             + QStringLiteral("/Amnezia%24%28id%29%60x%60%22.exe");
     CHECK(bundledArtifactRelativePath(shellCharactersPath, digest, relativePath));
