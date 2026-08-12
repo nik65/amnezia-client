@@ -2792,8 +2792,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.13)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2147)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.14)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2148)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -2802,6 +2802,38 @@ class SourceContractTests(unittest.TestCase):
         )
         self.assertIn(product_version, client_rc)
         self.assertIn(product_version, service_rc)
+
+    def test_managed_routing_transaction_runs_in_one_remote_shell(self) -> None:
+        install_controller = (
+            REPO_ROOT / "client/core/controllers/selfhosted/installController.cpp"
+        ).read_text(encoding="utf-8")
+
+        runner = install_controller[
+            install_controller.index("auto runPublishingScript ="):
+            install_controller.index("auto cleanupCandidate =")
+        ]
+        self.assertIn("sshSession.runScriptInSingleShell", runner)
+        self.assertNotIn("sshSession.runScript(credentials, script", runner)
+        self.assertIn("output.append(data);", runner)
+        self.assertNotIn('data + QStringLiteral("\\n")', runner)
+
+        # libssh callbacks are arbitrary transport chunks, not complete lines.
+        # A candidate larger than the 4096-byte read buffer must therefore be
+        # reconstructed without injecting separators at chunk boundaries.
+        large_candidate = json.dumps(
+            {"policy": {"sites": ["x" * 5000]}}, separators=(",", ":")
+        )
+        chunks = [large_candidate[:4096], large_candidate[4096:]]
+        self.assertEqual(json.loads("".join(chunks))["policy"]["sites"][0], "x" * 5000)
+        with self.assertRaises(json.JSONDecodeError):
+            json.loads("\n".join(chunks))
+
+        stage_index = install_controller.index("errorCode = runPublishingScript(stageScript")
+        commit_index = install_controller.index("errorCode = runPublishingScript(commitScript")
+        self.assertLess(stage_index, commit_index)
+        self.assertIn("if ! sudo mkdir", install_controller)
+        self.assertIn("<<'AMNEZIA_ROUTING_STAGE'", install_controller)
+        self.assertIn("<<'AMNEZIA_ROUTING_COMMIT'", install_controller)
 
     def test_selfhosted_release_has_one_command_rebuild_wrapper(self) -> None:
         readme = (REPO_ROOT / "deploy/selfhosted_updates/README.md").read_text(encoding="utf-8")

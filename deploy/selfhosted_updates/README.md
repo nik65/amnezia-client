@@ -191,8 +191,16 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.13` with Android
-`versionCode` `2147`, following the `4.9.2.12` / `2146` artifact set.
+The current self-hosted release line is `4.9.2.14` with Android
+`versionCode` `2148`, following the `4.9.2.13` / `2147` artifact set.
+
+Release notes for `4.9.2.14`: managed server-routing policy validation and
+commit now run in one bounded remote shell. The scripts use stateful shell
+constructs, including conditionals, variables, traps and heredocs; the prior
+line-by-line SSH runner split them across independent shells and failed on the
+first incomplete `if` with exit status `2`, after both candidate files had
+already uploaded successfully. SSH key authentication and the upload receipt
+remain unchanged.
 
 Release notes for `4.9.2.13`: the Windows replacement handoff no longer lets
 an unreadable elevated maintenance-tool process path mask the verified

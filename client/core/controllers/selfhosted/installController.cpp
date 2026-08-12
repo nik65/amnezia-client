@@ -880,10 +880,16 @@ ServerRoutingRulesPublishResult InstallController::publishVersionedServerRouting
 
     auto runPublishingScript = [&](const QString &script, QString &output) {
         auto cbReadOutput = [&output](const QString &data, libssh::Client &) {
-            output += data + QStringLiteral("\n");
+            // SSH delivers arbitrary chunks rather than logical lines. Keep
+            // the exact byte-to-text sequence so a chunk boundary cannot add
+            // whitespace inside the candidate JSON payload.
+            output.append(data);
             return ErrorCode::NoError;
         };
-        return sshSession.runScript(credentials, script, cbReadOutput, cbReadOutput);
+        // Stage and commit are stateful shell programs: they use conditionals,
+        // variables, traps and heredocs. Running them line by line would split
+        // those constructs across unrelated remote shells.
+        return sshSession.runScriptInSingleShell(credentials, script, cbReadOutput, cbReadOutput);
     };
 
     auto cleanupCandidate = [&]() {
