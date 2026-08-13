@@ -2,6 +2,7 @@
 #define CONNECTIONCONTROLLER_H
 
 #include <QObject>
+#include <QDeadlineTimer>
 #include <QJsonObject>
 #include <QPair>
 #include <QStringList>
@@ -16,6 +17,7 @@
 #include "core/utils/errorCodes.h"
 #include "core/utils/routeModes.h"
 #include "core/utils/commonStructs.h"
+#include "core/utils/managedDnsConvergence.h"
 #include "core/repositories/secureServersRepository.h"
 #include "core/repositories/secureAppSettingsRepository.h"
 #include "core/protocols/vpnProtocol.h"
@@ -186,6 +188,7 @@ private:
     void startClientManagedSitesResolve();
     void resolveNextClientManagedSite();
     void finishClientManagedSitesResolve();
+    void onClientManagedSiteResolveTimeout();
     void cancelClientManagedSitesResolve();
     void scheduleClientManagedSitesResolveRetry(int serverIndex);
 
@@ -195,6 +198,7 @@ private:
 
     QTimer m_serverRoutingRulesSyncTimer;
     QTimer m_serverRoutingRulesClientResolveTimer;
+    QTimer m_clientManagedSitesLookupTimeoutTimer;
     bool m_isServerRoutingRulesSyncInProgress = false;
     bool m_serverRoutingRulesSyncPendingRefresh = false;
     int m_serverRoutingRulesSyncFastRetryCount = 0;
@@ -228,8 +232,11 @@ private:
     int m_clientManagedSitesResolveGeneration = 0;
     QString m_clientManagedSitesResolveServerId;
     QStringList m_clientManagedSitesResolveQueue;
-    QJsonObject m_clientManagedSitesResolvedCache;
-    bool m_clientManagedSitesResolveHadFailure = false;
+    amnezia::managedDnsConvergence::State m_clientManagedSitesConvergence;
+    QString m_clientManagedSitesCurrentDomain;
+    int m_clientManagedSitesLookupId = -1;
+    bool m_clientManagedSitesResolveSnapshotCaptured = false;
+    QDeadlineTimer m_clientManagedSitesResolveDeadline;
     int m_clientManagedSitesResolveRetryCount = 0;
     bool m_clientManagedSitesResolveOldStateConfirmed = false;
     RouteMode m_clientManagedSitesResolveOldRouteMode = RouteMode::VpnAllSites;

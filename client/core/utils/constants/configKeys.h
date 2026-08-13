@@ -122,6 +122,7 @@ namespace amnezia
         constexpr QLatin1String managedSplitTunnelExceptSourceSites("managedSplitTunnelExceptSourceSites");
         constexpr QLatin1String managedSplitTunnelClientResolvedExceptSites("managedSplitTunnelClientResolvedExceptSites");
         constexpr QLatin1String managedSplitTunnelClientResolvedAt("managedSplitTunnelClientResolvedAt");
+        constexpr QLatin1String managedSplitTunnelClientResolveRetryAfter("managedSplitTunnelClientResolveRetryAfter");
         constexpr QLatin1String managedSplitTunnelForceEnabled("managedSplitTunnelForceEnabled");
         constexpr QLatin1String serverRoutingRulesSyncHost("serverRoutingRulesSyncHost");
         constexpr QLatin1String clientLogs("clientLogs");

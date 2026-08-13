@@ -191,8 +191,16 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.15` with Android
-`versionCode` `2149`, following the `4.9.2.14` / `2148` artifact set.
+The current self-hosted release line is `4.9.2.16` with Android
+`versionCode` `2150`, following the `4.9.2.15` / `2149` artifact set.
+
+Release notes for `4.9.2.16`: client-side managed-domain resolution now keeps
+successful answers across bounded retry waves, retries only failed domains with
+an individual lookup timeout, and publishes one coalesced route snapshot instead
+of discarding an otherwise useful pass. Server-side resolution preserves the
+last-known-good `rules.json` across policy replacement and performs a bounded
+background recovery burst with atomic file replacement. Policy and DNS deltas
+are coalesced so AWG/WireGuard do not enter repeated reconnect cycles.
 
 Release notes for `4.9.2.15`: bundled update-host verification now prefixes
 validated relative artifact paths with `/` before appending them to the local

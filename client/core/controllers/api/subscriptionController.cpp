@@ -65,6 +65,7 @@ void preserveServerRoutingRules(const QJsonObject &oldConfig, QJsonObject &newCo
         QString(configKey::managedSplitTunnelExceptSourceSites),
         QString(configKey::managedSplitTunnelClientResolvedExceptSites),
         QString(configKey::managedSplitTunnelClientResolvedAt),
+        QString(configKey::managedSplitTunnelClientResolveRetryAfter),
         QString(configKey::managedSplitTunnelForceEnabled),
         QString(configKey::serverRoutingRulesSyncHost)
     };

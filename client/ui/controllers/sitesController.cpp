@@ -345,6 +345,7 @@ bool SitesController::restoreManagedSplitTunnelingLocalState(
         QString(configKey::managedSplitTunnelExceptSourceSites),
         QString(configKey::managedSplitTunnelClientResolvedExceptSites),
         QString(configKey::managedSplitTunnelClientResolvedAt),
+        QString(configKey::managedSplitTunnelClientResolveRetryAfter),
         QString(configKey::managedSplitTunnelForceEnabled),
     };
     for (const QString &key : routingKeys) {

@@ -678,6 +678,7 @@ void SecureServersRepository::setManagedVpnSites(int serverIndex, RouteMode mode
     config.remove(configKey::serverExcept);
     config.remove(configKey::managedSplitTunnelClientResolvedExceptSites);
     config.remove(configKey::managedSplitTunnelClientResolvedAt);
+    config.remove(configKey::managedSplitTunnelClientResolveRetryAfter);
     editServerJson(serverIndex, config);
 }
 

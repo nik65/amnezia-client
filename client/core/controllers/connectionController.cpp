@@ -1,5 +1,8 @@
 #include "connectionController.h"
 
+#include <limits>
+#include <utility>
+
 #include <QDateTime>
 #include <QHostAddress>
 #include <QHostInfo>
@@ -50,6 +53,9 @@ constexpr int serverRoutingRulesClientResolveRetryBaseMs = 15 * 1000;
 constexpr int serverRoutingRulesClientResolveRetryMaxMs = 5 * 60 * 1000;
 constexpr int serverRoutingRulesClientResolveRetryJitterMs = 5 * 1000;
 constexpr int serverRoutingRulesClientResolveMaxBackoffExponent = 5;
+constexpr int serverRoutingRulesClientResolveLookupTimeoutMs = 8 * 1000;
+constexpr int serverRoutingRulesClientResolveMaxRetryWaves = 5;
+constexpr int serverRoutingRulesClientResolveCycleDeadlineMs = 10 * 60 * 1000;
 constexpr int serverRoutingRulesRequestDeadlineMs = 6000;
 constexpr qsizetype serverRoutingRulesMaxPayloadBytes = 4 * 1024 * 1024;
 
@@ -347,6 +353,9 @@ ConnectionController::ConnectionController(SecureServersRepository* serversRepos
     connect(&m_serverRoutingRulesSyncTimer, &QTimer::timeout, this, &ConnectionController::syncServerRoutingRules);
     m_serverRoutingRulesClientResolveTimer.setSingleShot(true);
     connect(&m_serverRoutingRulesClientResolveTimer, &QTimer::timeout, this, &ConnectionController::startClientManagedSitesResolve);
+    m_clientManagedSitesLookupTimeoutTimer.setSingleShot(true);
+    connect(&m_clientManagedSitesLookupTimeoutTimer, &QTimer::timeout,
+            this, &ConnectionController::onClientManagedSiteResolveTimeout);
 }
 
 bool ConnectionController::isConnected() const
@@ -1602,6 +1611,9 @@ void ConnectionController::syncServerRoutingRulesFromUrls(const QList<QUrl> &syn
 
                 applyServerRoutingRulesPayload(serverIndex, payloadObject, metadata.value());
                 scheduleClientManagedSitesResolve(serverIndex);
+                const bool clientManagedResolvePending =
+                        m_clientManagedSitesConvergence.active()
+                        && m_clientManagedSitesConvergence.serverId() == serverId;
 
                 const bool currentLocalSplitEnabled = m_appSettingsRepository->isSitesSplitTunnelingEnabled();
                 const RouteMode currentLocalRouteMode = m_appSettingsRepository->routeMode();
@@ -1628,18 +1640,27 @@ void ConnectionController::syncServerRoutingRulesFromUrls(const QList<QUrl> &syn
                 }
 
                 if (newRouteMode != routeSnapshot.appliedRouteMode) {
-                    requestManagedRouteReconciliation(
-                            serverId,
-                            QStringLiteral("server routing rules changed route mode"));
-                    m_isServerRoutingRulesSyncInProgress = false;
-                    m_serverRoutingRulesSyncPendingRefresh = false;
-                    return;
+                    if (clientManagedResolvePending
+                        && newRouteMode == RouteMode::VpnAllExceptSites) {
+                        qInfo() << "ConnectionController: deferring managed route-mode transition until DNS convergence";
+                    } else {
+                        requestManagedRouteReconciliation(
+                                serverId,
+                                QStringLiteral("server routing rules changed route mode"));
+                        m_isServerRoutingRulesSyncInProgress = false;
+                        m_serverRoutingRulesSyncPendingRefresh = false;
+                        return;
+                    }
                 }
                 if (newRouteMode == RouteMode::VpnAllExceptSites
                     && managedRuntimeChanged) {
-                    requestManagedRouteReconciliation(
-                            serverId,
-                            QStringLiteral("server routing rule IP delta"));
+                    if (clientManagedResolvePending) {
+                        qInfo() << "ConnectionController: deferring managed route reconciliation until DNS convergence";
+                    } else {
+                        requestManagedRouteReconciliation(
+                                serverId,
+                                QStringLiteral("server routing rule IP delta"));
+                    }
                 }
 
                 finishServerRoutingRulesSync(true);
@@ -1690,6 +1711,7 @@ bool ConnectionController::applyServerRoutingRulesPayload(int serverIndex, const
             serverConfig.value(configKey::managedSplitTunnelExceptSourceSites).toObject() != managedExceptSites;
     if (managedSourceChanged) {
         serverConfig.insert(configKey::managedSplitTunnelExceptSourceSites, managedExceptSites);
+        serverConfig.remove(configKey::managedSplitTunnelClientResolveRetryAfter);
         changed = true;
     }
     if (serverConfig.value(configKey::managedSplitTunnelExceptSites).toObject() != managedExceptSites) {
@@ -1741,11 +1763,17 @@ void ConnectionController::cancelClientManagedSitesResolve()
 {
     ++m_clientManagedSitesResolveGeneration;
     m_serverRoutingRulesClientResolveTimer.stop();
+    m_clientManagedSitesLookupTimeoutTimer.stop();
+    if (m_clientManagedSitesLookupId >= 0) {
+        QHostInfo::abortHostLookup(m_clientManagedSitesLookupId);
+    }
+    m_clientManagedSitesLookupId = -1;
     m_isClientManagedSitesResolveInProgress = false;
     m_clientManagedSitesResolveServerId.clear();
     m_clientManagedSitesResolveQueue.clear();
-    m_clientManagedSitesResolvedCache = {};
-    m_clientManagedSitesResolveHadFailure = false;
+    m_clientManagedSitesCurrentDomain.clear();
+    m_clientManagedSitesConvergence.clear();
+    m_clientManagedSitesResolveSnapshotCaptured = false;
 }
 
 void ConnectionController::scheduleClientManagedSitesResolve(int serverIndex)
@@ -1755,19 +1783,34 @@ void ConnectionController::scheduleClientManagedSitesResolve(int serverIndex)
         return;
     }
 
-    // Invalidate callbacks from an older policy before examining the new
-    // source set. QHostInfo lookups are not cancellable, so the generation is
-    // the ownership token for all asynchronous results.
-    cancelClientManagedSitesResolve();
     const QJsonObject serverConfig = m_serversRepository->serverJson(serverIndex);
     const QJsonObject sourceSites = serverRoutingRulesSourceSites(serverConfig);
     if (!shouldRunClientManagedResolve(serverConfig, sourceSites)) {
+        cancelClientManagedSitesResolve();
         return;
     }
 
-    m_clientManagedSitesResolveServerId = m_serversRepository->serverIdAt(serverIndex);
+    const QString serverId = m_serversRepository->serverIdAt(serverIndex);
+    const QString sourceDigest = managedRoutePolicy::derivedRevision(sourceSites);
+    if (m_clientManagedSitesConvergence.matches(serverId, sourceDigest)) {
+        return;
+    }
+
+    // A source-policy change owns a new convergence generation. A repeated
+    // sync of the same source cannot reset its pending-only retry wave.
+    cancelClientManagedSitesResolve();
+    const QStringList domains = managedResolveDomains(sourceSites);
+    m_clientManagedSitesConvergence.begin(
+            serverId, sourceDigest, domains,
+            clientResolvedSitesBoundToSource(serverConfig, sourceSites));
+    m_clientManagedSitesResolveDeadline =
+            QDeadlineTimer(serverRoutingRulesClientResolveCycleDeadlineMs);
+    m_clientManagedSitesResolveServerId = serverId;
     const int jitterMs = QRandomGenerator::global()->bounded(serverRoutingRulesClientResolveJitterMs + 1);
-    const int delayMs = serverRoutingRulesClientResolveInitialDelayMs + jitterMs;
+    const int delayMs = managedDnsConvergence::initialDelayMs(
+            serverConfig.value(configKey::managedSplitTunnelClientResolveRetryAfter).toString(),
+            QDateTime::currentDateTimeUtc(),
+            serverRoutingRulesClientResolveInitialDelayMs + jitterMs);
     qInfo() << "ConnectionController: scheduled client-side managed site resolve in" << delayMs << "ms for server" << serverIndex;
     m_serverRoutingRulesClientResolveTimer.start(delayMs);
 }
@@ -1783,13 +1826,17 @@ void ConnectionController::scheduleClientManagedSitesResolveRetry(int serverInde
     const int exponentialDelayMs = serverRoutingRulesClientResolveRetryBaseMs * (1 << exponent);
     const int boundedDelayMs = qMin(exponentialDelayMs, serverRoutingRulesClientResolveRetryMaxMs);
     const int jitterMs = QRandomGenerator::global()->bounded(serverRoutingRulesClientResolveRetryJitterMs + 1);
-    const int delayMs = qMin(boundedDelayMs + jitterMs, serverRoutingRulesClientResolveRetryMaxMs);
+    int delayMs = qMin(boundedDelayMs + jitterMs, serverRoutingRulesClientResolveRetryMaxMs);
+    const qint64 remainingMs = m_clientManagedSitesResolveDeadline.remainingTime();
+    if (remainingMs >= 0) {
+        delayMs = qMin(delayMs, static_cast<int>(qMin<qint64>(remainingMs, (std::numeric_limits<int>::max)())));
+    }
     m_clientManagedSitesResolveRetryCount =
             qMin(m_clientManagedSitesResolveRetryCount + 1,
                  serverRoutingRulesClientResolveMaxBackoffExponent);
-    m_clientManagedSitesResolveServerId = m_serversRepository->serverIdAt(serverIndex);
     qInfo() << "ConnectionController: managed DNS resolve incomplete; retrying in" << delayMs
-            << "ms for server" << serverIndex;
+            << "ms for server" << serverIndex
+            << "pending domains" << m_clientManagedSitesConvergence.pending().size();
     m_serverRoutingRulesClientResolveTimer.start(delayMs);
 }
 
@@ -1811,29 +1858,44 @@ void ConnectionController::startClientManagedSitesResolve()
 
     const QJsonObject serverConfig = m_serversRepository->serverJson(serverIndex);
     const QJsonObject sourceSites = serverRoutingRulesSourceSites(serverConfig);
-    m_clientManagedSitesResolveQueue = managedResolveDomains(sourceSites);
-    if (m_clientManagedSitesResolveQueue.isEmpty()) {
+    const QString sourceDigest = managedRoutePolicy::derivedRevision(sourceSites);
+    if (!m_clientManagedSitesConvergence.matches(serverId, sourceDigest)) {
+        scheduleClientManagedSitesResolve(serverIndex);
         return;
     }
 
-    // QHostInfo has no cancellation primitive. Each managed run owns a fresh
-    // generation so a late result can neither update the LKG cache nor advance
-    // its freshness marker.
+    m_clientManagedSitesResolveQueue = m_clientManagedSitesConvergence.takePendingWave();
+    if (m_clientManagedSitesResolveQueue.isEmpty()) {
+        finishClientManagedSitesResolve();
+        return;
+    }
+    if (m_clientManagedSitesResolveDeadline.hasExpired()) {
+        for (const QString &domain : std::as_const(m_clientManagedSitesResolveQueue)) {
+            m_clientManagedSitesConvergence.recordFailure(domain);
+        }
+        m_clientManagedSitesResolveQueue.clear();
+        finishClientManagedSitesResolve();
+        return;
+    }
+
+    // Each wave owns a fresh generation. A timed-out or superseded callback
+    // cannot update the staged cache or advance its bounded retry cycle.
     ++m_clientManagedSitesResolveGeneration;
-    m_clientManagedSitesResolvedCache = clientResolvedSitesBoundToSource(serverConfig, sourceSites);
-    m_clientManagedSitesResolveHadFailure = false;
-    m_clientManagedSitesResolveOldLocalSplitEnabled =
-            m_appSettingsRepository->isSitesSplitTunnelingEnabled();
-    m_clientManagedSitesResolveOldLocalRouteMode = m_appSettingsRepository->routeMode();
-    m_clientManagedSitesResolveOldStateConfirmed = m_hasConfirmedManagedRouteState;
-    m_clientManagedSitesResolveOldRouteMode = m_hasConfirmedManagedRouteState
-            ? m_confirmedManagedRouteMode : RouteMode::VpnAllSites;
-    m_clientManagedSitesResolveOldManagedSplitTunnelIps = m_hasConfirmedManagedRouteState
-            ? m_confirmedManagedSplitTunnelIps : QStringList();
-    m_clientManagedSitesResolveOldPolicyRevision = m_hasConfirmedManagedRouteState
-            ? m_confirmedManagedPolicyRevision : QString();
-    m_clientManagedSitesResolveOldContentHash = m_hasConfirmedManagedRouteState
-            ? m_confirmedManagedContentHash : QString();
+    if (!m_clientManagedSitesResolveSnapshotCaptured) {
+        m_clientManagedSitesResolveOldLocalSplitEnabled =
+                m_appSettingsRepository->isSitesSplitTunnelingEnabled();
+        m_clientManagedSitesResolveOldLocalRouteMode = m_appSettingsRepository->routeMode();
+        m_clientManagedSitesResolveOldStateConfirmed = m_hasConfirmedManagedRouteState;
+        m_clientManagedSitesResolveOldRouteMode = m_hasConfirmedManagedRouteState
+                ? m_confirmedManagedRouteMode : RouteMode::VpnAllSites;
+        m_clientManagedSitesResolveOldManagedSplitTunnelIps = m_hasConfirmedManagedRouteState
+                ? m_confirmedManagedSplitTunnelIps : QStringList();
+        m_clientManagedSitesResolveOldPolicyRevision = m_hasConfirmedManagedRouteState
+                ? m_confirmedManagedPolicyRevision : QString();
+        m_clientManagedSitesResolveOldContentHash = m_hasConfirmedManagedRouteState
+                ? m_confirmedManagedContentHash : QString();
+        m_clientManagedSitesResolveSnapshotCaptured = true;
+    }
     m_isClientManagedSitesResolveInProgress = true;
     qInfo() << "ConnectionController: starting client-side managed site resolve for server" << serverIndex
             << "domains" << m_clientManagedSitesResolveQueue.size();
@@ -1852,11 +1914,21 @@ void ConnectionController::resolveNextClientManagedSite()
         finishClientManagedSitesResolve();
         return;
     }
+    if (m_clientManagedSitesResolveDeadline.hasExpired()) {
+        for (const QString &domain : std::as_const(m_clientManagedSitesResolveQueue)) {
+            m_clientManagedSitesConvergence.recordFailure(domain);
+        }
+        m_clientManagedSitesResolveQueue.clear();
+        finishClientManagedSitesResolve();
+        return;
+    }
 
     const QString serverId = m_clientManagedSitesResolveServerId;
     const QString domain = m_clientManagedSitesResolveQueue.takeFirst();
     const int resolveGeneration = m_clientManagedSitesResolveGeneration;
-    QHostInfo::lookupHost(domain, this, [this, serverId, domain, resolveGeneration](const QHostInfo &hostInfo) {
+    m_clientManagedSitesCurrentDomain = domain;
+    m_clientManagedSitesLookupId = QHostInfo::lookupHost(
+            domain, this, [this, serverId, domain, resolveGeneration](const QHostInfo &hostInfo) {
         if (resolveGeneration != m_clientManagedSitesResolveGeneration) {
             return;
         }
@@ -1867,11 +1939,18 @@ void ConnectionController::resolveNextClientManagedSite()
             cancelClientManagedSitesResolve();
             return;
         }
+        if (domain != m_clientManagedSitesCurrentDomain) {
+            return;
+        }
+
+        m_clientManagedSitesLookupTimeoutTimer.stop();
+        m_clientManagedSitesLookupId = -1;
+        m_clientManagedSitesCurrentDomain.clear();
 
         if (hostInfo.error() != QHostInfo::NoError) {
             qDebug() << "ConnectionController: client-side managed site resolve failed"
                      << "errorCode" << static_cast<int>(hostInfo.error());
-            m_clientManagedSitesResolveHadFailure = true;
+            m_clientManagedSitesConvergence.recordFailure(domain);
             resolveNextClientManagedSite();
             return;
         }
@@ -1879,30 +1958,59 @@ void ConnectionController::resolveNextClientManagedSite()
         const QStringList resolvedIps = hostInfoIpv4Addresses(hostInfo);
         if (resolvedIps.isEmpty()) {
             qDebug() << "ConnectionController: client-side managed site resolve produced no IPv4 addresses";
-            m_clientManagedSitesResolveHadFailure = true;
+            m_clientManagedSitesConvergence.recordFailure(domain);
             resolveNextClientManagedSite();
             return;
         }
 
         const QString mergedIps = mergedStoredIps({ resolvedIps.join(QStringLiteral(", ")) });
         if (!mergedIps.isEmpty()) {
-            QJsonObject candidateCache = m_clientManagedSitesResolvedCache;
+            QJsonObject candidateCache = m_clientManagedSitesConvergence.cache();
             candidateCache.insert(domain, mergedIps);
             bool candidateValid = false;
             candidateCache = managedRoutePolicy::canonicalSourceSites(candidateCache, &candidateValid);
-            if (candidateValid) {
-                m_clientManagedSitesResolvedCache = candidateCache;
+            if (candidateValid
+                && m_clientManagedSitesConvergence.recordSuccess(domain, candidateCache.value(domain).toString())) {
+                // The state keeps earlier successful domains across retry waves.
             } else {
                 qWarning() << "ConnectionController: managed DNS cache reached its safety boundary";
-                m_clientManagedSitesResolveHadFailure = true;
+                m_clientManagedSitesConvergence.recordFailure(domain);
             }
         } else {
-            m_clientManagedSitesResolveHadFailure = true;
+            m_clientManagedSitesConvergence.recordFailure(domain);
         }
         qDebug() << "ConnectionController: client-side managed site resolved"
                  << resolvedIps.size() << "IPv4 addresses";
         resolveNextClientManagedSite();
     });
+    const qint64 remainingMs = m_clientManagedSitesResolveDeadline.remainingTime();
+    const int lookupTimeoutMs = remainingMs < 0
+            ? serverRoutingRulesClientResolveLookupTimeoutMs
+            : qMin(serverRoutingRulesClientResolveLookupTimeoutMs,
+                   static_cast<int>(qMin<qint64>(remainingMs, (std::numeric_limits<int>::max)())));
+    if (lookupTimeoutMs <= 0) {
+        onClientManagedSiteResolveTimeout();
+        return;
+    }
+    m_clientManagedSitesLookupTimeoutTimer.start(lookupTimeoutMs);
+}
+
+void ConnectionController::onClientManagedSiteResolveTimeout()
+{
+    if (!m_isClientManagedSitesResolveInProgress || m_clientManagedSitesCurrentDomain.isEmpty()) {
+        return;
+    }
+
+    const QString domain = m_clientManagedSitesCurrentDomain;
+    const int lookupId = m_clientManagedSitesLookupId;
+    m_clientManagedSitesLookupId = -1;
+    m_clientManagedSitesCurrentDomain.clear();
+    if (lookupId >= 0) {
+        QHostInfo::abortHostLookup(lookupId);
+    }
+    qDebug() << "ConnectionController: client-side managed site resolve timed out";
+    m_clientManagedSitesConvergence.recordFailure(domain);
+    resolveNextClientManagedSite();
 }
 
 void ConnectionController::finishClientManagedSitesResolve()
@@ -1911,6 +2019,9 @@ void ConnectionController::finishClientManagedSitesResolve()
     const int serverIndex = m_serversRepository->indexOfServerId(serverId);
     m_isClientManagedSitesResolveInProgress = false;
     m_clientManagedSitesResolveQueue.clear();
+    m_clientManagedSitesLookupTimeoutTimer.stop();
+    m_clientManagedSitesLookupId = -1;
+    m_clientManagedSitesCurrentDomain.clear();
 
     if (!isConnected() || serverIndex < 0 || serverIndex >= m_serversRepository->serversCount()) {
         return;
@@ -1922,25 +2033,43 @@ void ConnectionController::finishClientManagedSitesResolve()
 
     QJsonObject serverConfig = m_serversRepository->serverJson(serverIndex);
     const QJsonObject sourceSites = serverRoutingRulesSourceSites(serverConfig);
+    const QString sourceDigest = managedRoutePolicy::derivedRevision(sourceSites);
+    if (!m_clientManagedSitesConvergence.matches(serverId, sourceDigest)) {
+        scheduleClientManagedSitesResolve(serverIndex);
+        return;
+    }
+
+    m_clientManagedSitesConvergence.finishWave();
+    if (!m_clientManagedSitesConvergence.complete()
+        && !m_clientManagedSitesResolveDeadline.hasExpired()
+        && m_clientManagedSitesConvergence.shouldRetry(serverRoutingRulesClientResolveMaxRetryWaves)) {
+        qInfo() << "ConnectionController: managed DNS wave retained successful answers;"
+                   " only unresolved domains will be retried"
+                << "pending domains" << m_clientManagedSitesConvergence.pending().size();
+        scheduleClientManagedSitesResolveRetry(serverIndex);
+        return;
+    }
+
+    if (!m_clientManagedSitesConvergence.tryFinalize()) {
+        return;
+    }
+
+    QJsonObject stagedCache = m_clientManagedSitesConvergence.cache();
+    // An empty value is an explicit completed-attempt marker. It suppresses an
+    // immediate post-reconnect rerun while contributing no route; any LKG value
+    // already present for a failed domain remains untouched.
+    for (const QString &domain : m_clientManagedSitesConvergence.pending()) {
+        if (!stagedCache.contains(domain)) {
+            stagedCache.insert(domain, QString());
+        }
+    }
     bool resolvedCacheValid = false;
     const QJsonObject resolvedCacheCandidate = managedRoutePolicy::canonicalSourceSites(
-            sitesBoundToSource(m_clientManagedSitesResolvedCache, sourceSites), &resolvedCacheValid);
+            sitesBoundToSource(stagedCache, sourceSites), &resolvedCacheValid);
     const QJsonObject resolvedCache = resolvedCacheValid ? resolvedCacheCandidate : QJsonObject();
     if (!resolvedCacheValid) {
         qWarning() << "ConnectionController: refusing to persist an unsafe or oversized managed DNS cache";
-        m_clientManagedSitesResolveHadFailure = true;
-    }
-
-    if (m_clientManagedSitesResolveHadFailure) {
-        // A partial DNS pass is not a new authoritative route snapshot. Keep
-        // both the persisted last-known-good cache and the routes currently
-        // installed by the tunnel, then retry with the existing bounded
-        // backoff. Persisting successful answers from an incomplete pass can
-        // otherwise create a route delta; AWG/WireGuard conservatively apply
-        // that delta through a full reconnect, which resets the retry backoff
-        // and turns a single unresolved domain into a reconnect loop.
-        qInfo() << "ConnectionController: managed DNS resolve incomplete; preserving last-known-good routes";
-        scheduleClientManagedSitesResolveRetry(serverIndex);
+        cancelClientManagedSitesResolve();
         return;
     }
 
@@ -1954,12 +2083,36 @@ void ConnectionController::finishClientManagedSitesResolve()
         changed = true;
     }
 
-    const QString resolvedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-    if (serverConfig.value(configKey::managedSplitTunnelClientResolvedAt).toString() != resolvedAt) {
-        serverConfig.insert(configKey::managedSplitTunnelClientResolvedAt, resolvedAt);
-        changed = true;
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    const int unresolvedCount = m_clientManagedSitesConvergence.pending().size();
+    if (unresolvedCount == 0) {
+        const QString resolvedAt = now.toString(Qt::ISODate);
+        if (serverConfig.value(configKey::managedSplitTunnelClientResolvedAt).toString() != resolvedAt) {
+            serverConfig.insert(configKey::managedSplitTunnelClientResolvedAt, resolvedAt);
+            changed = true;
+        }
+        if (serverConfig.contains(configKey::managedSplitTunnelClientResolveRetryAfter)) {
+            serverConfig.remove(configKey::managedSplitTunnelClientResolveRetryAfter);
+            changed = true;
+        }
+    } else {
+        if (serverConfig.contains(configKey::managedSplitTunnelClientResolvedAt)) {
+            serverConfig.remove(configKey::managedSplitTunnelClientResolvedAt);
+            changed = true;
+        }
+        const QString retryAfter = now.addSecs(serverRoutingRulesClientResolveRetryMaxMs / 1000)
+                                           .toString(Qt::ISODate);
+        if (serverConfig.value(configKey::managedSplitTunnelClientResolveRetryAfter).toString() != retryAfter) {
+            serverConfig.insert(configKey::managedSplitTunnelClientResolveRetryAfter, retryAfter);
+            changed = true;
+        }
     }
     m_clientManagedSitesResolveRetryCount = 0;
+    m_clientManagedSitesConvergence.clear();
+    m_clientManagedSitesResolveServerId.clear();
+    m_clientManagedSitesResolveSnapshotCaptured = false;
+    qInfo() << "ConnectionController: managed DNS convergence finalized"
+            << "unresolved domains" << unresolvedCount;
 
     if (changed) {
         m_serversRepository->editServerJson(serverIndex, serverConfig);

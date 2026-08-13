@@ -20,6 +20,7 @@ if(WIN32)
 endif()
 
 add_subdirectory(bounded_queued_snapshot)
+add_subdirectory(managed_dns_convergence)
 add_subdirectory(managed_route_reconcile)
 add_subdirectory(remote_log_retry_privacy)
 add_subdirectory(route_rule_matcher)

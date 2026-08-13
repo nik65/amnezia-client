@@ -156,6 +156,47 @@ def extract_client_logs_legacy_map_refresh_script() -> str:
     return match.group(1)
 
 
+def extract_server_routing_rules_resolver_script() -> str:
+    install_controller = (
+        REPO_ROOT / "client/core/controllers/selfhosted/installController.cpp"
+    ).read_text(encoding="utf-8")
+    match = re.search(
+        r'QString script = QStringLiteral\(R"SERVER_RULES_SH\((.*?)\)SERVER_RULES_SH"\);',
+        install_controller,
+        re.S,
+    )
+    if not match:
+        raise AssertionError("server routing rules resolver script was not found")
+    script = match.group(1)
+    replacements = {
+        "__RULES_FILE__": "rules.json",
+        "__SOURCE_FILE__": "rules-source.txt",
+        "__READY_FILE__": "rules-ready",
+        "__POLICY_JSON__": "''",
+        "__SERVER_EXCEPT_KEY__": "server.except",
+        "__MANAGED_EXCEPT_KEY__": "managedSplitTunnelExceptSites",
+        "__SOURCE_EXCEPT_KEY__": "managedSplitTunnelExceptSourceSites",
+        "__FORCE_KEY__": "managedSplitTunnelForceEnabled",
+        "__FORCE_ENABLED__": "0",
+        "__SYNC_PORT__": "17864",
+        "__RESOLVE_INTERVAL_SECONDS__": "86400",
+        "__RESOLVE_JITTER_SECONDS__": "3600",
+        "__INITIAL_RESOLVE_TIMEOUT_SECONDS__": "90",
+        "__INITIAL_RESOLVE_RETRY_SECONDS__": "5",
+        "__RESOLVE_QUERY_TIMEOUT_SECONDS__": "3",
+        "__RECOVERY_QUERY_TIMEOUT_SECONDS__": "1",
+        "__RECOVERY_INITIAL_DELAY_SECONDS__": "15",
+        "__RECOVERY_MAXIMUM_DELAY_SECONDS__": "300",
+        "__RECOVERY_MAXIMUM_ATTEMPTS__": "6",
+        "__RECOVERY_ATTEMPT_BUDGET_SECONDS__": "30",
+    }
+    for placeholder, value in replacements.items():
+        script = script.replace(placeholder, value)
+    if re.search(r"__[A-Z0-9_]+__", script):
+        raise AssertionError("server routing rules resolver script contains unresolved placeholders")
+    return script
+
+
 def run_git(cwd: Path, *args: str, stdout: object | None = None) -> subprocess.CompletedProcess[str]:
     command = [find_git() or "git", *args]
     return subprocess.run(command, cwd=cwd, check=True, text=True, stdout=stdout, stderr=subprocess.PIPE)
@@ -2795,8 +2836,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.15)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2149)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.16)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2150)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -7904,12 +7945,24 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
         self.assertEqual(resolve_next.count("QHostInfo::lookupHost"), 1)
         self.assertGreaterEqual(resolve_next.count("resolveNextClientManagedSite()"), 3)
         self.assertNotIn("while (", resolve_next)
+        self.assertIn("m_clientManagedSitesLookupTimeoutTimer.start", resolve_next)
+        self.assertIn("QHostInfo::abortHostLookup", connection_controller)
 
-    def test_incomplete_managed_dns_preserves_lkg_before_runtime_reconcile(self) -> None:
+    def test_managed_dns_retries_only_failures_and_reconciles_once_after_bounded_convergence(self) -> None:
         connection_controller = (
             REPO_ROOT / "client/core/controllers/connectionController.cpp"
         ).read_text(encoding="utf-8")
+        connection_controller_h = (
+            REPO_ROOT / "client/core/controllers/connectionController.h"
+        ).read_text(encoding="utf-8")
+        convergence_test = (
+            REPO_ROOT / "client/tests/managed_dns_convergence/tst_managed_dns_convergence.cpp"
+        ).read_text(encoding="utf-8")
         vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
+        start_resolve = self.function_body(
+            connection_controller,
+            "void ConnectionController::startClientManagedSitesResolve()",
+        )
         finish_resolve = self.function_body(
             connection_controller,
             "void ConnectionController::finishClientManagedSitesResolve()",
@@ -7927,7 +7980,7 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
             "void VpnConnection::reconcileManagedSplitTunnelRoutes(",
         )
 
-        failure_gate = finish_resolve.index("if (m_clientManagedSitesResolveHadFailure)")
+        failure_gate = finish_resolve.index("if (!m_clientManagedSitesConvergence.complete()")
         retry = finish_resolve.index(
             "scheduleClientManagedSitesResolveRetry(serverIndex)", failure_gate
         )
@@ -7943,6 +7996,11 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
         request = finish_resolve.index("requestManagedRouteReconciliation")
         failure_block = finish_resolve[failure_gate : early_return + len("return;")]
 
+        self.assertIn("managedDnsConvergence::State", connection_controller_h)
+        self.assertIn("m_clientManagedSitesConvergence.takePendingWave()", start_resolve)
+        self.assertNotIn("managedResolveDomains(sourceSites)", start_resolve)
+        self.assertIn("shouldRetry(serverRoutingRulesClientResolveMaxRetryWaves)", failure_block)
+        self.assertIn("m_clientManagedSitesResolveDeadline.hasExpired()", failure_block)
         self.assertLess(early_return, cache_write)
         self.assertLess(early_return, freshness_write)
         self.assertLess(failure_gate, persist)
@@ -7951,11 +8009,33 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
         self.assertLess(early_return, request)
         self.assertEqual(failure_block.count("scheduleClientManagedSitesResolveRetry(serverIndex)"), 1)
         self.assertEqual(failure_block.count("return;"), 1)
-        self.assertIn("preserving last-known-good routes", failure_block)
-        self.assertNotIn("m_clientManagedSitesResolveRetryCount", failure_block)
+        self.assertIn("only unresolved domains will be retried", failure_block)
         self.assertNotIn("editServerJson", failure_block)
         self.assertNotIn("requestManagedRouteReconciliation", failure_block)
         self.assertNotIn("reconnectToVpn", failure_block)
+        self.assertIn("if (!stagedCache.contains(domain))", finish_resolve)
+        self.assertIn("stagedCache.insert(domain, QString())", finish_resolve)
+        self.assertIn("if (unresolvedCount == 0)", finish_resolve)
+        self.assertIn("configKey::managedSplitTunnelClientResolveRetryAfter", finish_resolve)
+        self.assertIn("now.addSecs(serverRoutingRulesClientResolveRetryMaxMs / 1000)", finish_resolve)
+        self.assertIn("serverConfig.value(configKey::managedSplitTunnelClientResolveRetryAfter)", connection_controller)
+        self.assertIn("managedDnsConvergence::initialDelayMs", connection_controller)
+        apply_payload = self.function_body(
+            connection_controller,
+            "bool ConnectionController::applyServerRoutingRulesPayload(",
+        )
+        source_change = apply_payload[apply_payload.index("if (managedSourceChanged)") :]
+        self.assertIn("managedSplitTunnelClientResolveRetryAfter", source_change)
+        self.assertEqual(finish_resolve.count("m_serversRepository->editServerJson"), 1)
+        self.assertLess(persist, publish)
+        self.assertIn("retriesOnlyFailuresAndKeepsSuccessfulResults", convergence_test)
+        self.assertIn("keepsLastKnownGoodUntilFailedDomainSucceeds", convergence_test)
+        self.assertIn("supersedingSourceCannotAcceptOldDomains", convergence_test)
+        self.assertIn("boundedWavesFinalizeAtMostOnce", convergence_test)
+        self.assertIn("retryAfterDelaysButDoesNotSuppressNextCycle", convergence_test)
+        self.assertIn("QVERIFY(!state.tryFinalize())", convergence_test)
+        self.assertIn("deferring managed route reconciliation until DNS convergence", connection_controller)
+        self.assertIn("deferring managed route-mode transition until DNS convergence", connection_controller)
 
         self.assertIn("dispatchManagedRouteReconciliation(desired, reason)", request_reconcile)
         self.assertNotIn("emit managedRouteReconcileRequested", request_reconcile)
@@ -7974,6 +8054,111 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
         self.assertLess(runtime_update, reconnect)
         self.assertIn("expectedConnectionEpoch == m_connectionEpoch", worker_reconcile)
         self.assertIn("expectedServerId == m_serverId", worker_reconcile)
+
+    @unittest.skipUnless(find_sh(), "sh is required to validate the managed routing resolver")
+    def test_server_managed_dns_recovery_is_bounded_atomic_and_preserves_lkg(self) -> None:
+        sh = find_sh()
+        self.assertIsNotNone(sh)
+        resolver_script = extract_server_routing_rules_resolver_script()
+        install_controller = (
+            REPO_ROOT / "client/core/controllers/selfhosted/installController.cpp"
+        ).read_text(encoding="utf-8")
+
+        syntax = subprocess.run(
+            [sh, "-n"], input=resolver_script, text=True, capture_output=True, check=False
+        )
+        self.assertEqual(syntax.returncode, 0, syntax.stderr + syntax.stdout)
+        retry_function = resolver_script[
+            resolver_script.index("retry_unresolved_burst() {") :
+            resolver_script.index("validate_source_file || exit 20")
+        ]
+        background = resolver_script[
+            resolver_script.index("(\n    retry_unresolved_burst") :
+            resolver_script.index("busybox httpd -f")
+        ]
+        self.assertIn('"$retry_attempt" -lt "$RECOVERY_MAXIMUM_ATTEMPTS"', retry_function)
+        self.assertIn('build_rules 1 "$RECOVERY_QUERY_TIMEOUT_SECONDS"', retry_function)
+        self.assertIn("RECOVERY_ATTEMPT_BUDGET_SECONDS", retry_function)
+        self.assertIn("resolve_deadline_seconds=0", retry_function)
+        self.assertIn('retry_delay="$RECOVERY_MAXIMUM_DELAY_SECONDS"', retry_function)
+        self.assertNotIn("docker", retry_function)
+        self.assertLess(background.index("retry_unresolved_burst"), background.index("while :; do"))
+        self.assertIn('mv "$tmp_file" "$RULES_FILE"', resolver_script)
+        self.assertIn("candidate_lkg_seed", install_controller)
+        self.assertIn(
+            "rm -f '__HOST_DIRECTORY__/__READY_FILE__' || fail_commit old_ready_remove",
+            install_controller,
+        )
+        self.assertNotIn(
+            "rm -f '__HOST_DIRECTORY__/__READY_FILE__' '__HOST_DIRECTORY__/__RULES_FILE__'",
+            install_controller,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_nslookup = fake_bin / "nslookup"
+            fake_nslookup.write_text(
+                "#!/bin/sh\n"
+                "if [ \"${FAKE_DNS_MODE:-fail}\" = success ]; then\n"
+                "  printf 'Address 1: 203.0.113.55\\n'\n"
+                "fi\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            fake_nslookup.chmod(0o755)
+            source_file = root / "rules-source.txt"
+            rules_file = root / "rules.json"
+            ready_file = root / "rules-ready"
+            source_file.write_text("D|recover.test|\n", encoding="utf-8", newline="\n")
+            rules_file.write_text(
+                '{"version":1,"server.except":{"recover.test":"198.51.100.10"}}',
+                encoding="utf-8",
+            )
+
+            functions = resolver_script[: resolver_script.index("validate_source_file || exit 20")]
+            functions = functions.replace(
+                'RULES_FILE="/www/rules.json"',
+                "RULES_FILE=" + publish_release.sh_quote(shell_absolute_path(rules_file)),
+            ).replace(
+                'SOURCE_FILE="/www/rules-source.txt"',
+                "SOURCE_FILE=" + publish_release.sh_quote(shell_absolute_path(source_file)),
+            ).replace(
+                'READY_FILE="/www/rules-ready"',
+                "READY_FILE=" + publish_release.sh_quote(shell_absolute_path(ready_file)),
+            )
+            harness = functions + textwrap.dedent(
+                """\
+                validate_source_file || exit 31
+                FAKE_DNS_MODE=fail
+                export FAKE_DNS_MODE
+                build_rules 1 1 || exit 32
+                grep -Fq '"recover.test":"198.51.100.10"' "$RULES_FILE" || exit 33
+                FAKE_DNS_MODE=success
+                export FAKE_DNS_MODE
+                last_unresolved_count=1
+                RECOVERY_INITIAL_DELAY_SECONDS=0
+                RECOVERY_MAXIMUM_ATTEMPTS=1
+                retry_unresolved_burst
+                grep -Fq '"recover.test":"203.0.113.55"' "$RULES_FILE" || exit 34
+                """
+            )
+            environment = os.environ.copy()
+            environment["PATH"] = str(fake_bin) + os.pathsep + environment.get("PATH", "")
+            probe = subprocess.run(
+                [sh],
+                input=harness,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+            self.assertEqual(probe.returncode, 0, probe.stderr + probe.stdout)
+            parsed_rules = json.loads(rules_file.read_text(encoding="utf-8"))
+            self.assertEqual(
+                parsed_rules["server.except"]["recover.test"], "203.0.113.55"
+            )
 
     def test_route_dns_logs_do_not_disclose_site_hostnames(self) -> None:
         connection_controller = (

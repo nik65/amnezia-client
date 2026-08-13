@@ -29,6 +29,7 @@ void removeClientResolvedServerRoutingRules(QJsonObject &serverConfig)
 {
     serverConfig.remove(configKey::managedSplitTunnelClientResolvedExceptSites);
     serverConfig.remove(configKey::managedSplitTunnelClientResolvedAt);
+    serverConfig.remove(configKey::managedSplitTunnelClientResolveRetryAfter);
 }
 
 constexpr char clientLogsPublishErrorMarker[] = "__AMNEZIA_CLIENT_LOGS_PUBLISH_ERROR__";

@@ -75,6 +75,12 @@ namespace
     constexpr int serverRoutingRulesResolveJitterSeconds = 60 * 60;
     constexpr int serverRoutingRulesInitialResolveTimeoutSeconds = 90;
     constexpr int serverRoutingRulesInitialResolveRetrySeconds = 5;
+    constexpr int serverRoutingRulesResolveQueryTimeoutSeconds = 3;
+    constexpr int serverRoutingRulesRecoveryQueryTimeoutSeconds = 1;
+    constexpr int serverRoutingRulesRecoveryInitialDelaySeconds = 15;
+    constexpr int serverRoutingRulesRecoveryMaximumDelaySeconds = 5 * 60;
+    constexpr int serverRoutingRulesRecoveryMaximumAttempts = 6;
+    constexpr int serverRoutingRulesRecoveryAttemptBudgetSeconds = 30;
     constexpr int serverRoutingRulesPolicyLifetimeYears = 10;
     constexpr qint64 serverRoutingRulesMaximumJsonRevision = 9007199254740991LL;
     constexpr char serverRoutingRulesSigningBlocker[] =
@@ -424,7 +430,14 @@ RESOLVE_INTERVAL_SECONDS=__RESOLVE_INTERVAL_SECONDS__
 RESOLVE_JITTER_SECONDS=__RESOLVE_JITTER_SECONDS__
 INITIAL_RESOLVE_TIMEOUT_SECONDS=__INITIAL_RESOLVE_TIMEOUT_SECONDS__
 INITIAL_RESOLVE_RETRY_SECONDS=__INITIAL_RESOLVE_RETRY_SECONDS__
+RESOLVE_QUERY_TIMEOUT_SECONDS=__RESOLVE_QUERY_TIMEOUT_SECONDS__
+RECOVERY_QUERY_TIMEOUT_SECONDS=__RECOVERY_QUERY_TIMEOUT_SECONDS__
+RECOVERY_INITIAL_DELAY_SECONDS=__RECOVERY_INITIAL_DELAY_SECONDS__
+RECOVERY_MAXIMUM_DELAY_SECONDS=__RECOVERY_MAXIMUM_DELAY_SECONDS__
+RECOVERY_MAXIMUM_ATTEMPTS=__RECOVERY_MAXIMUM_ATTEMPTS__
+RECOVERY_ATTEMPT_BUDGET_SECONDS=__RECOVERY_ATTEMPT_BUDGET_SECONDS__
 resolve_deadline_seconds=0
+last_unresolved_count=0
 
 validate_source_file() {
     [ -f "$SOURCE_FILE" ] || return 1
@@ -469,8 +482,9 @@ resolve_timed_out() {
 }
 
 resolve_domain_ips() {
+    query_timeout_seconds="${2:-$RESOLVE_QUERY_TIMEOUT_SECONDS}"
     if command -v timeout >/dev/null 2>&1; then
-        resolver_output="$(timeout 3 nslookup "$1" 2>/dev/null || true)"
+        resolver_output="$(timeout "$query_timeout_seconds" nslookup "$1" 2>/dev/null || true)"
     else
         resolver_output="$(nslookup "$1" 2>/dev/null || true)"
     fi
@@ -501,6 +515,8 @@ append_rule_entry() {
 
 build_rules() {
     allow_unresolved="${1:-0}"
+    query_timeout_seconds="${2:-$RESOLVE_QUERY_TIMEOUT_SECONDS}"
+    last_unresolved_count=0
     [ -f "$SOURCE_FILE" ] || return 0
 
     resolved_body_file="/tmp/server-routing-rules-resolved.$$"
@@ -513,6 +529,7 @@ build_rules() {
     resolved_body_file_first=1
     source_body_file_first=1
     unresolved_count=0
+    dns_retry_count=0
 
     while IFS='|' read -r source_kind source_value source_fallback; do
         [ -z "$source_value" ] && continue
@@ -523,9 +540,10 @@ build_rules() {
             append_rule_entry source_body_file "$source_value" "$source_fallback"
             resolved_ips=""
             if ! resolve_timed_out; then
-                resolved_ips="$(resolve_domain_ips "$source_value")"
+                resolved_ips="$(resolve_domain_ips "$source_value" "$query_timeout_seconds")"
             fi
             if [ -z "$resolved_ips" ]; then
+                dns_retry_count=$((dns_retry_count + 1))
                 resolved_ips="$(stored_rule_ips "$source_value")"
             fi
             if [ -z "$resolved_ips" ]; then
@@ -538,6 +556,7 @@ build_rules() {
             append_rule_entry resolved_body_file "$source_value" "$resolved_ips"
         fi
     done < "$SOURCE_FILE"
+    last_unresolved_count="$dns_retry_count"
 
     if [ "$unresolved_count" -ne 0 ] && [ "$allow_unresolved" != "1" ]; then
         rm -f "$resolved_body_file" "$source_body_file"
@@ -577,19 +596,41 @@ random_jitter() {
     echo $((jitter_seed % RESOLVE_JITTER_SECONDS))
 }
 
+retry_unresolved_burst() {
+    retry_attempt=0
+    retry_delay="$RECOVERY_INITIAL_DELAY_SECONDS"
+    while [ "${last_unresolved_count:-0}" -gt 0 ] \
+          && [ "$retry_attempt" -lt "$RECOVERY_MAXIMUM_ATTEMPTS" ]; do
+        sleep "$retry_delay"
+        recovery_start_seconds="$(current_time_seconds)"
+        if [ "$recovery_start_seconds" -gt 0 ]; then
+            resolve_deadline_seconds=$((recovery_start_seconds + RECOVERY_ATTEMPT_BUDGET_SECONDS))
+        fi
+        build_rules 1 "$RECOVERY_QUERY_TIMEOUT_SECONDS" || true
+        resolve_deadline_seconds=0
+        retry_attempt=$((retry_attempt + 1))
+        if [ "$retry_delay" -lt "$RECOVERY_MAXIMUM_DELAY_SECONDS" ]; then
+            retry_delay=$((retry_delay * 2))
+            if [ "$retry_delay" -gt "$RECOVERY_MAXIMUM_DELAY_SECONDS" ]; then
+                retry_delay="$RECOVERY_MAXIMUM_DELAY_SECONDS"
+            fi
+        fi
+    done
+}
+
 validate_source_file || exit 20
 
 initial_start_seconds="$(current_time_seconds)"
 if [ "$initial_start_seconds" -gt 0 ]; then
     resolve_deadline_seconds=$((initial_start_seconds + INITIAL_RESOLVE_TIMEOUT_SECONDS))
-    while ! build_rules 0; do
+    while ! build_rules 0 "$RESOLVE_QUERY_TIMEOUT_SECONDS"; do
         if resolve_timed_out; then
-            build_rules 1 && break
+            build_rules 1 "$RESOLVE_QUERY_TIMEOUT_SECONDS" && break
         fi
         sleep "$INITIAL_RESOLVE_RETRY_SECONDS"
     done
 else
-    build_rules 0 || build_rules 1
+    build_rules 0 "$RESOLVE_QUERY_TIMEOUT_SECONDS" || build_rules 1 "$RESOLVE_QUERY_TIMEOUT_SECONDS"
 fi
 resolve_deadline_seconds=0
 
@@ -599,15 +640,19 @@ if [ "${VALIDATE_ONLY:-0}" = "1" ]; then
 fi
 
 while [ ! -s "$READY_FILE" ]; do
-    build_rules 1 && break
+    build_rules 1 "$RESOLVE_QUERY_TIMEOUT_SECONDS" && break
     sleep 1
 done
 
 (
+    retry_unresolved_burst
     while :; do
         jitter="$(random_jitter)"
         sleep $((RESOLVE_INTERVAL_SECONDS + jitter))
-        build_rules 0 || true
+        build_rules 0 "$RESOLVE_QUERY_TIMEOUT_SECONDS" \
+            || build_rules 1 "$RESOLVE_QUERY_TIMEOUT_SECONDS" \
+            || true
+        retry_unresolved_burst
     done
 ) &
 
@@ -628,6 +673,12 @@ busybox httpd -f -p __SYNC_PORT__ -h /www
         script.replace("__RESOLVE_JITTER_SECONDS__", QString::number(serverRoutingRulesResolveJitterSeconds));
         script.replace("__INITIAL_RESOLVE_TIMEOUT_SECONDS__", QString::number(serverRoutingRulesInitialResolveTimeoutSeconds));
         script.replace("__INITIAL_RESOLVE_RETRY_SECONDS__", QString::number(serverRoutingRulesInitialResolveRetrySeconds));
+        script.replace("__RESOLVE_QUERY_TIMEOUT_SECONDS__", QString::number(serverRoutingRulesResolveQueryTimeoutSeconds));
+        script.replace("__RECOVERY_QUERY_TIMEOUT_SECONDS__", QString::number(serverRoutingRulesRecoveryQueryTimeoutSeconds));
+        script.replace("__RECOVERY_INITIAL_DELAY_SECONDS__", QString::number(serverRoutingRulesRecoveryInitialDelaySeconds));
+        script.replace("__RECOVERY_MAXIMUM_DELAY_SECONDS__", QString::number(serverRoutingRulesRecoveryMaximumDelaySeconds));
+        script.replace("__RECOVERY_MAXIMUM_ATTEMPTS__", QString::number(serverRoutingRulesRecoveryMaximumAttempts));
+        script.replace("__RECOVERY_ATTEMPT_BUDGET_SECONDS__", QString::number(serverRoutingRulesRecoveryAttemptBudgetSeconds));
         return script.toUtf8();
     }
 
@@ -943,6 +994,10 @@ fi
 
 rm -rf '__CANDIDATE_DIRECTORY__' || fail_stage candidate_cleanup
 mkdir -p '__CANDIDATE_DIRECTORY__' || fail_stage candidate_mkdir
+if [ -s '__HOST_DIRECTORY__/__RULES_FILE__' ]; then
+    install -m 0644 '__HOST_DIRECTORY__/__RULES_FILE__' '__CANDIDATE_DIRECTORY__/__RULES_FILE__' \
+        || fail_stage candidate_lkg_seed
+fi
 install -m 0644 '__SOURCE_TMP_FILE__' '__CANDIDATE_DIRECTORY__/__SOURCE_FILE__' || fail_stage candidate_source_install
 install -m 0755 '__SCRIPT_TMP_FILE__' '__CANDIDATE_DIRECTORY__/__SCRIPT_FILE__' || fail_stage candidate_script_install
 rm -f '__SOURCE_TMP_FILE__' '__SCRIPT_TMP_FILE__' || fail_stage uploaded_file_cleanup
@@ -1179,7 +1234,7 @@ install -m 0755 '__CANDIDATE_DIRECTORY__/__SCRIPT_FILE__' '__HOST_DIRECTORY__/.s
     || fail_commit script_stage
 mv -f '__HOST_DIRECTORY__/.script-new-__TRANSACTION_ID__' '__HOST_DIRECTORY__/__SCRIPT_FILE__' \
     || fail_commit script_switch
-rm -f '__HOST_DIRECTORY__/__READY_FILE__' '__HOST_DIRECTORY__/__RULES_FILE__' || fail_commit old_output_remove
+rm -f '__HOST_DIRECTORY__/__READY_FILE__' || fail_commit old_ready_remove
 
 docker run -d --log-driver none --restart always --network amnezia-dns-net --ip=__BRIDGE_HOST__ \
     --name '__BRIDGE_CONTAINER__' -v '__HOST_DIRECTORY__:/www:rw' --entrypoint sh \
