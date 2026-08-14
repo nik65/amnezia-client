@@ -2,6 +2,7 @@
 #define VPNCONNECTION_H
 
 #include <QObject>
+#include <QElapsedTimer>
 #include <QMetaObject>
 #include <QString>
 #include <QScopedPointer>
@@ -14,6 +15,7 @@
 #include "core/utils/errorCodes.h"
 #include "core/utils/routeModes.h"
 #include "core/utils/commonStructs.h"
+#include "core/utils/managedDnsConvergence.h"
 
 #ifdef AMNEZIA_DESKTOP
 #include "core/utils/ipcClient.h"
@@ -201,6 +203,10 @@ private:
     // Only for iOS for now, check counters
     QTimer m_checkTimer;
     QTimer m_deferredManagedRouteReconnectTimer;
+    QTimer m_managedRouteReconnectCooldownTimer;
+    QElapsedTimer m_managedRouteReconnectClock;
+    amnezia::managedDnsConvergence::ReconnectGate m_managedRouteReconnectGate;
+    bool m_managedRouteReconnectAwaitingBase = false;
 
 #ifdef Q_OS_ANDROID
    AndroidVpnProtocol* androidVpnProtocol = nullptr;
@@ -214,6 +220,14 @@ private:
    void createProtocolConnections();
    void invalidateAllSplitRouteResolutions();
    void invalidateAuthoritativeManagedRouteBase();
+   void beginManagedRouteReconnectSession(const QString &serverId);
+   void clearManagedRouteReconnectSession();
+   void recordReconnectFloor();
+   void scheduleManagedRouteReconnect(quint64 expectedConnectionEpoch,
+                                      const QString &expectedServerId,
+                                      const QString &reason);
+   void flushManagedRouteReconnect();
+   bool latestPreparedManagedRouteSnapshotIsApplied() const;
    bool clearSavedRoutesWithReceipt();
    void publishManagedRouteBase(RouteMode mode,
                                 const QStringList &managedRoutes,

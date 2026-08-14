@@ -168,24 +168,25 @@ class ThreadingSourceContracts(unittest.TestCase):
             "emit managedSplitTunnelRoutesReconciled", reconnect_marked
         )
         queued_reconnect = reconcile.index(
-            "QTimer::singleShot(0, this", acknowledgement_emit
+            "scheduleManagedRouteReconnect(", acknowledgement_emit
         )
-        epoch_guard = reconcile.index(
-            "expectedConnectionEpoch == m_connectionEpoch", queued_reconnect
+        reconnect_schedule = function_body(
+            vpn, "void VpnConnection::scheduleManagedRouteReconnect("
         )
-        server_guard = reconcile.index(
-            "expectedServerId == m_serverId", epoch_guard
+        epoch_guard = reconnect_schedule.index(
+            "expectedConnectionEpoch != m_connectionEpoch"
         )
-        reconnect_call = reconcile.index("reconnectToVpn()", server_guard)
+        server_guard = reconnect_schedule.index(
+            "expectedServerId != m_serverId", epoch_guard
+        )
         self.assertLess(update_result, base_invalidation)
         self.assertLess(base_invalidation, immediate_reconnect)
         self.assertLess(immediate_reconnect, reconnect_marked)
         self.assertLess(reconnect_marked, acknowledgement_emit)
         self.assertLess(acknowledgement_emit, queued_reconnect)
-        self.assertLess(queued_reconnect, epoch_guard)
         self.assertLess(epoch_guard, server_guard)
-        self.assertLess(server_guard, reconnect_call)
-        self.assertEqual(reconcile.count("reconnectToVpn()"), 1)
+        self.assertNotIn("reconnectToVpn()", reconcile)
+        self.assertIn("m_managedRouteReconnectGate.request", reconnect_schedule)
         self.assertIn(
             "generation, expectedConnectionEpoch, expectedServerId,\n"
             "            true, updated, reconnectScheduled",

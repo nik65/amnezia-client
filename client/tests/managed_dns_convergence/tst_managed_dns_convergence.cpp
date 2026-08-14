@@ -3,6 +3,7 @@
 #include "core/utils/managedDnsConvergence.h"
 
 using amnezia::managedDnsConvergence::State;
+using amnezia::managedDnsConvergence::ReconnectGate;
 
 class ManagedDnsConvergenceTest final : public QObject
 {
@@ -14,6 +15,13 @@ private slots:
     void supersedingSourceCannotAcceptOldDomains();
     void boundedWavesFinalizeAtMostOnce();
     void retryAfterDelaysButDoesNotSuppressNextCycle();
+    void partialCycleRetriesOnlyPersistedFailures();
+    void scheduledRefreshChecksEveryDomain();
+    void firstReconnectIsImmediateThenTwoHourFloorApplies();
+    void reconnectRequestsCoalesceWithoutSlidingTheDeadline();
+    void freshLogicalSessionRestoresOneImmediateReconnect();
+    void externalReconnectPreservesPendingAtTheSameDeadline();
+    void partialCyclesStillRunADailyFullSweep();
 };
 
 void ManagedDnsConvergenceTest::retriesOnlyFailuresAndKeepsSuccessfulResults()
@@ -107,6 +115,157 @@ void ManagedDnsConvergenceTest::retryAfterDelaysButDoesNotSuppressNextCycle()
              2000);
     QCOMPARE(amnezia::managedDnsConvergence::initialDelayMs(QString(), now, 2000),
              2000);
+}
+
+void ManagedDnsConvergenceTest::partialCycleRetriesOnlyPersistedFailures()
+{
+    const QStringList domains {
+        QStringLiteral("fresh.test"),
+        QStringLiteral("lkg.test"),
+        QStringLiteral("empty.test"),
+    };
+    const QJsonObject baseline {
+        { QStringLiteral("fresh.test"), QStringLiteral("192.0.2.10") },
+        { QStringLiteral("lkg.test"), QStringLiteral("198.51.100.20") },
+        { QStringLiteral("empty.test"), QString() },
+    };
+    const QStringList pending = amnezia::managedDnsConvergence::pendingDomainsForCycle(
+            domains, baseline,
+            { QStringLiteral("lkg.test"), QStringLiteral("removed.test") }, false);
+
+    QCOMPARE(pending,
+             QStringList({ QStringLiteral("lkg.test"), QStringLiteral("empty.test") }));
+
+    State state;
+    state.begin(QStringLiteral("server-a"), QStringLiteral("source-1"),
+                domains, baseline, pending);
+    QCOMPARE(state.takePendingWave(), pending);
+    QCOMPARE(state.cache().value(QStringLiteral("fresh.test")).toString(),
+             QStringLiteral("192.0.2.10"));
+    QCOMPARE(state.cache().value(QStringLiteral("lkg.test")).toString(),
+             QStringLiteral("198.51.100.20"));
+}
+
+void ManagedDnsConvergenceTest::scheduledRefreshChecksEveryDomain()
+{
+    const QStringList domains {
+        QStringLiteral("a.test"), QStringLiteral("b.test"), QStringLiteral("c.test")
+    };
+    const QJsonObject baseline {
+        { QStringLiteral("a.test"), QStringLiteral("192.0.2.1") },
+        { QStringLiteral("b.test"), QStringLiteral("192.0.2.2") },
+        { QStringLiteral("c.test"), QStringLiteral("192.0.2.3") },
+    };
+
+    QCOMPARE(amnezia::managedDnsConvergence::pendingDomainsForCycle(
+                     domains, baseline, { QStringLiteral("b.test") }, true),
+             domains);
+}
+
+void ManagedDnsConvergenceTest::firstReconnectIsImmediateThenTwoHourFloorApplies()
+{
+    constexpr qint64 minimumIntervalMs = 2LL * 60 * 60 * 1000;
+    ReconnectGate gate;
+    gate.beginSession(QStringLiteral("server-a"));
+
+    const auto first = gate.request(QStringLiteral("server-a"), 0, minimumIntervalMs);
+    QVERIFY(first.accepted);
+    QVERIFY(first.newlyPending);
+    QCOMPARE(first.delayMs, 0);
+    QVERIFY(gate.takeDue(QStringLiteral("server-a"), 0, minimumIntervalMs));
+    gate.recordReconnect(QStringLiteral("server-a"), 0);
+
+    const auto second = gate.request(QStringLiteral("server-a"), 1, minimumIntervalMs);
+    QVERIFY(second.accepted);
+    QVERIFY(second.newlyPending);
+    QCOMPARE(second.delayMs, minimumIntervalMs - 1);
+    QVERIFY(!gate.takeDue(QStringLiteral("server-a"), minimumIntervalMs - 1,
+                         minimumIntervalMs));
+    QVERIFY(gate.takeDue(QStringLiteral("server-a"), minimumIntervalMs,
+                        minimumIntervalMs));
+}
+
+void ManagedDnsConvergenceTest::reconnectRequestsCoalesceWithoutSlidingTheDeadline()
+{
+    constexpr qint64 minimumIntervalMs = 2LL * 60 * 60 * 1000;
+    ReconnectGate gate;
+    gate.beginSession(QStringLiteral("server-a"));
+    gate.request(QStringLiteral("server-a"), 0, minimumIntervalMs);
+    QVERIFY(gate.takeDue(QStringLiteral("server-a"), 0, minimumIntervalMs));
+    gate.recordReconnect(QStringLiteral("server-a"), 0);
+
+    const auto firstDeferred = gate.request(
+            QStringLiteral("server-a"), 1000, minimumIntervalMs);
+    QVERIFY(firstDeferred.newlyPending);
+    QCOMPARE(firstDeferred.delayMs, minimumIntervalMs - 1000);
+
+    const auto coalesced = gate.request(
+            QStringLiteral("server-a"), minimumIntervalMs / 2, minimumIntervalMs);
+    QVERIFY(coalesced.accepted);
+    QVERIFY(!coalesced.newlyPending);
+    QCOMPARE(coalesced.delayMs, minimumIntervalMs / 2);
+    QVERIFY(gate.takeDue(QStringLiteral("server-a"), minimumIntervalMs,
+                        minimumIntervalMs));
+}
+
+void ManagedDnsConvergenceTest::freshLogicalSessionRestoresOneImmediateReconnect()
+{
+    constexpr qint64 minimumIntervalMs = 2LL * 60 * 60 * 1000;
+    ReconnectGate gate;
+    gate.beginSession(QStringLiteral("server-a"));
+    gate.request(QStringLiteral("server-a"), 0, minimumIntervalMs);
+    QVERIFY(gate.takeDue(QStringLiteral("server-a"), 0, minimumIntervalMs));
+    gate.recordReconnect(QStringLiteral("server-a"), 0);
+
+    gate.beginSession(QStringLiteral("server-b"));
+    const auto fresh = gate.request(QStringLiteral("server-b"), 1000, minimumIntervalMs);
+    QVERIFY(fresh.accepted);
+    QVERIFY(fresh.newlyPending);
+    QCOMPARE(fresh.delayMs, 0);
+    QVERIFY(!gate.request(QStringLiteral("server-a"), 1000, minimumIntervalMs).accepted);
+}
+
+void ManagedDnsConvergenceTest::externalReconnectPreservesPendingAtTheSameDeadline()
+{
+    constexpr qint64 minimumIntervalMs = 2LL * 60 * 60 * 1000;
+    ReconnectGate gate;
+    gate.beginSession(QStringLiteral("server-a"));
+    QVERIFY(gate.request(QStringLiteral("server-a"), 0, minimumIntervalMs).newlyPending);
+
+    gate.recordReconnect(QStringLiteral("server-a"), 1000);
+    QVERIFY(gate.pending());
+    const auto coalesced = gate.request(
+            QStringLiteral("server-a"), 2000, minimumIntervalMs);
+    QVERIFY(coalesced.accepted);
+    QVERIFY(!coalesced.newlyPending);
+    QCOMPARE(coalesced.delayMs, minimumIntervalMs - 1000);
+}
+
+void ManagedDnsConvergenceTest::partialCyclesStillRunADailyFullSweep()
+{
+    const QDateTime now = QDateTime::fromString(
+            QStringLiteral("2026-08-14T20:00:00Z"), Qt::ISODate);
+    constexpr int refreshIntervalSeconds = 24 * 60 * 60;
+
+    QVERIFY(amnezia::managedDnsConvergence::fullSweepDue(
+            QString(), now, refreshIntervalSeconds));
+    QVERIFY(!amnezia::managedDnsConvergence::fullSweepDue(
+            now.addSecs(-60 * 60).toString(Qt::ISODate),
+            now, refreshIntervalSeconds));
+    QVERIFY(amnezia::managedDnsConvergence::fullSweepDue(
+            now.addSecs(-refreshIntervalSeconds).toString(Qt::ISODate),
+            now, refreshIntervalSeconds));
+    QVERIFY(amnezia::managedDnsConvergence::fullSweepDue(
+            now.addSecs(11 * 60).toString(Qt::ISODate),
+            now, refreshIntervalSeconds));
+
+    const QString originalFullSweep =
+            now.addSecs(-refreshIntervalSeconds).toString(Qt::ISODate);
+    const QString latePartialSuccess =
+            now.addSecs(-60 * 60).toString(Qt::ISODate);
+    QVERIFY(amnezia::managedDnsConvergence::completeCacheRefreshDue(
+            originalFullSweep, latePartialSuccess,
+            now, refreshIntervalSeconds));
 }
 
 QTEST_GUILESS_MAIN(ManagedDnsConvergenceTest)

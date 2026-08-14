@@ -530,11 +530,16 @@ class ManagedRouteSourceContractTests(unittest.TestCase):
         )
 
         dns_reconnect = self.vpn.index(
-            "local DNS resolution completed; reconnecting to apply deferred managed policy safely"
+            "local DNS resolution completed; queueing a bounded managed-policy reconnect"
         )
-        dns_reconnect = self.vpn[dns_reconnect : dns_reconnect + 1200]
-        self.assertIn("expectedConnectionEpoch == m_connectionEpoch", dns_reconnect)
-        self.assertIn("expectedServerId == m_serverId", dns_reconnect)
+        dns_reconnect = self.vpn[dns_reconnect : dns_reconnect + 700]
+        self.assertIn("scheduleManagedRouteReconnect(", dns_reconnect)
+        self.assertIn("m_connectionEpoch, m_serverId", dns_reconnect)
+        schedule = function_body(
+            self.vpn, "void VpnConnection::scheduleManagedRouteReconnect("
+        )
+        self.assertIn("expectedConnectionEpoch != m_connectionEpoch", schedule)
+        self.assertIn("expectedServerId != m_serverId", schedule)
 
     def test_restored_android_connection_is_not_a_route_receipt(self) -> None:
         state_changed = function_body(

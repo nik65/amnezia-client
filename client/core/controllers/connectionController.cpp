@@ -258,6 +258,26 @@ QStringList managedResolveDomains(const QJsonObject &sourceSites)
     return domains;
 }
 
+QStringList persistedManagedResolvePendingDomains(const QJsonObject &serverConfig,
+                                                   const QStringList &domains)
+{
+    QStringList pending;
+    const QJsonValue value =
+            serverConfig.value(configKey::managedSplitTunnelClientResolvePendingSites);
+    if (!value.isArray()) {
+        return pending;
+    }
+
+    const QJsonArray items = value.toArray();
+    for (const QJsonValue &item : items) {
+        const QString domain = item.toString().trimmed().toLower();
+        if (domains.contains(domain) && !pending.contains(domain)) {
+            pending.append(domain);
+        }
+    }
+    return pending;
+}
+
 bool shouldRunClientManagedResolve(const QJsonObject &serverConfig, const QJsonObject &sourceSites)
 {
     const QStringList domains = managedResolveDomains(sourceSites);
@@ -278,11 +298,12 @@ bool shouldRunClientManagedResolve(const QJsonObject &serverConfig, const QJsonO
         return true;
     }
 
-    const QDateTime now = QDateTime::currentDateTimeUtc();
-    if (resolvedAt.toUTC() > now.addSecs(10 * 60)) {
-        return true;
-    }
-    return resolvedAt.toUTC().secsTo(now) >= serverRoutingRulesClientResolveIntervalSeconds;
+    return managedDnsConvergence::completeCacheRefreshDue(
+            serverConfig.value(
+                    configKey::managedSplitTunnelClientResolveLastFullSweepAt).toString(),
+            serverConfig.value(configKey::managedSplitTunnelClientResolvedAt).toString(),
+            QDateTime::currentDateTimeUtc(),
+            serverRoutingRulesClientResolveIntervalSeconds);
 }
 
 QStringList hostInfoIpv4Addresses(const QHostInfo &hostInfo)
@@ -1712,6 +1733,9 @@ bool ConnectionController::applyServerRoutingRulesPayload(int serverIndex, const
     if (managedSourceChanged) {
         serverConfig.insert(configKey::managedSplitTunnelExceptSourceSites, managedExceptSites);
         serverConfig.remove(configKey::managedSplitTunnelClientResolveRetryAfter);
+        serverConfig.remove(configKey::managedSplitTunnelClientResolvePendingSites);
+        serverConfig.remove(configKey::managedSplitTunnelClientResolvePendingSourceDigest);
+        serverConfig.remove(configKey::managedSplitTunnelClientResolveLastFullSweepAt);
         changed = true;
     }
     if (serverConfig.value(configKey::managedSplitTunnelExceptSites).toObject() != managedExceptSites) {
@@ -1774,6 +1798,7 @@ void ConnectionController::cancelClientManagedSitesResolve()
     m_clientManagedSitesCurrentDomain.clear();
     m_clientManagedSitesConvergence.clear();
     m_clientManagedSitesResolveSnapshotCaptured = false;
+    m_clientManagedSitesResolveIsFullSweep = false;
 }
 
 void ConnectionController::scheduleClientManagedSitesResolve(int serverIndex)
@@ -1800,16 +1825,38 @@ void ConnectionController::scheduleClientManagedSitesResolve(int serverIndex)
     // sync of the same source cannot reset its pending-only retry wave.
     cancelClientManagedSitesResolve();
     const QStringList domains = managedResolveDomains(sourceSites);
+    const QJsonObject baseline = clientResolvedSitesBoundToSource(serverConfig, sourceSites);
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    const bool refreshAll = managedDnsConvergence::fullSweepDue(
+            serverConfig.value(
+                    configKey::managedSplitTunnelClientResolveLastFullSweepAt).toString(),
+            now, serverRoutingRulesClientResolveIntervalSeconds);
+    const bool resumePartialCycle =
+            serverConfig.value(configKey::managedSplitTunnelClientResolvePendingSites).isArray()
+            && serverConfig.value(
+                       configKey::managedSplitTunnelClientResolvePendingSourceDigest).toString()
+                    == sourceDigest
+            && !refreshAll
+            && !QDateTime::fromString(
+                        serverConfig.value(configKey::managedSplitTunnelClientResolvedAt).toString(),
+                        Qt::ISODate).isValid();
+    const QStringList persistedPending =
+            persistedManagedResolvePendingDomains(serverConfig, domains);
+    const QStringList pending = managedDnsConvergence::pendingDomainsForCycle(
+            domains, baseline, persistedPending, !resumePartialCycle);
+    m_clientManagedSitesResolveIsFullSweep = !resumePartialCycle;
     m_clientManagedSitesConvergence.begin(
-            serverId, sourceDigest, domains,
-            clientResolvedSitesBoundToSource(serverConfig, sourceSites));
+            serverId, sourceDigest, domains, baseline, pending);
     m_clientManagedSitesResolveDeadline =
             QDeadlineTimer(serverRoutingRulesClientResolveCycleDeadlineMs);
     m_clientManagedSitesResolveServerId = serverId;
     const int jitterMs = QRandomGenerator::global()->bounded(serverRoutingRulesClientResolveJitterMs + 1);
     const int delayMs = managedDnsConvergence::initialDelayMs(
-            serverConfig.value(configKey::managedSplitTunnelClientResolveRetryAfter).toString(),
-            QDateTime::currentDateTimeUtc(),
+            resumePartialCycle
+                    ? serverConfig.value(
+                              configKey::managedSplitTunnelClientResolveRetryAfter).toString()
+                    : QString(),
+            now,
             serverRoutingRulesClientResolveInitialDelayMs + jitterMs);
     qInfo() << "ConnectionController: scheduled client-side managed site resolve in" << delayMs << "ms for server" << serverIndex;
     m_serverRoutingRulesClientResolveTimer.start(delayMs);
@@ -2085,6 +2132,7 @@ void ConnectionController::finishClientManagedSitesResolve()
 
     const QDateTime now = QDateTime::currentDateTimeUtc();
     const int unresolvedCount = m_clientManagedSitesConvergence.pending().size();
+    const bool completedFullSweep = m_clientManagedSitesResolveIsFullSweep;
     if (unresolvedCount == 0) {
         const QString resolvedAt = now.toString(Qt::ISODate);
         if (serverConfig.value(configKey::managedSplitTunnelClientResolvedAt).toString() != resolvedAt) {
@@ -2093,6 +2141,19 @@ void ConnectionController::finishClientManagedSitesResolve()
         }
         if (serverConfig.contains(configKey::managedSplitTunnelClientResolveRetryAfter)) {
             serverConfig.remove(configKey::managedSplitTunnelClientResolveRetryAfter);
+            changed = true;
+        }
+        if (serverConfig.contains(configKey::managedSplitTunnelClientResolvePendingSites)) {
+            serverConfig.remove(configKey::managedSplitTunnelClientResolvePendingSites);
+            changed = true;
+        }
+        if (serverConfig.contains(configKey::managedSplitTunnelClientResolvePendingSourceDigest)) {
+            serverConfig.remove(configKey::managedSplitTunnelClientResolvePendingSourceDigest);
+            changed = true;
+        }
+        if (completedFullSweep
+            && serverConfig.contains(configKey::managedSplitTunnelClientResolveLastFullSweepAt)) {
+            serverConfig.remove(configKey::managedSplitTunnelClientResolveLastFullSweepAt);
             changed = true;
         }
     } else {
@@ -2106,11 +2167,40 @@ void ConnectionController::finishClientManagedSitesResolve()
             serverConfig.insert(configKey::managedSplitTunnelClientResolveRetryAfter, retryAfter);
             changed = true;
         }
+        QJsonArray pendingSites;
+        for (const QString &domain : m_clientManagedSitesConvergence.pending()) {
+            pendingSites.append(domain);
+        }
+        if (serverConfig.value(configKey::managedSplitTunnelClientResolvePendingSites).toArray()
+            != pendingSites) {
+            serverConfig.insert(configKey::managedSplitTunnelClientResolvePendingSites, pendingSites);
+            changed = true;
+        }
+        if (serverConfig.value(
+                    configKey::managedSplitTunnelClientResolvePendingSourceDigest).toString()
+            != sourceDigest) {
+            serverConfig.insert(
+                    configKey::managedSplitTunnelClientResolvePendingSourceDigest,
+                    sourceDigest);
+            changed = true;
+        }
+        if (completedFullSweep) {
+            const QString lastFullSweepAt = now.toString(Qt::ISODate);
+            if (serverConfig.value(
+                        configKey::managedSplitTunnelClientResolveLastFullSweepAt).toString()
+                != lastFullSweepAt) {
+                serverConfig.insert(
+                        configKey::managedSplitTunnelClientResolveLastFullSweepAt,
+                        lastFullSweepAt);
+                changed = true;
+            }
+        }
     }
     m_clientManagedSitesResolveRetryCount = 0;
     m_clientManagedSitesConvergence.clear();
     m_clientManagedSitesResolveServerId.clear();
     m_clientManagedSitesResolveSnapshotCaptured = false;
+    m_clientManagedSitesResolveIsFullSweep = false;
     qInfo() << "ConnectionController: managed DNS convergence finalized"
             << "unresolved domains" << unresolvedCount;
 

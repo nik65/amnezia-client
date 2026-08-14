@@ -1,5 +1,7 @@
 #include "vpnConnection.h"
 
+#include <limits>
+
 #include <QDebug>
 #include <QEventLoop>
 #include <QFile>
@@ -50,6 +52,7 @@ constexpr int killSwitchIpcTimeoutMs = 1000;
 constexpr int dnsFlushIpcTimeoutMs = 1000;
 constexpr int clearSavedRoutesIpcTimeoutMs = 5000;
 constexpr int deferredManagedRouteDeadlineMs = 10000;
+constexpr qint64 managedRouteReconnectMinimumIntervalMs = 2LL * 60 * 60 * 1000;
 
 enum class SplitTunnelRouteSource {
     Client,
@@ -496,8 +499,10 @@ bool addTrustedRoutesWithReceipt(const QString &gateway, const QStringList &rout
 }
 
 VpnConnection::VpnConnection(QObject *parent)
-    : QObject(parent), m_checkTimer(this), m_deferredManagedRouteReconnectTimer(this)
+    : QObject(parent), m_checkTimer(this), m_deferredManagedRouteReconnectTimer(this),
+      m_managedRouteReconnectCooldownTimer(this)
 {
+    m_managedRouteReconnectClock.start();
     m_deferredManagedRouteReconnectTimer.setSingleShot(true);
     m_deferredManagedRouteReconnectTimer.setInterval(deferredManagedRouteDeadlineMs);
     connect(&m_deferredManagedRouteReconnectTimer, &QTimer::timeout, this, [this]() {
@@ -506,11 +511,14 @@ VpnConnection::VpnConnection(QObject *parent)
         }
 
         m_reconnectAfterClientRouteResolution = false;
-        qWarning() << "VpnConnection: local DNS resolution exceeded managed policy deadline; reconnecting safely";
-        if (m_connectionState == Vpn::ConnectionState::Connected) {
-            reconnectToVpn();
-        }
+        qWarning() << "VpnConnection: local DNS resolution exceeded managed policy deadline; queueing a bounded reconnect";
+        scheduleManagedRouteReconnect(
+                m_connectionEpoch, m_serverId,
+                QStringLiteral("local DNS resolution deadline"));
     });
+    m_managedRouteReconnectCooldownTimer.setSingleShot(true);
+    connect(&m_managedRouteReconnectCooldownTimer, &QTimer::timeout,
+            this, &VpnConnection::flushManagedRouteReconnect);
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
     m_checkTimer.setInterval(1000);
     connect(IosController::Instance(), &IosController::connectionStateChanged, this, &VpnConnection::setConnectionState);
@@ -625,6 +633,15 @@ void VpnConnection::publishManagedRouteBase(
     m_authoritativeManagedRoutePolicyContentHash = baseConfirmed
             ? policyContentHash : QString();
 
+    if (m_managedRouteReconnectGate.pending()
+        && m_managedRouteReconnectGate.serverId() == m_serverId) {
+        // A route-base attempt (confirmed or fail-closed) is the barrier for an
+        // unrelated reconnect. Resume the original fixed cooldown without
+        // polling; a confirmed equal base will cancel it in flush().
+        m_managedRouteReconnectAwaitingBase = false;
+        QTimer::singleShot(0, this, &VpnConnection::flushManagedRouteReconnect);
+    }
+
     const quint64 epoch = m_connectionEpoch;
     const QString serverId = m_serverId;
     const quint64 revision = m_authoritativeManagedRouteBaseRevision;
@@ -706,13 +723,9 @@ void VpnConnection::rebuildManagedSplitTunnelRoutes(
         return;
     }
     invalidateAuthoritativeManagedRouteBase();
-    QTimer::singleShot(0, this, [this, expectedConnectionEpoch, expectedServerId]() {
-        if (expectedConnectionEpoch == m_connectionEpoch
-            && expectedServerId == m_serverId
-            && m_connectionState == Vpn::ConnectionState::Connected) {
-            reconnectToVpn();
-        }
-    });
+    scheduleManagedRouteReconnect(
+            expectedConnectionEpoch, expectedServerId,
+            QStringLiteral("managed route base rebuild"));
 }
 
 void VpnConnection::onBytesChanged(quint64 receivedBytes, quint64 sentBytes)
@@ -735,6 +748,14 @@ void VpnConnection::onKillSwitchModeChanged(bool enabled)
 
 void VpnConnection::onConnectionStateChanged(Vpn::ConnectionState state)
 {
+    if ((state == Vpn::ConnectionState::Connecting
+         || state == Vpn::ConnectionState::Reconnecting
+         || state == Vpn::ConnectionState::Error)
+        && m_managedRouteReconnectGate.pending()
+        && m_managedRouteReconnectGate.serverId() == m_serverId) {
+        m_managedRouteReconnectAwaitingBase = true;
+        m_managedRouteReconnectCooldownTimer.stop();
+    }
 #ifdef AMNEZIA_DESKTOP
     const DockerContainer container = m_container;
 
@@ -1022,6 +1043,131 @@ void VpnConnection::invalidateAllSplitRouteResolutions()
     invalidateAuthoritativeManagedRouteBase();
 }
 
+void VpnConnection::beginManagedRouteReconnectSession(const QString &serverId)
+{
+    m_managedRouteReconnectCooldownTimer.stop();
+    m_managedRouteReconnectAwaitingBase = false;
+    m_managedRouteReconnectGate.beginSession(serverId);
+}
+
+void VpnConnection::clearManagedRouteReconnectSession()
+{
+    m_managedRouteReconnectCooldownTimer.stop();
+    m_managedRouteReconnectAwaitingBase = false;
+    m_managedRouteReconnectGate.clear();
+}
+
+void VpnConnection::recordReconnectFloor()
+{
+    m_managedRouteReconnectCooldownTimer.stop();
+    m_managedRouteReconnectAwaitingBase = false;
+    m_managedRouteReconnectGate.recordReconnect(
+            m_serverId, m_managedRouteReconnectClock.elapsed());
+}
+
+void VpnConnection::scheduleManagedRouteReconnect(
+        quint64 expectedConnectionEpoch, const QString &expectedServerId,
+        const QString &reason)
+{
+    if (QThread::currentThread() != thread()
+        || expectedConnectionEpoch != m_connectionEpoch
+        || expectedServerId.isEmpty() || expectedServerId != m_serverId
+        || m_connectionState != Vpn::ConnectionState::Connected) {
+        return;
+    }
+
+    const auto request = m_managedRouteReconnectGate.request(
+            expectedServerId, m_managedRouteReconnectClock.elapsed(),
+            managedRouteReconnectMinimumIntervalMs);
+    if (!request.accepted) {
+        return;
+    }
+    if (!request.newlyPending) {
+        qInfo() << "VpnConnection: coalesced managed-route reconnect behind the existing cooldown";
+        return;
+    }
+
+    const int delayMs = static_cast<int>(qMin<qint64>(
+            request.delayMs, (std::numeric_limits<int>::max)()));
+    qInfo() << "VpnConnection: scheduled managed-route reconnect"
+            << reason << "in" << delayMs << "ms";
+    m_managedRouteReconnectCooldownTimer.start(delayMs);
+}
+
+void VpnConnection::flushManagedRouteReconnect()
+{
+    if (!m_managedRouteReconnectGate.pending()) {
+        return;
+    }
+    if (m_connectionState != Vpn::ConnectionState::Connected
+        || m_serverId.isEmpty()
+        || m_serverId != m_managedRouteReconnectGate.serverId()) {
+        if (!m_serverId.isEmpty()
+            && m_serverId == m_managedRouteReconnectGate.serverId()) {
+            m_managedRouteReconnectAwaitingBase = true;
+        }
+        return;
+    }
+
+    if (m_managedRouteReconnectAwaitingBase
+        && !m_hasAuthoritativeManagedRouteBase) {
+        return;
+    }
+    m_managedRouteReconnectAwaitingBase = false;
+
+    if (latestPreparedManagedRouteSnapshotIsApplied()) {
+        m_managedRouteReconnectGate.cancelPending();
+        qInfo() << "VpnConnection: cancelled deferred managed-route reconnect because the latest snapshot is already applied";
+        return;
+    }
+
+    const qint64 nowMs = m_managedRouteReconnectClock.elapsed();
+    const auto request = m_managedRouteReconnectGate.request(
+            m_serverId, nowMs, managedRouteReconnectMinimumIntervalMs);
+    if (!request.accepted) {
+        return;
+    }
+    if (request.delayMs > 0) {
+        const int delayMs = static_cast<int>(qMin<qint64>(
+                request.delayMs, (std::numeric_limits<int>::max)()));
+        m_managedRouteReconnectCooldownTimer.start(delayMs);
+        return;
+    }
+    if (!m_managedRouteReconnectGate.takeDue(
+                m_serverId, nowMs, managedRouteReconnectMinimumIntervalMs)) {
+        return;
+    }
+
+    recordReconnectFloor();
+    qInfo() << "VpnConnection: applying the latest managed routes with a bounded reconnect";
+    reconnectToVpn();
+}
+
+bool VpnConnection::latestPreparedManagedRouteSnapshotIsApplied() const
+{
+    if (!m_hasPreparedManagedRouteSnapshot || !m_hasAuthoritativeManagedRouteBase
+        || m_preparedManagedRouteServerId != m_authoritativeManagedRouteServerId
+        || m_preparedManagedRouteMode != m_authoritativeManagedRouteMode
+        || m_preparedManagedRoutePolicyRevision
+                != m_authoritativeManagedRoutePolicyRevision
+        || m_preparedManagedRoutePolicyContentHash
+                != m_authoritativeManagedRoutePolicyContentHash) {
+        return false;
+    }
+
+    QStringList protectedHosts = serverRoutingRulesSyncHosts();
+    protectedHosts << m_vpnConfiguration.value(configKey::dns1).toString()
+                   << m_vpnConfiguration.value(configKey::dns2).toString();
+    protectedHosts.removeAll(QString());
+    protectedHosts.removeDuplicates();
+    bool normalizedValid = false;
+    const QStringList normalizedPreparedRoutes = normalizedManagedRoutesForRuntime(
+            m_preparedManagedRouteMode, m_preparedManagedRoutes,
+            m_preparedLocalSites, protectedHosts, &normalizedValid);
+    return normalizedValid
+            && normalizedPreparedRoutes == m_authoritativeManagedRoutes;
+}
+
 bool VpnConnection::clearSavedRoutesWithReceipt()
 {
 #ifdef AMNEZIA_DESKTOP
@@ -1196,17 +1342,10 @@ void VpnConnection::addSitesRoutes(const QString &gw, amnezia::RouteMode mode)
                 if (m_reconnectAfterClientRouteResolution) {
                     m_reconnectAfterClientRouteResolution = false;
                     m_deferredManagedRouteReconnectTimer.stop();
-                    qInfo() << "VpnConnection: local DNS resolution completed; reconnecting to apply deferred managed policy safely";
-                    const quint64 expectedConnectionEpoch = m_connectionEpoch;
-                    const QString expectedServerId = m_serverId;
-                    QTimer::singleShot(0, this, [this, expectedConnectionEpoch,
-                                                expectedServerId]() {
-                        if (expectedConnectionEpoch == m_connectionEpoch
-                            && expectedServerId == m_serverId
-                            && m_connectionState == Vpn::ConnectionState::Connected) {
-                            reconnectToVpn();
-                        }
-                    });
+                    qInfo() << "VpnConnection: local DNS resolution completed; queueing a bounded managed-policy reconnect";
+                    scheduleManagedRouteReconnect(
+                            m_connectionEpoch, m_serverId,
+                            QStringLiteral("local DNS resolution completed"));
                     return;
                 }
                 QTimer::singleShot(0, this, startManagedRoutes);
@@ -1526,13 +1665,9 @@ void VpnConnection::reconcileManagedSplitTunnelRoutes(
                      ? m_authoritativeManagedRoutePolicyContentHash : QString());
 
     if (updateResult == ManagedRouteUpdateResult::ReconnectRequired) {
-        QTimer::singleShot(0, this, [this, expectedConnectionEpoch, expectedServerId]() {
-            if (expectedConnectionEpoch == m_connectionEpoch
-                && expectedServerId == m_serverId
-                && m_connectionState == Vpn::ConnectionState::Connected) {
-                reconnectToVpn();
-            }
-        });
+        scheduleManagedRouteReconnect(
+                expectedConnectionEpoch, expectedServerId,
+                QStringLiteral("managed route reconciliation"));
     }
 }
 
@@ -1580,6 +1715,7 @@ void VpnConnection::connectToVpn(const QString &serverId, int serverIndex,
         setConnectionState(Vpn::ConnectionState::Error);
         return;
     }
+    beginManagedRouteReconnectSession(serverId);
 
     // A fresh protocol start may reuse the same gateway and route keys. Clear
     // the service registry while the old protocol is still authoritative and
@@ -1826,6 +1962,7 @@ void VpnConnection::restoreConnection(const QString &serverId, int serverIndex,
                                       DockerContainer container, const QJsonObject &vpnConfiguration,
                                       Vpn::ConnectionState state)
 {
+    beginManagedRouteReconnectSession(serverId);
     invalidateAllSplitRouteResolutions();
     ++m_connectionEpoch;
     m_connectionRestoredWithoutStartup = true;
@@ -1833,6 +1970,10 @@ void VpnConnection::restoreConnection(const QString &serverId, int serverIndex,
     m_serverId = serverId;
     m_container = container;
     m_vpnConfiguration = vpnConfiguration;
+    // Restoring a service-owned tunnel is not a new manual connection. Start
+    // the floor now so a UI-process restart cannot consume a fresh immediate
+    // managed-route reconnect allowance.
+    recordReconnectFloor();
     m_remoteAddress = NetworkUtilities::getIPAddress(vpnConfiguration.value(configKey::hostName).toString());
 
     createAndroidConnections();
@@ -1877,6 +2018,7 @@ void VpnConnection::reconnectToVpn() {
         || m_connectionState != Vpn::ConnectionState::Connected) {
         return;
     }
+    recordReconnectFloor();
     m_startupRouteTeardownConfirmed = clearSavedRoutesWithReceipt();
     if (!m_startupRouteTeardownConfirmed) {
         qWarning() << "VpnConnection::reconnectToVpn: saved-route teardown was not confirmed";
@@ -1914,6 +2056,7 @@ void VpnConnection::reconnectToVpn() {
         return;
     }
 
+    recordReconnectFloor();
     qDebug() << "Reconnect triggered. Reconnecting to the server";
     // The authoritative removal receipt must arrive before protocol signals
     // are disconnected and before the old protocol is stopped. Otherwise a
@@ -1976,6 +2119,7 @@ void VpnConnection::reconnectToVpn() {
 
 void VpnConnection::disconnectFromVpn()
 {
+    clearManagedRouteReconnectSession();
     m_startupRouteTeardownConfirmed = clearSavedRoutesWithReceipt();
     if (!m_startupRouteTeardownConfirmed) {
         qWarning() << "VpnConnection::disconnectFromVpn: saved-route teardown was not confirmed";
@@ -2033,6 +2177,7 @@ void VpnConnection::shutdownForApplicationExit(bool disconnectVpn, QThread *dest
     }
     disconnectSlots();
     m_checkTimer.stop();
+    clearManagedRouteReconnectSession();
     if (disconnectVpn) {
         disconnectFromVpn();
     } else {

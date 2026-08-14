@@ -236,6 +236,7 @@ private:
     QString m_clientManagedSitesCurrentDomain;
     int m_clientManagedSitesLookupId = -1;
     bool m_clientManagedSitesResolveSnapshotCaptured = false;
+    bool m_clientManagedSitesResolveIsFullSweep = false;
     QDeadlineTimer m_clientManagedSitesResolveDeadline;
     int m_clientManagedSitesResolveRetryCount = 0;
     bool m_clientManagedSitesResolveOldStateConfirmed = false;

@@ -191,8 +191,17 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.16` with Android
-`versionCode` `2150`, following the `4.9.2.15` / `2149` artifact set.
+The current self-hosted release line is `4.9.2.17` with Android
+`versionCode` `2151`, following the `4.9.2.16` / `2150` artifact set.
+
+Release notes for `4.9.2.17`: managed-domain DNS convergence continues in the
+background and persists successful answers while later cycles retry only the
+domains that remain unresolved. Persisted partial progress is bound to the
+exact source-policy digest. One managed-route reconnect is allowed immediately
+after a fresh logical connection; subsequent automatic managed-route reconnects
+are coalesced behind a non-sliding two-hour floor while DNS work continues.
+Network-change, wakeup, and recovery reconnects remain unthrottled, but an
+already-applied normalized route snapshot cancels a redundant deferred reconnect.
 
 Release notes for `4.9.2.16`: client-side managed-domain resolution now keeps
 successful answers across bounded retry waves, retries only failed domains with

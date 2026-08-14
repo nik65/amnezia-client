@@ -2836,8 +2836,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.16)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2150)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 4.9.2.17)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2151)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -7963,6 +7963,10 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
             connection_controller,
             "void ConnectionController::startClientManagedSitesResolve()",
         )
+        schedule_resolve = self.function_body(
+            connection_controller,
+            "void ConnectionController::scheduleClientManagedSitesResolve(",
+        )
         finish_resolve = self.function_body(
             connection_controller,
             "void ConnectionController::finishClientManagedSitesResolve()",
@@ -8017,15 +8021,26 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
         self.assertIn("stagedCache.insert(domain, QString())", finish_resolve)
         self.assertIn("if (unresolvedCount == 0)", finish_resolve)
         self.assertIn("configKey::managedSplitTunnelClientResolveRetryAfter", finish_resolve)
+        self.assertIn("configKey::managedSplitTunnelClientResolvePendingSites", finish_resolve)
+        self.assertIn("configKey::managedSplitTunnelClientResolvePendingSourceDigest", finish_resolve)
+        self.assertIn("configKey::managedSplitTunnelClientResolveLastFullSweepAt", finish_resolve)
         self.assertIn("now.addSecs(serverRoutingRulesClientResolveRetryMaxMs / 1000)", finish_resolve)
         self.assertIn("serverConfig.value(configKey::managedSplitTunnelClientResolveRetryAfter)", connection_controller)
         self.assertIn("managedDnsConvergence::initialDelayMs", connection_controller)
+        self.assertIn("managedDnsConvergence::pendingDomainsForCycle", connection_controller)
+        self.assertIn("managedDnsConvergence::fullSweepDue", schedule_resolve)
+        self.assertIn("managedDnsConvergence::completeCacheRefreshDue", connection_controller)
+        self.assertIn("resumePartialCycle", schedule_resolve)
+        self.assertIn(": QString()", schedule_resolve)
         apply_payload = self.function_body(
             connection_controller,
             "bool ConnectionController::applyServerRoutingRulesPayload(",
         )
         source_change = apply_payload[apply_payload.index("if (managedSourceChanged)") :]
         self.assertIn("managedSplitTunnelClientResolveRetryAfter", source_change)
+        self.assertIn("managedSplitTunnelClientResolvePendingSites", source_change)
+        self.assertIn("managedSplitTunnelClientResolvePendingSourceDigest", source_change)
+        self.assertIn("managedSplitTunnelClientResolveLastFullSweepAt", source_change)
         self.assertEqual(finish_resolve.count("m_serversRepository->editServerJson"), 1)
         self.assertLess(persist, publish)
         self.assertIn("retriesOnlyFailuresAndKeepsSuccessfulResults", convergence_test)
@@ -8033,6 +8048,12 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
         self.assertIn("supersedingSourceCannotAcceptOldDomains", convergence_test)
         self.assertIn("boundedWavesFinalizeAtMostOnce", convergence_test)
         self.assertIn("retryAfterDelaysButDoesNotSuppressNextCycle", convergence_test)
+        self.assertIn("partialCycleRetriesOnlyPersistedFailures", convergence_test)
+        self.assertIn("scheduledRefreshChecksEveryDomain", convergence_test)
+        self.assertIn("firstReconnectIsImmediateThenTwoHourFloorApplies", convergence_test)
+        self.assertIn("reconnectRequestsCoalesceWithoutSlidingTheDeadline", convergence_test)
+        self.assertIn("externalReconnectPreservesPendingAtTheSameDeadline", convergence_test)
+        self.assertIn("partialCyclesStillRunADailyFullSweep", convergence_test)
         self.assertIn("QVERIFY(!state.tryFinalize())", convergence_test)
         self.assertIn("deferring managed route reconciliation until DNS convergence", connection_controller)
         self.assertIn("deferring managed route-mode transition until DNS convergence", connection_controller)
@@ -8048,12 +8069,69 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
         thread_guard = worker_reconcile.index("QThread::currentThread() != thread()")
         binding_gate = worker_reconcile.index("const bool bindingMatches")
         runtime_update = worker_reconcile.index("updateManagedSplitTunnelRoutes")
-        reconnect = worker_reconcile.index("reconnectToVpn()")
+        reconnect = worker_reconcile.index("scheduleManagedRouteReconnect(")
         self.assertLess(thread_guard, binding_gate)
         self.assertLess(binding_gate, runtime_update)
         self.assertLess(runtime_update, reconnect)
         self.assertIn("expectedConnectionEpoch == m_connectionEpoch", worker_reconcile)
         self.assertIn("expectedServerId == m_serverId", worker_reconcile)
+
+    def test_managed_route_reconnects_are_rate_limited_without_throttling_dns(self) -> None:
+        vpn_connection_h = (REPO_ROOT / "client/vpnConnection.h").read_text(encoding="utf-8")
+        vpn_connection = (REPO_ROOT / "client/vpnConnection.cpp").read_text(encoding="utf-8")
+        convergence = (
+            REPO_ROOT / "client/core/utils/managedDnsConvergence.h"
+        ).read_text(encoding="utf-8")
+
+        constructor = self.function_body(vpn_connection, "VpnConnection::VpnConnection(")
+        schedule = self.function_body(
+            vpn_connection, "void VpnConnection::scheduleManagedRouteReconnect("
+        )
+        flush = self.function_body(
+            vpn_connection, "void VpnConnection::flushManagedRouteReconnect()"
+        )
+        connect_to_vpn = self.function_body(vpn_connection, "void VpnConnection::connectToVpn(")
+        reconnect_to_vpn = self.function_body(vpn_connection, "void VpnConnection::reconnectToVpn()")
+        restore_connection = self.function_body(
+            vpn_connection, "void VpnConnection::restoreConnection("
+        )
+        disconnect_from_vpn = self.function_body(
+            vpn_connection, "void VpnConnection::disconnectFromVpn()"
+        )
+        rebuild = self.function_body(
+            vpn_connection, "void VpnConnection::rebuildManagedSplitTunnelRoutes("
+        )
+
+        self.assertIn("2LL * 60 * 60 * 1000", vpn_connection)
+        self.assertIn("ReconnectGate m_managedRouteReconnectGate", vpn_connection_h)
+        self.assertIn("QTimer m_managedRouteReconnectCooldownTimer", vpn_connection_h)
+        self.assertIn("m_managedRouteReconnectCooldownTimer.setSingleShot(true)", constructor)
+        self.assertIn("m_managedRouteReconnectGate.request", schedule)
+        self.assertIn("if (!request.newlyPending)", schedule)
+        self.assertIn("m_managedRouteReconnectGate.takeDue", flush)
+        self.assertIn("recordReconnectFloor()", flush)
+        self.assertIn("reconnectToVpn()", flush)
+        self.assertIn("m_managedRouteReconnectAwaitingBase", flush)
+        self.assertIn("latestPreparedManagedRouteSnapshotIsApplied", flush)
+        self.assertNotIn("start(1000)", flush)
+        applied = self.function_body(
+            vpn_connection,
+            "bool VpnConnection::latestPreparedManagedRouteSnapshotIsApplied() const",
+        )
+        self.assertIn("normalizedManagedRoutesForRuntime", applied)
+        self.assertIn("m_preparedLocalSites", applied)
+        self.assertIn("beginManagedRouteReconnectSession(serverId)", connect_to_vpn)
+        self.assertNotIn("recordReconnectFloor()", connect_to_vpn)
+        self.assertNotIn("beginManagedRouteReconnectSession", reconnect_to_vpn)
+        self.assertGreaterEqual(reconnect_to_vpn.count("recordReconnectFloor()"), 1)
+        self.assertIn("beginManagedRouteReconnectSession(serverId)", restore_connection)
+        self.assertIn("recordReconnectFloor()", restore_connection)
+        self.assertIn("clearManagedRouteReconnectSession()", disconnect_from_vpn)
+        self.assertIn("scheduleManagedRouteReconnect", rebuild)
+        self.assertNotIn("reconnectToVpn", rebuild)
+        self.assertIn("class ReconnectGate final", convergence)
+        self.assertIn("m_pending", convergence)
+        self.assertIn("m_lastReconnectMs", convergence)
 
     @unittest.skipUnless(find_sh(), "sh is required to validate the managed routing resolver")
     def test_server_managed_dns_recovery_is_bounded_atomic_and_preserves_lkg(self) -> None:
