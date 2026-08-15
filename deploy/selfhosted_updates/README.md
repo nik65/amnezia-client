@@ -191,8 +191,14 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.17` with Android
-`versionCode` `2151`, following the `4.9.2.16` / `2150` artifact set.
+The current self-hosted release line is `4.9.2.18` with Android
+`versionCode` `2152`, following the `4.9.2.17` / `2151` artifact set.
+
+Release notes for `4.9.2.18`: the elevated Windows batch runner reads the
+installation-directory security descriptor through the .NET ACL API instead
+of relying on path-sensitive Windows PowerShell module autoload. Trusted-owner
+and untrusted-writer checks therefore still run when the literal installation
+path contains safe shell metacharacters.
 
 Release notes for `4.9.2.17`: managed-domain DNS convergence continues in the
 background and persists successful answers while later cycles retry only the

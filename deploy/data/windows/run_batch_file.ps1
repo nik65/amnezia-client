@@ -29,7 +29,12 @@ $trustedWriterSids = @(
     "S-1-5-32-544",  # Administrators
     "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464" # TrustedInstaller
 )
-$rootAcl = Get-Acl -LiteralPath $PSScriptRoot -ErrorAction Stop
+# Avoid PowerShell module autoload here. Windows PowerShell 5.1 can fail to
+# autoload Microsoft.PowerShell.Security when the script path contains shell
+# metacharacters even though the path is passed literally. The .NET API reads
+# the same directory security descriptor without that path-sensitive module
+# loader.
+$rootAcl = [IO.Directory]::GetAccessControl($PSScriptRoot)
 $ownerAccount = [Security.Principal.NTAccount]::new($rootAcl.Owner)
 $ownerSid = $ownerAccount.Translate([Security.Principal.SecurityIdentifier]).Value
 if ($ownerSid -notin $trustedWriterSids) {
