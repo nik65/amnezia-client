@@ -127,3 +127,5 @@ jobs:
           git add "AmneziaVPN-Windows-IPv6-fix.exe" "SHA256.txt"
           git commit -m "Publish Windows IPv6 fix installer"
           git push --force origin HEAD:refs/heads/build-artifacts/windows-ipv6-fix
+
+# Triggered after GitHub Actions was enabled on the fork.
