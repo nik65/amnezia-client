@@ -693,8 +693,10 @@ bool WindowsFirewall::enablePeerTraffic(const InterfaceConfig& config) {
 }
 
 bool WindowsFirewall::blockIpv6TrafficForPeer(const QString& peer) {
-  if (peer.isEmpty() || !m_policyStateKnown ||
-      !m_orphanedRules.isEmpty() || m_baseRules.isEmpty()) {
+  // IPv6 leak protection is independent of the full kill switch. When the
+  // kill switch is disabled, allowAllTraffic() intentionally clears
+  // m_baseRules, but this peer-specific block still has to be installable.
+  if (peer.isEmpty() || !m_policyStateKnown || !m_orphanedRules.isEmpty()) {
     return false;
   }
   if (m_ipv6BlockRules.contains(peer)) {
