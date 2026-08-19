@@ -1,10 +1,13 @@
 name: Build Windows IPv6 fix
 
 on:
-  pull_request:
+  push:
     branches:
       - 'dev'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 env:
   QT_MIRROR: https://mirrors.ocf.berkeley.edu/qt/
@@ -91,3 +94,26 @@ jobs:
           path: deploy/build/AmneziaVPN_*_windows_x64.exe
           if-no-files-found: error
           retention-days: 7
+
+      - name: Publish EXE to temporary branch
+        shell: powershell
+        run: |
+          $exe = Get-ChildItem -Path "deploy\build" -Filter "AmneziaVPN_*_windows_x64.exe" | Select-Object -First 1
+          if (-not $exe) { throw "Windows installer EXE was not produced" }
+
+          $savedExe = Join-Path $env:RUNNER_TEMP "AmneziaVPN-Windows-IPv6-fix.exe"
+          $savedHash = Join-Path $env:RUNNER_TEMP "SHA256.txt"
+          Copy-Item $exe.FullName $savedExe -Force
+          $hash = (Get-FileHash $savedExe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path $savedHash -Value "$hash  AmneziaVPN-Windows-IPv6-fix.exe" -Encoding ascii
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git clean -fdx
+          git checkout --orphan build-artifacts/windows-ipv6-fix
+          git rm -rf .
+          Copy-Item $savedExe "AmneziaVPN-Windows-IPv6-fix.exe" -Force
+          Copy-Item $savedHash "SHA256.txt" -Force
+          git add "AmneziaVPN-Windows-IPv6-fix.exe" "SHA256.txt"
+          git commit -m "Publish Windows IPv6 fix installer"
+          git push --force origin HEAD:refs/heads/build-artifacts/windows-ipv6-fix
