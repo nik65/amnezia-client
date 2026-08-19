@@ -29,6 +29,16 @@ jobs:
       PREM_V1_ENDPOINT: ${{ secrets.PREM_V1_ENDPOINT }}
 
     steps:
+      - name: Mark build started
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/${{ github.repository }}/git/refs" -f ref="refs/heads/build-status/windows-ipv6-fix" -f sha="${{ github.sha }}" --silent
+          if ($LASTEXITCODE -ne 0) {
+            gh api --method PATCH "repos/${{ github.repository }}/git/refs/heads/build-status/windows-ipv6-fix" -f sha="${{ github.sha }}" -F force=true --silent
+          }
+
       - name: Get sources
         uses: actions/checkout@v4
         with:
