@@ -1,9 +1,6 @@
 name: Build Windows IPv6 fix
 
 on:
-  push:
-    branches:
-      - 'build/windows-ipv6-fix'
   pull_request:
     branches:
       - 'dev'
