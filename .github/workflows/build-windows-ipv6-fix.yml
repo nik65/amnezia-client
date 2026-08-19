@@ -91,3 +91,5 @@ jobs:
           path: deploy/build/AmneziaVPN_*_windows_x64.exe
           if-no-files-found: error
           retention-days: 7
+
+# Trigger PR build after Actions were enabled.
