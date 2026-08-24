@@ -208,4 +208,3 @@ QString ProtocolUtils::key_proto_config_path(Proto p)
 {
     return protoToString(p) + "_config_path";
 }
-
