@@ -4,7 +4,6 @@
 #include <QAbstractListModel>
 #include <QVector>
 #include <QPair>
-#include <QStringList>
 
 class IpSplitTunnelingModel : public QAbstractListModel
 {
@@ -26,7 +25,7 @@ public:
     int count() const;
 
 public slots:
-    void updateModel(const QVector<QPair<QString, QStringList>> &sites);
+    void updateModel(const QVector<QPair<QString, QString>> &sites);
 
 signals:
     void countChanged();
@@ -35,7 +34,7 @@ protected:
     QHash<int, QByteArray> roleNames() const override;
 
 private:
-    QVector<QPair<QString, QStringList>> m_sites;
+    QVector<QPair<QString, QString>> m_sites;
 };
 
 #endif // IPSPLITTUNNELINGMODEL_H

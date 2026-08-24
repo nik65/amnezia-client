@@ -22,7 +22,7 @@ QVariant IpSplitTunnelingModel::data(const QModelIndex &index, int role) const
         break;
     }
     case IpRole: {
-        return m_sites.at(index.row()).second.join(", ");
+        return m_sites.at(index.row()).second;
         break;
     }
     default: {
@@ -33,11 +33,17 @@ QVariant IpSplitTunnelingModel::data(const QModelIndex &index, int role) const
     return QVariant();
 }
 
-void IpSplitTunnelingModel::updateModel(const QVector<QPair<QString, QStringList>> &sites)
+int IpSplitTunnelingModel::count() const
+{
+    return rowCount();
+}
+
+void IpSplitTunnelingModel::updateModel(const QVector<QPair<QString, QString>> &sites)
 {
     beginResetModel();
     m_sites = sites;
     endResetModel();
+    emit countChanged();
 }
 
 QHash<int, QByteArray> IpSplitTunnelingModel::roleNames() const
