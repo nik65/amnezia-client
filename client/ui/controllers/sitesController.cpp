@@ -300,7 +300,12 @@ void SitesController::reloadManagedSites()
     if (!m_managedExceptSitesModel) {
         return;
     }
-    m_managedExceptSitesModel->updateModel(currentManagedSites(RouteMode::VpnAllExceptSites));
+
+    QVector<QPair<QString, QStringList>> modelSites;
+    for (const auto &site : currentManagedSites(RouteMode::VpnAllExceptSites)) {
+        modelSites.append({site.first, QStringList{site.second}});
+    }
+    m_managedExceptSitesModel->updateModel(modelSites);
 }
 
 void SitesController::reloadDefaultManagedSites()
@@ -308,8 +313,13 @@ void SitesController::reloadDefaultManagedSites()
     if (!m_managedExceptSitesModel) {
         return;
     }
-    m_managedExceptSitesModel->updateModel(
-            managedSitesForServer(m_serversRepository->defaultServerIndex(), RouteMode::VpnAllExceptSites));
+
+    QVector<QPair<QString, QStringList>> modelSites;
+    for (const auto &site : managedSitesForServer(m_serversRepository->defaultServerIndex(),
+                                                  RouteMode::VpnAllExceptSites)) {
+        modelSites.append({site.first, QStringList{site.second}});
+    }
+    m_managedExceptSitesModel->updateModel(modelSites);
 }
 
 QJsonObject SitesController::managedRoutingRulesPayload(int serverIndex) const
