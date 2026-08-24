@@ -18,7 +18,6 @@
 #include <QUrlQuery>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSysInfo>
 #include <QTimer>
 #include <QUuid>
 #include <QVector>
@@ -48,6 +47,7 @@
 #include "logger.h"
 #include "version.h"
 #include "core/controllers/gatewayController.h"
+#include "core/utils/api/gatewayPayloadBuilder.h"
 #include "core/utils/constants/apiKeys.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/constants/protocolConstants.h"
@@ -2701,10 +2701,9 @@ void UpdateController::fetchGatewayUrl()
                                                                        m_appSettingsRepository->isStrictKillSwitchEnabled(),
                                                                        m_appSettingsRepository);
 
-    QJsonObject apiPayload;
-    apiPayload[apiDefs::key::cliVersion] = QString(APP_VERSION);
-    apiPayload[apiDefs::key::osVersion] = QSysInfo::productType();
-    apiPayload[apiDefs::key::installationUuid] = m_appSettingsRepository->getInstallationUuid(true);
+    QJsonObject apiPayload = GatewayPayloadBuilder(m_appSettingsRepository)
+                                     .addField(apiDefs::key::cliVersion, QString(APP_VERSION))
+                                     .build();
 
     // Workaround: wait before contacting gateway to avoid rate limit triggered by other requests (news etc.)
     QTimer::singleShot(1000, this, [this, gatewayController, apiPayload]() {

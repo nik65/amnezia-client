@@ -634,7 +634,7 @@ PageType {
             ListView {
                 id: clientsListView
                 Layout.fillWidth: true
-                Layout.preferredHeight: childrenRect.height
+                Layout.preferredHeight: contentHeight
 
                 visible: accessTypeSelector.currentIndex === 1
 

@@ -22,6 +22,8 @@ Item {
     property string buttonImageSource
     property string rightImageSource
     property string leftImageSource
+    property string rightWarningImageSource
+    property string rightWarningImageColor: AmneziaStyle.color.goldenApricot
     property bool isLeftImageHoverEnabled: true
     property bool isSmallLeftImage: false
 
@@ -56,11 +58,11 @@ Item {
     Keys.onUpPressed: {
         FocusController.nextKeyUpItem()
     }
-    
+
     Keys.onDownPressed: {
         FocusController.nextKeyDownItem()
     }
-    
+
     Keys.onLeftPressed: {
         FocusController.nextKeyLeftItem()
     }
@@ -68,7 +70,7 @@ Item {
     Keys.onRightPressed: {
         FocusController.nextKeyRightItem()
     }
-    
+
     implicitWidth: content.implicitWidth + content.anchors.topMargin + content.anchors.bottomMargin
     implicitHeight: content.implicitHeight + content.anchors.leftMargin + content.anchors.rightMargin
 
@@ -222,6 +224,33 @@ Item {
                 function replaceWithAsterisks(input) {
                     return '*'.repeat(input.length)
                 }
+            }
+        }
+
+        Rectangle {
+            id: rightWarningImageBackground
+
+            visible: rightWarningImageSource !== ""
+
+            Layout.preferredWidth: 40
+            Layout.preferredHeight: 40
+            Layout.alignment: Qt.AlignRight
+
+            radius: 12
+            color: AmneziaStyle.color.transparent
+
+            Image {
+                id: rightWarningImage
+
+                anchors.centerIn: parent
+                source: rightWarningImageSource
+                visible: false
+            }
+
+            ColorOverlay {
+                anchors.fill: rightWarningImage
+                source: rightWarningImage
+                color: rightWarningImageColor
             }
         }
 
