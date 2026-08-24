@@ -93,6 +93,18 @@ target_include_directories(${PROJECT} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
 )
 
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/core/utils)
+configure_file(
+    ${CMAKE_CURRENT_LIST_DIR}/core/utils/appUiConfig.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/core/utils/appUiConfig.h
+    @ONLY
+)
+configure_file(
+    ${CMAKE_CURRENT_LIST_DIR}/core/utils/swiftBridgeConfig.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/core/utils/swiftBridgeConfig.h
+    @ONLY
+)
+
 if(WIN32 OR (APPLE AND NOT IOS AND NOT MACOS_NE) OR (LINUX AND NOT ANDROID))
     qt_add_repc_replicas(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/../ipc/ipc_interface.rep)
     qt_add_repc_replicas(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/../ipc/ipc_process_interface.rep)
