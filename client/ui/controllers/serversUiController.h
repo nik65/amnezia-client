@@ -29,6 +29,7 @@ class ServersUiController : public QObject
     Q_PROPERTY(bool isDefaultServerFromApi READ isDefaultServerFromApi NOTIFY defaultServerIdChanged)
     Q_PROPERTY(QString defaultServerServiceProtocol READ getDefaultServerServiceProtocol NOTIFY defaultServerIdChanged)
     Q_PROPERTY(QStringList defaultServerAvailableProtocols READ getDefaultServerAvailableProtocols NOTIFY defaultServerIdChanged)
+    Q_PROPERTY(bool defaultServerHasOutdatedAwgContainer READ defaultServerHasOutdatedAwgContainer NOTIFY defaultServerIdChanged)
     
     Q_PROPERTY(QString processedServerId READ getProcessedServerId WRITE setProcessedServerId NOTIFY processedServerIdChanged)
     Q_PROPERTY(int processedServerIndex READ getProcessedServerIndex NOTIFY processedServerIndexChanged)
@@ -76,6 +77,11 @@ public slots:
     QString getDefaultServerServiceProtocol() const;
     QStringList getDefaultServerAvailableProtocols() const;
     bool hasServerWithWriteAccess() const;
+
+    bool serverHasOutdatedAwgContainer(const QString &serverId) const;
+    bool defaultServerHasOutdatedAwgContainer() const;
+    bool isContainerOutdatedAwg(int containerIndex) const;
+    bool isProcessedContainerOutdatedAwg() const;
 
     QString serverName(const QString &serverId) const;
     QString serverHostName(const QString &serverId) const;
