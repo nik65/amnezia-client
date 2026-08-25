@@ -4,6 +4,16 @@
 #include <QObject>
 #include <QQmlEngine>
 
+// Single canonical definition of PageLoader::PageEnum.
+//
+// History: upstream introduced this file in the branding rework while the
+// fork still carried its own copy of the enum inside
+// ui/controllers/qml/pageController.h. Two Q_NAMESPACE definitions of the
+// same enum made AUTOMOC emit colliding meta-objects and broke the build.
+// The lists were merged here: fork entries first, in the exact fork order
+// (numeric values are part of the stored UI state contract), followed by
+// the upstream-only entry at the end.
+
 namespace PageLoader
 {
     Q_NAMESPACE
@@ -12,7 +22,6 @@ namespace PageLoader
         PageHome,
         PageShare,
         PageDeinstalling,
-        PageAbout,
 
         PageSettingsServersList,
         PageSettings,
@@ -20,6 +29,7 @@ namespace PageLoader
         PageSettingsServerInfo,
         PageSettingsServerProtocols,
         PageSettingsServerServices,
+        PageSettingsServerManagedSplitTunneling,
         PageSettingsServerProtocol,
         PageSettingsConnection,
         PageSettingsDns,
@@ -82,10 +92,13 @@ namespace PageLoader
         PageProtocolXraySnapshots,
         PageProtocolXrayTransportSettings,
         PageProtocolXrayXmuxSettings,
-        PageProtocolXrayXPaddingSettings,
         PageProtocolXrayFlowSettings,
         PageProtocolXraySecuritySettings,
+        PageProtocolXrayXPaddingSettings,
         PageProtocolXrayXPaddingBytesSettings,
+
+        PageFleetCenter,
+        PageRouteInspector,
 
         PageSettingsLanguage,
     };
