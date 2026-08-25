@@ -35,6 +35,23 @@ set(APP_MAJOR_VERSION ${CMAKE_PROJECT_VERSION_MAJOR}.${CMAKE_PROJECT_VERSION_MIN
 # Keep the fork code monotonic beyond upstream 5.0.1.5 (2152).
 set(APP_ANDROID_VERSION_CODE 2154)
 
+# Branding defaults must load before any subproject configures version.h.in:
+# APPLICATION_NAME / SERVICE_NAME / ORGANIZATION_NAME are expanded from
+# CLIENT_* variables there, and both the client and the service targets
+# consume the generated header. Without these defaults the placeholders
+# expand to empty strings, which silently changes the QSettings identity
+# (user data appears "reset") and breaks IPC trust with the privileged
+# service (Error 103 AmneziaServiceNotRunning).
+include(${CMAKE_CURRENT_LIST_DIR}/client/cmake/clientBrandingDefaults.cmake)
+foreach(_branding_var IN ITEMS
+        CLIENT_APPLICATION_NAME
+        CLIENT_SERVICE_NAME
+        CLIENT_ORGANIZATION_NAME)
+    if("${${_branding_var}}" STREQUAL "")
+        message(FATAL_ERROR "Required branding variable is empty: ${_branding_var}")
+    endif()
+endforeach()
+
 if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
     set(MZ_PLATFORM_NAME "linux")
 elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
