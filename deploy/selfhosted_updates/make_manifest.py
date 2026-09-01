@@ -49,6 +49,7 @@ ED25519_PUBLIC_KEY_DER_BYTES = len(ED25519_PUBLIC_KEY_DER_PREFIX) + 32
 MAX_POLICY_GENERATION = (1 << 53) - 1
 MAX_VERSION_COMPONENT = (1 << 31) - 1
 MAX_ANDROID_VERSION_CODE = 2_100_000_000
+HEADLESS_ARTIFACT_FORMAT = "amnezia-headless-tar-v1"
 
 
 def openssl_command() -> str:
@@ -181,6 +182,12 @@ def is_android_platform(platform: object) -> bool:
     )
 
 
+def is_headless_platform(platform: object) -> bool:
+    return isinstance(platform, str) and (
+        platform == "linux-headless" or platform.startswith("linux-headless-")
+    )
+
+
 def validate_android_version_code(value: object, option_name: str = "--android-version-code") -> int:
     if (
         isinstance(value, bool)
@@ -268,7 +275,11 @@ def validate_local_artifact_metadata(
     if not isinstance(artifact, dict):
         raise SystemExit(f"{context} platform {platform} must be an object")
     required_keys = {"url", "sha256", "size", "autoInstall"}
-    optional_keys = {"versionCode"} if is_android_platform(platform) else set()
+    optional_keys = set()
+    if is_android_platform(platform):
+        optional_keys.add("versionCode")
+    if is_headless_platform(platform):
+        optional_keys.add("format")
     if set(artifact) - optional_keys != required_keys:
         missing = sorted(required_keys - set(artifact))
         unknown = sorted(set(artifact) - required_keys - optional_keys)
@@ -300,6 +311,10 @@ def validate_local_artifact_metadata(
         raise SystemExit(f"{context} platform {platform} must have a positive integer size")
     if not isinstance(artifact["autoInstall"], bool):
         raise SystemExit(f"{context} platform {platform} autoInstall must be a boolean")
+    if is_headless_platform(platform) and artifact.get("format") != HEADLESS_ARTIFACT_FORMAT:
+        raise SystemExit(
+            f"{context} platform {platform} format must be {HEADLESS_ARTIFACT_FORMAT!r}"
+        )
     if is_android_platform(platform):
         if require_android_version_code and "versionCode" not in artifact:
             raise SystemExit(f"{context} platform {platform} must have versionCode")
@@ -1162,6 +1177,8 @@ def main() -> int:
             "size": target.stat().st_size,
             "autoInstall": args.auto_install,
         }
+        if is_headless_platform(platform):
+            artifact_metadata["format"] = HEADLESS_ARTIFACT_FORMAT
         if is_android_platform(platform) and android_version_code is not None:
             artifact_metadata["versionCode"] = android_version_code
         add_platform(platform, artifact_metadata)
@@ -1194,6 +1211,8 @@ def main() -> int:
                 "size": target.stat().st_size,
                 "autoInstall": args.auto_install,
             }
+            if is_headless_platform(platform):
+                rollback_platforms[platform]["format"] = HEADLESS_ARTIFACT_FORMAT
 
     if args.ios_ipa:
         require_https_base_url_for_ios_ota(base_url)

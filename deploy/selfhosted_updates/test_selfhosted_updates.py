@@ -5655,6 +5655,50 @@ class ManifestPublisherTests(unittest.TestCase):
             self.assertRegex(platform["url"], rf"^files/artifacts/{platform['sha256']}/")
             self.assertTrue((out_dir / unquote(platform["url"])).is_file())
 
+    def test_headless_manifest_declares_required_artifact_format(self) -> None:
+        version = "9.9.9.9"
+        artifact = self.write_artifact(
+            f"AmneziaHeadless_{version}_linux_x64.tar.gz",
+            b"headless release archive",
+        )
+        out_dir = self.root / "headless-format"
+        subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "make_manifest.py"),
+                "--version",
+                version,
+                "--base-url",
+                "https://updates.example.invalid",
+                "--private-key",
+                str(self.private_key),
+                "--out-dir",
+                str(out_dir),
+                "--artifact",
+                f"linux-headless-x64={artifact}",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+        platform = manifest_payload(out_dir / "manifest.json")["platforms"]["linux-headless-x64"]
+        self.assertEqual(platform["format"], make_manifest.HEADLESS_ARTIFACT_FORMAT)
+        make_manifest.validate_local_artifact_metadata(
+            "linux-headless-x64",
+            platform,
+            context="test manifest",
+        )
+
+        without_format = dict(platform)
+        without_format.pop("format")
+        with self.assertRaises(SystemExit):
+            make_manifest.validate_local_artifact_metadata(
+                "linux-headless-x64",
+                without_format,
+                context="test manifest",
+            )
+
     def test_manifest_rejects_case_insensitive_artifact_basename_collisions(self) -> None:
         first_dir = self.root / "case-first"
         second_dir = self.root / "case-second"
