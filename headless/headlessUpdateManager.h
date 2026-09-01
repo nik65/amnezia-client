@@ -1,0 +1,95 @@
+#ifndef AMNEZIA_HEADLESS_UPDATE_MANAGER_H
+#define AMNEZIA_HEADLESS_UPDATE_MANAGER_H
+
+#include <QJsonObject>
+#include <QString>
+#include <QUrl>
+
+#include <memory>
+
+#include "profileStore.h"
+#include "vpnBackend.h"
+
+namespace amnezia::headless
+{
+
+struct HeadlessUpdateResult
+{
+    bool ok = false;
+    QString code;
+    QString message;
+};
+
+class HeadlessUpdateManager final
+{
+public:
+    explicit HeadlessUpdateManager(std::shared_ptr<CommandRunner> runner = {},
+                                   QString statePath = {},
+                                   QString installDirectory = {});
+
+    // A check is deliberately synchronous: the daemon invokes it from its
+    // low-frequency timer, while all network and archive bounds are finite.
+    HeadlessUpdateResult checkAndApply(const Profile &profile,
+                                       const QString &currentVersion);
+    HeadlessUpdateResult rollback();
+    QJsonObject status() const;
+
+private:
+    struct Candidate
+    {
+        QString version;
+        QString platform;
+        QUrl url;
+        QString sha256;
+        qint64 size = -1;
+        bool autoInstall = false;
+        QString format;
+    };
+
+    HeadlessUpdateResult failure(const QString &code, const QString &message);
+    HeadlessUpdateResult parseManifest(const QByteArray &manifest,
+                                       const QUrl &manifestUrl,
+                                       const QString &publicKeyPath,
+                                       const QString &currentVersion,
+                                       Candidate &candidate) const;
+    bool download(const Candidate &candidate, const QString &path,
+                  QString *error) const;
+    bool extract(const Candidate &candidate, const QString &archivePath,
+                 const QString &directory, QString *error) const;
+    bool install(const Candidate &candidate, const QString &payloadDirectory,
+                 const QString &currentVersion, QString *error);
+    bool restartService(QString *error) const;
+    bool restoreRollback(QString *error);
+    bool loadState();
+    bool saveState() const;
+    static bool verifyEnvelope(const QJsonObject &envelope,
+                               const QString &publicKeyPath,
+                               QByteArray &payload);
+    static bool decodeStrict(const QByteArray &encoded, bool urlSafe,
+                             QByteArray &decoded);
+    static bool validVersion(const QString &value);
+    static bool validSha256(const QString &value);
+    static bool validArtifactUrl(const QUrl &manifestUrl,
+                                 const QString &rawUrl,
+                                 QUrl &resolved);
+    static bool runProcess(const QString &program, const QStringList &arguments,
+                           int timeoutMs, QString *output, QString *error);
+    static bool atomicReplace(const QString &source, const QString &destination,
+                              QString *error);
+
+    std::shared_ptr<CommandRunner> m_runner;
+    QString m_statePath;
+    QString m_updateRoot;
+    QString m_installDirectory;
+    QString m_lastCheckedAt;
+    QString m_lastAppliedVersion;
+    QString m_lastState = QStringLiteral("never_checked");
+    QString m_lastError;
+    QString m_rollbackDirectory;
+    QString m_rollbackVersion;
+    QString m_candidatePlatform;
+};
+
+} // namespace amnezia::headless
+
+#endif // AMNEZIA_HEADLESS_UPDATE_MANAGER_H

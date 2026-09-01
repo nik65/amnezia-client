@@ -1,0 +1,24 @@
+[Unit]
+Description=AmneziaVPN headless system daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=amnezia
+RuntimeDirectory=amnezia
+RuntimeDirectoryMode=0750
+StateDirectory=amnezia
+StateDirectoryMode=0750
+UMask=0007
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/amneziad --socket /run/amnezia/amneziad.sock --store /var/lib/amnezia/profiles.json --config-root /etc/amnezia/profiles --require-root-owned-config
+Restart=on-failure
+RestartSec=2
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/amnezia /run/amneziawg /var/lib/amnezia
+ReadWritePaths=@CMAKE_INSTALL_FULL_BINDIR@
+
+[Install]
+WantedBy=multi-user.target

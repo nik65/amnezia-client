@@ -685,6 +685,193 @@ def verify_payload_signature(private_key: Path, payload: bytes, signature_base64
         )
 
 
+def verify_public_key_matches_private(public_key_base64: str, private_key: Path) -> None:
+    """Verify the public key embedded in clients belongs to the signing key."""
+
+    if any(character.isspace() for character in public_key_base64):
+        raise SystemExit("SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 must not contain whitespace or line breaks")
+    try:
+        public_key_pem = base64.b64decode(public_key_base64, validate=True)
+    except Exception as error:
+        raise SystemExit(
+            "SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 must be a single-line base64-encoded PEM public key"
+        ) from error
+    if b"BEGIN PUBLIC KEY" not in public_key_pem:
+        raise SystemExit("SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 must decode to a PEM public key")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        public_key_path = tmp_dir / "public.pem"
+        normalized_public_key_path = tmp_dir / "normalized-public.der"
+        derived_public_key_path = tmp_dir / "derived-public.der"
+        public_key_path.write_bytes(public_key_pem)
+        try:
+            subprocess.run(
+                [
+                    openssl_command(),
+                    "pkey",
+                    "-pubin",
+                    "-in",
+                    str(public_key_path),
+                    "-pubout",
+                    "-outform",
+                    "DER",
+                    "-out",
+                    str(normalized_public_key_path),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                [
+                    openssl_command(),
+                    "pkey",
+                    "-in",
+                    str(private_key),
+                    "-pubout",
+                    "-outform",
+                    "DER",
+                    "-out",
+                    str(derived_public_key_path),
+                ],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as error:
+            raise SystemExit("SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 must decode to a valid Ed25519 public key") from error
+        normalized_public_key = normalized_public_key_path.read_bytes()
+        derived_public_key = derived_public_key_path.read_bytes()
+        if (
+            len(normalized_public_key) != ED25519_PUBLIC_KEY_DER_BYTES
+            or not normalized_public_key.startswith(ED25519_PUBLIC_KEY_DER_PREFIX)
+        ):
+            raise SystemExit("SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 must contain an Ed25519 public key")
+        if (
+            len(derived_public_key) != ED25519_PUBLIC_KEY_DER_BYTES
+            or not derived_public_key.startswith(ED25519_PUBLIC_KEY_DER_PREFIX)
+        ):
+            raise SystemExit("SELFHOSTED_UPDATE_PRIVATE_KEY must contain an Ed25519 private key")
+        if normalized_public_key != derived_public_key:
+            raise SystemExit("SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 does not match SELFHOSTED_UPDATE_PRIVATE_KEY")
+
+
+def decode_manifest_envelope(manifest_data: bytes) -> tuple[dict[str, object], bytes, str]:
+    """Decode the signed envelope without contacting or publishing to a server."""
+
+    if len(manifest_data) > MAX_MANIFEST_RESPONSE_BYTES:
+        raise SystemExit("Update manifest exceeds the client-compatible 1 MiB response limit")
+    try:
+        manifest = json.loads(manifest_data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit("Update manifest is not valid UTF-8 JSON") from error
+    if not isinstance(manifest, dict):
+        raise SystemExit("Update manifest envelope must be an object")
+    if manifest.get("schema") != "amnezia-selfhosted-update-v1":
+        raise SystemExit(f"Unexpected manifest schema: {manifest.get('schema')!r}")
+    if manifest.get("signatureAlgorithm") != "Ed25519":
+        raise SystemExit(f"Unexpected manifest signature algorithm: {manifest.get('signatureAlgorithm')!r}")
+    encoded_payload = manifest.get("payload")
+    encoded_signature = manifest.get("signature")
+    if not isinstance(encoded_payload, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", encoded_payload):
+        raise SystemExit("Update manifest payload is not strict unpadded base64url")
+    if not isinstance(encoded_signature, str):
+        raise SystemExit("Update manifest signature is missing")
+    try:
+        payload_bytes = base64.b64decode(
+            encoded_payload + "=" * (-len(encoded_payload) % 4),
+            altchars=b"-_",
+            validate=True,
+        )
+        signature = base64.b64decode(encoded_signature, validate=True)
+    except (ValueError, TypeError) as error:
+        raise SystemExit("Update manifest payload or signature is not valid base64") from error
+    if not payload_bytes:
+        raise SystemExit("Update manifest payload is empty")
+    if len(signature) != 64:
+        raise SystemExit("Update manifest signature is not a 64-byte Ed25519 signature")
+    try:
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit("Update manifest payload is not valid UTF-8 JSON") from error
+    if not isinstance(payload, dict):
+        raise SystemExit("Update manifest payload must be an object")
+    return payload, payload_bytes, encoded_signature
+
+
+def verify_manifest(
+    manifest_path: Path,
+    private_key: Path,
+    expected_version: str,
+    required_platforms: set[str],
+    auto_install: bool,
+    expected_payload_schema: int = 1,
+    expected_policy_generation: int | None = None,
+    expected_android_version_code: int | None = None,
+) -> None:
+    """Verify a locally generated payload before the self-hosted client receives it."""
+
+    if not manifest_path.is_file() or manifest_path.is_symlink():
+        raise SystemExit("Generated manifest must be a regular file")
+    if manifest_path.stat().st_size > MAX_MANIFEST_RESPONSE_BYTES:
+        raise SystemExit("Update manifest exceeds the client-compatible 1 MiB response limit")
+    payload, payload_bytes, signature = decode_manifest_envelope(manifest_path.read_bytes())
+    if payload.get("schema") != expected_payload_schema:
+        raise SystemExit(f"Unexpected manifest payload schema: {payload.get('schema')!r}")
+    if expected_payload_schema == 1 and "releasePolicy" in payload:
+        raise SystemExit("Payload schema 1 must not contain releasePolicy")
+    if expected_payload_schema == 2:
+        policy = payload.get("releasePolicy")
+        if not isinstance(policy, dict) or policy.get("schema") != 2:
+            raise SystemExit("Payload schema 2 must contain releasePolicy schema 2")
+        generation = policy.get("generation")
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation <= 0:
+            raise SystemExit("Payload schema 2 releasePolicy has invalid generation")
+        if expected_policy_generation is not None and generation != expected_policy_generation:
+            raise SystemExit(
+                f"Generated policy generation {generation!r} does not match requested generation "
+                f"{expected_policy_generation!r}"
+            )
+    elif expected_payload_schema != 1:
+        raise SystemExit(f"Unsupported expected payload schema: {expected_payload_schema!r}")
+    if payload.get("version") != expected_version:
+        raise SystemExit(
+            f"Generated manifest version {payload.get('version')!r} does not match requested version "
+            f"{expected_version!r}"
+        )
+    platforms = payload.get("platforms")
+    if not isinstance(platforms, dict):
+        raise SystemExit("Generated manifest platforms must be an object")
+    missing = sorted(required_platforms - set(platforms))
+    if missing:
+        raise SystemExit("Generated manifest is missing required platforms: " + ", ".join(missing))
+    for platform, artifact in platforms.items():
+        if not isinstance(platform, str) or not isinstance(artifact, dict):
+            raise SystemExit(f"Generated manifest platform {platform!r} must be an object")
+        if artifact.get("openExternal"):
+            url = artifact.get("url")
+            if not isinstance(url, str):
+                raise SystemExit(f"Generated manifest platform {platform} is missing an external URL")
+            validate_external_url(platform, url)
+        else:
+            validate_local_artifact_metadata(
+                platform,
+                artifact,
+                context="Generated manifest",
+                require_android_version_code=expected_payload_schema == 2,
+            )
+            if expected_android_version_code is not None and is_android_platform(platform):
+                if artifact.get("versionCode") != expected_android_version_code:
+                    raise SystemExit(
+                        f"Generated manifest platform {platform} versionCode does not match the requested Android versionCode"
+                    )
+    if auto_install:
+        if payload.get("autoInstall") is not True:
+            raise SystemExit("Generated manifest is missing top-level autoInstall=true")
+        if any(artifact.get("autoInstall") is not True for artifact in platforms.values()):
+            raise SystemExit("Generated manifest is missing autoInstall=true for a platform")
+    verify_payload_signature(private_key, payload_bytes, signature)
+
+
 def parse_artifact(values: list[str]) -> dict[str, Path]:
     artifacts: dict[str, Path] = {}
     for value in values:
@@ -1120,16 +1307,12 @@ def main() -> int:
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_bytes(manifest_bytes)
     if (args.public_key_base64 or args.require_platform) and args.payload_schema == 1:
-        from publish_release import verify_manifest, verify_public_key_matches_private
-
         if args.public_key_base64:
             verify_public_key_matches_private(args.public_key_base64, private_key)
         verify_manifest(manifest_path, private_key, version, set(args.require_platform), args.auto_install)
         print("Verified self-hosted update manifest signature and required platforms", flush=True)
     elif args.payload_schema == 2:
         if args.public_key_base64:
-            from publish_release import verify_public_key_matches_private
-
             verify_public_key_matches_private(args.public_key_base64, private_key)
         print("Verified schema-2 manifest signature, signing key, and required platforms", flush=True)
     if args.payload_schema == 2:

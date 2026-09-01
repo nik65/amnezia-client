@@ -1,13 +1,16 @@
 [CmdletBinding()]
 param(
-    [ValidateSet("windows", "linux", "android")]
-    [string[]] $BuildPlatform = @("windows", "linux", "android"),
+    [ValidateSet("windows", "linux", "android", "headless")]
+    [string[]] $BuildPlatform = @("windows", "linux", "android", "headless"),
     [string[]] $RequirePlatform = @(
         "windows-x64",
         "linux-x64",
-        "android-arm64-v8a"
+        "android-arm64-v8a",
+        "linux-headless-x64"
     ),
     [int] $BuildJobs = 0,
+    [string] $HeadlessOpenSslIncludeDir = "",
+    [string] $HeadlessOpenSslCryptoLibrary = "",
     [string] $EnvFile = "",
     [string] $LogDir = "",
     [ValidateSet(1, 2)]
@@ -72,6 +75,12 @@ function New-LocalReleaseCommand([switch] $PreflightCommand) {
     )
     if ($BuildJobs -gt 0) {
         $parts += @("-BuildJobs", [string] $BuildJobs)
+    }
+    if ($RebuildBoundParameters.ContainsKey("HeadlessOpenSslIncludeDir")) {
+        $parts += @("-HeadlessOpenSslIncludeDir", (Quote-PowerShellString $HeadlessOpenSslIncludeDir))
+    }
+    if ($RebuildBoundParameters.ContainsKey("HeadlessOpenSslCryptoLibrary")) {
+        $parts += @("-HeadlessOpenSslCryptoLibrary", (Quote-PowerShellString $HeadlessOpenSslCryptoLibrary))
     }
     if ($NoBundleUpdatesInWindowsClient) {
         $parts += "-NoBundleUpdatesInWindowsClient"

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $Version = "",
-    [ValidateSet("windows", "linux", "android")]
+    [ValidateSet("windows", "linux", "android", "headless")]
     [string[]] $BuildPlatform = @("windows", "linux", "android"),
     [string[]] $RequirePlatform = @(
         "windows-x64",
@@ -17,6 +17,8 @@ param(
     [string] $PrivateKey = $env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH,
     [string] $PublicKeyBase64 = $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64,
     [string] $WslAndroidHome = $(if ($env:WSL_ANDROID_HOME) { $env:WSL_ANDROID_HOME } else { "" }),
+    [string] $HeadlessOpenSslIncludeDir = $(if ($env:AMNEZIA_HEADLESS_OPENSSL_INCLUDE_DIR) { $env:AMNEZIA_HEADLESS_OPENSSL_INCLUDE_DIR } else { "" }),
+    [string] $HeadlessOpenSslCryptoLibrary = $(if ($env:AMNEZIA_HEADLESS_OPENSSL_CRYPTO_LIBRARY) { $env:AMNEZIA_HEADLESS_OPENSSL_CRYPTO_LIBRARY } else { "" }),
     [ValidateSet(1, 2)]
     [int] $PayloadSchema = $(if ($env:SELFHOSTED_UPDATE_PAYLOAD_SCHEMA) { [int] $env:SELFHOSTED_UPDATE_PAYLOAD_SCHEMA } else { 1 }),
     [ValidateSet("stable", "canary", "emergency")]
@@ -52,6 +54,13 @@ if ($RollbackArtifact.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:SE
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $RepoRoot = (Resolve-Path (Join-Path $ScriptRoot "..\..")).Path
+
+function Resolve-RepoPath([string] $Path) {
+    if ([System.IO.Path]::IsPathRooted($Path)) {
+        return [System.IO.Path]::GetFullPath($Path)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $Path))
+}
 
 function Write-Step([string] $Message) {
     Write-Host ""
@@ -632,8 +641,10 @@ function Assert-LocalReleasePrerequisites {
     Assert-Command "cmd.exe"
     Assert-ReleaseInputs
 
-    if ($BuildPlatform -contains "linux" -or $BuildPlatform -contains "android") {
+    if ($BuildPlatform -contains "linux" -or $BuildPlatform -contains "android" -or $BuildPlatform -contains "headless") {
         Assert-WslReady
+    }
+    if ($BuildPlatform -contains "linux" -or $BuildPlatform -contains "android") {
         Assert-WslCommand "conan"
     }
     $qtRootPath = Resolve-QtRootPath
@@ -673,6 +684,8 @@ if ([string]::IsNullOrWhiteSpace($ArtifactDir)) {
 if ([string]::IsNullOrWhiteSpace($OutDir)) {
     $OutDir = Join-Path $RepoRoot "dist\selfhosted-updates\$Version"
 }
+$ArtifactDir = Resolve-RepoPath $ArtifactDir
+$OutDir = Resolve-RepoPath $OutDir
 
 $bundlesUpdatesInWindowsClient = (-not $NoBundleUpdatesInWindowsClient) -and
     ($BuildPlatform -contains "windows")
@@ -789,6 +802,30 @@ if (-not $SkipBuild) {
 
         Copy-Artifact (Join-Path $RepoRoot "deploy\build-android-arm64-v8a") "AmneziaVPN_${Version}_android9+_arm64-v8a.apk" $ArtifactDir
     }
+
+    if ($BuildPlatform -contains "headless") {
+        Write-Step "Build Linux headless client locally through WSL"
+        $repoWsl = Convert-ToWslPath $RepoRoot
+        $artifactDirWsl = Convert-ToWslPath $ArtifactDir
+        $headlessExports = @(
+            "export AMNEZIA_BUILD_JOBS=$(Quote-Sh ([string] $buildJobs))",
+            "export CMAKE_BUILD_PARALLEL_LEVEL=$(Quote-Sh ([string] $buildJobs))",
+            "export MAKEFLAGS=-j$buildJobs"
+        )
+        if (-not [string]::IsNullOrWhiteSpace($HeadlessOpenSslIncludeDir)) {
+            $headlessExports += "export AMNEZIA_HEADLESS_OPENSSL_INCLUDE_DIR=$(Quote-Sh $HeadlessOpenSslIncludeDir)"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($HeadlessOpenSslCryptoLibrary)) {
+            $headlessExports += "export AMNEZIA_HEADLESS_OPENSSL_CRYPTO_LIBRARY=$(Quote-Sh $HeadlessOpenSslCryptoLibrary)"
+        }
+        $headlessScript = ("{0}; cd {1} && bash deploy/headless/build_headless_release.sh {2} {3}" -f
+            ($headlessExports -join "; "),
+            (Quote-Sh $repoWsl),
+            (Quote-Sh $Version),
+            (Quote-Sh $artifactDirWsl))
+        Invoke-WslBash $headlessScript
+        Assert-ExistingFile (Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64.tar.gz") "Linux headless update artifact"
+    }
 }
 
 Remove-UnsupportedAndroidArtifacts $ArtifactDir $Version
@@ -808,6 +845,7 @@ $requiredArtifactNames = @{
     "windows-x64" = "AmneziaVPN_${Version}_windows_x64.exe"
     "linux-x64" = "AmneziaVPN_${Version}_linux_x64.run"
     "android-arm64-v8a" = "AmneziaVPN_${Version}_android9+_arm64-v8a.apk"
+    "linux-headless-x64" = "AmneziaHeadless_${Version}_linux_x64.tar.gz"
 }
 $manifestArgs = @(
     "deploy/selfhosted_updates/make_manifest.py",

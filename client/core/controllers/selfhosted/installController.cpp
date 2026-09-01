@@ -78,6 +78,7 @@ namespace
     constexpr int serverRoutingRulesInitialResolveRetrySeconds = 5;
     constexpr int serverRoutingRulesResolveQueryTimeoutSeconds = 3;
     constexpr int serverRoutingRulesRecoveryQueryTimeoutSeconds = 1;
+    constexpr int serverRoutingRulesValidationResolveBudgetSeconds = 15;
     constexpr int serverRoutingRulesRecoveryInitialDelaySeconds = 15;
     constexpr int serverRoutingRulesRecoveryMaximumDelaySeconds = 5 * 60;
     constexpr int serverRoutingRulesRecoveryMaximumAttempts = 6;
@@ -433,6 +434,7 @@ INITIAL_RESOLVE_TIMEOUT_SECONDS=__INITIAL_RESOLVE_TIMEOUT_SECONDS__
 INITIAL_RESOLVE_RETRY_SECONDS=__INITIAL_RESOLVE_RETRY_SECONDS__
 RESOLVE_QUERY_TIMEOUT_SECONDS=__RESOLVE_QUERY_TIMEOUT_SECONDS__
 RECOVERY_QUERY_TIMEOUT_SECONDS=__RECOVERY_QUERY_TIMEOUT_SECONDS__
+VALIDATE_RESOLVE_BUDGET_SECONDS=__VALIDATE_RESOLVE_BUDGET_SECONDS__
 RECOVERY_INITIAL_DELAY_SECONDS=__RECOVERY_INITIAL_DELAY_SECONDS__
 RECOVERY_MAXIMUM_DELAY_SECONDS=__RECOVERY_MAXIMUM_DELAY_SECONDS__
 RECOVERY_MAXIMUM_ATTEMPTS=__RECOVERY_MAXIMUM_ATTEMPTS__
@@ -489,7 +491,14 @@ resolve_domain_ips() {
     else
         resolver_output="$(nslookup "$1" 2>/dev/null || true)"
     fi
-    resolved_list="$(printf '%s\n' "$resolver_output" | awk '/^Address[0-9 ]*:/ {print $NF}' | grep -E '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$' | sort -u)"
+    resolved_list="$(printf '%s\n' "$resolver_output" | awk '
+        /^Name:[[:space:]]/ { in_answer=1; next }
+        in_answer && /^Address[0-9 ]*:/ {
+            value=$NF
+            sub(/:[0-9]+$/, "", value)
+            print value
+        }
+    ' | grep -E '^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$' | sort -u)"
     resolved_ips=""
     for resolved_ip in $resolved_list; do
         if [ -z "$resolved_ips" ]; then
@@ -517,6 +526,7 @@ append_rule_entry() {
 build_rules() {
     allow_unresolved="${1:-0}"
     query_timeout_seconds="${2:-$RESOLVE_QUERY_TIMEOUT_SECONDS}"
+    skip_dns="${3:-0}"
     last_unresolved_count=0
     [ -f "$SOURCE_FILE" ] || return 0
 
@@ -540,7 +550,7 @@ build_rules() {
         elif [ "$source_kind" = "D" ]; then
             append_rule_entry source_body_file "$source_value" "$source_fallback"
             resolved_ips=""
-            if ! resolve_timed_out; then
+            if [ "$skip_dns" != "1" ] && ! resolve_timed_out; then
                 resolved_ips="$(resolve_domain_ips "$source_value" "$query_timeout_seconds")"
             fi
             if [ -z "$resolved_ips" ]; then
@@ -565,6 +575,7 @@ build_rules() {
     fi
 
     tmp_file="${RULES_FILE}.tmp"
+    ready_tmp_file="${READY_FILE}.tmp.$$"
     if {
         printf '{"version":1'
         if [ -n "$POLICY_JSON" ]; then
@@ -581,13 +592,15 @@ build_rules() {
             printf ',"%s":true' "$FORCE_KEY"
         fi
         printf '}'
-    } > "$tmp_file" && mv "$tmp_file" "$RULES_FILE"; then
-        printf 'ready\n' > "$READY_FILE"
+    } > "$tmp_file" && mv "$tmp_file" "$RULES_FILE" \
+      && rm -f "$READY_FILE" \
+      && printf 'ready\n' > "$ready_tmp_file" \
+      && mv -f "$ready_tmp_file" "$READY_FILE"; then
         rm -f "$resolved_body_file" "$source_body_file"
         return 0
     fi
 
-    rm -f "$resolved_body_file" "$source_body_file" "$tmp_file"
+    rm -f "$resolved_body_file" "$source_body_file" "$tmp_file" "$ready_tmp_file"
     return 1
 }
 
@@ -621,24 +634,33 @@ retry_unresolved_burst() {
 
 validate_source_file || exit 20
 
-initial_start_seconds="$(current_time_seconds)"
-if [ "$initial_start_seconds" -gt 0 ]; then
-    resolve_deadline_seconds=$((initial_start_seconds + INITIAL_RESOLVE_TIMEOUT_SECONDS))
-    while ! build_rules 0 "$RESOLVE_QUERY_TIMEOUT_SECONDS"; do
-        if resolve_timed_out; then
-            build_rules 1 "$RESOLVE_QUERY_TIMEOUT_SECONDS" && break
-        fi
-        sleep "$INITIAL_RESOLVE_RETRY_SECONDS"
-    done
-else
-    build_rules 0 "$RESOLVE_QUERY_TIMEOUT_SECONDS" || build_rules 1 "$RESOLVE_QUERY_TIMEOUT_SECONDS"
-fi
-resolve_deadline_seconds=0
-
 if [ "${VALIDATE_ONLY:-0}" = "1" ]; then
-    [ -s "$RULES_FILE" ] && [ -s "$READY_FILE" ]
-    exit $?
+    validation_start_seconds="$(current_time_seconds)"
+    if [ "$validation_start_seconds" -gt 0 ]; then
+        resolve_deadline_seconds=$((validation_start_seconds + VALIDATE_RESOLVE_BUDGET_SECONDS))
+    fi
+    if ! build_rules 1 "$RECOVERY_QUERY_TIMEOUT_SECONDS"; then
+        printf 'candidate validation could not build routing rules\n' >&2
+        exit 21
+    fi
+    resolve_deadline_seconds=0
+    if [ ! -s "$RULES_FILE" ] || [ ! -s "$READY_FILE" ]; then
+        printf 'candidate validation produced no ready routing rules\n' >&2
+        exit 22
+    fi
+    exit 0
 fi
+
+# Readiness is an atomic publication invariant, not proof that every DNS name
+# has converged.  A newly committed container must expose the candidate LKG
+# immediately; strict DNS resolution continues in the background retry loop.
+# Skipping DNS here also prevents one unavailable resolver from blocking the
+# commit transaction past its readiness timeout.
+build_rules 1 "$RECOVERY_QUERY_TIMEOUT_SECONDS" 1 || {
+    printf 'initial routing rules recovery could not build routing rules\n' >&2
+    exit 23
+}
+resolve_deadline_seconds=0
 
 while [ ! -s "$READY_FILE" ]; do
     build_rules 1 "$RESOLVE_QUERY_TIMEOUT_SECONDS" && break
@@ -676,6 +698,7 @@ busybox httpd -f -p __SYNC_PORT__ -h /www
         script.replace("__INITIAL_RESOLVE_RETRY_SECONDS__", QString::number(serverRoutingRulesInitialResolveRetrySeconds));
         script.replace("__RESOLVE_QUERY_TIMEOUT_SECONDS__", QString::number(serverRoutingRulesResolveQueryTimeoutSeconds));
         script.replace("__RECOVERY_QUERY_TIMEOUT_SECONDS__", QString::number(serverRoutingRulesRecoveryQueryTimeoutSeconds));
+        script.replace("__VALIDATE_RESOLVE_BUDGET_SECONDS__", QString::number(serverRoutingRulesValidationResolveBudgetSeconds));
         script.replace("__RECOVERY_INITIAL_DELAY_SECONDS__", QString::number(serverRoutingRulesRecoveryInitialDelaySeconds));
         script.replace("__RECOVERY_MAXIMUM_DELAY_SECONDS__", QString::number(serverRoutingRulesRecoveryMaximumDelaySeconds));
         script.replace("__RECOVERY_MAXIMUM_ATTEMPTS__", QString::number(serverRoutingRulesRecoveryMaximumAttempts));
@@ -782,13 +805,26 @@ busybox httpd -f -p __SYNC_PORT__ -h /www
         }
 
         const QJsonObject expectedSources = serverRoutingRulesSourceSites(versionedRules);
-        if (!candidate.value(configKey::serverExcept).isObject()
+        const QJsonValue candidateServerExceptValue = candidate.value(configKey::serverExcept);
+        if (!candidateServerExceptValue.isObject()
             || candidate.value(configKey::managedSplitTunnelExceptSites).toObject() != expectedSources
             || candidate.value(configKey::managedSplitTunnelExceptSourceSites).toObject() != expectedSources
             || candidate.value(configKey::managedSplitTunnelForceEnabled).toBool(false)
                     != versionedRules.value(configKey::managedSplitTunnelForceEnabled).toBool(false)) {
             errorMessage = QStringLiteral("Candidate resolver output does not match the requested managed routing policy");
             return false;
+        }
+
+        const QJsonObject candidateServerExcept = candidateServerExceptValue.toObject();
+        for (auto it = expectedSources.constBegin(); it != expectedSources.constEnd(); ++it) {
+            if (NetworkUtilities::checkIpSubnetFormat(it.key())
+                && (!candidateServerExcept.contains(it.key())
+                    || !candidateServerExcept.value(it.key()).isString()
+                    || !candidateServerExcept.value(it.key()).toString().isEmpty())) {
+                errorMessage = QStringLiteral(
+                        "Candidate resolver output dropped the requested IP or subnet route: %1").arg(it.key());
+                return false;
+            }
         }
 
         return true;
@@ -967,9 +1003,10 @@ set -u
 stage_complete=0
 candidate_ready=0
 failure_reason=unexpected_stage_failure
+candidate_log_file="/tmp/amnezia-routing-candidate-$$.log"
 cleanup_stage() {
     trap - EXIT HUP INT TERM
-    rm -f '__SOURCE_TMP_FILE__' '__SCRIPT_TMP_FILE__' >/dev/null 2>&1 || true
+    rm -f '__SOURCE_TMP_FILE__' '__SCRIPT_TMP_FILE__' "$candidate_log_file" >/dev/null 2>&1 || true
     if [ "$candidate_ready" != '1' ]; then
         rm -rf '__CANDIDATE_DIRECTORY__' >/dev/null 2>&1 || true
     fi
@@ -1012,17 +1049,25 @@ if ! docker image inspect '__ROUTING_RULES_IMAGE__' >/dev/null 2>&1; then
     docker pull '__ROUTING_RULES_IMAGE__' >/dev/null || fail_stage image_pull
 fi
 
+candidate_rc=0
 if command -v timeout >/dev/null 2>&1; then
     timeout 150 docker run --rm --log-driver none --network amnezia-dns-net \
         -e VALIDATE_ONLY=1 -v '__CANDIDATE_DIRECTORY__:/www:rw' --entrypoint sh \
-        '__ROUTING_RULES_IMAGE__' -c 'sh /www/__SCRIPT_FILE__' >/dev/null \
-        || fail_stage candidate_resolver_run
+        '__ROUTING_RULES_IMAGE__' -c 'sh /www/__SCRIPT_FILE__' >"$candidate_log_file" 2>&1 \
+        || candidate_rc=$?
 else
     docker run --rm --log-driver none --network amnezia-dns-net \
         -e VALIDATE_ONLY=1 -v '__CANDIDATE_DIRECTORY__:/www:rw' --entrypoint sh \
-        '__ROUTING_RULES_IMAGE__' -c 'sh /www/__SCRIPT_FILE__' >/dev/null \
-        || fail_stage candidate_resolver_run
+        '__ROUTING_RULES_IMAGE__' -c 'sh /www/__SCRIPT_FILE__' >"$candidate_log_file" 2>&1 \
+        || candidate_rc=$?
 fi
+if [ "$candidate_rc" -ne 0 ]; then
+    if [ -s "$candidate_log_file" ]; then
+        sed -n '1,160p' "$candidate_log_file" >&2 || true
+    fi
+    fail_stage "candidate_resolver_run_${candidate_rc}"
+fi
+rm -f "$candidate_log_file" >/dev/null 2>&1 || true
 test -s '__CANDIDATE_DIRECTORY__/__READY_FILE__' || fail_stage candidate_not_ready
 test -s '__CANDIDATE_DIRECTORY__/__RULES_FILE__' || fail_stage candidate_rules_missing
 

@@ -1,0 +1,816 @@
+#include "headlessUpdateManager.h"
+
+#include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDateTime>
+#include <QDir>
+#include <QEventLoop>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonParseError>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QProcess>
+#include <QRegularExpression>
+#include <QSaveFile>
+#include <QSet>
+#include <QTimer>
+#include <QUuid>
+#include <QUrl>
+#include <QVersionNumber>
+
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+
+#include <cerrno>
+#include <cmath>
+#include <cstring>
+#include <utility>
+
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#endif
+
+namespace amnezia::headless
+{
+namespace
+{
+
+constexpr qsizetype MaximumManifestBytes = 1024 * 1024;
+constexpr qint64 MaximumArtifactBytes = 512LL * 1024 * 1024;
+constexpr int NetworkTimeoutMs = 20'000;
+constexpr int ArchiveTimeoutMs = 60'000;
+constexpr auto HeadlessArtifactFormat = "amnezia-headless-tar-v1";
+constexpr auto UpdateServiceName = "amneziad.service";
+
+QString utcNow()
+{
+    return QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+}
+
+bool isObjectWithOnly(const QJsonObject &object, const QStringList &allowed)
+{
+    for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+        if (!allowed.contains(it.key())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool jsonInteger(const QJsonValue &value, qint64 minimum, qint64 maximum, qint64 &result)
+{
+    if (!value.isDouble()) {
+        return false;
+    }
+    const double number = value.toDouble();
+    if (!std::isfinite(number) || std::floor(number) != number
+        || number < static_cast<double>(minimum)
+        || number > static_cast<double>(maximum)) {
+        return false;
+    }
+    result = static_cast<qint64>(number);
+    return true;
+}
+
+} // namespace
+
+HeadlessUpdateManager::HeadlessUpdateManager(std::shared_ptr<CommandRunner> runner,
+                                             QString statePath,
+                                             QString installDirectory)
+    : m_runner(runner ? std::move(runner) : std::make_shared<RealCommandRunner>()),
+      m_statePath(std::move(statePath)),
+      m_installDirectory(installDirectory.trimmed().isEmpty()
+                             ? QCoreApplication::applicationDirPath()
+                             : std::move(installDirectory))
+{
+    if (!m_statePath.isEmpty()) {
+        m_updateRoot = QFileInfo(m_statePath).absolutePath();
+        m_updateRoot = QDir(m_updateRoot).filePath(QStringLiteral("updates"));
+    }
+    loadState();
+}
+
+HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile,
+                                                          const QString &currentVersion)
+{
+    m_lastCheckedAt = utcNow();
+    m_lastError.clear();
+    m_candidatePlatform.clear();
+
+    if (!profile.autoUpdate || profile.updateManifestUrl.isEmpty()
+        || profile.updatePublicKeyPath.isEmpty()) {
+        m_lastState = QStringLiteral("disabled");
+        saveState();
+        return { true, QStringLiteral("disabled"), QStringLiteral("automatic updates are disabled") };
+    }
+
+    QNetworkAccessManager manager;
+    QNetworkRequest request(QUrl(profile.updateManifestUrl));
+    request.setTransferTimeout(NetworkTimeoutMs);
+    QNetworkReply *reply = manager.get(request);
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timer.start(NetworkTimeoutMs);
+    loop.exec();
+
+    if (!reply->isFinished()) {
+        reply->abort();
+        reply->deleteLater();
+        return failure(QStringLiteral("update_timeout"),
+                       QStringLiteral("headless update manifest request timed out"));
+    }
+    const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray manifest = reply->readAll();
+    const QString networkError = reply->error() == QNetworkReply::NoError
+            ? QString() : reply->errorString();
+    reply->deleteLater();
+    if (!networkError.isEmpty()) {
+        return failure(QStringLiteral("update_unreachable"),
+                       QStringLiteral("headless update manifest request failed"));
+    }
+    if (statusCode < 200 || statusCode >= 300) {
+        return failure(QStringLiteral("update_http_error"),
+                       QStringLiteral("headless update manifest returned an unexpected status"));
+    }
+    if (manifest.isEmpty() || manifest.size() > MaximumManifestBytes) {
+        return failure(QStringLiteral("update_manifest_too_large"),
+                       QStringLiteral("headless update manifest exceeds the byte limit"));
+    }
+
+    Candidate candidate;
+    const HeadlessUpdateResult parsed = parseManifest(
+            manifest, QUrl(profile.updateManifestUrl), profile.updatePublicKeyPath,
+            currentVersion, candidate);
+    if (!parsed.ok || parsed.code == QStringLiteral("no_update")
+        || parsed.code == QStringLiteral("no_headless_artifact")) {
+        m_lastState = parsed.code;
+        if (!parsed.ok) {
+            m_lastError = parsed.message;
+        }
+        saveState();
+        return parsed;
+    }
+    m_candidatePlatform = candidate.platform;
+    if (!candidate.autoInstall) {
+        m_lastState = QStringLiteral("update_available");
+        saveState();
+        return { true, QStringLiteral("update_available"),
+                 QStringLiteral("a signed headless update is available") };
+    }
+
+    if (m_updateRoot.isEmpty() || !QDir().mkpath(m_updateRoot)) {
+        return failure(QStringLiteral("update_storage_unavailable"),
+                       QStringLiteral("headless update storage is unavailable"));
+    }
+    const QString transaction = QDir(m_updateRoot).filePath(
+            QStringLiteral("transaction-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    const QString payloadDirectory = QDir(transaction).filePath(QStringLiteral("payload"));
+    const QString archivePath = QDir(transaction).filePath(QStringLiteral("artifact.tar.gz"));
+    if (!QDir().mkpath(payloadDirectory)) {
+        return failure(QStringLiteral("update_storage_unavailable"),
+                       QStringLiteral("headless update staging directory cannot be created"));
+    }
+
+    QString error;
+    if (!download(candidate, archivePath, &error)
+        || !extract(candidate, archivePath, payloadDirectory, &error)
+        || !install(candidate, payloadDirectory, currentVersion, &error)) {
+        QDir(transaction).removeRecursively();
+        return failure(QStringLiteral("update_install_failed"),
+                       error.isEmpty() ? QStringLiteral("headless update installation failed") : error);
+    }
+    QDir(transaction).removeRecursively();
+    m_lastState = QStringLiteral("applied");
+    m_lastAppliedVersion = candidate.version;
+    saveState();
+    return { true, QStringLiteral("updated"), QStringLiteral("headless update installed") };
+}
+
+HeadlessUpdateResult HeadlessUpdateManager::rollback()
+{
+    m_lastError.clear();
+    QString error;
+    if (m_rollbackDirectory.isEmpty()) {
+        return failure(QStringLiteral("no_rollback"),
+                       QStringLiteral("no verified headless rollback is available"));
+    }
+    if (!restoreRollback(&error)) {
+        return failure(QStringLiteral("rollback_failed"),
+                       error.isEmpty() ? QStringLiteral("headless rollback failed") : error);
+    }
+    m_lastState = QStringLiteral("rolled_back");
+    m_lastAppliedVersion.clear();
+    m_rollbackDirectory.clear();
+    m_rollbackVersion.clear();
+    saveState();
+    return { true, QStringLiteral("rolled_back"), QStringLiteral("headless update rolled back") };
+}
+
+QJsonObject HeadlessUpdateManager::status() const
+{
+    return QJsonObject {
+        { QStringLiteral("state"), m_lastState },
+        { QStringLiteral("lastCheckedAt"), m_lastCheckedAt },
+        { QStringLiteral("lastAppliedVersion"), m_lastAppliedVersion },
+        { QStringLiteral("candidatePlatform"), m_candidatePlatform },
+        { QStringLiteral("rollbackAvailable"), !m_rollbackDirectory.isEmpty() },
+        { QStringLiteral("rollbackVersion"), m_rollbackVersion },
+        { QStringLiteral("lastError"), m_lastError },
+    };
+}
+
+HeadlessUpdateResult HeadlessUpdateManager::failure(const QString &code,
+                                                    const QString &message)
+{
+    m_lastState = code;
+    m_lastError = message;
+    saveState();
+    return { false, code, message };
+}
+
+HeadlessUpdateResult HeadlessUpdateManager::parseManifest(
+        const QByteArray &manifest, const QUrl &manifestUrl,
+        const QString &publicKeyPath, const QString &currentVersion,
+        Candidate &candidate) const
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(manifest, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        return { false, QStringLiteral("invalid_manifest"), QStringLiteral("headless update manifest is not JSON") };
+    }
+    const QJsonObject envelope = document.object();
+    if (!isObjectWithOnly(envelope, { QStringLiteral("schema"),
+                                      QStringLiteral("signatureAlgorithm"),
+                                      QStringLiteral("payload"), QStringLiteral("signature") })
+        || envelope.value(QStringLiteral("schema")).toString()
+               != QStringLiteral("amnezia-selfhosted-update-v1")
+        || envelope.value(QStringLiteral("signatureAlgorithm")).toString()
+               != QStringLiteral("Ed25519")) {
+        return { false, QStringLiteral("invalid_manifest"), QStringLiteral("headless update manifest envelope is invalid") };
+    }
+
+    QByteArray payloadBytes;
+    if (!verifyEnvelope(envelope, publicKeyPath, payloadBytes)
+        || payloadBytes.size() > MaximumManifestBytes) {
+        return { false, QStringLiteral("signature_invalid"), QStringLiteral("headless update manifest signature is invalid") };
+    }
+    const QJsonDocument payloadDocument = QJsonDocument::fromJson(payloadBytes, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !payloadDocument.isObject()) {
+        return { false, QStringLiteral("invalid_manifest"), QStringLiteral("signed headless update payload is invalid") };
+    }
+    const QJsonObject payload = payloadDocument.object();
+    if (!isObjectWithOnly(payload, { QStringLiteral("schema"), QStringLiteral("version"),
+                                     QStringLiteral("platforms"), QStringLiteral("autoInstall"),
+                                     QStringLiteral("changelog"), QStringLiteral("releaseDate") })) {
+        return { false, QStringLiteral("invalid_manifest"), QStringLiteral("signed headless update payload has unknown fields") };
+    }
+    qint64 schema = 0;
+    if (!jsonInteger(payload.value(QStringLiteral("schema")), 1, 1, schema)
+        || !payload.value(QStringLiteral("version")).isString()
+        || !validVersion(payload.value(QStringLiteral("version")).toString())) {
+        return { false, QStringLiteral("invalid_manifest"), QStringLiteral("signed headless update version is invalid") };
+    }
+    const QString version = payload.value(QStringLiteral("version")).toString();
+    QVersionNumber current;
+    QVersionNumber next;
+    if (!validVersion(currentVersion)) {
+        // A malformed local version can never be treated as an invitation to
+        // update.
+        return { false, QStringLiteral("invalid_current_version"), QStringLiteral("running headless version is invalid") };
+    }
+    current = QVersionNumber::fromString(currentVersion);
+    next = QVersionNumber::fromString(version);
+    if (next <= current) {
+        return { true, QStringLiteral("no_update"), QStringLiteral("headless client is up to date") };
+    }
+
+    const QJsonValue platformsValue = payload.value(QStringLiteral("platforms"));
+    if (!platformsValue.isObject()) {
+        return { false, QStringLiteral("invalid_manifest"), QStringLiteral("headless update platforms are missing") };
+    }
+    const QJsonObject platforms = platformsValue.toObject();
+    QString selectedPlatform;
+    for (const QString &platform : { QStringLiteral("linux-headless-x64"),
+                                      QStringLiteral("linux-headless") }) {
+        if (platforms.value(platform).isObject()) {
+            selectedPlatform = platform;
+            break;
+        }
+    }
+    if (selectedPlatform.isEmpty()) {
+        return { true, QStringLiteral("no_headless_artifact"),
+                 QStringLiteral("manifest contains no Linux headless artifact") };
+    }
+    const QJsonObject artifact = platforms.value(selectedPlatform).toObject();
+    if (!isObjectWithOnly(artifact, { QStringLiteral("url"), QStringLiteral("path"),
+                                      QStringLiteral("sha256"), QStringLiteral("size"),
+                                      QStringLiteral("autoInstall"), QStringLiteral("format") })) {
+        return { false, QStringLiteral("invalid_manifest"), QStringLiteral("headless artifact has unknown fields") };
+    }
+    const QString rawUrl = artifact.value(QStringLiteral("url")).toString(
+            artifact.value(QStringLiteral("path")).toString());
+    QUrl resolved;
+    if (!validArtifactUrl(manifestUrl, rawUrl, resolved)
+        || artifact.value(QStringLiteral("sha256")).toString()
+               != artifact.value(QStringLiteral("sha256")).toString().toLower()
+        || !validSha256(artifact.value(QStringLiteral("sha256")).toString())
+        || artifact.value(QStringLiteral("format")).toString()
+               != QString::fromLatin1(HeadlessArtifactFormat)) {
+        return { false, QStringLiteral("invalid_manifest"), QStringLiteral("headless artifact metadata is invalid") };
+    }
+    qint64 size = -1;
+    if (!jsonInteger(artifact.value(QStringLiteral("size")), 1, MaximumArtifactBytes, size)) {
+        return { false, QStringLiteral("invalid_manifest"), QStringLiteral("headless artifact size is invalid") };
+    }
+    if (artifact.contains(QStringLiteral("autoInstall"))
+        && !artifact.value(QStringLiteral("autoInstall")).isBool()) {
+        return { false, QStringLiteral("invalid_manifest"), QStringLiteral("headless artifact autoInstall is invalid") };
+    }
+    candidate.version = version;
+    candidate.platform = selectedPlatform;
+    candidate.url = resolved;
+    candidate.sha256 = artifact.value(QStringLiteral("sha256")).toString();
+    candidate.size = size;
+    candidate.autoInstall = artifact.value(QStringLiteral("autoInstall"))
+            .toBool(payload.value(QStringLiteral("autoInstall")).toBool(false));
+    candidate.format = artifact.value(QStringLiteral("format")).toString();
+    return { true, QStringLiteral("update_available"), QStringLiteral("signed headless update is available") };
+}
+
+bool HeadlessUpdateManager::download(const Candidate &candidate, const QString &path,
+                                     QString *error) const
+{
+    QNetworkAccessManager manager;
+    QNetworkRequest request(candidate.url);
+    request.setTransferTimeout(NetworkTimeoutMs);
+    QNetworkReply *reply = manager.get(request);
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        reply->abort();
+        reply->deleteLater();
+        if (error) *error = QStringLiteral("headless update artifact cannot be staged");
+        return false;
+    }
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    qint64 received = 0;
+    bool writeFailed = false;
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    QObject::connect(reply, &QIODevice::readyRead, &loop, [&]() {
+        const QByteArray chunk = reply->readAll();
+        received += chunk.size();
+        if (received > candidate.size || received > MaximumArtifactBytes
+            || file.write(chunk) != chunk.size()) {
+            writeFailed = true;
+            reply->abort();
+            return;
+        }
+        hash.addData(chunk);
+    });
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timer.start(NetworkTimeoutMs);
+    loop.exec();
+    if (!reply->isFinished()) {
+        reply->abort();
+    }
+    const QByteArray tail = reply->readAll();
+    if (!tail.isEmpty() && !writeFailed) {
+        received += tail.size();
+        if (received > candidate.size || file.write(tail) != tail.size()) {
+            writeFailed = true;
+        } else {
+            hash.addData(tail);
+        }
+    }
+    file.close();
+    const bool ok = reply->isFinished() && !writeFailed
+            && reply->error() == QNetworkReply::NoError
+            && received == candidate.size
+            && QString::fromLatin1(hash.result().toHex()) == candidate.sha256;
+    reply->deleteLater();
+    if (!ok) {
+        QFile::remove(path);
+        if (error) *error = QStringLiteral("headless update artifact failed size or SHA-256 verification");
+    }
+    return ok;
+}
+
+bool HeadlessUpdateManager::extract(const Candidate &candidate, const QString &archivePath,
+                                    const QString &directory, QString *error) const
+{
+    Q_UNUSED(candidate);
+    const QString tar = m_runner->resolveExecutable({ QStringLiteral("tar"), QStringLiteral("/usr/bin/tar") });
+    if (tar.isEmpty()) {
+        if (error) *error = QStringLiteral("tar is not installed for headless update extraction");
+        return false;
+    }
+    QString listing;
+    if (!runProcess(tar, { QStringLiteral("--list"), QStringLiteral("--gzip"),
+                           QStringLiteral("--file"), archivePath },
+                    ArchiveTimeoutMs, &listing, error)) {
+        return false;
+    }
+    QSet<QString> members;
+    for (const QByteArray &lineBytes : listing.toUtf8().split('\n')) {
+        QString member = QString::fromUtf8(lineBytes).trimmed();
+        if (member.startsWith(QStringLiteral("./"))) {
+            member.remove(0, 2);
+        }
+        if (member.isEmpty() || member.contains(QLatin1Char('/'))
+            || member == QStringLiteral(".") || member == QStringLiteral("..")) {
+            if (!member.isEmpty()) {
+                if (error) *error = QStringLiteral("headless update archive contains an unsafe path");
+                return false;
+            }
+            continue;
+        }
+        members.insert(member);
+    }
+    if (!members.contains(QStringLiteral("amneziad"))
+        || !members.contains(QStringLiteral("amnezia-cli"))
+        || members.size() > 3) {
+        if (error) *error = QStringLiteral("headless update archive has an unexpected file set");
+        return false;
+    }
+    if (!runProcess(tar, { QStringLiteral("--extract"), QStringLiteral("--gzip"),
+                           QStringLiteral("--file"), archivePath,
+                           QStringLiteral("--directory"), directory,
+                           QStringLiteral("--no-same-owner"), QStringLiteral("--no-same-permissions") },
+                    ArchiveTimeoutMs, nullptr, error)) {
+        return false;
+    }
+    for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+        const QFileInfo info(QDir(directory).filePath(name));
+        if (!info.exists() || !info.isFile() || info.isSymLink()) {
+            if (error) *error = QStringLiteral("headless update archive contains a non-regular binary");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool HeadlessUpdateManager::install(const Candidate &candidate,
+                                    const QString &payloadDirectory,
+                                    const QString &currentVersion,
+                                    QString *error)
+{
+    const QStringList files { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") };
+    const QString rollbackDirectory = QDir(m_updateRoot).filePath(
+            QStringLiteral("rollback-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    if (!QDir().mkpath(rollbackDirectory)) {
+        if (error) *error = QStringLiteral("headless rollback directory cannot be created");
+        return false;
+    }
+    for (const QString &name : files) {
+        const QString destination = QDir(m_installDirectory).filePath(name);
+        const QFileInfo destinationInfo(destination);
+        if (!destinationInfo.exists() || !destinationInfo.isFile() || destinationInfo.isSymLink()
+            || !QFile::copy(destination, QDir(rollbackDirectory).filePath(name))) {
+            QDir(rollbackDirectory).removeRecursively();
+            if (error) *error = QStringLiteral("existing headless binary cannot be backed up");
+            return false;
+        }
+    }
+
+    QStringList replaced;
+    for (const QString &name : files) {
+        const QString source = QDir(payloadDirectory).filePath(name);
+        const QString destination = QDir(m_installDirectory).filePath(name);
+        if (!atomicReplace(source, destination, error)) {
+            for (const QString &restored : replaced) {
+                atomicReplace(QDir(rollbackDirectory).filePath(restored),
+                              QDir(m_installDirectory).filePath(restored), nullptr);
+            }
+            QDir(rollbackDirectory).removeRecursively();
+            return false;
+        }
+        replaced.append(name);
+    }
+
+    m_rollbackDirectory = rollbackDirectory;
+    m_rollbackVersion = currentVersion;
+    if (!saveState()) {
+        if (error) *error = QStringLiteral("headless update receipt cannot be persisted");
+        return false;
+    }
+    if (!restartService(error)) {
+        restoreRollback(nullptr);
+        m_rollbackDirectory.clear();
+        m_rollbackVersion.clear();
+        saveState();
+        return false;
+    }
+    Q_UNUSED(candidate);
+    return true;
+}
+
+bool HeadlessUpdateManager::restartService(QString *error) const
+{
+    const QString systemctl = m_runner->resolveExecutable({ QStringLiteral("systemctl"), QStringLiteral("/usr/bin/systemctl") });
+    if (systemctl.isEmpty()) {
+        if (error) *error = QStringLiteral("systemctl is not installed for headless update restart");
+        return false;
+    }
+    if (!m_runner->run(systemctl,
+                       { QStringLiteral("restart"), QString::fromLatin1(UpdateServiceName) }).ok) {
+        if (error) *error = QStringLiteral("headless service restart failed");
+        return false;
+    }
+    return true;
+}
+
+bool HeadlessUpdateManager::restoreRollback(QString *error)
+{
+    if (m_rollbackDirectory.isEmpty()) {
+        if (error) *error = QStringLiteral("no rollback directory is recorded");
+        return false;
+    }
+    const QStringList files { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") };
+    QStringList replaced;
+    for (const QString &name : files) {
+        const QString backup = QDir(m_rollbackDirectory).filePath(name);
+        if (!QFileInfo(backup).isFile()
+            || !atomicReplace(backup, QDir(m_installDirectory).filePath(name), error)) {
+            for (const QString &restored : replaced) {
+                Q_UNUSED(restored);
+            }
+            return false;
+        }
+        replaced.append(name);
+    }
+    if (!restartService(error)) {
+        return false;
+    }
+    QDir(m_rollbackDirectory).removeRecursively();
+    return true;
+}
+
+bool HeadlessUpdateManager::loadState()
+{
+    if (m_statePath.isEmpty()) {
+        return true;
+    }
+    QFile file(m_statePath);
+    if (!file.exists()) {
+        return true;
+    }
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) {
+        return false;
+    }
+    const QJsonObject object = document.object();
+    m_lastCheckedAt = object.value(QStringLiteral("lastCheckedAt")).toString();
+    m_lastAppliedVersion = object.value(QStringLiteral("lastAppliedVersion")).toString();
+    m_lastState = object.value(QStringLiteral("state")).toString(m_lastState);
+    m_rollbackDirectory = object.value(QStringLiteral("rollbackDirectory")).toString();
+    m_rollbackVersion = object.value(QStringLiteral("rollbackVersion")).toString();
+    m_lastError = object.value(QStringLiteral("lastError")).toString();
+    if (!m_rollbackDirectory.isEmpty()
+        && !QFileInfo(m_rollbackDirectory).isDir()) {
+        m_rollbackDirectory.clear();
+        m_rollbackVersion.clear();
+    }
+    return true;
+}
+
+bool HeadlessUpdateManager::saveState() const
+{
+    if (m_statePath.isEmpty()) {
+        return true;
+    }
+    const QFileInfo info(m_statePath);
+    if (!QDir().mkpath(info.absolutePath())) {
+        return false;
+    }
+    QSaveFile file(m_statePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    const QJsonObject object {
+        { QStringLiteral("version"), 1 },
+        { QStringLiteral("state"), m_lastState },
+        { QStringLiteral("lastCheckedAt"), m_lastCheckedAt },
+        { QStringLiteral("lastAppliedVersion"), m_lastAppliedVersion },
+        { QStringLiteral("rollbackDirectory"), m_rollbackDirectory },
+        { QStringLiteral("rollbackVersion"), m_rollbackVersion },
+        { QStringLiteral("lastError"), m_lastError },
+    };
+    if (file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) < 0
+        || !file.commit()) {
+        return false;
+    }
+#ifndef Q_OS_WIN
+    QFile::setPermissions(m_statePath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+#endif
+    return true;
+}
+
+bool HeadlessUpdateManager::verifyEnvelope(const QJsonObject &envelope,
+                                           const QString &publicKeyPath,
+                                           QByteArray &payload)
+{
+    if (!envelope.value(QStringLiteral("payload")).isString()
+        || !envelope.value(QStringLiteral("signature")).isString()) {
+        return false;
+    }
+    QByteArray signature;
+    if (!decodeStrict(envelope.value(QStringLiteral("payload")).toString().toUtf8(), true, payload)
+        || !decodeStrict(envelope.value(QStringLiteral("signature")).toString().toUtf8(), false, signature)
+        || payload.isEmpty() || signature.size() != 64) {
+        return false;
+    }
+    QFile keyFile(publicKeyPath);
+    if (!keyFile.open(QIODevice::ReadOnly) || keyFile.size() > 16 * 1024) {
+        return false;
+    }
+    const QByteArray pem = keyFile.readAll();
+    BIO *bio = BIO_new_mem_buf(pem.constData(), pem.size());
+    if (!bio) {
+        return false;
+    }
+    EVP_PKEY *key = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
+    BIO_free(bio);
+    if (!key) {
+        return false;
+    }
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    const bool ok = context && EVP_PKEY_base_id(key) == EVP_PKEY_ED25519
+            && EVP_DigestVerifyInit(context, nullptr, nullptr, nullptr, key) == 1
+            && EVP_DigestVerify(context,
+                                reinterpret_cast<const unsigned char *>(signature.constData()),
+                                static_cast<size_t>(signature.size()),
+                                reinterpret_cast<const unsigned char *>(payload.constData()),
+                                static_cast<size_t>(payload.size())) == 1;
+    EVP_MD_CTX_free(context);
+    EVP_PKEY_free(key);
+    return ok;
+}
+
+bool HeadlessUpdateManager::decodeStrict(const QByteArray &encoded, bool urlSafe,
+                                         QByteArray &decoded)
+{
+    if (encoded.isEmpty()) {
+        return false;
+    }
+    bool padding = false;
+    int paddingCount = 0;
+    for (const char ch : encoded) {
+        const bool alpha = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+        const bool digit = ch >= '0' && ch <= '9';
+        const bool symbol = urlSafe ? (ch == '-' || ch == '_') : (ch == '+' || ch == '/');
+        if (ch == '=') {
+            padding = true;
+            ++paddingCount;
+        } else if (padding || (!alpha && !digit && !symbol)) {
+            return false;
+        }
+    }
+    if (paddingCount > 2 || (urlSafe && paddingCount != 0)
+        || encoded.size() % 4 == 1) {
+        return false;
+    }
+    const QByteArray::Base64Options options = urlSafe
+            ? QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals
+            : QByteArray::Base64Encoding;
+    decoded = QByteArray::fromBase64(encoded, options);
+    if (decoded.isEmpty()) {
+        return false;
+    }
+    const QByteArray canonical = decoded.toBase64(urlSafe
+            ? QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals
+            : QByteArray::Base64Encoding);
+    return canonical == encoded;
+}
+
+bool HeadlessUpdateManager::validVersion(const QString &value)
+{
+    const QStringList parts = value.split(QLatin1Char('.'), Qt::KeepEmptyParts);
+    if (parts.size() != 4 || value != value.trimmed()) {
+        return false;
+    }
+    for (const QString &part : parts) {
+        if (part.isEmpty() || (part.size() > 1 && part.startsWith(QLatin1Char('0')))) {
+            return false;
+        }
+        for (const QChar ch : part) {
+            if (!ch.isDigit()) {
+                return false;
+            }
+        }
+    }
+    return !QVersionNumber::fromString(value).isNull();
+}
+
+bool HeadlessUpdateManager::validSha256(const QString &value)
+{
+    if (value.size() != 64) {
+        return false;
+    }
+    for (const QChar ch : value) {
+        if (!((ch >= QLatin1Char('0') && ch <= QLatin1Char('9'))
+              || (ch >= QLatin1Char('a') && ch <= QLatin1Char('f')))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool HeadlessUpdateManager::validArtifactUrl(const QUrl &manifestUrl,
+                                             const QString &rawUrl,
+                                             QUrl &resolved)
+{
+    if (rawUrl.trimmed().isEmpty()) {
+        return false;
+    }
+    const QUrl candidate(rawUrl, QUrl::StrictMode);
+    if (!candidate.isValid() || candidate.userInfo().size() > 0
+        || candidate.hasFragment()) {
+        return false;
+    }
+    resolved = candidate.isRelative() ? manifestUrl.resolved(candidate) : candidate;
+    return resolved.isValid()
+            && (resolved.scheme() == QStringLiteral("http")
+                || resolved.scheme() == QStringLiteral("https"))
+            && !resolved.host().isEmpty() && resolved.userInfo().isEmpty()
+            && !resolved.hasFragment();
+}
+
+bool HeadlessUpdateManager::runProcess(const QString &program,
+                                       const QStringList &arguments,
+                                       int timeoutMs, QString *output,
+                                       QString *error)
+{
+    QProcess process;
+    process.setProgram(program);
+    process.setArguments(arguments);
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start();
+    if (!process.waitForStarted(3000) || !process.waitForFinished(timeoutMs)) {
+        process.kill();
+        process.waitForFinished(2000);
+        if (error) *error = QStringLiteral("headless update archive command failed to start or timed out");
+        return false;
+    }
+    const QByteArray bytes = process.readAll();
+    if (bytes.size() > 64 * 1024 || process.exitStatus() != QProcess::NormalExit
+        || process.exitCode() != 0) {
+        if (error) *error = QStringLiteral("headless update archive command failed");
+        return false;
+    }
+    if (output) {
+        *output = QString::fromUtf8(bytes);
+    }
+    return true;
+}
+
+bool HeadlessUpdateManager::atomicReplace(const QString &source,
+                                          const QString &destination,
+                                          QString *error)
+{
+    const QFileInfo sourceInfo(source);
+    if (!sourceInfo.isFile() || sourceInfo.isSymLink()) {
+        if (error) *error = QStringLiteral("headless update source is not a regular file");
+        return false;
+    }
+    const QString temporary = QDir(QFileInfo(destination).absolutePath()).filePath(
+            QStringLiteral(".%1.update-%2").arg(QFileInfo(destination).fileName(),
+                                                  QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    QFile::remove(temporary);
+    if (!QFile::copy(source, temporary)) {
+        if (error) *error = QStringLiteral("headless update binary cannot be copied into place");
+        return false;
+    }
+#ifndef Q_OS_WIN
+    QFile::setPermissions(temporary, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                              | QFileDevice::ExeOwner | QFileDevice::ReadGroup
+                              | QFileDevice::ExeGroup | QFileDevice::ReadOther
+                              | QFileDevice::ExeOther);
+    if (::rename(temporary.toLocal8Bit().constData(), destination.toLocal8Bit().constData()) != 0) {
+        QFile::remove(temporary);
+        if (error) *error = QStringLiteral("headless update binary cannot be atomically replaced");
+        return false;
+    }
+#else
+    if (!QFile::remove(destination) || !QFile::rename(temporary, destination)) {
+        QFile::remove(temporary);
+        if (error) *error = QStringLiteral("headless update binary cannot be replaced");
+        return false;
+    }
+#endif
+    return true;
+}
+
+} // namespace amnezia::headless

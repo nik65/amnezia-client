@@ -19,6 +19,7 @@ PageType {
     id: root
 
     property bool pageEnabled: true
+    property bool managedPublishPending: false
 
     QtObject {
         id: routeMode
@@ -26,14 +27,11 @@ PageType {
     }
 
     function addManagedSite() {
-        if (searchField.textField.text === "") {
+        if (managedPublishPending || searchField.textField.text.trim() === "") {
             return
         }
 
-        PageController.showBusyIndicator(true)
         SitesController.addManagedSite(routeMode.allExceptSites, searchField.textField.text)
-        searchField.textField.text = ""
-        PageController.showBusyIndicator(false)
     }
 
     Component.onCompleted: {
@@ -50,6 +48,29 @@ PageType {
 
         function onErrorOccurred(errorMessage) {
             PageController.showErrorMessage(errorMessage)
+        }
+
+        function onManagedSplitTunnelingRulesPublishPending(serverIndex, expectedRevision) {
+            if (serverIndex === ServersUiController.getProcessedServerIndex()) {
+                root.managedPublishPending = true
+                PageController.showBusyIndicator(true)
+            }
+        }
+
+        function onManagedSplitTunnelingRulesPublishSucceeded(serverIndex, publishedRevision,
+                                                               contentSha256, signatureAvailable) {
+            if (serverIndex === ServersUiController.getProcessedServerIndex()) {
+                searchField.textField.text = ""
+            }
+        }
+
+        function onManagedSplitTunnelingRulesPublishFailed(serverIndex, expectedRevision,
+                                                            currentRevision, reason, conflict) {
+        }
+
+        function onManagedSplitTunnelingRulesPublishIdle() {
+            root.managedPublishPending = false
+            PageController.showBusyIndicator(false)
         }
 
         function onManagedSplitTunnelingForceChanged() {
@@ -95,7 +116,7 @@ PageType {
             text: qsTr("Force split tunneling")
             descriptionText: qsTr("For clients with split tunneling disabled, enable bypass mode and apply these server bypass rules. Clients using the opposite split tunneling mode keep their own settings.")
 
-            enabled: root.pageEnabled
+            enabled: root.pageEnabled && !root.managedPublishPending
             checked: SitesController.isManagedSplitTunnelingForceEnabled()
 
             onToggled: function() {
@@ -117,7 +138,7 @@ PageType {
         anchors.bottomMargin: addSiteButton.implicitHeight + 48 + (searchField.textField.activeFocus ? 0 : PageController.imeHeight)
 
         width: parent.width
-        enabled: root.pageEnabled
+        enabled: root.pageEnabled && !root.managedPublishPending
         clip: true
 
         model: SortFilterProxyModel {
@@ -150,7 +171,7 @@ PageType {
                 descriptionText: ip
                 rightImageSource: root.pageEnabled ? "qrc:/images/controls/trash.svg" : ""
                 rightImageColor: AmneziaStyle.color.paleGray
-                enabled: root.pageEnabled
+                enabled: root.pageEnabled && !root.managedPublishPending
 
                 clickedFunction: function() {
                     var yesButtonFunction = function() {
@@ -183,7 +204,7 @@ PageType {
         RowLayout {
             id: addSiteButton
 
-            enabled: root.pageEnabled
+            enabled: root.pageEnabled && !root.managedPublishPending
             anchors.bottom: parent.bottom
             anchors.left: parent.left
             anchors.right: parent.right
@@ -289,7 +310,6 @@ PageType {
                         PageController.showBusyIndicator(true)
                         SitesController.removeManagedSites(routeMode.allExceptSites)
                         moreActionsDrawer.closeTriggered()
-                        PageController.showBusyIndicator(false)
                     }
                     showQuestionDrawer(qsTr("Clear site list?"), qsTr("All sites will be removed from list."),
                                        qsTr("Continue"), qsTr("Cancel"), yesButtonFunction, function() {})
@@ -398,7 +418,6 @@ PageType {
     function importManagedSites(fileName, replaceExistingSites) {
         PageController.showBusyIndicator(true)
         SitesController.importManagedSites(routeMode.allExceptSites, fileName, replaceExistingSites)
-        PageController.showBusyIndicator(false)
         importSitesDrawer.closeTriggered()
         moreActionsDrawer.closeTriggered()
     }

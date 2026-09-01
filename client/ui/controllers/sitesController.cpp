@@ -195,6 +195,7 @@ void SitesController::addManagedSite(int routeMode, const QString &hostname)
         return;
     }
     if (!m_serversRepository->addManagedVpnSite(serverIndex, mode, normalizedHostname, QString())) {
+        emit errorOccurred(tr("Site is already in the list or could not be saved"));
         return;
     }
     reloadManagedSites();
@@ -412,6 +413,7 @@ void SitesController::publishManagedSplitTunnelingRules(
         emit managedSplitTunnelingRulesPublishFailed(serverIndex, QStringLiteral("unknown"),
                                                      QStringLiteral("unknown"), reason, false);
         emit errorOccurred(reason);
+        emit managedSplitTunnelingRulesPublishIdle();
         return;
     }
 
@@ -439,6 +441,8 @@ void SitesController::publishManagedSplitTunnelingRules(
         }
     }
     m_pendingManagedSplitTunnelingPublishJobs.append(job);
+    qDebug() << "SitesController: queued managed routing rules publication for server index" << serverIndex
+             << "expected revision" << job.expectedRevision;
     emit managedSplitTunnelingRulesPublishPending(
             serverIndex, job.expectedRevision >= 0 ? QString::number(job.expectedRevision) : QStringLiteral("unknown"));
     startNextManagedSplitTunnelingPublish();
@@ -454,6 +458,25 @@ void SitesController::startNextManagedSplitTunnelingPublish()
         const ManagedSplitTunnelingPublishJob job = m_pendingManagedSplitTunnelingPublishJobs.takeFirst();
         const int serverIndex = m_serversRepository->indexOfServerId(job.serverId);
         if (serverIndex < 0 || job.credentials.userName.isEmpty() || job.credentials.secretData.isEmpty()) {
+            const int signalServerIndex = serverIndex >= 0 ? serverIndex : job.serverIndex;
+            const QString reason = serverIndex < 0
+                    ? tr("The selected server is no longer available; routing policy was not published")
+                    : tr("Server credentials are unavailable; routing policy was not published");
+            qWarning() << "SitesController: rejecting managed routing rules publication job"
+                       << "server index" << signalServerIndex
+                       << "server present" << (serverIndex >= 0)
+                       << "has username" << !job.credentials.userName.isEmpty()
+                       << "has secret" << !job.credentials.secretData.isEmpty();
+            if (serverIndex >= 0) {
+                restoreManagedSplitTunnelingLocalState(job.serverId, job.rollbackState);
+            }
+            emit managedSplitTunnelingRulesRemoteRollbackFinished(
+                    signalServerIndex, false, false, QStringLiteral("not_needed"));
+            emit managedSplitTunnelingRulesPublishFailed(
+                    signalServerIndex,
+                    job.expectedRevision >= 0 ? QString::number(job.expectedRevision) : QStringLiteral("unknown"),
+                    QStringLiteral("unknown"), reason, false);
+            emit errorOccurred(reason);
             continue;
         }
 
@@ -540,4 +563,6 @@ void SitesController::startNextManagedSplitTunnelingPublish()
         }));
         return;
     }
+
+    emit managedSplitTunnelingRulesPublishIdle();
 }

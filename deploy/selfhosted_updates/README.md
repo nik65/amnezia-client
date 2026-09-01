@@ -13,10 +13,13 @@ Runtime update behavior lives in the client C++/Qt code:
 - `client/platforms/android/*` handles the Android APK installer handoff.
 
 The local release helpers in this directory do not ship inside the app. The
-exception is `install_server_update_host.sh`, which is embedded as a Qt resource
-so the self-hosted Windows client can refresh the update host on the server.
-Local release automation uses these helpers after platform builds to generate
-the signed manifest and verify artifacts.
+server-side bootstrap, bundled publication protocol, and verified host-update
+runner are embedded as Qt resources so the self-hosted Windows client can
+refresh the update host and publish the update channel on the server. There is
+no standalone server publisher in this repository: release publication is a
+client operation using the saved self-hosted admin credentials.
+Local release automation uses the remaining helpers only to generate the
+signed manifest and assemble the client payload.
 
 The client checks signed manifests from:
 
@@ -107,7 +110,7 @@ or reuse the administrative libssh pin automatically.
 
 `SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64` is required at build time because the
 clients must embed that public key to accept the signed private update manifest.
-The private signing key is used only by the local publisher. The manifest tools
+The private signing key is used only by local release preparation. The manifest tools
 inspect the key type and reject RSA, generic EC, or any other non-Ed25519 keypair
 instead of emitting an envelope whose algorithm label clients cannot verify.
 
@@ -115,11 +118,12 @@ instead of emitting an envelope whose algorithm label clients cannot verify.
 
 Self-hosted releases are built locally on the release workstation. The Windows
 release client can carry the update payload and upload it to the Amnezia VPN
-server after installation. The default local release set is:
+server after installation. The normal `rebuild_clients.ps1` release set is:
 
 - `windows-x64`
 - `linux-x64`
 - `android-arm64-v8a`
+- `linux-headless-x64`
 
 macOS and iOS are intentionally not part of this local self-hosted release set.
 Android releases are intentionally arm64-v8a only for Android 9+ devices.
@@ -179,8 +183,23 @@ release platform set:
 powershell -ExecutionPolicy Bypass -File deploy\selfhosted_updates\rebuild_clients.ps1 -BuildJobs 24
 ```
 
-Use `-BuildPlatform windows`, `-BuildPlatform linux`, or
-`-BuildPlatform android` only when intentionally rebuilding a single client.
+The repository policy requires the final installer launch to be explicit. To
+start the self-hosted Windows package without the legacy replacement question,
+launch it manually with Qt IFW's unattended arguments and the self-hosted
+handoff marker (Windows may still display its UAC consent prompt):
+
+```powershell
+& .\dist\selfhosted-windows-client\5.0.1.11\AmneziaVPN_5.0.1.11_windows_x64_selfhosted.exe `
+  --accept-messages --accept-licenses --confirm-command install AmneziaSelfHostedUpdate=true
+```
+
+After the new client starts, its embedded self-hosted flow publishes the
+verified local release payload to the configured update host. Do not use a
+separate publisher or direct SSH/SCP upload.
+
+Use `-BuildPlatform windows`, `-BuildPlatform linux`, `-BuildPlatform android`,
+or `-BuildPlatform headless` only when intentionally rebuilding a single
+client.
 Use `-NoBundleUpdatesInWindowsClient` for a faster smoke rebuild that does not
 produce the self-hosted Windows installer carrying the update payload.
 
@@ -191,8 +210,22 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `4.9.2.18` with Android
-`versionCode` `2152`, following the `4.9.2.17` / `2151` artifact set.
+The current self-hosted release line is `5.0.1.11` with Android
+`versionCode` `2159`. The release includes the Linux headless client and the
+managed all-except/full-tunnel routing path.
+
+Release notes for `5.0.1.11`: managed routing publication makes the live
+container ready from the candidate last-known-good state before background DNS
+convergence, preserves deterministic CIDR routes including subnets, ignores
+the Docker DNS endpoint in `nslookup` results, and keeps the global busy
+indicator tied to publication completion; candidate validation now rejects a
+dropped IP/CIDR route and preserves Docker diagnostics when validation fails;
+self-hosted desktop handoff uses Qt Installer
+Framework's unattended command-line mode and passes an internal update marker;
+the Windows replacement confirmation is skipped only for this verified
+self-hosted flow. The application still exits briefly because Windows cannot
+replace its own mapped executable, and Windows UAC or platform-native Android
+and macOS authorization prompts remain controlled by the operating system.
 
 Release notes for `4.9.2.18`: the elevated Windows batch runner reads the
 installation-directory security descriptor through the .NET ACL API instead
@@ -485,46 +518,19 @@ Migration must therefore happen in two releases:
    `--payload-schema 2`. Clients that predate the bootstrap reject schema 2
    fail-closed instead of bypassing its rollout.
 
-`publish_release.py`, `local_release.ps1`, and `rebuild_clients.ps1` expose the
-same policy controls. Their defaults intentionally remain payload schema 1,
+`local_release.ps1` and `rebuild_clients.ps1` expose the same policy controls.
+Their defaults intentionally remain payload schema 1,
 `stable`, and 100%, producing the legacy unrestricted manifest. Supplying any
 restrictive option while schema 1 is selected fails; policy mode never enables
 itself implicitly. Select schema 2 and provide a new positive monotonic
-generation explicitly for every policy publication. Before a server upload,
-the publisher reads and verifies the live signed manifest. Once that channel has
-accepted schema 2 it refuses a schema-1 downgrade, a lower generation, reuse of
-the same generation for different payload bytes, or a lower four-part release
-version. Equal release versions remain valid for an idempotent publication or a
-higher-generation rollout-policy update, but the non-policy release content
-(including artifact URLs, hashes, changelog, and install flags) stays bound to
-that version. Version components are canonical decimal numbers and cannot
-contain leading zeroes. The final manifest switch
-checks both the previously observed envelope hash and the uploaded candidate
-hash under a server-side lock, so concurrent publishers cannot substitute a
-different candidate or overwrite state that changed after validation. Local
-publication holds one channel lock from the fresh local transition check through
-the optional remote commit and the final local switch. Immutable local files are
-merged first and `manifest.json` is replaced atomically last; interruption cannot
-remove the previously published local manifest, and a retry reuses identical
-content-addressed files.
-
-Remote publication requires a dedicated normalized absolute `--server-dir`;
-root, dot/dot-dot aliases, and a path resolving to the host root are rejected
-before upload. The directory carries the root-owned
-`.amnezia-update-channel-v1` marker and may contain only the channel marker,
-manifest, publication lock, and `files/` tree. An empty directory is adopted on
-first publication; a legacy nonempty channel is adopted only when its regular
-`manifest.json` still matches the signed envelope verified by the local
-publisher. This prevents accidentally serving an unrelated root-owned directory.
-Each upload uses a fresh random mode-0700 staging directory. File publication and
-temporary-file recovery run under the same channel lock. Uploaded bytes are first
-snapshotted without privilege, handed into a root-only quarantine, then copied
-with signed byte limits into fresh root-owned inodes. Exact candidate paths,
-sizes, and SHA-256 values are checked again on the sealed tree and on any
-concurrent no-clobber winner before it can be referenced by `manifest.json`.
-The manifest uses the same bounded two-stage seal. Signal/exit traps remove
-unfinished stages; a retry can reconcile an exact remote manifest committed just
-before a local crash without republishing or changing its signed policy window.
+generation explicitly for every policy publication. The self-hosted client
+performs the live-manifest compare-and-swap, immutable content-addressed upload,
+server-side locking, and final manifest switch through its embedded trusted
+scripts. Once that channel has accepted schema 2 it refuses a schema-1
+downgrade, a lower generation, reuse of the same generation for different
+payload bytes, or a lower four-part release version. Equal release versions
+remain valid for an idempotent publication or a higher-generation rollout-policy
+update, but the non-policy release content stays bound to that version.
 
 Example of a signed 10% canary with an explicit eligibility window, one-hour
 post-install health deadline, seven-day policy lifetime, and a previous Windows
@@ -549,26 +555,6 @@ python deploy/selfhosted_updates/make_manifest.py \
   --private-key selfhosted-update-private.pem \
   --out-dir dist/selfhosted-updates \
   --artifact windows-x64=dist/current/AmneziaVPN_4.9.2.8_windows_x64.exe \
-  --auto-install
-```
-
-The artifact-discovery publisher accepts the same flags, including repeatable
-rollback artifacts:
-
-```bash
-python deploy/selfhosted_updates/publish_release.py \
-  --version 4.9.2.8 \
-  --payload-schema 2 \
-  --channel canary \
-  --rollout-percentage 10 \
-  --cohort-salt-id canary-2026q3 \
-  --policy-generation 1721470000 \
-  --expires-at 2026-07-27T10:00:00Z \
-  --previous-version 4.9.2.0 \
-  --rollback-artifact windows-x64=dist/previous/AmneziaVPN_4.9.2.0_windows_x64.exe \
-  --private-key selfhosted-update-private.pem \
-  --artifact-dir dist/current \
-  --base-url http://172.29.172.252:17865 \
   --auto-install
 ```
 
@@ -728,11 +714,9 @@ public host port closed and serve only through VPN/internal routes, run it with
 
 The helper autodetects `amnezia-awg2`, `amnezia-awg`, `amnezia-wireguard`, and
 `amnezia-openvpn`. To force a specific VPN container network namespace, set
-`AMNEZIA_UPDATE_VPN_CONTAINER` to that Docker container name, for example:
-
-```bash
-ssh root@SERVER 'AMNEZIA_UPDATE_VPN_CONTAINER=amnezia-awg sh -s' < deploy/selfhosted_updates/install_server_update_host.sh
-```
+`AMNEZIA_UPDATE_VPN_CONTAINER` in the self-hosted client's server settings.
+The embedded helper is not an operator-facing publication command; the client
+uploads and invokes it as part of its authenticated publication flow.
 
 The manifest envelope is signed, and desktop installers are additionally
 checked by sha256 before launch. Android APK artifacts are downloaded by the

@@ -371,6 +371,17 @@ Window  {
     }
 
     Connections {
+        target: SitesController
+
+        // The settings page can be removed while the asynchronous SSH/Docker
+        // publication is still running. Keep the global indicator owned by
+        // the publication queue, not by the page instance.
+        function onManagedSplitTunnelingRulesPublishIdle() {
+            PageController.showBusyIndicator(false)
+        }
+    }
+
+    Connections {
         target: SubscriptionUiController
 
         function onRenewalLinkReceived(url) {

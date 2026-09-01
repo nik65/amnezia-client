@@ -49,6 +49,7 @@ signals:
     void managedSplitTunnelingRulesPublishFailed(int serverIndex, const QString &expectedRevision,
                                                  const QString &currentRevision, const QString &reason,
                                                  bool conflict);
+    void managedSplitTunnelingRulesPublishIdle();
     void managedSplitTunnelingRulesSigningBlocked(int serverIndex, const QString &blocker);
     void managedSplitTunnelingRulesPublishRolledBack(int serverIndex);
     void managedSplitTunnelingRulesLocalRollbackFinished(int serverIndex, bool applied,

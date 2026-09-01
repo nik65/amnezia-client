@@ -649,6 +649,16 @@ Controller.prototype.ReadyForInstallationPageCallback = function()
     }
 }
 
+function isSelfHostedAutomaticUpdate()
+{
+    // This is a UX hint supplied by the already verified self-hosted client
+    // handoff. It does not bypass the Windows service, residue, ownership, or
+    // artifact checks below; it only prevents the legacy replacement question
+    // from turning a scheduled update into an interactive installation.
+    var value = String(installer.value("AmneziaSelfHostedUpdate") || "").toLowerCase();
+    return value === "true" || value === "1";
+}
+
 Controller.prototype.TargetDirectoryPageCallback = function ()
 {
     var widget = gui.pageById(QInstaller.TargetDirectory);
@@ -776,14 +786,18 @@ function Controller () {
 
         if (appInstalled()) {
             writeWindowsInstallerLog("existing-install-detected", "1");
-            if (QMessageBox.Ok === QMessageBox.information("os.information", appName(),
-                                                           qsTr("The application is already installed.") + " " +
-                                                           qsTr("We need to remove the old installation first. Do you wish to proceed?"),
-                                                           QMessageBox.Ok | QMessageBox.Cancel)) {
+            var automaticReplacement = isSelfHostedAutomaticUpdate();
+            var replacementAccepted = automaticReplacement
+                    || QMessageBox.Ok === QMessageBox.information("os.information", appName(),
+                                                                   qsTr("The application is already installed.") + " " +
+                                                                   qsTr("We need to remove the old installation first. Do you wish to proceed?"),
+                                                                   QMessageBox.Ok | QMessageBox.Cancel);
+            if (replacementAccepted) {
 
                 if (runningOnWindows()) {
                     windowsUpgradeReplacementRequested = true;
-                    writeWindowsInstallerLog("replacement-consent", "accepted");
+                    writeWindowsInstallerLog("replacement-consent",
+                                             automaticReplacement ? "automatic" : "accepted");
                 }
 
                 // The user has consented to replace the existing installation.
@@ -973,6 +987,11 @@ isDesktopAppProcessRunningMessageLoop = function ()
     }
 
     if (desktopAppProcessRunning) {
+        if (isSelfHostedAutomaticUpdate()) {
+            console.log("AmneziaVPN could not be closed automatically during a self-hosted update; cancelling without user interaction");
+            installer.setCancelled();
+            return;
+        }
         var result = QMessageBox.warning("QMessageBox", appName() + " installer",
                                          appName() + " could not be closed automatically. Close the app and press \"Retry\" button to continue installation. Press \"Abort\" button to abort the installer and exit.",
                                          QMessageBox.Retry | QMessageBox.Abort);

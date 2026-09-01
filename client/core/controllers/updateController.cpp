@@ -4153,8 +4153,16 @@ int UpdateController::runWindowsInstaller(const QString &installerPath,
         return -1;
     }
 
+    // Qt Installer Framework's supported non-interactive switches are used
+    // here.  This bundled IFW does not implement the common quiet-mode
+    // switch: passing that unknown option falls back to graphical mode and exposes the custom
+    // "already installed" replacement dialog.  The installer controller
+    // still performs its bounded service/process handoff, but no wizard or
+    // confirmation dialog is shown to the user.  The running executable must
+    // still exit briefly: a Windows image cannot replace its own mapped binary
+    // in place.
     const QString commandLine = QStringLiteral("\"") + resolvedInstallerPath
-            + QStringLiteral("\"");
+            + QStringLiteral("\" --accept-messages --accept-licenses --confirm-command install AmneziaSelfHostedUpdate=true");
     QVector<wchar_t> commandLineBuffer(commandLine.size() + 1, L'\0');
     commandLine.toWCharArray(commandLineBuffer.data());
     if (!SetHandleInformation(directoryHandle, HANDLE_FLAG_INHERIT,
@@ -4380,7 +4388,13 @@ int UpdateController::runLinuxInstaller(const QString &installerPath,
         }
 
         char processName[] = "AmneziaVPN-installer";
-        char *const arguments[] { processName, nullptr };
+        char acceptMessages[] = "--accept-messages";
+        char acceptLicenses[] = "--accept-licenses";
+        char confirmCommand[] = "--confirm-command";
+        char installCommand[] = "install";
+        char selfHostedUpdate[] = "AmneziaSelfHostedUpdate=true";
+        char *const arguments[] { processName, acceptMessages, acceptLicenses,
+                                  confirmCommand, installCommand, selfHostedUpdate, nullptr };
         ::fexecve(installerFd, arguments, environ);
         const int launchError = errno;
         (void) ::write(execStatusPipe[1], &launchError, sizeof(launchError));

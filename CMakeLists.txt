@@ -1,10 +1,15 @@
 cmake_minimum_required(VERSION 3.25.0 FATAL_ERROR)
 
+option(AMNEZIAVPN_BUILD_HEADLESS "Build the Ubuntu headless client" OFF)
+if(AMNEZIAVPN_BUILD_HEADLESS AND (NOT UNIX OR APPLE OR ANDROID OR IOS))
+    message(FATAL_ERROR "AMNEZIAVPN_BUILD_HEADLESS requires a native Ubuntu/Linux build")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(PROJECT AmneziaVPN)
-set(AMNEZIAVPN_VERSION 5.0.1.6)
+set(AMNEZIAVPN_VERSION 5.0.1.11)
 
 set(QT_CREATOR_SKIP_PACKAGE_MANAGER_SETUP ON CACHE BOOL "" FORCE)
 set(CMAKE_PROJECT_TOP_LEVEL_INCLUDES
@@ -33,7 +38,7 @@ set(RELEASE_DATE "${CURRENT_DATE}")
 
 set(APP_MAJOR_VERSION ${CMAKE_PROJECT_VERSION_MAJOR}.${CMAKE_PROJECT_VERSION_MINOR}.${CMAKE_PROJECT_VERSION_PATCH})
 # Keep the fork code monotonic beyond upstream 5.0.1.5 (2152).
-set(APP_ANDROID_VERSION_CODE 2154)
+set(APP_ANDROID_VERSION_CODE 2159)
 
 # Branding defaults must load before any subproject configures version.h.in:
 # APPLICATION_NAME / SERVICE_NAME / ORGANIZATION_NAME are expanded from
@@ -88,7 +93,6 @@ if(APPLE AND NOT IOS)
     )
 endif()
 
-
 add_subdirectory(client)
 
 if(NOT IOS AND NOT ANDROID AND NOT MACOS_NE)
@@ -110,4 +114,8 @@ if(AMNEZIAVPN_BUILD_FOCUSED_TESTS)
     endif()
     enable_testing()
     add_subdirectory(client/tests)
+endif()
+
+if(AMNEZIAVPN_BUILD_HEADLESS)
+    add_subdirectory(headless)
 endif()

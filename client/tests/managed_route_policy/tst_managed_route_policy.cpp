@@ -301,7 +301,8 @@ void ManagedRoutePolicyTest::managedRouteSafetyHelpersRejectBroadAndSpecialRoute
 
     const QStringList allowed {
         QStringLiteral("93.184.0.0/16"), QStringLiteral("93.184.216.34"),  QStringLiteral("10.0.0.0/8"),
-        QStringLiteral("172.16.0.0/12"), QStringLiteral("192.168.0.0/16"),
+        QStringLiteral("172.16.0.0/12"), QStringLiteral("172.16.31.0/24"),
+        QStringLiteral("192.168.0.0/16"),
     };
     for (const QString &route : allowed) {
         QVERIFY2(managedRoutePolicy::isAllowedManagedIpv4Route(route), qPrintable(route));
@@ -328,6 +329,11 @@ void ManagedRoutePolicyTest::managedRouteSafetyHelpersRejectBroadAndSpecialRoute
             QJsonObject { { QStringLiteral("10.0.0.0/8"), QString() } }, &sitesValid);
     QVERIFY(sitesValid);
     QCOMPARE(directRoute.value(QStringLiteral("10.0.0.0/8")).toString(), QString());
+
+    const QJsonObject corporateSubnet = managedRoutePolicy::canonicalSourceSites(
+            QJsonObject { { QStringLiteral("172.16.31.0/24"), QString() } }, &sitesValid);
+    QVERIFY(sitesValid);
+    QCOMPARE(corporateSubnet.value(QStringLiteral("172.16.31.0/24")).toString(), QString());
 
     const QJsonObject aliasRoutes = managedRoutePolicy::canonicalSourceSites(
             QJsonObject {
