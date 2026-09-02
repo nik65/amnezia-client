@@ -34,3 +34,21 @@ The root agent is orchestration-only: it may read files and inspect status or
 metadata, but must not write code or execute build, test, install, network, or
 other executable commands. Delegate practical implementation, diagnostics,
 builds, tests, and live checks to Luna/high subagents whenever available.
+
+## Permanent multi-agent audit policy
+
+Before every substantial code change, complete 10 independent read-only
+audits by `gpt-5.6-luna` agents at `high` reasoning effort. Each audit must
+cover a distinct area and must finish before the code change begins.
+
+After every code change, complete another 10 independent read-only reviews by
+`gpt-5.6-luna` agents at `high` reasoning effort against the current diff,
+before any build, release, or live deployment. If a review identifies a
+blocking finding that requires code, repeat the post-change 10-review cycle
+after the next code change until a complete cycle has no blocking findings.
+
+When runtime concurrency is lower than 10, run the audits in waves until
+exactly 10 agents have completed. Do not count queued, failed, interrupted,
+or duplicate reviews. The root agent only orchestrates this process; practical
+auditing, implementation, review, builds, tests, and live checks belong to
+the delegated Luna/high subagents.
