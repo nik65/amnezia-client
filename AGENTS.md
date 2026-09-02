@@ -19,10 +19,16 @@ must be launched manually by the user when publication is required.
 
 ## Local workstation and orchestration policy
 
-On this local PC only, Codex must never uninstall, reinstall, launch, or
-otherwise initiate an AmneziaVPN/Amnezia Client installer or local updater. If
-local reinstallation or updating is needed, stop and ask the user to launch it
-manually.
+On this local PC only, Codex must never disconnect, reconnect, stop, restart,
+or otherwise control an active VPN tunnel, the AmneziaVPN application or
+service, or local VPN routes, DNS, or firewall. Codex must also never
+uninstall, reinstall, launch, or otherwise initiate an AmneziaVPN/Amnezia
+Client installer or local updater.
+
+These prohibitions remain in force during release, publication, update,
+debugging, testing, build, or operator requests; such requests do not grant
+permission for those local actions. If any such action is needed, stop and
+require the user to perform it manually.
 
 The root agent is orchestration-only: it may read files and inspect status or
 metadata, but must not write code or execute build, test, install, network, or
