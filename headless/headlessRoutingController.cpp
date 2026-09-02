@@ -88,6 +88,9 @@ bool privateOrLocalIpv4(const QHostAddress &address)
     return ((value >> 24) == 10)
         || ((value >> 20) == ((172u << 4) | 1u))
         || ((value >> 16) == ((192u << 8) | 168u))
+        || ((value & 0xffc00000u) == 0x64400000u) // RFC 6598 CGNAT
+        || ((value & 0xffffff00u) == 0xc0000000u) // IETF protocol assignments
+        || ((value & 0xfffe0000u) == 0xc6120000u) // benchmarking
         || ((value >> 24) == 127)
         || ((value >> 16) == 169 * 256 + 254)
         || value == 0;
