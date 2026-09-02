@@ -8,6 +8,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 
+#include <algorithm>
 #include <utility>
 
 #include "../client/core/utils/managedRoutePolicy.h"
@@ -167,6 +168,113 @@ bool LinuxRouteReconciler::removeFullTunnelRoute(const QStringList &arguments)
         && m_runner->run(executable, arguments).ok;
 }
 
+LinuxRouteReconciler::RuleSnapshot LinuxRouteReconciler::readRuleSnapshot() const
+{
+    RuleSnapshot snapshot;
+    const QString executable = ipExecutable();
+    if (executable.isEmpty()) {
+        return snapshot;
+    }
+    const QList<QStringList> ruleQueries {
+        { QStringLiteral("rule"), QStringLiteral("show") },
+        { QStringLiteral("-6"), QStringLiteral("rule"), QStringLiteral("show") }
+    };
+    for (int family = 0; family < ruleQueries.size(); ++family) {
+        const QStringList &arguments = ruleQueries.at(family);
+        const CommandResult result = m_runner->runCaptured(executable, arguments);
+        if (!result.ok) {
+            return snapshot;
+        }
+        const QStringList lines = result.output.split(QRegularExpression(QStringLiteral("[\\r\\n]")),
+                                                        Qt::SkipEmptyParts);
+        for (const QString &line : lines) {
+            const QRegularExpressionMatch match =
+                    QRegularExpression(QStringLiteral("^\\s*(\\d+):")).match(line);
+            if (!match.hasMatch()) {
+                continue;
+            }
+            const int priority = match.captured(1).toInt();
+            snapshot.occupied.insert(priority);
+            snapshot.lines.append(line);
+            if (line.contains(QStringLiteral("lookup 51821"))) {
+                snapshot.ownedFull.insert(priority);
+                (family == 0 ? snapshot.ownedFullV4 : snapshot.ownedFullV6).insert(priority);
+            }
+            if (line.contains(QStringLiteral("lookup main"))) {
+                snapshot.ownedBypass.insert(priority);
+            }
+        }
+    }
+    snapshot.valid = true;
+    return snapshot;
+}
+
+bool LinuxRouteReconciler::selectRulePriorities(const RuleSnapshot &snapshot,
+                                                int *bypassPriority,
+                                                int *fullPriority) const
+{
+    if (!snapshot.valid || !bypassPriority || !fullPriority) {
+        return false;
+    }
+    auto hasOwnedBypassPriority = [this, &snapshot](int priority) {
+        return std::any_of(m_bypassRoutes.cbegin(), m_bypassRoutes.cend(),
+                           [&snapshot, priority](const QString &route) {
+            return std::any_of(snapshot.lines.cbegin(), snapshot.lines.cend(),
+                               [priority, &route](const QString &line) {
+                return ruleLineMatches(line, priority,
+                                       QStringLiteral("to %1 ").arg(route));
+            });
+        });
+    };
+    auto select = [&snapshot](int preferred, int first, int last, bool preferredOwned,
+                              int *selected) {
+        if (preferred >= first && preferred <= last && preferredOwned) {
+            *selected = preferred;
+            return true;
+        }
+        for (int candidate = first; candidate <= last; ++candidate) {
+            if (!snapshot.occupied.contains(candidate)) {
+                *selected = candidate;
+                return true;
+            }
+        }
+        return false;
+    };
+    return select(m_bypassRulePriority, FullTunnelBypassRulePriority, 1099,
+                  hasOwnedBypassPriority(m_bypassRulePriority), bypassPriority)
+        && select(m_fullRulePriority, FullTunnelRulePriority, FullTunnelPriorityLimit,
+                  snapshot.ownedFull.contains(m_fullRulePriority), fullPriority);
+}
+
+bool LinuxRouteReconciler::ruleLineMatches(const QString &line, int priority,
+                                           const QString &needle)
+{
+    return QRegularExpression(QStringLiteral("^\\s*%1:").arg(priority)).match(line).hasMatch()
+        && line.contains(needle);
+}
+
+QStringList LinuxRouteReconciler::bypassRuleArguments(const QString &operation,
+                                                      int priority,
+                                                      const QString &route) const
+{
+    return { QStringLiteral("rule"), operation, QStringLiteral("priority"),
+             QString::number(priority), QStringLiteral("to"), route,
+             QStringLiteral("lookup"), QStringLiteral("main") };
+}
+
+QStringList LinuxRouteReconciler::fullRuleArguments(const QString &operation,
+                                                    int priority, bool ipv6) const
+{
+    QStringList arguments;
+    if (ipv6) {
+        arguments.append(QStringLiteral("-6"));
+    }
+    arguments << QStringLiteral("rule") << operation << QStringLiteral("priority")
+              << QString::number(priority) << QStringLiteral("lookup")
+              << QString::number(FullTunnelRouteTable);
+    return arguments;
+}
+
 RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
         const QString &interfaceName, const QStringList &bypassRoutes)
 {
@@ -175,9 +283,18 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
                        QStringLiteral("the Linux ip command is not installed"));
     }
 
+    const RuleSnapshot ruleSnapshot = readRuleSnapshot();
+    int bypassPriority = FullTunnelBypassRulePriority;
+    int fullPriority = FullTunnelRulePriority;
+    if (!selectRulePriorities(ruleSnapshot, &bypassPriority, &fullPriority)) {
+        return failure(QStringLiteral("full_tunnel_rule_probe_failed"),
+                       QStringLiteral("could not find safe policy-rule priorities"));
+    }
+
     const bool hadFullTunnel = m_mode == QStringLiteral("all-except");
     const QString previousInterface = m_interfaceName;
     const QStringList previousBypassRoutes = m_bypassRoutes;
+    const int previousBypassPriority = m_bypassRulePriority;
 
     const QList<QStringList> fullRoutes {
         { QStringLiteral("route"), QStringLiteral("replace"), QStringLiteral("0.0.0.0/1"),
@@ -193,8 +310,17 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
           QStringLiteral("8000::/1"), QStringLiteral("dev"), interfaceName,
           QStringLiteral("table"), QString::number(FullTunnelRouteTable) },
     };
+    int installedRoutes = 0;
     for (const QStringList &arguments : fullRoutes) {
         if (!addFullTunnelRoute(arguments)) {
+            if (!hadFullTunnel || previousInterface != interfaceName) {
+                for (int index = 0; index < installedRoutes; ++index) {
+                    QStringList deletion = fullRoutes.at(index);
+                    deletion.replace(deletion.indexOf(QStringLiteral("replace")),
+                                     QStringLiteral("del"));
+                    removeFullTunnelRoute(deletion);
+                }
+            }
             // Restore the previous full-tunnel table when a refresh changed
             // the interface and only part of the replacement was accepted.
             if (hadFullTunnel && !previousInterface.isEmpty()) {
@@ -220,99 +346,106 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
             return failure(QStringLiteral("full_tunnel_route_failed"),
                            QStringLiteral("failed to install the full-tunnel route table"));
         }
+        ++installedRoutes;
     }
 
     QStringList addedBypassRoutes;
-    if (hadFullTunnel) {
-        for (const QString &route : bypassRoutes) {
-            if (previousBypassRoutes.contains(route)) {
-                continue;
-            }
-            if (!addFullTunnelRule({ QStringLiteral("rule"), QStringLiteral("add"),
-                                     QStringLiteral("priority"),
-                                     QString::number(FullTunnelBypassRulePriority),
-                                     QStringLiteral("to"), route, QStringLiteral("lookup"),
-                                     QStringLiteral("main") })) {
-                for (const QString &added : addedBypassRoutes) {
-                    removeFullTunnelRule({ QStringLiteral("rule"), QStringLiteral("del"),
-                                           QStringLiteral("priority"),
-                                           QString::number(FullTunnelBypassRulePriority),
-                                           QStringLiteral("to"), added, QStringLiteral("lookup"),
-                                           QStringLiteral("main") });
-                }
-                return failure(QStringLiteral("full_tunnel_rule_conflict"),
-                               QStringLiteral("a full-tunnel bypass rule could not be installed"));
-            }
-            addedBypassRoutes.append(route);
-        }
-    } else {
-        for (const QString &route : bypassRoutes) {
-            if (!addFullTunnelRule({ QStringLiteral("rule"), QStringLiteral("add"),
-                                     QStringLiteral("priority"),
-                                     QString::number(FullTunnelBypassRulePriority),
-                                     QStringLiteral("to"), route, QStringLiteral("lookup"),
-                                     QStringLiteral("main") })) {
-                for (const QString &added : addedBypassRoutes) {
-                    removeFullTunnelRule({ QStringLiteral("rule"), QStringLiteral("del"),
-                                           QStringLiteral("priority"),
-                                           QString::number(FullTunnelBypassRulePriority),
-                                           QStringLiteral("to"), added, QStringLiteral("lookup"),
-                                           QStringLiteral("main") });
-                }
-                return failure(QStringLiteral("full_tunnel_rule_conflict"),
-                               QStringLiteral("a full-tunnel bypass rule could not be installed"));
-            }
-            addedBypassRoutes.append(route);
-        }
-    }
-
-    QStringList fullRuleArguments { QStringLiteral("rule"), QStringLiteral("add"),
-                                    QStringLiteral("priority"),
-                                    QString::number(FullTunnelRulePriority),
-                                    QStringLiteral("lookup"),
-                                    QString::number(FullTunnelRouteTable) };
-    QStringList fullRule6Arguments { QStringLiteral("-6"), QStringLiteral("rule"),
-                                     QStringLiteral("add"), QStringLiteral("priority"),
-                                     QString::number(FullTunnelRulePriority),
-                                     QStringLiteral("lookup"),
-                                     QString::number(FullTunnelRouteTable) };
-    if (!hadFullTunnel && (!addFullTunnelRule(fullRuleArguments)
-                           || !addFullTunnelRule(fullRule6Arguments))) {
+    bool addedFullV4 = false;
+    bool addedFullV6 = false;
+    auto rollback = [&]() {
         for (const QString &route : addedBypassRoutes) {
-            removeFullTunnelRule({ QStringLiteral("rule"), QStringLiteral("del"),
-                                   QStringLiteral("priority"),
-                                   QString::number(FullTunnelBypassRulePriority),
-                                   QStringLiteral("to"), route, QStringLiteral("lookup"),
-                                   QStringLiteral("main") });
+            removeFullTunnelRule(bypassRuleArguments(QStringLiteral("del"), bypassPriority, route));
         }
-        removeFullTunnelRule({ QStringLiteral("rule"), QStringLiteral("del"),
-                               QStringLiteral("priority"),
-                               QString::number(FullTunnelRulePriority),
-                               QStringLiteral("lookup"),
-                               QString::number(FullTunnelRouteTable) });
-        removeFullTunnelRule({ QStringLiteral("-6"), QStringLiteral("rule"),
-                               QStringLiteral("del"), QStringLiteral("priority"),
-                               QString::number(FullTunnelRulePriority),
-                               QStringLiteral("lookup"),
-                               QString::number(FullTunnelRouteTable) });
-        return failure(QStringLiteral("full_tunnel_rule_conflict"),
-                       QStringLiteral("the full-tunnel policy rule could not be installed"));
+        if (addedFullV4) {
+            removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"), fullPriority, false));
+        }
+        if (addedFullV6) {
+            removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"), fullPriority, true));
+        }
+        if (!hadFullTunnel) {
+            for (const QStringList &route : fullRoutes) {
+                QStringList deletion { route };
+                deletion.replace(deletion.indexOf(QStringLiteral("replace")),
+                                 QStringLiteral("del"));
+                removeFullTunnelRoute(deletion);
+            }
+        } else if (previousInterface != interfaceName && !previousInterface.isEmpty()) {
+            for (const QStringList &route : fullRoutes) {
+                QStringList restore = route;
+                restore.replace(restore.indexOf(interfaceName), previousInterface);
+                addFullTunnelRoute(restore);
+            }
+        }
+    };
+
+    for (const QString &route : bypassRoutes) {
+        bool owned = false;
+        for (const QString &line : ruleSnapshot.lines) {
+            if (ruleLineMatches(line, bypassPriority,
+                                QStringLiteral("to %1 ").arg(route))) {
+                owned = true;
+                break;
+            }
+        }
+        if (owned) {
+            continue;
+        }
+        if (!addFullTunnelRule(bypassRuleArguments(QStringLiteral("add"), bypassPriority, route))) {
+            rollback();
+            return failure(QStringLiteral("full_tunnel_rule_conflict"),
+                           QStringLiteral("a full-tunnel bypass rule could not be installed"));
+        }
+        addedBypassRoutes.append(route);
+    }
+
+    const bool fullV4Present = ruleSnapshot.ownedFullV4.contains(fullPriority);
+    if (!fullV4Present) {
+        if (!addFullTunnelRule(fullRuleArguments(QStringLiteral("add"), fullPriority, false))) {
+            rollback();
+            return failure(QStringLiteral("full_tunnel_rule_conflict"),
+                           QStringLiteral("the full-tunnel policy rule could not be installed"));
+        }
+        addedFullV4 = true;
+    }
+    const bool fullV6Present = ruleSnapshot.ownedFullV6.contains(fullPriority);
+    if (!fullV6Present) {
+        if (!addFullTunnelRule(fullRuleArguments(QStringLiteral("add"), fullPriority, true))) {
+            rollback();
+            return failure(QStringLiteral("full_tunnel_rule_conflict"),
+                           QStringLiteral("the IPv6 full-tunnel policy rule could not be installed"));
+        }
+        addedFullV6 = true;
     }
 
     if (hadFullTunnel) {
+        QStringList removedPreviousBypassRoutes;
         for (const QString &route : previousBypassRoutes) {
-            if (!bypassRoutes.contains(route)
-                && !removeFullTunnelRule({ QStringLiteral("rule"), QStringLiteral("del"),
-                                            QStringLiteral("priority"),
-                                            QString::number(FullTunnelBypassRulePriority),
-                                            QStringLiteral("to"), route,
-                                            QStringLiteral("lookup"), QStringLiteral("main") })) {
+            bool owned = false;
+            for (const QString &line : ruleSnapshot.lines) {
+                if (ruleLineMatches(line, previousBypassPriority,
+                                    QStringLiteral("to %1 ").arg(route))) {
+                    owned = true;
+                    break;
+                }
+            }
+            if (!bypassRoutes.contains(route) && owned
+                && !removeFullTunnelRule(bypassRuleArguments(QStringLiteral("del"),
+                                                              previousBypassPriority, route))) {
+                rollback();
+                for (const QString &removed : removedPreviousBypassRoutes) {
+                    addFullTunnelRule(bypassRuleArguments(QStringLiteral("add"),
+                                                           previousBypassPriority, removed));
+                }
                 return failure(QStringLiteral("full_tunnel_rule_cleanup_failed"),
                                QStringLiteral("a stale full-tunnel bypass rule could not be removed"));
+            }
+            if (!bypassRoutes.contains(route) && owned) {
+                removedPreviousBypassRoutes.append(route);
             }
         }
     } else if (!m_routes.isEmpty()) {
         if (!removeRoutes(m_interfaceName, m_routes)) {
+            rollback();
             return failure(QStringLiteral("route_remove_failed"),
                            QStringLiteral("failed to retire the previous managed routes"));
         }
@@ -322,6 +455,8 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     m_interfaceName = interfaceName;
     m_routes.clear();
     m_bypassRoutes = bypassRoutes;
+    m_bypassRulePriority = bypassPriority;
+    m_fullRulePriority = fullPriority;
     if (!saveState()) {
         return failure(QStringLiteral("route_state_persist_failed"),
                        QStringLiteral("full-tunnel routes applied but state was not persisted"));
@@ -335,26 +470,35 @@ RouteReconcileResult LinuxRouteReconciler::clearFullTunnel()
         return failure(QStringLiteral("route_backend_unavailable"),
                        QStringLiteral("the Linux ip command is not installed"));
     }
+    const RuleSnapshot snapshot = readRuleSnapshot();
+    if (!snapshot.valid) {
+        return failure(QStringLiteral("full_tunnel_rule_probe_failed"),
+                       QStringLiteral("could not inspect policy rules safely"));
+    }
     for (const QString &route : m_bypassRoutes) {
-        if (!removeFullTunnelRule({ QStringLiteral("rule"), QStringLiteral("del"),
-                                    QStringLiteral("priority"),
-                                    QString::number(FullTunnelBypassRulePriority),
-                                    QStringLiteral("to"), route, QStringLiteral("lookup"),
-                                    QStringLiteral("main") })) {
+        bool owned = false;
+        for (const QString &line : snapshot.lines) {
+            if (ruleLineMatches(line, m_bypassRulePriority,
+                                QStringLiteral("to %1 ").arg(route))) {
+                owned = true;
+                break;
+            }
+        }
+        if (!owned) {
+            continue;
+        }
+        if (!removeFullTunnelRule(bypassRuleArguments(QStringLiteral("del"),
+                                                       m_bypassRulePriority, route))) {
             return failure(QStringLiteral("full_tunnel_rule_cleanup_failed"),
                            QStringLiteral("a full-tunnel bypass rule could not be removed"));
         }
     }
-    if (!removeFullTunnelRule({ QStringLiteral("rule"), QStringLiteral("del"),
-                                QStringLiteral("priority"),
-                                QString::number(FullTunnelRulePriority),
-                                QStringLiteral("lookup"),
-                                QString::number(FullTunnelRouteTable) })
-        || !removeFullTunnelRule({ QStringLiteral("-6"), QStringLiteral("rule"),
-                                   QStringLiteral("del"), QStringLiteral("priority"),
-                                   QString::number(FullTunnelRulePriority),
-                                   QStringLiteral("lookup"),
-                                   QString::number(FullTunnelRouteTable) })) {
+    const bool fullV4Owned = snapshot.ownedFullV4.contains(m_fullRulePriority);
+    const bool fullV6Owned = snapshot.ownedFullV6.contains(m_fullRulePriority);
+    if ((fullV4Owned && !removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"),
+                                                                    m_fullRulePriority, false)))
+        || (fullV6Owned && !removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"),
+                                                                    m_fullRulePriority, true)))) {
         return failure(QStringLiteral("full_tunnel_rule_cleanup_failed"),
                        QStringLiteral("the full-tunnel policy rule could not be removed"));
     }
@@ -482,6 +626,8 @@ QJsonObject LinuxRouteReconciler::status() const
         { QStringLiteral("bypassRoutes"), QJsonArray::fromStringList(m_bypassRoutes) },
         { QStringLiteral("routeTable"), m_mode == QStringLiteral("all-except")
                                                ? FullTunnelRouteTable : 0 },
+        { QStringLiteral("bypassRulePriority"), m_bypassRulePriority },
+        { QStringLiteral("fullRulePriority"), m_fullRulePriority },
         { QStringLiteral("statePath"), m_statePath },
     };
 }
@@ -513,6 +659,8 @@ bool LinuxRouteReconciler::loadState()
     m_interfaceName.clear();
     m_routes.clear();
     m_bypassRoutes.clear();
+    m_bypassRulePriority = FullTunnelBypassRulePriority;
+    m_fullRulePriority = FullTunnelRulePriority;
     if (m_statePath.isEmpty()) {
         return true;
     }
@@ -569,6 +717,19 @@ bool LinuxRouteReconciler::loadState()
     m_interfaceName = interfaceName;
     m_routes = bounded;
     m_bypassRoutes = boundedBypass;
+    const int storedBypassPriority = object.value(QStringLiteral("bypassRulePriority"))
+                                             .toInt(FullTunnelBypassRulePriority);
+    const int storedFullPriority = object.value(QStringLiteral("fullRulePriority"))
+                                           .toInt(FullTunnelRulePriority);
+    if (storedBypassPriority < FullTunnelBypassRulePriority
+        || storedBypassPriority > 1099
+        || storedFullPriority < FullTunnelRulePriority
+        || storedFullPriority > FullTunnelPriorityLimit
+        || storedBypassPriority >= storedFullPriority) {
+        return false;
+    }
+    m_bypassRulePriority = storedBypassPriority;
+    m_fullRulePriority = storedFullPriority;
     return true;
 }
 
@@ -591,6 +752,8 @@ bool LinuxRouteReconciler::saveState() const
         { QStringLiteral("interface"), m_interfaceName },
         { QStringLiteral("routes"), QJsonArray::fromStringList(m_routes) },
         { QStringLiteral("bypassRoutes"), QJsonArray::fromStringList(m_bypassRoutes) },
+        { QStringLiteral("bypassRulePriority"), m_bypassRulePriority },
+        { QStringLiteral("fullRulePriority"), m_fullRulePriority },
     };
     if (file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) < 0
         || !file.commit()) {

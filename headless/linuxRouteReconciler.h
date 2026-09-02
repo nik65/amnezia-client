@@ -6,6 +6,7 @@
 #include <QStringList>
 
 #include <memory>
+#include <QSet>
 
 #include "vpnBackend.h"
 
@@ -52,6 +53,25 @@ private:
     bool removeFullTunnelRule(const QStringList &arguments);
     bool addFullTunnelRoute(const QStringList &arguments);
     bool removeFullTunnelRoute(const QStringList &arguments);
+    struct RuleSnapshot
+    {
+        QSet<int> occupied;
+        QSet<int> ownedBypass;
+        QSet<int> ownedFull;
+        QSet<int> ownedFullV4;
+        QSet<int> ownedFullV6;
+        QStringList lines;
+        bool valid = false;
+    };
+    RuleSnapshot readRuleSnapshot() const;
+    bool selectRulePriorities(const RuleSnapshot &snapshot,
+                              int *bypassPriority, int *fullPriority) const;
+    static bool ruleLineMatches(const QString &line, int priority,
+                                const QString &needle);
+    QStringList bypassRuleArguments(const QString &operation, int priority,
+                                    const QString &route) const;
+    QStringList fullRuleArguments(const QString &operation, int priority,
+                                  bool ipv6) const;
     bool removeRoutes(const QString &interfaceName, const QStringList &routes,
                       QString *failedRoute = nullptr);
     static bool validInterfaceName(const QString &value);
@@ -59,6 +79,7 @@ private:
     static constexpr int FullTunnelRouteTable = 51821;
     static constexpr int FullTunnelBypassRulePriority = 1000;
     static constexpr int FullTunnelRulePriority = 1100;
+    static constexpr int FullTunnelPriorityLimit = 1999;
 
     std::shared_ptr<CommandRunner> m_runner;
     QString m_statePath;
@@ -66,6 +87,8 @@ private:
     QString m_interfaceName;
     QStringList m_routes;
     QStringList m_bypassRoutes;
+    int m_bypassRulePriority = FullTunnelBypassRulePriority;
+    int m_fullRulePriority = FullTunnelRulePriority;
     mutable QString m_lastError;
 };
 

@@ -3,6 +3,8 @@
 #include <QFile>
 #include <QTemporaryDir>
 
+#include <algorithm>
+
 #include "linuxRouteReconciler.h"
 #include "serverRoutingPolicy.h"
 
@@ -34,7 +36,27 @@ public:
     CommandResult run(const QString &program, const QStringList &arguments) override
     {
         calls.append({ QStringLiteral("run"), program, arguments });
+        if (failAtCall > 0 && calls.size() == failAtCall) {
+            failAtCall = -1;
+            return { false, 1, QStringLiteral("simulated failure") };
+        }
         return runResult;
+    }
+
+    CommandResult runCaptured(const QString &program,
+                              const QStringList &arguments) override
+    {
+        ++capturedCalls;
+        if (!capturedOutputs.isEmpty()) {
+            return { true, 0, {}, capturedOutputs.value(capturedCalls - 1) };
+        }
+        if (capturedCalls <= 2) {
+            return { true, 0, {}, {} };
+        }
+        const bool ipv6 = arguments.contains(QStringLiteral("-6"));
+        return { true, 0, {}, ipv6
+            ? QStringLiteral("1100: from all lookup 51821\n")
+            : QStringLiteral("1000: to 10.8.1.4 lookup main\n1100: from all lookup 51821\n") };
     }
 
     CommandResult start(const QString &, const QString &, const QStringList &) override
@@ -49,6 +71,9 @@ public:
 
     QList<Call> calls;
     CommandResult runResult { true, 0, {} };
+    int capturedCalls = 0;
+    int failAtCall = -1;
+    QStringList capturedOutputs;
 };
 
 } // namespace
@@ -183,6 +208,96 @@ private slots:
             QStringLiteral("10.8.1.4"), QStringLiteral("lookup"), QStringLiteral("main") };
         QCOMPARE(runner->calls.at(runner->calls.size() - 7).arguments,
                  expectedBypassDelete);
+    }
+
+    void foreignRulePrioritiesAreSkippedWithoutForeignMutation()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->capturedOutputs = {
+            QStringLiteral("1000: from all lookup main\n1100: from all lookup main\n"),
+            QStringLiteral("1000: from all lookup main\n1100: from all lookup main\n") };
+        LinuxRouteReconciler reconciler(
+                runner, temporaryDirectory.filePath(QStringLiteral("routes.json")));
+
+        QVERIFY2(reconciler.applyAllExcept(QStringLiteral("wg0"),
+                                           { QStringLiteral("10.8.1.4") }).ok,
+                 "dynamic priorities should avoid foreign rules");
+        QVERIFY(runner->calls.size() >= 7);
+        for (const FakeCommandRunner::Call &call : runner->calls) {
+            QVERIFY(!call.arguments.contains(QStringLiteral("1000"))
+                    || call.arguments.contains(QStringLiteral("1001")));
+            QVERIFY(!call.arguments.contains(QStringLiteral("1100"))
+                    || call.arguments.contains(QStringLiteral("1101")));
+            QVERIFY(!call.arguments.contains(QStringLiteral("del")));
+        }
+        QCOMPARE(reconciler.status().value(QStringLiteral("bypassRulePriority")).toInt(), 1001);
+        QCOMPARE(reconciler.status().value(QStringLiteral("fullRulePriority")).toInt(), 1101);
+    }
+
+    void partialRuleFailureRollsBackRoutesAndRules()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->failAtCall = 6; // full-tunnel IPv4 rule after four routes and bypass rule
+        LinuxRouteReconciler reconciler(
+                runner, temporaryDirectory.filePath(QStringLiteral("routes.json")));
+
+        const RouteReconcileResult result = reconciler.applyAllExcept(
+                QStringLiteral("wg0"), { QStringLiteral("10.8.1.4") });
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("full_tunnel_rule_conflict"));
+        QCOMPARE(reconciler.status().value(QStringLiteral("mode")).toString(),
+                 QStringLiteral("only-forward"));
+        QVERIFY(std::any_of(runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.arguments.contains(QStringLiteral("del"))
+                && call.arguments.contains(QStringLiteral("0.0.0.0/1"));
+        }));
+        QVERIFY(std::any_of(runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.arguments.contains(QStringLiteral("del"))
+                && call.arguments.contains(QStringLiteral("1000"));
+        }));
+    }
+
+    void ownedPrioritiesReloadAndMissingKernelRuleIsRecreated()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        auto firstRunner = std::make_shared<FakeCommandRunner>();
+        LinuxRouteReconciler first(firstRunner, statePath);
+        QVERIFY(first.applyAllExcept(QStringLiteral("wg0"),
+                                     { QStringLiteral("10.8.1.4") }).ok);
+
+        auto secondRunner = std::make_shared<FakeCommandRunner>();
+        secondRunner->capturedOutputs = {
+            QStringLiteral("1000: to 10.8.1.4 lookup main\n1100: from all lookup 51821\n"),
+            QString() };
+        LinuxRouteReconciler second(secondRunner, statePath);
+        QVERIFY(second.applyAllExcept(QStringLiteral("wg0"),
+                                      { QStringLiteral("10.8.1.4") }).ok);
+        QVERIFY(std::any_of(secondRunner->calls.cbegin(), secondRunner->calls.cend(),
+                            [](const auto &call) {
+            return call.arguments.contains(QStringLiteral("-6"))
+                && call.arguments.contains(QStringLiteral("add"))
+                && call.arguments.contains(QStringLiteral("1100"));
+        }));
+        QCOMPARE(second.status().value(QStringLiteral("fullRulePriority")).toInt(), 1100);
+    }
+
+    void fullTunnelNeverTouchesUnderlayTable501()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
+        LinuxRouteReconciler reconciler(
+                runner, temporaryDirectory.filePath(QStringLiteral("routes.json")));
+        QVERIFY(reconciler.applyAllExcept(QStringLiteral("wg0"), {}).ok);
+        for (const FakeCommandRunner::Call &call : runner->calls) {
+            QVERIFY(!call.arguments.contains(QStringLiteral("501")));
+        }
     }
 };
 

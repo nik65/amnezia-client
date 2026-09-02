@@ -90,6 +90,29 @@ CommandResult RealCommandRunner::run(const QString &program, const QStringList &
     return { true, process.exitCode(), {} };
 }
 
+CommandResult RealCommandRunner::runCaptured(const QString &program,
+                                             const QStringList &arguments)
+{
+    QProcess process;
+    process.setProgram(program);
+    process.setArguments(arguments);
+    process.start();
+    if (!process.waitForStarted(3000)) {
+        return { false, -1, QStringLiteral("unable to start backend executable"), {} };
+    }
+    if (!process.waitForFinished(30'000)) {
+        process.kill();
+        process.waitForFinished(2000);
+        return { false, -1, QStringLiteral("backend executable timed out"), {} };
+    }
+    const QString output = QString::fromUtf8(process.readAllStandardOutput());
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        return { false, process.exitCode(),
+                 QStringLiteral("backend executable failed"), output };
+    }
+    return { true, process.exitCode(), {}, output };
+}
+
 CommandResult RealCommandRunner::startDetached(const QString &program,
                                                const QStringList &arguments)
 {

@@ -17,6 +17,7 @@ struct CommandResult
     bool ok = false;
     int exitCode = -1;
     QString message;
+    QString output;
 };
 
 class CommandRunner
@@ -27,6 +28,14 @@ public:
     virtual bool isAvailable(const QString &program) const = 0;
     virtual QString resolveExecutable(const QStringList &candidates) const = 0;
     virtual CommandResult run(const QString &program, const QStringList &arguments) = 0;
+    // Read-only command output is used only for local kernel state probes.
+    // Keep the ordinary run() path output-free so backend output never enters
+    // the daemon control protocol or logs.
+    virtual CommandResult runCaptured(const QString &program,
+                                       const QStringList &arguments)
+    {
+        return run(program, arguments);
+    }
     virtual CommandResult startDetached(const QString &program, const QStringList &arguments)
     {
         return run(program, arguments);
@@ -45,6 +54,8 @@ public:
     bool isAvailable(const QString &program) const override;
     QString resolveExecutable(const QStringList &candidates) const override;
     CommandResult run(const QString &program, const QStringList &arguments) override;
+    CommandResult runCaptured(const QString &program,
+                              const QStringList &arguments) override;
     CommandResult startDetached(const QString &program,
                                 const QStringList &arguments) override;
     CommandResult start(const QString &id, const QString &program,
