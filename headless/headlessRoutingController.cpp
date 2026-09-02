@@ -361,6 +361,11 @@ RoutingResult HeadlessRoutingController::connect(const Profile &profile)
         m_activeProfile = profile.id;
         m_activeInterface.clear();
         m_hasPolicy = false;
+        if (!saveState()) {
+            m_stateValid = false;
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("routing controller receipt could not be saved"));
+        }
         return { true, {}, {} };
     }
     return fetchAndApply(profile);
@@ -384,16 +389,19 @@ RoutingResult HeadlessRoutingController::refresh(const Profile &profile)
 RoutingResult HeadlessRoutingController::disconnect()
 {
     const QJsonObject receipt = m_reconciler.status();
-    const QString dnsInterface = m_activeInterface.isEmpty()
-            ? (receipt.value(QStringLiteral("dnsInterface")).toString().isEmpty()
-                   ? receipt.value(QStringLiteral("interface")).toString()
-                   : receipt.value(QStringLiteral("dnsInterface")).toString())
-            : m_activeInterface;
-    const RouteReconcileResult result = m_reconciler.clear();
+    // DNS ownership is independent from the route interface.  Clear it
+    // first using the persisted receipt, so a route cleanup cannot erase the
+    // only interface identity needed to revert systemd-resolved.
+    const QString dnsInterface = receipt.value(QStringLiteral("dnsInterface")).toString();
     const RouteReconcileResult dnsResult = m_reconciler.clearDns(dnsInterface);
-    if (!result.ok || !dnsResult.ok) {
-        return failure(!result.ok ? result.code : dnsResult.code,
+    if (!dnsResult.ok) {
+        return failure(dnsResult.code,
                        QStringLiteral("route and DNS cleanup did not complete"));
+    }
+    const RouteReconcileResult result = m_reconciler.clear();
+    if (!result.ok) {
+        return failure(result.code,
+                       QStringLiteral("route cleanup did not complete"));
     }
     m_activeProfile.clear();
     m_activeInterface.clear();

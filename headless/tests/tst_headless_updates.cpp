@@ -47,10 +47,14 @@ private slots:
         QVERIFY(state.write(QJsonDocument(QJsonObject {
             { QStringLiteral("version"), 2 },
             { QStringLiteral("state"), QStringLiteral("restart_pending") },
+            { QStringLiteral("lastCheckedAt"), QString() },
             { QStringLiteral("lastAppliedVersion"), QStringLiteral("5.0.1.16") },
             { QStringLiteral("rollbackDirectory"), QString() },
+            { QStringLiteral("rollbackVersion"), QString() },
+            { QStringLiteral("rollbackHashes"), QJsonObject() },
             { QStringLiteral("installDirectory"), temporaryDirectory.path() },
             { QStringLiteral("updateRoot"), QDir(updates).canonicalPath() },
+            { QStringLiteral("lastError"), QString() },
         }).toJson(QJsonDocument::Compact)) > 0);
         state.close();
         QFile journal(QDir(updates).filePath(QStringLiteral("transaction.json")));
@@ -98,9 +102,14 @@ private slots:
         QVERIFY(state.write(QJsonDocument(QJsonObject {
             { QStringLiteral("version"), 2 },
             { QStringLiteral("state"), QStringLiteral("restart_pending") },
+            { QStringLiteral("lastCheckedAt"), QString() },
             { QStringLiteral("lastAppliedVersion"), QStringLiteral("5.0.1.16") },
+            { QStringLiteral("rollbackDirectory"), QString() },
+            { QStringLiteral("rollbackVersion"), QString() },
+            { QStringLiteral("rollbackHashes"), QJsonObject() },
             { QStringLiteral("installDirectory"), temporaryDirectory.path() },
             { QStringLiteral("updateRoot"), QDir(updates).canonicalPath() },
+            { QStringLiteral("lastError"), QString() },
         }).toJson(QJsonDocument::Compact)) > 0);
         state.close();
         QFile journal(QDir(updates).filePath(QStringLiteral("transaction.json")));
@@ -136,6 +145,9 @@ private slots:
         QVERIFY(!QFileInfo::exists(QDir(updates).filePath(QStringLiteral("transaction.json"))));
         QCOMPARE(manager.status().value(QStringLiteral("state")).toString(),
                  QStringLiteral("disabled"));
+        HeadlessUpdateManager reloaded({}, statePath, temporaryDirectory.path(), false);
+        QVERIFY(!reloaded.status().value(QStringLiteral("recoveryRequired")).toBool());
+        QVERIFY(reloaded.status().value(QStringLiteral("rollbackAvailable")).toBool());
     }
 
     void unknownPersistedStateFailsClosed()

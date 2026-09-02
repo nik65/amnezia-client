@@ -258,6 +258,10 @@ LinuxRouteReconciler::RuleSnapshot LinuxRouteReconciler::readRuleSnapshot() cons
             const int priority = match.captured(1).toInt();
             snapshot.occupied.insert(priority);
             snapshot.lines.append(line);
+            // Linux policy rules have no RTPROTO/protocol selector (unlike
+            // routes).  Ownership therefore uses the exact rule grammar and
+            // the persisted priority; ambiguous same-priority rules fail
+            // closed below rather than emitting an invalid `ip rule` syntax.
             if (QRegularExpression(QStringLiteral("^\\s*\\d+:\\s+from\\s+all\\s+lookup\\s+51821\\s*$")).match(line).hasMatch()) {
                 snapshot.ownedFull.insert(priority);
                 (family == 0 ? snapshot.ownedFullV4 : snapshot.ownedFullV6).insert(priority);
@@ -684,6 +688,35 @@ RouteReconcileResult LinuxRouteReconciler::clearFullTunnel()
                            QStringLiteral("route table 51821 contains a foreign or unmarked route"));
         }
     }
+    // A route marker alone does not prove that policy rules at the persisted
+    // priorities belong to this daemon.  Refuse to delete or take over a
+    // same-priority foreign rule; only an exact protocol-marked rule is ours.
+    if ((snapshot.occupied.contains(m_fullRulePriority)
+         && !snapshot.ownedFull.contains(m_fullRulePriority))
+        || (snapshot.occupied.contains(m_bypassRulePriority)
+            && !snapshot.ownedBypass.contains(m_bypassRulePriority))) {
+        return failure(QStringLiteral("full_tunnel_ownership_ambiguous"),
+                       QStringLiteral("a policy rule priority is occupied by a foreign rule"));
+    }
+    QStringList removedBypassRoutes;
+    bool removedFullV4 = false;
+    bool removedFullV6 = false;
+    const auto restoreRemovedRules = [&]() {
+        bool restored = true;
+        for (const QString &route : removedBypassRoutes) {
+            restored = addFullTunnelRule(bypassRuleArguments(QStringLiteral("add"),
+                                                              m_bypassRulePriority, route)) && restored;
+        }
+        if (removedFullV4) {
+            restored = addFullTunnelRule(fullRuleArguments(QStringLiteral("add"),
+                                                            m_fullRulePriority, false)) && restored;
+        }
+        if (removedFullV6) {
+            restored = addFullTunnelRule(fullRuleArguments(QStringLiteral("add"),
+                                                            m_fullRulePriority, true)) && restored;
+        }
+        return restored;
+    };
     for (const QString &route : m_bypassRoutes) {
         bool owned = false;
         for (const QString &line : snapshot.lines) {
@@ -698,19 +731,28 @@ RouteReconcileResult LinuxRouteReconciler::clearFullTunnel()
         }
         if (!removeFullTunnelRule(bypassRuleArguments(QStringLiteral("del"),
                                                        m_bypassRulePriority, route))) {
+            restoreRemovedRules();
             return failure(QStringLiteral("full_tunnel_rule_cleanup_failed"),
                            QStringLiteral("a full-tunnel bypass rule could not be removed"));
         }
+        removedBypassRoutes.append(route);
     }
     const bool fullV4Owned = snapshot.ownedFullV4.contains(m_fullRulePriority);
     const bool fullV6Owned = snapshot.ownedFullV6.contains(m_fullRulePriority);
-    if ((fullV4Owned && !removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"),
-                                                                    m_fullRulePriority, false)))
-        || (fullV6Owned && !removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"),
-                                                                    m_fullRulePriority, true)))) {
+    if (fullV4Owned && !removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"),
+                                                                    m_fullRulePriority, false))) {
+        restoreRemovedRules();
         return failure(QStringLiteral("full_tunnel_rule_cleanup_failed"),
                        QStringLiteral("the full-tunnel policy rule could not be removed"));
     }
+    removedFullV4 = fullV4Owned;
+    if (fullV6Owned && !removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"),
+                                                                    m_fullRulePriority, true))) {
+        restoreRemovedRules();
+        return failure(QStringLiteral("full_tunnel_rule_cleanup_failed"),
+                       QStringLiteral("the IPv6 full-tunnel policy rule could not be removed"));
+    }
+    removedFullV6 = fullV6Owned;
     const QStringList v4Route = { QStringLiteral("route"), QStringLiteral("del"),
                                   QStringLiteral("0.0.0.0/1"), QStringLiteral("table"),
                                   QString::number(FullTunnelRouteTable), QStringLiteral("proto"),
@@ -747,8 +789,9 @@ RouteReconcileResult LinuxRouteReconciler::clearFullTunnel()
     if (!removeFullTunnelRoute(v4Route) || !removeFullTunnelRoute(v4RouteUpper)
         || !removeFullTunnelRoute(v6Route) || !removeFullTunnelRoute(v6RouteUpper)) {
         const bool restored = restoreOwnedTable();
+        const bool rulesRestored = restoreRemovedRules();
         return failure(QStringLiteral("full_tunnel_route_cleanup_failed"),
-                       restored ? QStringLiteral("the full-tunnel route table could not be removed")
+                       restored && rulesRestored ? QStringLiteral("the full-tunnel route table could not be removed")
                                : QStringLiteral("the full-tunnel route table could not be removed and restoration failed"));
     }
 
@@ -783,15 +826,25 @@ RouteReconcileResult LinuxRouteReconciler::configureDns(const QString &interface
     const QStringList previousServers = m_dnsServers;
     const QStringList previousDomains = m_dnsDomains;
     const auto restorePreviousDns = [&]() {
+        bool restored = true;
+        // A failed refresh may have configured a different interface before
+        // the domain command failed.  Revert that new binding first; only
+        // then restore the exact previous receipt.
+        if (interfaceName != previousInterface && !interfaceName.isEmpty()) {
+            restored = m_runner->run(executable,
+                                     { QStringLiteral("revert"), interfaceName }).ok
+                    && restored;
+        }
         if (previousInterface.isEmpty() || previousServers.isEmpty() || previousDomains.isEmpty()) {
-            return clearDns(interfaceName).ok;
+            return restored;
         }
         QStringList restoreDns { QStringLiteral("dns"), previousInterface };
         restoreDns.append(previousServers);
         QStringList restoreDomain { QStringLiteral("domain"), previousInterface };
         restoreDomain.append(previousDomains);
         return m_runner->run(executable, restoreDns).ok
-            && m_runner->run(executable, restoreDomain).ok;
+            && m_runner->run(executable, restoreDomain).ok
+            && restored;
     };
     QStringList dnsArguments { QStringLiteral("dns"), interfaceName };
     dnsArguments.append(dnsServers);
@@ -805,7 +858,12 @@ RouteReconcileResult LinuxRouteReconciler::configureDns(const QString &interface
     domainArguments.append(dnsDomains);
     const CommandResult domainResult = m_runner->run(executable, domainArguments);
     if (!domainResult.ok) {
-        restorePreviousDns();
+        if (!restorePreviousDns()) {
+            m_stateValid = false;
+            m_mode = QStringLiteral("recovery_required");
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("DNS configuration failed and the previous resolver binding could not be restored"));
+        }
         return failure(QStringLiteral("dns_configure_failed"),
                        QStringLiteral("failed to assign the VPN DNS routing domain"));
     }
@@ -827,6 +885,10 @@ RouteReconcileResult LinuxRouteReconciler::configureDns(const QString &interface
 RouteReconcileResult LinuxRouteReconciler::clearDns(const QString &interfaceName)
 {
     if (interfaceName.isEmpty()) {
+        if (!m_dnsInterface.isEmpty()) {
+            return failure(QStringLiteral("dns_interface_required"),
+                           QStringLiteral("cannot retire a DNS receipt without its persisted interface"));
+        }
         m_dnsInterface.clear();
         m_dnsServers.clear();
         m_dnsDomains.clear();
@@ -875,7 +937,12 @@ RouteReconcileResult LinuxRouteReconciler::clear()
         m_interfaceName.clear();
         m_mode = QStringLiteral("only-forward");
         m_bypassRoutes.clear();
-        saveState();
+        if (!saveState()) {
+            m_stateValid = false;
+            m_mode = QStringLiteral("recovery_required");
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("managed route receipt could not be cleared"));
+        }
         return { true, {}, {} };
     }
     if (ipExecutable().isEmpty()) {
@@ -972,6 +1039,17 @@ bool LinuxRouteReconciler::loadState()
         return false;
     }
     const QJsonObject object = document.object();
+    for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+        if (!QStringList {
+                QStringLiteral("version"), QStringLiteral("mode"),
+                QStringLiteral("interface"), QStringLiteral("routes"),
+                QStringLiteral("bypassRoutes"), QStringLiteral("bypassRulePriority"),
+                QStringLiteral("fullRulePriority"), QStringLiteral("dnsInterface"),
+                QStringLiteral("dnsServers"), QStringLiteral("dnsDomains")
+            }.contains(it.key())) {
+            return false;
+        }
+    }
     const auto strictInt = [](const QJsonValue &value, int minimum, int maximum, int *result) {
         if (!value.isDouble()) return false;
         const double number = value.toDouble();
@@ -1006,8 +1084,8 @@ bool LinuxRouteReconciler::loadState()
     bool routesValid = false;
     const QStringList bounded = amnezia::managedRoutePolicy::validatedManagedRoutes(
             routes, &routesValid);
-    if (!interfaceName.isEmpty() && (!validInterfaceName(interfaceName)
-                                     || !routesValid || bounded.size() != routes.size())) {
+    if (!routesValid || bounded.size() != routes.size()
+        || (!interfaceName.isEmpty() && !validInterfaceName(interfaceName))) {
         return false;
     }
     if (mode == QStringLiteral("only-forward")
@@ -1032,13 +1110,23 @@ bool LinuxRouteReconciler::loadState()
     if (mode == QStringLiteral("only-forward") && !bypassRoutes.isEmpty()) {
         return false;
     }
+    if (mode == QStringLiteral("all-except") && !routes.isEmpty()) {
+        return false;
+    }
     if (object.contains(QStringLiteral("dnsInterface"))
         && (!object.value(QStringLiteral("dnsInterface")).isString()
             || !object.value(QStringLiteral("dnsServers")).isArray()
             || !object.value(QStringLiteral("dnsDomains")).isArray())) {
         return false;
     }
-    if (object.contains(QStringLiteral("dnsInterface"))) {
+    if (object.contains(QStringLiteral("dnsInterface"))
+        || object.contains(QStringLiteral("dnsServers"))
+        || object.contains(QStringLiteral("dnsDomains"))) {
+        if (!object.value(QStringLiteral("dnsInterface")).isString()
+            || !object.value(QStringLiteral("dnsServers")).isArray()
+            || !object.value(QStringLiteral("dnsDomains")).isArray()) {
+            return false;
+        }
         m_dnsInterface = object.value(QStringLiteral("dnsInterface")).toString();
         for (const QJsonValue &value : object.value(QStringLiteral("dnsServers")).toArray()) {
             if (!value.isString()) return false;

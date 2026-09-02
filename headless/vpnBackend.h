@@ -111,6 +111,7 @@ private:
         QString configPath;
         QString temporaryConfigDirectory;
         QString program;
+        QString interfaceName;
         SessionKind kind = SessionKind::OneShot;
     };
 

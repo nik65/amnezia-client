@@ -214,9 +214,6 @@ void Daemon::readFromClient()
     }
 
     m_clientBuffers[client].append(client->readAll());
-    if (!m_clientBuffers[client].contains('\n')) {
-        if (auto *timer = m_clientFrameTimers.value(client)) timer->start();
-    }
     processFrames(client);
 }
 
@@ -243,6 +240,7 @@ void Daemon::processFrames(QLocalSocket *client)
                 client->flush();
                 client->disconnectFromServer();
             }
+            if (auto *timer = m_clientFrameTimers.value(client)) timer->start();
             return;
         }
 
@@ -269,6 +267,14 @@ void Daemon::processFrames(QLocalSocket *client)
         client->flush();
 
         if (buffer.isEmpty()) {
+            return;
+        }
+        // A packet may contain one complete request followed by the prefix
+        // of another request.  processFrames() stops the timer after the
+        // complete frame; restart it while the tail remains incomplete so a
+        // peer cannot hold a local socket forever.
+        if (buffer.indexOf('\n') < 0) {
+            if (auto *timer = m_clientFrameTimers.value(client)) timer->start();
             return;
         }
     }

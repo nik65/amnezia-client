@@ -188,6 +188,20 @@ def is_headless_platform(platform: object) -> bool:
     )
 
 
+def validate_platform_vocabulary(platform: object, context: str) -> None:
+    """Reject aliases that would bypass the headless schema contract.
+
+    Platform names are part of the signed manifest protocol, not arbitrary
+    labels.  In particular, every name containing ``headless`` must use the
+    canonical Linux headless namespace so schema-2 gating cannot be bypassed
+    with keys such as ``headless`` or ``linux-headlessx``.
+    """
+    if isinstance(platform, str) and "headless" in platform.lower() and not is_headless_platform(platform):
+        raise SystemExit(
+            f"{context} platform {platform!r} is not a canonical Linux headless platform name"
+        )
+
+
 def validate_android_version_code(value: object, option_name: str = "--android-version-code") -> int:
     if (
         isinstance(value, bool)
@@ -860,6 +874,7 @@ def verify_manifest(
     if missing:
         raise SystemExit("Generated manifest is missing required platforms: " + ", ".join(missing))
     for platform, artifact in platforms.items():
+        validate_platform_vocabulary(platform, "Generated manifest")
         if not isinstance(platform, str) or not isinstance(artifact, dict):
             raise SystemExit(f"Generated manifest platform {platform!r} must be an object")
         if artifact.get("openExternal"):
@@ -1102,7 +1117,12 @@ def main() -> int:
         bool(args.rollback_artifact),
     ))
     artifact_platforms = parse_artifact(args.artifact)
-    if args.payload_schema == 2 and any(is_headless_platform(platform) for platform in artifact_platforms):
+    for platform in artifact_platforms:
+        validate_platform_vocabulary(platform, "--artifact")
+    if args.payload_schema == 2 and any(
+        isinstance(platform, str) and "headless" in platform.lower()
+        for platform in artifact_platforms
+    ):
         raise SystemExit(
             "Linux headless artifacts require --payload-schema 1 until the headless updater consumes releasePolicy"
         )

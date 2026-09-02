@@ -425,6 +425,55 @@ private slots:
         QVERIFY(reconciler.status().value(QStringLiteral("recoveryRequired")).toBool());
     }
 
+    void malformedEmptyInterfaceRouteReceiptFailsClosed()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        QFile state(statePath);
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        QVERIFY(state.write(QJsonDocument(QJsonObject {
+            { QStringLiteral("version"), 2 },
+            { QStringLiteral("mode"), QStringLiteral("only-forward") },
+            { QStringLiteral("interface"), QString() },
+            { QStringLiteral("routes"), QJsonArray { QStringLiteral("not-a-route") } },
+            { QStringLiteral("bypassRoutes"), QJsonArray() },
+            { QStringLiteral("bypassRulePriority"), 1000 },
+            { QStringLiteral("fullRulePriority"), 1100 },
+        }).toJson(QJsonDocument::Compact)) > 0);
+        state.close();
+        auto runner = std::make_shared<FakeCommandRunner>();
+        LinuxRouteReconciler reconciler(runner, statePath);
+        const RouteReconcileResult result = reconciler.applyAllExcept(
+                QStringLiteral("wg0"), { QStringLiteral("8.8.8.8/32") });
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("recovery_required"));
+        QVERIFY(runner->calls.isEmpty());
+    }
+
+    void foreignMarkedPriorityIsNotDeleted()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        auto initialRunner = std::make_shared<FakeCommandRunner>();
+        LinuxRouteReconciler initial(initialRunner, statePath);
+        QVERIFY(initial.applyAllExcept(QStringLiteral("wg0"), {}).ok);
+
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->capturedOutputs = {
+            QStringLiteral("1000: to 10.8.1.4 lookup main protocol 999\n1100: from all lookup 51821 protocol 999\n"),
+            QStringLiteral("1000: to 10.8.1.4 lookup main protocol 999\n1100: from all lookup 51821 protocol 999\n"),
+            QStringLiteral("0.0.0.0/1 dev wg0 proto 186\n128.0.0.0/1 dev wg0 proto 186\n"),
+            QStringLiteral("::/1 dev wg0 proto 186\n8000::/1 dev wg0 proto 186\n")
+        };
+        LinuxRouteReconciler reconciler(runner, statePath);
+        const RouteReconcileResult result = reconciler.clear();
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("full_tunnel_ownership_ambiguous"));
+        QVERIFY(runner->calls.isEmpty());
+    }
+
     void foreignFullTunnelRouteIsNeverDeleted()
     {
         QTemporaryDir temporaryDirectory;

@@ -252,9 +252,15 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
             return failure(QStringLiteral("recovery_required"),
                            QStringLiteral("headless update acknowledgement state could not be persisted"));
         }
-        // Retain the acknowledged journal and rollback directory.  An
-        // explicitly requested rollback after a healthy update must remain
-        // deterministic; retirement happens only after rollback acknowledgement.
+        // The rollback receipt is in the state file and is independently
+        // hash-bound to the installation.  Retire the active transaction
+        // journal now; this makes a completed update idempotent and prevents
+        // a later disabled/no-update check from being interpreted as an
+        // in-flight transaction.  If removal loses a crash race, loadState()
+        // accepts the acknowledged phase and the next check retries it.
+        if (!m_journalPath.isEmpty() && QFileInfo::exists(m_journalPath)) {
+            QFile::remove(m_journalPath);
+        }
     }
     if (m_lastState == QStringLiteral("rollback_restart_pending")
         && !m_rollbackVersion.isEmpty() && currentVersion == m_rollbackVersion) {
@@ -281,9 +287,6 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
                     .value(QStringLiteral("transactionDirectory")).toString();
             transactionEvidencePath = transactionDirectory;
         }
-        m_rollbackDirectory.clear();
-        m_rollbackVersion.clear();
-        m_rollbackHashes.clear();
         m_lastState = QStringLiteral("rolled_back");
         m_lastError.clear();
         if (!saveState()) {
@@ -310,6 +313,17 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
             || !retireEvidence(transactionEvidencePath)) {
             return failure(QStringLiteral("recovery_required"),
                            QStringLiteral("rollback evidence could not be retired after health acknowledgement"));
+        }
+        // Retire the rollback receipt only after the journal and all evidence
+        // have been removed.  A crash before this point leaves a complete,
+        // retryable receipt instead of advertising rollbackAvailable with no
+        // usable journal/evidence.
+        m_rollbackDirectory.clear();
+        m_rollbackVersion.clear();
+        m_rollbackHashes.clear();
+        if (!saveState()) {
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("rollback receipt could not be retired after acknowledgement"));
         }
     }
 
@@ -950,6 +964,54 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
         }
     }
     qint64 journalVersion = 0;
+    if (journalObject.isEmpty()) {
+        // A healthy update owns a durable rollback receipt in state.  The
+        // active transaction journal is intentionally retired after
+        // acknowledgement, so an explicit rollback must remain possible
+        // without resurrecting a stale transaction file.
+        const QString stableState = m_lastState;
+        if (!validVersion(m_rollbackVersion)
+            || (stableState != QStringLiteral("updated")
+                && stableState != QStringLiteral("disabled")
+                && stableState != QStringLiteral("no_update")
+                && stableState != QStringLiteral("applied"))) {
+            if (error) *error = QStringLiteral("rollback transaction journal is missing and state is not a completed update receipt");
+            m_lastState = QStringLiteral("recovery_required");
+            m_lastError = error ? *error : QStringLiteral("rollback transaction journal is missing");
+            saveState();
+            return false;
+        }
+        const QString recoveryTransaction = QDir(m_updateRoot).filePath(
+                QStringLiteral("recovery-receipt-%1").arg(
+                    QUuid::createUuid().toString(QUuid::WithoutBraces)));
+        if (!QDir().mkpath(recoveryTransaction)) {
+            if (error) *error = QStringLiteral("rollback recovery receipt directory cannot be created");
+            return false;
+        }
+        journalObject = QJsonObject {
+            { QStringLiteral("version"), 1 },
+            { QStringLiteral("phase"), QStringLiteral("acknowledged") },
+            { QStringLiteral("candidateVersion"), m_lastAppliedVersion },
+            { QStringLiteral("currentVersion"), m_rollbackVersion },
+            { QStringLiteral("transactionDirectory"), QFileInfo(recoveryTransaction).canonicalFilePath() },
+            { QStringLiteral("rollbackDirectory"), QFileInfo(m_rollbackDirectory).canonicalFilePath() },
+            { QStringLiteral("installDirectory"), QFileInfo(m_installDirectory).canonicalFilePath() },
+        };
+        QJsonObject receiptHashes;
+        QJsonObject currentHashes;
+        QJsonObject currentSizes;
+        for (auto it = m_rollbackHashes.cbegin(); it != m_rollbackHashes.cend(); ++it) {
+            receiptHashes.insert(it.key(), it.value());
+        }
+        journalObject.insert(QStringLiteral("rollbackHashes"), receiptHashes);
+        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+            const QString path = QDir(m_installDirectory).filePath(name);
+            currentHashes.insert(name, sha256ForFile(path));
+            currentSizes.insert(name, QJsonValue(QFileInfo(path).size()));
+        }
+        journalObject.insert(QStringLiteral("candidateHashes"), currentHashes);
+        journalObject.insert(QStringLiteral("candidateSizes"), currentSizes);
+    }
     const QString journalPhase = journalObject.value(QStringLiteral("phase")).toString();
     const QString journalInstall = journalObject.value(QStringLiteral("installDirectory")).toString();
     const QString canonicalInstall = QFileInfo(m_installDirectory).canonicalFilePath();
@@ -1161,6 +1223,12 @@ bool HeadlessUpdateManager::loadState()
     m_rollbackVersion = object.value(QStringLiteral("rollbackVersion")).toString();
     m_lastError = object.value(QStringLiteral("lastError")).toString();
     m_rollbackHashes.clear();
+    if (!object.value(QStringLiteral("rollbackHashes")).isObject()) {
+        m_stateValid = false;
+        m_lastState = QStringLiteral("recovery_required");
+        m_lastError = QStringLiteral("headless rollback hash receipt is not an object");
+        return false;
+    }
     const QJsonObject rollbackHashes = object.value(QStringLiteral("rollbackHashes")).toObject();
     for (auto it = rollbackHashes.constBegin(); it != rollbackHashes.constEnd(); ++it) {
         if (!it.value().isString() || !validSha256(it.value().toString())) {
@@ -1189,6 +1257,13 @@ bool HeadlessUpdateManager::loadState()
             m_lastError = QStringLiteral("headless rollback receipt is outside the trusted update root");
             return false;
         }
+    }
+    if (m_rollbackDirectory.isEmpty()
+        && (!m_rollbackVersion.isEmpty() || !m_rollbackHashes.isEmpty())) {
+        m_stateValid = false;
+        m_lastState = QStringLiteral("recovery_required");
+        m_lastError = QStringLiteral("headless rollback receipt has incomplete identity");
+        return false;
     }
     if (!m_journalPath.isEmpty() && QFileInfo::exists(m_journalPath)) {
         QFile journalFile(m_journalPath);
@@ -1246,6 +1321,14 @@ bool HeadlessUpdateManager::loadState()
             m_lastError = QStringLiteral("headless transaction journal identity is invalid");
             return false;
         }
+        if (!journalObject.value(QStringLiteral("candidateHashes")).isObject()
+            || !journalObject.value(QStringLiteral("candidateSizes")).isObject()
+            || !journalObject.value(QStringLiteral("rollbackHashes")).isObject()) {
+            m_stateValid = false;
+            m_lastState = QStringLiteral("recovery_required");
+            m_lastError = QStringLiteral("headless transaction journal receipts are not objects");
+            return false;
+        }
         const QJsonObject candidateHashes = journalObject.value(QStringLiteral("candidateHashes")).toObject();
         const QJsonObject candidateSizes = journalObject.value(QStringLiteral("candidateSizes")).toObject();
         for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
@@ -1274,6 +1357,16 @@ bool HeadlessUpdateManager::loadState()
         const QString journalRollbackCanonical = QFileInfo(journalRollbackPath).canonicalFilePath();
         const QString stateRollbackCanonical = QFileInfo(m_rollbackDirectory).canonicalFilePath();
         const QJsonObject journalRollbackHashes = journalObject.value(QStringLiteral("rollbackHashes")).toObject();
+        if (journalRollbackHashes.size() != 2
+            || !journalRollbackHashes.value(QStringLiteral("amneziad")).isString()
+            || !journalRollbackHashes.value(QStringLiteral("amnezia-cli")).isString()
+            || !validSha256(journalRollbackHashes.value(QStringLiteral("amneziad")).toString())
+            || !validSha256(journalRollbackHashes.value(QStringLiteral("amnezia-cli")).toString())) {
+            m_stateValid = false;
+            m_lastState = QStringLiteral("recovery_required");
+            m_lastError = QStringLiteral("headless transaction journal rollback hash receipt is invalid");
+            return false;
+        }
         if (!m_rollbackDirectory.isEmpty()
             && (journalRollbackCanonical.isEmpty() || stateRollbackCanonical != journalRollbackCanonical
                 || m_rollbackVersion != journalCurrent
@@ -1311,6 +1404,12 @@ bool HeadlessUpdateManager::loadState()
             // The final state was committed before journal retirement.  Keep
             // this receipt valid so a crash in the retirement window is
             // recoverable and harmless on the next start.
+            // Acknowledgement is a completed transaction.  It is valid to
+            // observe it with any stable post-update state (disabled,
+            // no_update, or a later check), because the rollback receipt is
+            // carried by state and the journal is only a crash-window hint.
+            // Treating only "updated" as valid made the normal disabled/
+            // no-update path self-lock the daemon on its next restart.
             if (m_lastState == QStringLiteral("restart_pending")
                 || m_lastState == QStringLiteral("rollback_restart_pending")
                 || m_lastState == QStringLiteral("recovery_required")) {

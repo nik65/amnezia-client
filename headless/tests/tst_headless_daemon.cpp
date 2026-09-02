@@ -43,6 +43,16 @@ public:
         return { true, 0, {} };
     }
 
+    CommandResult runCaptured(const QString &program,
+                              const QStringList &arguments) override
+    {
+        if (program == QStringLiteral("ip")
+            && arguments.contains(QStringLiteral("link"))) {
+            return { true, 0, {}, QStringLiteral("7: wg0: <POINTOPOINT>\n") };
+        }
+        return run(program, arguments);
+    }
+
     CommandResult start(const QString &id, const QString &program,
                         const QStringList &arguments) override
     {
@@ -181,6 +191,26 @@ private slots:
                          .value(QStringLiteral("code")).toString(),
                  QStringLiteral("frame_too_large"));
         QVERIFY(client.waitForDisconnected(1000) || client.state() == QLocalSocket::UnconnectedState);
+    }
+
+    void partialTailAfterCompleteFrameIsTimedOut()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        Daemon daemon(temporaryDirectory.filePath(QStringLiteral("amneziad.sock")),
+                      temporaryDirectory.filePath(QStringLiteral("profiles.json")));
+        QVERIFY(daemon.start());
+        QLocalSocket client;
+        client.connectToServer(daemon.socketPath(), QIODevice::ReadWrite);
+        QVERIFY(client.waitForConnected(1000));
+        const QByteArray complete = encodeRequest(
+                Request { Command::Status, QStringLiteral("tail-1"), {} });
+        QVERIFY(client.write(complete + QByteArrayLiteral("{\"protocol\":")) > 0);
+        QVERIFY(client.waitForReadyRead(1000));
+        QTest::qWait(10'200);
+        QVERIFY(client.state() == QLocalSocket::UnconnectedState
+                || client.waitForDisconnected(1000));
+        daemon.stop();
     }
 
     void staleSocketIsReplacedWhenNoDaemonOwnsIt()

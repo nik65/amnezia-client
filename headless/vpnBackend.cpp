@@ -274,6 +274,11 @@ BackendResult VpnBackend::connect(const Profile &profile)
         effectiveConfigPath,
         temporaryConfigDirectory,
         executable,
+        profile.interfaceName.isEmpty()
+            ? (protocol == QStringLiteral("wireguard") ? QStringLiteral("wg0")
+               : protocol == QStringLiteral("amneziawg") ? QStringLiteral("amn0")
+               : protocol == QStringLiteral("openvpn") ? QStringLiteral("tun0") : QString())
+            : profile.interfaceName,
         longRunning ? SessionKind::LongRunning : SessionKind::OneShot,
     });
     return { true, {}, {} };
@@ -432,7 +437,10 @@ bool VpnBackend::sessionAlive() const
     if (m_session->kind == SessionKind::LongRunning) {
         return m_runner->isSessionAlive(m_session->profileId);
     }
-    return true;
+    // One-shot WireGuard/AmneziaWG commands return after configuring the
+    // interface; process liveness is therefore not a health signal.  Probe
+    // the actual interface on every health tick instead.
+    return interfaceHealthy(m_session->interfaceName);
 }
 
 bool VpnBackend::interfaceHealthy(const QString &interfaceName) const
