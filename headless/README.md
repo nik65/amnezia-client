@@ -141,8 +141,9 @@ Windows-клиента. Пока отсутствуют и не должны с�
   а XRay/SS-XRay остаются proxy-режимом;
 - управление self-hosted серверами, Docker-контейнерами и пользователями;
 - диагностика протокольных backend-ов и journald integration;
-- automatic update требует опубликованного артефакта `linux-headless-x64` и доверенного
-  public key в профиле;
+- automatic update требует опубликованного артефакта `linux-headless-x64`, HTTPS manifest
+  и root-owned ключ строго `/etc/amnezia/update-public-key.pem`; поле ключа в профиле
+  сохраняется для совместимости, но не может выбрать другой trust anchor;
 - HTTPS remote API;
 - автоматическая или zero-touch миграция AWG 2.0 → 3.1.
 
@@ -152,6 +153,22 @@ privileged adapter и kill-switch; текущий full-tunnel слой испо�
 проверяемые `ip route`/`ip rule` операции.
 Импорт/экспорт сохраняет только безопасные метаданные, включая whitelist/update URL и путь
 к публичному ключу; private keys, tokens, passwords и прочие secrets в store и логи не записываются.
+
+### Update и policy transport hardening
+
+Updater принимает только HTTPS manifest/artifact с Ed25519-подписью и проверяет canonical
+containment, отсутствие symlink, root ownership и запрет group/world-write для trust anchor,
+устанавливаемых бинарей и rollback evidence. Перед заменой создаётся durable journal с фазами
+`prepared`, `replaced`, `restart_pending`; после перезапуска daemon подтверждает здоровье пары
+бинарей и только затем помечает транзакцию `acknowledged`. Смешанное состояние или ошибка
+восстановления переводит daemon в `recovery_required`; rollback выполняется только по
+проверенным SHA-256 и не скрывает ошибки.
+
+Политика маршрутизации требует HTTPS. Единственное исключение — буквальный IPv4 по HTTP,
+который должен быть VPN-internal и содержаться в `forwardRoutes` (например, текущий ServerX
+`10.8.1.253:17864` при `10.8.1.0/24`). Внешний/plain HTTP, reserved hostnames и unsafe
+private endpoint отвергаются до сетевого запроса; redirects запрещены. Full-tunnel staging
+добавляет `Table = off`, чтобы только reconciler владел таблицей `51821` и его правилами.
 
 ## Безопасность разработки
 

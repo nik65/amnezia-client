@@ -89,6 +89,7 @@ private:
     QStringList m_bypassRoutes;
     int m_bypassRulePriority = FullTunnelBypassRulePriority;
     int m_fullRulePriority = FullTunnelRulePriority;
+    bool m_stateValid = true;
     mutable QString m_lastError;
 };
 

@@ -2,6 +2,7 @@
 #define AMNEZIA_HEADLESS_UPDATE_MANAGER_H
 
 #include <QJsonObject>
+#include <QMap>
 #include <QString>
 #include <QUrl>
 
@@ -62,6 +63,13 @@ private:
     bool restoreRollback(QString *error);
     bool loadState();
     bool saveState() const;
+    bool writeJournal(const QJsonObject &journal, QString *error) const;
+    bool verifyTrustedKey(const QString &configuredPath, QString *error) const;
+    bool verifyInstallFile(const QString &path, QString *error) const;
+    bool verifyRollbackFile(const QString &path, const QString &expectedSha256,
+                            QString *error) const;
+    static QString trustedUpdatePublicKeyPath();
+    static QString sha256ForFile(const QString &path);
     static bool verifyEnvelope(const QJsonObject &envelope,
                                const QString &publicKeyPath,
                                QByteArray &payload);
@@ -87,7 +95,10 @@ private:
     QString m_lastError;
     QString m_rollbackDirectory;
     QString m_rollbackVersion;
+    QMap<QString, QString> m_rollbackHashes;
     QString m_candidatePlatform;
+    QString m_journalPath;
+    bool m_stateValid = true;
 };
 
 } // namespace amnezia::headless

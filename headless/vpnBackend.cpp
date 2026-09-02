@@ -54,9 +54,25 @@ bool RealCommandRunner::isAvailable(const QString &program) const
 QString RealCommandRunner::resolveExecutable(const QStringList &candidates) const
 {
     for (const QString &candidate : candidates) {
-        const QString executable = QStandardPaths::findExecutable(candidate);
-        if (!executable.isEmpty()) {
-            return executable;
+        if (QFileInfo(candidate).isAbsolute()) {
+            const QFileInfo info(candidate);
+            if (info.isFile() && info.isExecutable() && !info.isSymLink()) {
+                return info.absoluteFilePath();
+            }
+            continue;
+        }
+        // Never resolve privileged VPN helpers from the ambient service PATH.
+        // Only the distro-owned absolute locations below are accepted.
+        const QStringList trustedDirectories {
+            QStringLiteral("/usr/bin"), QStringLiteral("/usr/sbin"),
+            QStringLiteral("/bin"), QStringLiteral("/sbin"),
+            QStringLiteral("/usr/local/bin"), QStringLiteral("/usr/local/sbin")
+        };
+        for (const QString &directory : trustedDirectories) {
+            const QFileInfo info(QDir(directory).filePath(candidate));
+            if (info.isFile() && info.isExecutable() && !info.isSymLink()) {
+                return info.absoluteFilePath();
+            }
         }
     }
     return {};
@@ -318,6 +334,25 @@ bool VpnBackend::prepareFullTunnelConfig(const Profile &profile,
     QString rewritten = content;
     rewritten.replace(allowedIpsLine,
                       QStringLiteral("AllowedIPs = 0.0.0.0/0, ::/0"));
+
+    // The native wg-quick policy-rules generator is not the transaction owner
+    // for headless full-tunnel mode.  Disable it explicitly and let the
+    // reconciler stage table 51821 plus its bounded rules atomically.
+    const QRegularExpression tableLine(
+            QStringLiteral(R"(^\s*Table\s*=\s*[^\r\n]*$)"),
+            QRegularExpression::MultilineOption | QRegularExpression::CaseInsensitiveOption);
+    if (tableLine.match(rewritten).hasMatch()) {
+        rewritten.replace(tableLine, QStringLiteral("Table = off"));
+    } else {
+        const qsizetype interfaceEnd = rewritten.indexOf(QRegularExpression(
+                QStringLiteral(R"(^\s*\[Peer\]\s*$)")), 0);
+        const QString line = QStringLiteral("Table = off\n");
+        if (interfaceEnd >= 0) {
+            rewritten.insert(interfaceEnd, line);
+        } else {
+            rewritten.append(QStringLiteral("\n") + line);
+        }
+    }
 
     QString interfaceName = profile.interfaceName.trimmed();
     if (interfaceName.isEmpty()) {

@@ -227,6 +227,8 @@ private slots:
         QVERIFY(staged.open(QIODevice::ReadOnly));
         QVERIFY(QString::fromUtf8(staged.readAll()).contains(
                 QStringLiteral("AllowedIPs = 0.0.0.0/0, ::/0")));
+        staged.seek(0);
+        QVERIFY(QString::fromUtf8(staged.readAll()).contains(QStringLiteral("Table = off")));
 
         QVERIFY2(backend.disconnect().ok, qPrintable(backend.lastError().message));
         QCOMPARE(runner->calls.constLast().arguments.at(0), QStringLiteral("down"));

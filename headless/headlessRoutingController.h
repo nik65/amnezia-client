@@ -29,6 +29,11 @@ QStringList allExceptBypassRoutes(const Profile &profile,
                                   const QStringList &serverRoutes,
                                   bool *valid = nullptr);
 
+// Validate policy transport before any network request. HTTP is accepted only
+// for a literal VPN-internal address covered by profile.forwardRoutes.
+bool isSafePolicyEndpoint(const Profile &profile, const QString &url,
+                          QString *error = nullptr);
+
 class HeadlessRoutingController final
 {
 public:
@@ -47,7 +52,7 @@ private:
                               const QStringList &serverRoutes);
     static QString defaultInterfaceFor(const Profile &profile);
     static ServerRoutingPolicyResult fetchPolicy(
-            const QString &url,
+            const Profile &profile,
             const std::optional<amnezia::ManagedRoutePolicyMetadata> &current);
 
     LinuxRouteReconciler m_reconciler;

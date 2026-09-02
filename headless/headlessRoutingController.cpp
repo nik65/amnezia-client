@@ -66,6 +66,32 @@ bool ipv4RoutesOverlap(const QString &left, const QString &right)
     return leftStart <= rightEnd && rightStart <= leftEnd;
 }
 
+bool ipv4ContainedByRoute(const QHostAddress &address, const QString &route)
+{
+    if (address.protocol() != QAbstractSocket::IPv4Protocol) {
+        return false;
+    }
+    quint32 network = 0;
+    int prefix = 0;
+    if (!parseIpv4Route(route, &network, &prefix)) {
+        return false;
+    }
+    const quint32 mask = prefix == 0 ? 0u : 0xffffffffu << (32 - prefix);
+    return (address.toIPv4Address() & mask) == (network & mask);
+}
+
+bool privateOrLocalIpv4(const QHostAddress &address)
+{
+    if (address.protocol() != QAbstractSocket::IPv4Protocol) return false;
+    const quint32 value = address.toIPv4Address();
+    return ((value >> 24) == 10)
+        || ((value >> 20) == ((172u << 4) | 1u))
+        || ((value >> 16) == ((192u << 8) | 168u))
+        || ((value >> 24) == 127)
+        || ((value >> 16) == 169 * 256 + 254)
+        || value == 0;
+}
+
 QStringList mergeRoutes(QStringList left, const QStringList &right, bool *valid)
 {
     left.append(right);
@@ -337,7 +363,11 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
         }
         const std::optional<amnezia::ManagedRoutePolicyMetadata> current = m_policyMetadata;
 
-        const ServerRoutingPolicyResult fetched = fetchPolicy(profile.serverRulesUrl, current);
+        QString policyUrlError;
+        if (!isSafePolicyEndpoint(profile, profile.serverRulesUrl, &policyUrlError)) {
+            return failure(QStringLiteral("policy_transport_invalid"), policyUrlError);
+        }
+        const ServerRoutingPolicyResult fetched = fetchPolicy(profile, current);
         if (!fetched.ok) {
             return failure(fetched.code, fetched.message);
         }
@@ -424,12 +454,62 @@ QString HeadlessRoutingController::defaultInterfaceFor(const Profile &profile)
     return {};
 }
 
-ServerRoutingPolicyResult HeadlessRoutingController::fetchPolicy(
-        const QString &url, const std::optional<amnezia::ManagedRoutePolicyMetadata> &current)
+bool isSafePolicyEndpoint(const Profile &profile, const QString &rawUrl,
+                          QString *error)
 {
+    const QUrl url(rawUrl, QUrl::StrictMode);
+    const auto fail = [error](const QString &message) {
+        if (error) *error = message;
+        return false;
+    };
+    if (!url.isValid() || url.host().isEmpty() || url.userInfo().size() > 0
+        || url.hasFragment() || (url.port() != -1 && (url.port() < 1 || url.port() > 65535))) {
+        return fail(QStringLiteral("server routing policy URL is invalid"));
+    }
+    const QHostAddress literal(url.host());
+    if (url.scheme() == QStringLiteral("http")) {
+        if (literal.protocol() != QAbstractSocket::IPv4Protocol
+            || privateOrLocalIpv4(literal) == false) {
+            return fail(QStringLiteral("plain HTTP policy endpoints are allowed only for literal VPN-internal addresses"));
+        }
+        const bool contained = std::any_of(profile.forwardRoutes.cbegin(), profile.forwardRoutes.cend(),
+                                           [&literal](const QString &route) {
+            return ipv4ContainedByRoute(literal, route);
+        });
+        if (!contained) {
+            return fail(QStringLiteral("plain HTTP policy endpoint is not contained in forwardRoutes"));
+        }
+        return true;
+    }
+    if (url.scheme() != QStringLiteral("https")) {
+        return fail(QStringLiteral("server routing policy requires HTTPS or the documented VPN-internal HTTP exception"));
+    }
+    if (literal.protocol() == QAbstractSocket::IPv4Protocol && privateOrLocalIpv4(literal)) {
+        const bool contained = std::any_of(profile.forwardRoutes.cbegin(), profile.forwardRoutes.cend(),
+                                           [&literal](const QString &route) {
+            return ipv4ContainedByRoute(literal, route);
+        });
+        if (!contained) {
+            return fail(QStringLiteral("HTTPS policy endpoint resolves to an unsafe private address"));
+        }
+    }
+    const QString lowerHost = url.host().toLower();
+    if (lowerHost == QStringLiteral("localhost") || lowerHost.endsWith(QStringLiteral(".localhost"))
+        || lowerHost.endsWith(QStringLiteral(".local")) || lowerHost.endsWith(QStringLiteral(".internal"))) {
+        return fail(QStringLiteral("policy endpoint hostname is reserved for local or internal resolution"));
+    }
+    return true;
+}
+
+ServerRoutingPolicyResult HeadlessRoutingController::fetchPolicy(
+        const Profile &profile, const std::optional<amnezia::ManagedRoutePolicyMetadata> &current)
+{
+    const QString url = profile.serverRulesUrl;
     QNetworkAccessManager manager;
     QNetworkRequest request { QUrl(url) };
     request.setTransferTimeout(PolicyRequestTimeoutMs);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::ManualRedirectPolicy);
     QNetworkReply *reply = manager.get(request);
     QEventLoop loop;
     QTimer timer;

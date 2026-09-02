@@ -12,6 +12,12 @@ RuntimeDirectoryMode=0750
 StateDirectory=amnezia
 StateDirectoryMode=0750
 UMask=0007
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/amneziad --socket /run/amnezia/amneziad.sock --store /var/lib/amnezia/profiles.json --config-root /etc/amnezia/profiles --require-root-owned-config --staging-root /run/amnezia
 Restart=on-failure
 RestartSec=2

@@ -236,6 +236,11 @@ QByteArray Daemon::handleRequest(const Request &request)
         return encodeResponse(request.requestId, result);
     }
     case Command::Connect: {
+        if (m_state == QStringLiteral("cleanup_failed")
+            || m_state == QStringLiteral("recovery_required")) {
+            return encodeError(request.requestId, m_state,
+                               QStringLiteral("daemon requires cleanup or recovery before another connection"));
+        }
         const QString profile = request.parameters.value(QStringLiteral("profile"))
                                          .toString().trimmed();
         if (profile.isEmpty()) {
@@ -257,8 +262,19 @@ QByteArray Daemon::handleRequest(const Request &request)
             // Routing setup may already have installed a bootstrap route used
             // to reach the server policy endpoint.  Always roll it back when
             // connection setup fails, before tearing down the VPN backend.
-            m_routingController.disconnect();
-            m_vpnBackend.disconnect();
+            const RoutingResult routeCleanup = m_routingController.disconnect();
+            const BackendResult backendCleanup = m_vpnBackend.disconnect();
+            m_routingRefreshTimer.stop();
+            if (!routeCleanup.ok || !backendCleanup.ok) {
+                m_state = QStringLiteral("cleanup_failed");
+                m_activeProfile = storedProfile.id;
+                m_activeProfileData = storedProfile;
+                return encodeError(request.requestId, QStringLiteral("cleanup_failed"),
+                                   QStringLiteral("connection failed and cleanup requires recovery"));
+            }
+            m_state = QStringLiteral("disconnected");
+            m_activeProfile.clear();
+            m_activeProfileData.reset();
             return encodeError(request.requestId, routingResult.code, routingResult.message);
         }
         m_state = QStringLiteral("connected");
@@ -274,13 +290,14 @@ QByteArray Daemon::handleRequest(const Request &request)
     case Command::Disconnect: {
         const RoutingResult routingResult = m_routingController.disconnect();
         const BackendResult result = m_vpnBackend.disconnect();
-        if (!result.ok) {
-            return encodeError(request.requestId, result.code, result.message);
-        }
-        if (!routingResult.ok) {
-            return encodeError(request.requestId, routingResult.code, routingResult.message);
-        }
         m_routingRefreshTimer.stop();
+        if (!result.ok || !routingResult.ok) {
+            m_state = QStringLiteral("cleanup_failed");
+            const QString code = !result.ok ? result.code : routingResult.code;
+            const QString message = QStringLiteral("disconnect did not complete; recovery is required");
+            return encodeError(request.requestId, code.isEmpty()
+                               ? QStringLiteral("cleanup_failed") : code, message);
+        }
         m_state = QStringLiteral("disconnected");
         m_activeProfile.clear();
         m_activeProfileData.reset();
@@ -397,8 +414,14 @@ void Daemon::connectAutomaticProfile()
         }
         const RoutingResult routing = m_routingController.connect(profile);
         if (!routing.ok) {
-            m_routingController.disconnect();
-            m_vpnBackend.disconnect();
+            const RoutingResult routeCleanup = m_routingController.disconnect();
+            const BackendResult backendCleanup = m_vpnBackend.disconnect();
+            m_routingRefreshTimer.stop();
+            if (!routeCleanup.ok || !backendCleanup.ok) {
+                m_state = QStringLiteral("cleanup_failed");
+                m_activeProfile = profile.id;
+                m_activeProfileData = profile;
+            }
             qWarning() << "Headless automatic route setup failed:" << routing.code;
             return;
         }

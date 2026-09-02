@@ -368,6 +368,47 @@ private slots:
         QVERIFY(valid);
         QCOMPARE(routes, QStringList { QStringLiteral("8.8.8.8") });
     }
+
+    void policyTransportAllowsOnlyDocumentedInternalHttp()
+    {
+        Profile profile;
+        profile.forwardRoutes = { QStringLiteral("10.8.1.0/24") };
+        QString error;
+        QVERIFY(isSafePolicyEndpoint(profile,
+                                     QStringLiteral("http://10.8.1.253:17864/rules.json"),
+                                     &error));
+        QVERIFY(!isSafePolicyEndpoint(profile,
+                                      QStringLiteral("http://192.168.1.98/rules.json"),
+                                      &error));
+        QVERIFY(!isSafePolicyEndpoint(profile,
+                                      QStringLiteral("http://policy.example/rules.json"),
+                                      &error));
+        QVERIFY(!isSafePolicyEndpoint(profile,
+                                      QStringLiteral("https://127.0.0.1/rules.json"),
+                                      &error));
+        QVERIFY(isSafePolicyEndpoint(profile,
+                                     QStringLiteral("https://policy.example/rules.json"),
+                                     &error));
+    }
+
+    void invalidRouteStateFailsClosedWithoutMutatingHost()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        QFile state(statePath);
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        QVERIFY(state.write(QByteArrayLiteral("not-json")) > 0);
+        state.close();
+        auto runner = std::make_shared<FakeCommandRunner>();
+        LinuxRouteReconciler reconciler(runner, statePath);
+        const RouteReconcileResult result = reconciler.applyAllExcept(
+                QStringLiteral("wg0"), { QStringLiteral("8.8.8.8/32") });
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("recovery_required"));
+        QVERIFY(runner->calls.isEmpty());
+        QVERIFY(reconciler.status().value(QStringLiteral("recoveryRequired")).toBool());
+    }
 };
 
 QTEST_MAIN(ServerRoutingTest)

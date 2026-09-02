@@ -21,13 +21,21 @@ LinuxRouteReconciler::LinuxRouteReconciler(std::shared_ptr<CommandRunner> runner
     : m_runner(runner ? std::move(runner) : std::make_shared<RealCommandRunner>()),
       m_statePath(std::move(statePath))
 {
-    loadState();
+    m_stateValid = loadState();
+    if (!m_stateValid) {
+        m_mode = QStringLiteral("recovery_required");
+        m_lastError = QStringLiteral("managed route state is invalid; refusing to mutate host routes");
+    }
 }
 
 RouteReconcileResult LinuxRouteReconciler::apply(const QString &interfaceName,
                                                  const QStringList &routes)
 {
     m_lastError.clear();
+    if (!m_stateValid) {
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("managed route state is invalid; manual route recovery is required"));
+    }
     if (m_mode == QStringLiteral("all-except")) {
         const RouteReconcileResult cleared = clearFullTunnel();
         if (!cleared.ok) {
@@ -123,6 +131,10 @@ RouteReconcileResult LinuxRouteReconciler::applyAllExcept(
         const QString &interfaceName, const QStringList &bypassRoutes)
 {
     m_lastError.clear();
+    if (!m_stateValid) {
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("managed route state is invalid; manual route recovery is required"));
+    }
     if (!validInterfaceName(interfaceName)) {
         return failure(QStringLiteral("invalid_interface"),
                        QStringLiteral("VPN interface name is invalid"));
@@ -196,11 +208,11 @@ LinuxRouteReconciler::RuleSnapshot LinuxRouteReconciler::readRuleSnapshot() cons
             const int priority = match.captured(1).toInt();
             snapshot.occupied.insert(priority);
             snapshot.lines.append(line);
-            if (line.contains(QStringLiteral("lookup 51821"))) {
+            if (QRegularExpression(QStringLiteral("(?:^|\\s)lookup\\s+51821(?:\\s|$)")).match(line).hasMatch()) {
                 snapshot.ownedFull.insert(priority);
                 (family == 0 ? snapshot.ownedFullV4 : snapshot.ownedFullV6).insert(priority);
             }
-            if (line.contains(QStringLiteral("lookup main"))) {
+            if (QRegularExpression(QStringLiteral("(?:^|\\s)lookup\\s+main(?:\\s|$)")).match(line).hasMatch()) {
                 snapshot.ownedBypass.insert(priority);
             }
         }
@@ -247,10 +259,17 @@ bool LinuxRouteReconciler::selectRulePriorities(const RuleSnapshot &snapshot,
 }
 
 bool LinuxRouteReconciler::ruleLineMatches(const QString &line, int priority,
-                                           const QString &needle)
+                                            const QString &needle)
 {
-    return QRegularExpression(QStringLiteral("^\\s*%1:").arg(priority)).match(line).hasMatch()
-        && line.contains(needle);
+    if (!QRegularExpression(QStringLiteral("^\\s*%1:").arg(priority)).match(line).hasMatch()) {
+        return false;
+    }
+    // The caller supplies a complete destination token (including its
+    // trailing delimiter).  Require it at a whitespace boundary so a route
+    // such as 10.0.0.1/32 cannot accidentally match a longer prefix.
+    return QRegularExpression(QStringLiteral("(?:^|\\s)%1(?:\\s|$)")
+                               .arg(QRegularExpression::escape(needle.trimmed())))
+            .match(line).hasMatch();
 }
 
 QStringList LinuxRouteReconciler::bypassRuleArguments(const QString &operation,
@@ -313,37 +332,39 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     int installedRoutes = 0;
     for (const QStringList &arguments : fullRoutes) {
         if (!addFullTunnelRoute(arguments)) {
+            bool rollbackOk = true;
             if (!hadFullTunnel || previousInterface != interfaceName) {
                 for (int index = 0; index < installedRoutes; ++index) {
                     QStringList deletion = fullRoutes.at(index);
                     deletion.replace(deletion.indexOf(QStringLiteral("replace")),
                                      QStringLiteral("del"));
-                    removeFullTunnelRoute(deletion);
+                    rollbackOk = removeFullTunnelRoute(deletion) && rollbackOk;
                 }
             }
             // Restore the previous full-tunnel table when a refresh changed
             // the interface and only part of the replacement was accepted.
             if (hadFullTunnel && !previousInterface.isEmpty()) {
-                addFullTunnelRoute({ QStringLiteral("route"), QStringLiteral("replace"),
+                rollbackOk = addFullTunnelRoute({ QStringLiteral("route"), QStringLiteral("replace"),
                                      QStringLiteral("0.0.0.0/1"), QStringLiteral("dev"),
                                      previousInterface, QStringLiteral("table"),
                                      QString::number(FullTunnelRouteTable) });
-                addFullTunnelRoute({ QStringLiteral("route"), QStringLiteral("replace"),
+                rollbackOk = addFullTunnelRoute({ QStringLiteral("route"), QStringLiteral("replace"),
                                      QStringLiteral("128.0.0.0/1"), QStringLiteral("dev"),
                                      previousInterface, QStringLiteral("table"),
                                      QString::number(FullTunnelRouteTable) });
-                addFullTunnelRoute({ QStringLiteral("-6"), QStringLiteral("route"),
+                rollbackOk = addFullTunnelRoute({ QStringLiteral("-6"), QStringLiteral("route"),
                                      QStringLiteral("replace"), QStringLiteral("::/1"),
                                      QStringLiteral("dev"), previousInterface,
                                      QStringLiteral("table"),
                                      QString::number(FullTunnelRouteTable) });
-                addFullTunnelRoute({ QStringLiteral("-6"), QStringLiteral("route"),
+                rollbackOk = addFullTunnelRoute({ QStringLiteral("-6"), QStringLiteral("route"),
                                      QStringLiteral("replace"), QStringLiteral("8000::/1"),
                                      QStringLiteral("dev"), previousInterface,
                                      QStringLiteral("table"),
                                      QString::number(FullTunnelRouteTable) });
             }
-            return failure(QStringLiteral("full_tunnel_route_failed"),
+            return failure(rollbackOk ? QStringLiteral("full_tunnel_route_failed")
+                                      : QStringLiteral("full_tunnel_rollback_failed"),
                            QStringLiteral("failed to install the full-tunnel route table"));
         }
         ++installedRoutes;
@@ -353,29 +374,31 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     bool addedFullV4 = false;
     bool addedFullV6 = false;
     auto rollback = [&]() {
+        bool ok = true;
         for (const QString &route : addedBypassRoutes) {
-            removeFullTunnelRule(bypassRuleArguments(QStringLiteral("del"), bypassPriority, route));
+            ok = removeFullTunnelRule(bypassRuleArguments(QStringLiteral("del"), bypassPriority, route)) && ok;
         }
         if (addedFullV4) {
-            removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"), fullPriority, false));
+            ok = removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"), fullPriority, false)) && ok;
         }
         if (addedFullV6) {
-            removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"), fullPriority, true));
+            ok = removeFullTunnelRule(fullRuleArguments(QStringLiteral("del"), fullPriority, true)) && ok;
         }
         if (!hadFullTunnel) {
             for (const QStringList &route : fullRoutes) {
                 QStringList deletion { route };
                 deletion.replace(deletion.indexOf(QStringLiteral("replace")),
                                  QStringLiteral("del"));
-                removeFullTunnelRoute(deletion);
+                ok = removeFullTunnelRoute(deletion) && ok;
             }
         } else if (previousInterface != interfaceName && !previousInterface.isEmpty()) {
             for (const QStringList &route : fullRoutes) {
                 QStringList restore = route;
                 restore.replace(restore.indexOf(interfaceName), previousInterface);
-                addFullTunnelRoute(restore);
+                ok = addFullTunnelRoute(restore) && ok;
             }
         }
+        return ok;
     };
 
     for (const QString &route : bypassRoutes) {
@@ -391,7 +414,10 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
             continue;
         }
         if (!addFullTunnelRule(bypassRuleArguments(QStringLiteral("add"), bypassPriority, route))) {
-            rollback();
+            if (!rollback()) {
+                return failure(QStringLiteral("full_tunnel_rollback_failed"),
+                               QStringLiteral("full-tunnel route transaction rollback failed"));
+            }
             return failure(QStringLiteral("full_tunnel_rule_conflict"),
                            QStringLiteral("a full-tunnel bypass rule could not be installed"));
         }
@@ -401,7 +427,10 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     const bool fullV4Present = ruleSnapshot.ownedFullV4.contains(fullPriority);
     if (!fullV4Present) {
         if (!addFullTunnelRule(fullRuleArguments(QStringLiteral("add"), fullPriority, false))) {
-            rollback();
+            if (!rollback()) {
+                return failure(QStringLiteral("full_tunnel_rollback_failed"),
+                               QStringLiteral("full-tunnel rule transaction rollback failed"));
+            }
             return failure(QStringLiteral("full_tunnel_rule_conflict"),
                            QStringLiteral("the full-tunnel policy rule could not be installed"));
         }
@@ -410,7 +439,10 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     const bool fullV6Present = ruleSnapshot.ownedFullV6.contains(fullPriority);
     if (!fullV6Present) {
         if (!addFullTunnelRule(fullRuleArguments(QStringLiteral("add"), fullPriority, true))) {
-            rollback();
+            if (!rollback()) {
+                return failure(QStringLiteral("full_tunnel_rollback_failed"),
+                               QStringLiteral("full-tunnel rule transaction rollback failed"));
+            }
             return failure(QStringLiteral("full_tunnel_rule_conflict"),
                            QStringLiteral("the IPv6 full-tunnel policy rule could not be installed"));
         }
@@ -431,10 +463,16 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
             if (!bypassRoutes.contains(route) && owned
                 && !removeFullTunnelRule(bypassRuleArguments(QStringLiteral("del"),
                                                               previousBypassPriority, route))) {
-                rollback();
+                if (!rollback()) {
+                    return failure(QStringLiteral("full_tunnel_rollback_failed"),
+                                   QStringLiteral("full-tunnel cleanup rollback failed"));
+                }
                 for (const QString &removed : removedPreviousBypassRoutes) {
-                    addFullTunnelRule(bypassRuleArguments(QStringLiteral("add"),
-                                                           previousBypassPriority, removed));
+                    if (!addFullTunnelRule(bypassRuleArguments(QStringLiteral("add"),
+                                                                previousBypassPriority, removed))) {
+                        return failure(QStringLiteral("full_tunnel_rollback_failed"),
+                                       QStringLiteral("full-tunnel stale-rule rollback failed"));
+                    }
                 }
                 return failure(QStringLiteral("full_tunnel_rule_cleanup_failed"),
                                QStringLiteral("a stale full-tunnel bypass rule could not be removed"));
@@ -445,7 +483,10 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
         }
     } else if (!m_routes.isEmpty()) {
         if (!removeRoutes(m_interfaceName, m_routes)) {
-            rollback();
+            if (!rollback()) {
+                return failure(QStringLiteral("full_tunnel_rollback_failed"),
+                               QStringLiteral("full-tunnel route transaction rollback failed"));
+            }
             return failure(QStringLiteral("route_remove_failed"),
                            QStringLiteral("failed to retire the previous managed routes"));
         }
@@ -587,6 +628,10 @@ RouteReconcileResult LinuxRouteReconciler::clearDns(const QString &interfaceName
 RouteReconcileResult LinuxRouteReconciler::clear()
 {
     m_lastError.clear();
+    if (!m_stateValid) {
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("managed route state is invalid; manual route recovery is required"));
+    }
     if (m_mode == QStringLiteral("all-except")) {
         return clearFullTunnel();
     }
@@ -629,6 +674,8 @@ QJsonObject LinuxRouteReconciler::status() const
         { QStringLiteral("bypassRulePriority"), m_bypassRulePriority },
         { QStringLiteral("fullRulePriority"), m_fullRulePriority },
         { QStringLiteral("statePath"), m_statePath },
+        { QStringLiteral("recoveryRequired"), !m_stateValid
+                                                 || m_mode == QStringLiteral("recovery_required") },
     };
 }
 
@@ -664,9 +711,16 @@ bool LinuxRouteReconciler::loadState()
     if (m_statePath.isEmpty()) {
         return true;
     }
+    const QFileInfo stateInfo(m_statePath);
+    if (!stateInfo.exists()) {
+        return true;
+    }
+    if (stateInfo.isSymLink() || !stateInfo.isFile()) {
+        return false;
+    }
     QFile file(m_statePath);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
-        return !file.exists();
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
     }
     QJsonParseError error;
     const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
@@ -674,6 +728,10 @@ bool LinuxRouteReconciler::loadState()
         return false;
     }
     const QJsonObject object = document.object();
+    if (object.contains(QStringLiteral("version"))
+        && object.value(QStringLiteral("version")).toInt(2) != 2) {
+        return false;
+    }
     const QString mode = object.value(QStringLiteral("mode"))
                                  .toString(QStringLiteral("only-forward"));
     if (mode != QStringLiteral("only-forward") && mode != QStringLiteral("all-except")) {
