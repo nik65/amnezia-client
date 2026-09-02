@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "linuxRouteReconciler.h"
+#include "headlessRoutingController.h"
 #include "serverRoutingPolicy.h"
 
 using namespace amnezia::headless;
@@ -298,6 +299,35 @@ private slots:
         for (const FakeCommandRunner::Call &call : runner->calls) {
             QVERIFY(!call.arguments.contains(QStringLiteral("501")));
         }
+    }
+
+    void allExceptKeepsVpnInternalPolicyEndpointOnTunnel()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("wg.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        QVERIFY(config.write(QByteArrayLiteral("[Peer]\nEndpoint = 8.8.8.9:51820\n")) > 0);
+        config.close();
+
+        Profile profile;
+        profile.routingMode = QStringLiteral("all-except");
+        profile.serverRulesUrl = QStringLiteral("http://10.8.1.4:17864/rules.json");
+        profile.forwardRoutes = { QStringLiteral("10.8.1.0/24") };
+        profile.dnsServers = { QStringLiteral("10.8.1.53") };
+        profile.dnsDomains = { QStringLiteral("~.") };
+        profile.configPath = configPath;
+
+        bool valid = false;
+        const QStringList bypass = allExceptBypassRoutes(
+                profile, { QStringLiteral("10.8.1.7/32") }, &valid);
+        QVERIFY(valid);
+        QVERIFY(bypass.contains(QStringLiteral("10.8.1.7")));
+        QVERIFY(bypass.contains(QStringLiteral("10.8.1.53")));
+        QVERIFY(bypass.contains(QStringLiteral("8.8.8.9")));
+        QVERIFY(!bypass.contains(QStringLiteral("10.8.1.0/24")));
+        QVERIFY(!bypass.contains(QStringLiteral("10.8.1.4/32")));
     }
 };
 

@@ -21,6 +21,14 @@ struct RoutingResult
     QString message;
 };
 
+// Build only the destinations that must bypass the all-except tunnel.  The
+// profile's forwardRoutes are VPN-internal routes and deliberately remain on
+// the tunnel side; only the server allow-list, DNS servers, and public VPN
+// endpoint bootstrap routes use the main/underlay table.
+QStringList allExceptBypassRoutes(const Profile &profile,
+                                  const QStringList &serverRoutes,
+                                  bool *valid = nullptr);
+
 class HeadlessRoutingController final
 {
 public:

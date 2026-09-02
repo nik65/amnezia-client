@@ -97,8 +97,6 @@ QStringList endpointHostsFromConfig(const Profile &profile)
 QStringList protectedRoutesForProfile(const Profile &profile)
 {
     QStringList routes;
-    const QUrl rulesUrl(profile.serverRulesUrl, QUrl::StrictMode);
-    appendHostRoutes(routes, rulesUrl.host());
     for (const QString &dnsServer : profile.dnsServers) {
         appendHostRoutes(routes, dnsServer);
     }
@@ -111,6 +109,22 @@ QStringList protectedRoutesForProfile(const Profile &profile)
 }
 
 } // namespace
+
+QStringList allExceptBypassRoutes(const Profile &profile,
+                                  const QStringList &serverRoutes,
+                                  bool *valid)
+{
+    QStringList routes = serverRoutes;
+    routes.append(protectedRoutesForProfile(profile));
+    bool routesValid = false;
+    routes = amnezia::managedRoutePolicy::validatedManagedRoutes(routes, &routesValid);
+    routes.removeDuplicates();
+    routes.sort();
+    if (valid) {
+        *valid = routesValid;
+    }
+    return routesValid ? routes : QStringList();
+}
 
 HeadlessRoutingController::HeadlessRoutingController(
         std::shared_ptr<CommandRunner> runner, QString routeStatePath)
@@ -254,8 +268,11 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
     const QString interfaceName = defaultInterfaceFor(profile);
     RouteReconcileResult result;
     if (allExcept) {
-        routes.append(protectedRoutesForProfile(profile));
-        routes = mergeRoutes({}, routes, &routesValid);
+        // forwardRoutes are VPN-internal (for example the ServerX 10.8.1.0/24
+        // subnet) and must not become main-table bypasses.  The policy URL is
+        // likewise intentionally fetched through the tunnel.  Only resolved
+        // server allow-list, DNS, and public endpoint routes are bypassed.
+        routes = allExceptBypassRoutes(profile, serverRoutes, &routesValid);
         if (!routesValid) {
             return failure(QStringLiteral("invalid_routes"),
                            QStringLiteral("full-tunnel bypass routes exceed the safety boundary"));
