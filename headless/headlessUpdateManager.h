@@ -99,6 +99,7 @@ private:
     QString m_candidatePlatform;
     QString m_journalPath;
     bool m_stateValid = true;
+    bool m_updateInProgress = false;
 };
 
 } // namespace amnezia::headless

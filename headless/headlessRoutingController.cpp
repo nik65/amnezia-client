@@ -92,6 +92,20 @@ bool privateOrLocalIpv4(const QHostAddress &address)
         || value == 0;
 }
 
+bool privateOrLocalAddress(const QHostAddress &address)
+{
+    if (privateOrLocalIpv4(address) || address.isLoopback() || address.isLinkLocal()
+        || address.isMulticast() || address.isNull()) {
+        return true;
+    }
+    if (address.protocol() == QAbstractSocket::IPv6Protocol) {
+        const Q_IPV6ADDR bytes = address.toIPv6Address();
+        // fc00::/7 (ULA) is not a public policy endpoint.
+        return (bytes.c[0] & 0xfe) == 0xfc;
+    }
+    return false;
+}
+
 QStringList mergeRoutes(QStringList left, const QStringList &right, bool *valid)
 {
     left.append(right);
@@ -427,6 +441,12 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
         const RouteReconcileResult dnsResult = m_reconciler.configureDns(
                 interfaceName, profile.dnsServers, profile.dnsDomains);
         if (!dnsResult.ok) {
+            const RouteReconcileResult dnsCleanup = m_reconciler.clearDns(interfaceName);
+            const RouteReconcileResult routeCleanup = m_reconciler.clear();
+            if (!dnsCleanup.ok || !routeCleanup.ok) {
+                return failure(QStringLiteral("recovery_required"),
+                               QStringLiteral("DNS setup failed and managed routes or DNS could not be rolled back"));
+            }
             return failure(dnsResult.code, dnsResult.message);
         }
     }
@@ -484,7 +504,8 @@ bool isSafePolicyEndpoint(const Profile &profile, const QString &rawUrl,
     if (url.scheme() != QStringLiteral("https")) {
         return fail(QStringLiteral("server routing policy requires HTTPS or the documented VPN-internal HTTP exception"));
     }
-    if (literal.protocol() == QAbstractSocket::IPv4Protocol && privateOrLocalIpv4(literal)) {
+    if (literal.protocol() != QAbstractSocket::UnknownNetworkLayerProtocol
+        && privateOrLocalAddress(literal)) {
         const bool contained = std::any_of(profile.forwardRoutes.cbegin(), profile.forwardRoutes.cend(),
                                            [&literal](const QString &route) {
             return ipv4ContainedByRoute(literal, route);
@@ -497,6 +518,19 @@ bool isSafePolicyEndpoint(const Profile &profile, const QString &rawUrl,
     if (lowerHost == QStringLiteral("localhost") || lowerHost.endsWith(QStringLiteral(".localhost"))
         || lowerHost.endsWith(QStringLiteral(".local")) || lowerHost.endsWith(QStringLiteral(".internal"))) {
         return fail(QStringLiteral("policy endpoint hostname is reserved for local or internal resolution"));
+    }
+    if (literal.protocol() == QAbstractSocket::UnknownNetworkLayerProtocol) {
+        const QHostInfo resolved = QHostInfo::fromName(url.host());
+        for (const QHostAddress &address : resolved.addresses()) {
+            if (!privateOrLocalAddress(address)) continue;
+            if (address.protocol() != QAbstractSocket::IPv4Protocol
+                || !std::any_of(profile.forwardRoutes.cbegin(), profile.forwardRoutes.cend(),
+                                [&address](const QString &route) {
+                return ipv4ContainedByRoute(address, route);
+            })) {
+                return fail(QStringLiteral("policy endpoint hostname resolves to an unsafe private address"));
+            }
+        }
     }
     return true;
 }

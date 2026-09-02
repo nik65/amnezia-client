@@ -187,6 +187,13 @@ CommandResult RealCommandRunner::stop(const QString &id)
                     : CommandResult { false, -1, QStringLiteral("unable to stop backend executable") };
 }
 
+bool RealCommandRunner::isSessionAlive(const QString &id) const
+{
+    return m_processes && m_processes->processes.contains(id)
+        && m_processes->processes.value(id)
+        && m_processes->processes.value(id)->state() != QProcess::NotRunning;
+}
+
 VpnBackend::VpnBackend(std::shared_ptr<CommandRunner> runner,
                        QString configRoot,
                        bool requireRootOwnedConfig,
@@ -417,6 +424,15 @@ QJsonObject VpnBackend::doctor() const
 QString VpnBackend::activeProfile() const
 {
     return m_session ? m_session->profileId : QString();
+}
+
+bool VpnBackend::sessionAlive() const
+{
+    if (!m_session) return false;
+    if (m_session->kind == SessionKind::LongRunning) {
+        return m_runner->isSessionAlive(m_session->profileId);
+    }
+    return true;
 }
 
 BackendResult VpnBackend::lastError() const

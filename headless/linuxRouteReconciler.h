@@ -61,6 +61,7 @@ private:
         QSet<int> ownedFullV4;
         QSet<int> ownedFullV6;
         QStringList lines;
+        QStringList tableLines;
         bool valid = false;
     };
     RuleSnapshot readRuleSnapshot() const;

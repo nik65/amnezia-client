@@ -5,6 +5,12 @@
 #include <QJsonArray>
 #include <QLocalSocket>
 
+#if defined(Q_OS_LINUX)
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+#endif
+
 #include <utility>
 
 namespace amnezia::headless
@@ -210,7 +216,7 @@ void Daemon::processFrames(QLocalSocket *client)
             client->write(encodeError({}, QStringLiteral("invalid_request"), error));
         } else {
             ++m_processedRequestCount;
-            client->write(handleRequest(request));
+            client->write(handleRequest(request, client));
         }
         client->flush();
 
@@ -220,8 +226,13 @@ void Daemon::processFrames(QLocalSocket *client)
     }
 }
 
-QByteArray Daemon::handleRequest(const Request &request)
+QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
 {
+    if (!authorizePrivilegedCommand(client, request)) {
+        return encodeError(request.requestId, QStringLiteral("permission_denied"),
+                           QStringLiteral("this daemon operation requires a root-owned local peer"));
+    }
+    ensureBackendHealthy();
     switch (request.command) {
     case Command::Status:
         return statusResponse(request.requestId);
@@ -332,6 +343,31 @@ QByteArray Daemon::profileListResponse(const QString &requestId) const
     });
 }
 
+bool Daemon::peerIsRoot(QLocalSocket *client) const
+{
+#if defined(Q_OS_LINUX)
+    if (!client || client->socketDescriptor() < 0) return false;
+    struct ucred peer {};
+    socklen_t size = sizeof(peer);
+    return ::getsockopt(static_cast<int>(client->socketDescriptor()), SOL_SOCKET,
+                        SO_PEERCRED, &peer, &size) == 0 && peer.uid == 0 && peer.pid > 0;
+#else
+    Q_UNUSED(client);
+    return false;
+#endif
+}
+
+bool Daemon::authorizePrivilegedCommand(QLocalSocket *client, const Request &request) const
+{
+    switch (request.command) {
+    case Command::Import:
+    case Command::UpdateRollback:
+        return peerIsRoot(client);
+    default:
+        return true;
+    }
+}
+
 QByteArray Daemon::importProfileResponse(const Request &request)
 {
     const QJsonValue profileValue = request.parameters.value(QStringLiteral("profile"));
@@ -372,8 +408,9 @@ QByteArray Daemon::exportProfileResponse(const Request &request) const
     });
 }
 
-QByteArray Daemon::statusResponse(const QString &requestId) const
+QByteArray Daemon::statusResponse(const QString &requestId)
 {
+    ensureBackendHealthy();
     return encodeResponse(requestId, QJsonObject {
         { QStringLiteral("state"), m_state },
         { QStringLiteral("activeProfile"), m_activeProfile },
@@ -382,8 +419,26 @@ QByteArray Daemon::statusResponse(const QString &requestId) const
     });
 }
 
+void Daemon::ensureBackendHealthy()
+{
+    if (m_state != QStringLiteral("connected") || m_vpnBackend.sessionAlive()) {
+        return;
+    }
+    m_routingRefreshTimer.stop();
+    const RoutingResult routing = m_routingController.disconnect();
+    const BackendResult backend = m_vpnBackend.disconnect();
+    if (!routing.ok || !backend.ok) {
+        m_state = QStringLiteral("cleanup_failed");
+        return;
+    }
+    m_state = QStringLiteral("disconnected");
+    m_activeProfile.clear();
+    m_activeProfileData.reset();
+}
+
 void Daemon::refreshManagedRoutes()
 {
+    ensureBackendHealthy();
     if (m_state != QStringLiteral("connected") || !m_activeProfileData.has_value()) {
         m_routingRefreshTimer.stop();
         return;
@@ -450,6 +505,13 @@ void Daemon::checkAutomaticUpdates()
         if (result.code == QStringLiteral("updated")) {
             // systemd is expected to restart this daemon as part of the
             // transaction. Do not continue probing profiles in the old image.
+            return;
+        }
+        if (result.code == QStringLiteral("restart_pending")
+            || result.code == QStringLiteral("rollback_restart_pending")) {
+            // Never begin a second transaction while systemd is replacing or
+            // health-checking the daemon image.
+            m_updateTimer.stop();
             return;
         }
     }

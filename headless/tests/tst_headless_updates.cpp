@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QCryptographicHash>
 
 #include "headlessUpdateManager.h"
 
@@ -75,6 +76,16 @@ private slots:
         const QString statePath = temporaryDirectory.filePath(QStringLiteral("state.json"));
         const QString updates = temporaryDirectory.filePath(QStringLiteral("updates"));
         QVERIFY(QDir().mkpath(updates));
+        const QString rollback = QDir(updates).filePath(QStringLiteral("rollback-test"));
+        QVERIFY(QDir().mkpath(rollback));
+        const QString digest = QString::fromLatin1(QCryptographicHash::hash(
+                QByteArrayLiteral("old"), QCryptographicHash::Sha256).toHex());
+        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+            QFile backup(QDir(rollback).filePath(name));
+            QVERIFY(backup.open(QIODevice::WriteOnly));
+            QVERIFY(backup.write("old") > 0);
+            backup.close();
+        }
         QFile state(statePath);
         QVERIFY(state.open(QIODevice::WriteOnly));
         QVERIFY(state.write(QJsonDocument(QJsonObject {
@@ -84,7 +95,15 @@ private slots:
         state.close();
         QFile journal(QDir(updates).filePath(QStringLiteral("transaction.json")));
         QVERIFY(journal.open(QIODevice::WriteOnly));
-        QVERIFY(journal.write(QByteArrayLiteral("{\"phase\":\"restart_pending\"}")) > 0);
+        QVERIFY(journal.write(QJsonDocument(QJsonObject {
+            { QStringLiteral("phase"), QStringLiteral("restart_pending") },
+            { QStringLiteral("rollbackDirectory"), rollback },
+            { QStringLiteral("currentVersion"), QStringLiteral("5.0.1.6") },
+            { QStringLiteral("rollbackHashes"), QJsonObject {
+                { QStringLiteral("amneziad"), digest },
+                { QStringLiteral("amnezia-cli"), digest },
+            } },
+        }).toJson(QJsonDocument::Compact)) > 0);
         journal.close();
 
         HeadlessUpdateManager manager({}, statePath, temporaryDirectory.path());

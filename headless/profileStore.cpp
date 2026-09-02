@@ -24,6 +24,8 @@ namespace
 {
 
 constexpr int StoreVersion = 1;
+constexpr qsizetype MaximumStoreBytes = 16 * 1024 * 1024;
+constexpr qsizetype MaximumProfiles = 128;
 
 } // namespace
 
@@ -45,6 +47,10 @@ bool ProfileStore::load()
         m_lastError = QStringLiteral("unable to read profile store");
         return false;
     }
+    if (file.size() > MaximumStoreBytes) {
+        m_lastError = QStringLiteral("profile store exceeds the size limit");
+        return false;
+    }
 
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
@@ -61,6 +67,10 @@ bool ProfileStore::load()
     }
 
     const QJsonArray entries = root.value(QStringLiteral("profiles")).toArray();
+    if (entries.size() > MaximumProfiles) {
+        m_lastError = QStringLiteral("profile store contains too many profiles");
+        return false;
+    }
     for (const QJsonValue &entry : entries) {
         Profile profile;
         if (!entry.isObject() || !fromJson(entry.toObject(), profile) || !validate(profile, true)) {
@@ -79,6 +89,10 @@ bool ProfileStore::load()
 bool ProfileStore::add(const Profile &profile)
 {
     m_lastError.clear();
+    if (m_profiles.size() >= MaximumProfiles) {
+        m_lastError = QStringLiteral("profile store contains too many profiles");
+        return false;
+    }
     if (!validate(profile, true)) {
         return false;
     }

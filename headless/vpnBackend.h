@@ -43,6 +43,11 @@ public:
     virtual CommandResult start(const QString &id, const QString &program,
                                 const QStringList &arguments) = 0;
     virtual CommandResult stop(const QString &id) = 0;
+    virtual bool isSessionAlive(const QString &id) const
+    {
+        Q_UNUSED(id);
+        return true;
+    }
 };
 
 class RealCommandRunner final : public CommandRunner
@@ -61,6 +66,7 @@ public:
     CommandResult start(const QString &id, const QString &program,
                         const QStringList &arguments) override;
     CommandResult stop(const QString &id) override;
+    bool isSessionAlive(const QString &id) const override;
 
 private:
     struct RunningProcess;
@@ -87,6 +93,7 @@ public:
     QJsonObject doctor() const;
 
     QString activeProfile() const;
+    bool sessionAlive() const;
     BackendResult lastError() const;
 
 private:

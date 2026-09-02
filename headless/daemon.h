@@ -46,8 +46,8 @@ private:
     void readFromClient();
     void removeClient();
     void processFrames(QLocalSocket *client);
-    QByteArray handleRequest(const Request &request);
-    QByteArray statusResponse(const QString &requestId) const;
+    QByteArray handleRequest(const Request &request, QLocalSocket *client);
+    QByteArray statusResponse(const QString &requestId);
     QByteArray profileListResponse(const QString &requestId) const;
     QByteArray importProfileResponse(const Request &request);
     QByteArray exportProfileResponse(const Request &request) const;
@@ -59,6 +59,9 @@ private:
     void connectAutomaticProfile();
     void refreshManagedRoutes();
     void checkAutomaticUpdates();
+    bool peerIsRoot(QLocalSocket *client) const;
+    bool authorizePrivilegedCommand(QLocalSocket *client, const Request &request) const;
+    void ensureBackendHealthy();
 
     QLocalServer m_server;
     QString m_socketPath;

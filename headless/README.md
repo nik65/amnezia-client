@@ -99,7 +99,9 @@ amnezia-cli --socket /run/amnezia/amneziad.sock doctor --json
 ```
 
 Доступ к socket получает только root и группа `amnezia`; не публикуйте его через TCP и не меняйте
-права на world-writable. Установка unit-а и любые привилегированные сетевые операции остаются
+права на world-writable. `status`, `doctor`, `connect` и `disconnect` доступны группе, но
+импорт профиля и rollback обновления требуют подтверждённого Linux `SO_PEERCRED` с UID 0.
+Хранилище ограничено 128 профилями и 16 MiB. Установка unit-а и любые привилегированные сетевые операции остаются
 отдельным явным deployment-шагом.
 
 ## IPC-контракт
@@ -160,7 +162,9 @@ Updater принимает только HTTPS manifest/artifact с Ed25519-по�
 containment, отсутствие symlink, root ownership и запрет group/world-write для trust anchor,
 устанавливаемых бинарей и rollback evidence. Перед заменой создаётся durable journal с фазами
 `prepared`, `replaced`, `restart_pending`; после перезапуска daemon подтверждает здоровье пары
-бинарей и только затем помечает транзакцию `acknowledged`. Смешанное состояние или ошибка
+бинарей и только затем помечает транзакцию `acknowledged`. Rollback использует копии, сохраняет
+оригинальную evidence до следующего health acknowledgement и проходит фазы
+`rollback_restart_pending`/`rolled_back`. Смешанное состояние или ошибка
 восстановления переводит daemon в `recovery_required`; rollback выполняется только по
 проверенным SHA-256 и не скрывает ошибки.
 
