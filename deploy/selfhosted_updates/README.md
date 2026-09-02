@@ -189,7 +189,7 @@ launch it manually with Qt IFW's unattended arguments and the self-hosted
 handoff marker (Windows may still display its UAC consent prompt):
 
 ```powershell
-& .\dist\selfhosted-windows-client\5.0.1.15\AmneziaVPN_5.0.1.15_windows_x64_selfhosted.exe `
+& .\dist\selfhosted-windows-client\5.0.1.16\AmneziaVPN_5.0.1.16_windows_x64_selfhosted.exe `
   --accept-messages --accept-licenses --confirm-command install AmneziaSelfHostedUpdate=true
 ```
 
@@ -210,11 +210,11 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `5.0.1.15` with Android
-`versionCode` `2163`. The release includes the Linux headless client and the
+The current self-hosted release line is `5.0.1.16` with Android
+`versionCode` `2164`. The release includes the Linux headless client and the
 managed all-except/full-tunnel routing path.
 
-Release notes for `5.0.1.15`: this monotonic routing safety release supersedes
+Release notes for `5.0.1.16`: this monotonic routing safety release supersedes
 `5.0.1.12` because the headless updater now schedules its own service restart
 with `systemctl --no-block`, avoiding a self-restart wait deadlock. It also
 supersedes the earlier same-version correction release because the signed
@@ -226,6 +226,10 @@ convergence, preserves deterministic CIDR routes including subnets, ignores
 the Docker DNS endpoint in `nslookup` results, and keeps the global busy
 indicator tied to publication completion; candidate validation now rejects a
 dropped IP/CIDR route and preserves Docker diagnostics when validation fails;
+self-hosted all-except routing keeps VPN-internal forward/policy/DNS
+destinations inside the tunnel, bypasses only the public VPN endpoint through
+the underlay, and fails closed for ambiguous internal CIDR overlap or IPv6
+underlay endpoints;
 self-hosted desktop handoff uses Qt Installer
 Framework's unattended command-line mode and passes an internal update marker;
 the Windows replacement confirmation is skipped only for this verified

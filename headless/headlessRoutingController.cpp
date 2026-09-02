@@ -11,6 +11,7 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
 #include <utility>
 
 namespace amnezia::headless
@@ -21,6 +22,49 @@ namespace
 constexpr int PolicyRequestTimeoutMs = 5000;
 constexpr qsizetype MaximumPolicyBytes = 1024 * 1024;
 constexpr qsizetype MaximumProfileConfigBytes = 1024 * 1024;
+
+bool parseIpv4Route(const QString &value, quint32 *address, int *prefix)
+{
+    const QStringList parts = value.split(QLatin1Char('/'));
+    QHostAddress host(parts.value(0));
+    if (parts.size() < 1 || parts.size() > 2
+        || host.protocol() != QAbstractSocket::IPv4Protocol) {
+        return false;
+    }
+    bool ok = true;
+    const int length = parts.size() == 2 ? parts.at(1).toInt(&ok) : 32;
+    if (!ok || length < 0 || length > 32) {
+        return false;
+    }
+    if (address) {
+        *address = host.toIPv4Address();
+    }
+    if (prefix) {
+        *prefix = length;
+    }
+    return true;
+}
+
+bool ipv4RoutesOverlap(const QString &left, const QString &right)
+{
+    quint32 leftAddress = 0;
+    quint32 rightAddress = 0;
+    int leftPrefix = 32;
+    int rightPrefix = 32;
+    if (!parseIpv4Route(left, &leftAddress, &leftPrefix)
+        || !parseIpv4Route(right, &rightAddress, &rightPrefix)) {
+        return false;
+    }
+    const quint32 leftMask = leftPrefix == 0 ? 0u : 0xffffffffu << (32 - leftPrefix);
+    const quint32 rightMask = rightPrefix == 0 ? 0u : 0xffffffffu << (32 - rightPrefix);
+    const quint32 leftStart = leftAddress & leftMask;
+    const quint32 rightStart = rightAddress & rightMask;
+    const quint64 leftEnd = static_cast<quint64>(leftStart)
+            | static_cast<quint64>(0xffffffffu ^ leftMask);
+    const quint64 rightEnd = static_cast<quint64>(rightStart)
+            | static_cast<quint64>(0xffffffffu ^ rightMask);
+    return leftStart <= rightEnd && rightStart <= leftEnd;
+}
 
 QStringList mergeRoutes(QStringList left, const QStringList &right, bool *valid)
 {
@@ -94,18 +138,41 @@ QStringList endpointHostsFromConfig(const Profile &profile)
     return hosts;
 }
 
-QStringList protectedRoutesForProfile(const Profile &profile)
+QStringList protectedRoutesForProfile(const Profile &profile, bool *valid)
 {
-    QStringList routes;
-    for (const QString &dnsServer : profile.dnsServers) {
-        appendHostRoutes(routes, dnsServer);
+    if (valid) {
+        *valid = true;
     }
+    QStringList routes;
     for (const QString &endpoint : endpointHostsFromConfig(profile)) {
+        QString normalizedEndpoint = endpoint;
+        if (normalizedEndpoint.startsWith(QLatin1Char('['))
+            && normalizedEndpoint.endsWith(QLatin1Char(']'))) {
+            normalizedEndpoint = normalizedEndpoint.mid(1, normalizedEndpoint.size() - 2);
+        }
+        QHostAddress address(normalizedEndpoint);
+        bool hasIpv6 = address.protocol() == QAbstractSocket::IPv6Protocol;
+        if (address.protocol() == QAbstractSocket::UnknownNetworkLayerProtocol) {
+            const QHostInfo resolved = QHostInfo::fromName(normalizedEndpoint);
+            hasIpv6 = std::any_of(resolved.addresses().cbegin(), resolved.addresses().cend(),
+                                  [](const QHostAddress &candidate) {
+                return candidate.protocol() == QAbstractSocket::IPv6Protocol;
+            });
+        }
+        if (hasIpv6) {
+            if (valid) {
+                *valid = false;
+            }
+            return {};
+        }
         appendHostRoutes(routes, endpoint);
     }
-    bool valid = false;
-    routes = amnezia::managedRoutePolicy::validatedManagedRoutes(routes, &valid);
-    return valid ? routes : QStringList();
+    bool routesValid = false;
+    routes = amnezia::managedRoutePolicy::validatedManagedRoutes(routes, &routesValid);
+    if (!routesValid && valid) {
+        *valid = false;
+    }
+    return routesValid ? routes : QStringList();
 }
 
 } // namespace
@@ -114,10 +181,52 @@ QStringList allExceptBypassRoutes(const Profile &profile,
                                   const QStringList &serverRoutes,
                                   bool *valid)
 {
-    QStringList routes = serverRoutes;
-    routes.append(protectedRoutesForProfile(profile));
-    bool routesValid = false;
-    routes = amnezia::managedRoutePolicy::validatedManagedRoutes(routes, &routesValid);
+    bool routesValid = true;
+    QStringList routes;
+    for (const QString &serverRoute : serverRoutes) {
+        bool overlapsInternal = false;
+        for (const QString &forwardRoute : profile.forwardRoutes) {
+            if (ipv4RoutesOverlap(serverRoute, forwardRoute)) {
+                overlapsInternal = true;
+                break;
+            }
+        }
+        if (!overlapsInternal) {
+            routes.append(serverRoute);
+            continue;
+        }
+
+        // A host allow-list entry inside the VPN subnet is redundant and is
+        // removed so it cannot accidentally create a main-table bypass.  A
+        // wider/partial overlap is ambiguous; reject it rather than invent a
+        // route split that could leak part of the VPN-internal network.
+        quint32 serverAddress = 0;
+        int serverPrefix = 32;
+        parseIpv4Route(serverRoute, &serverAddress, &serverPrefix);
+        bool safelyContained = serverPrefix == 32;
+        if (!safelyContained) {
+            for (const QString &forwardRoute : profile.forwardRoutes) {
+                quint32 forwardAddress = 0;
+                int forwardPrefix = 32;
+                if (parseIpv4Route(forwardRoute, &forwardAddress, &forwardPrefix)
+                    && serverPrefix >= forwardPrefix
+                    && ipv4RoutesOverlap(serverRoute, forwardRoute)) {
+                    safelyContained = true;
+                    break;
+                }
+            }
+        }
+        if (!safelyContained) {
+            routesValid = false;
+            break;
+        }
+    }
+    bool protectedValid = true;
+    routes.append(protectedRoutesForProfile(profile, &protectedValid));
+    routesValid = routesValid && protectedValid;
+    bool validated = false;
+    routes = amnezia::managedRoutePolicy::validatedManagedRoutes(routes, &validated);
+    routesValid = routesValid && validated;
     routes.removeDuplicates();
     routes.sort();
     if (valid) {
@@ -220,7 +329,7 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
         // profile's small bootstrap set before fetching the server policy.
         // Refreshes keep the last-known-good server routes in place and must
         // not clear them before a network request that may fail.
-        if (m_activeProfile != profile.id && !profile.forwardRoutes.isEmpty()) {
+        if (m_activeProfile != profile.id) {
             const RoutingResult bootstrap = applyRoutes(profile, {});
             if (!bootstrap.ok) {
                 return bootstrap;

@@ -2836,8 +2836,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.1.15)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2163)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.1.16)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2164)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (

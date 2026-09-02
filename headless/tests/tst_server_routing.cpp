@@ -321,13 +321,52 @@ private slots:
 
         bool valid = false;
         const QStringList bypass = allExceptBypassRoutes(
-                profile, { QStringLiteral("10.8.1.7/32") }, &valid);
+                profile, { QStringLiteral("10.8.1.7/32"), QStringLiteral("8.8.8.8/32") }, &valid);
         QVERIFY(valid);
-        QVERIFY(bypass.contains(QStringLiteral("10.8.1.7")));
-        QVERIFY(bypass.contains(QStringLiteral("10.8.1.53")));
+        QVERIFY(bypass.contains(QStringLiteral("8.8.8.8")));
         QVERIFY(bypass.contains(QStringLiteral("8.8.8.9")));
         QVERIFY(!bypass.contains(QStringLiteral("10.8.1.0/24")));
+        QVERIFY(!bypass.contains(QStringLiteral("10.8.1.7")));
+        QVERIFY(!bypass.contains(QStringLiteral("10.8.1.53")));
         QVERIFY(!bypass.contains(QStringLiteral("10.8.1.4/32")));
+    }
+
+    void broadInternalOverlapFailsClosed()
+    {
+        Profile profile;
+        profile.forwardRoutes = { QStringLiteral("10.8.1.0/24") };
+        bool valid = true;
+        QVERIFY(allExceptBypassRoutes(profile,
+                                      { QStringLiteral("10.8.0.0/16") }, &valid).isEmpty());
+        QVERIFY(!valid);
+    }
+
+    void ipv6UnderlayEndpointFailsClosed()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("wg.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        QVERIFY(config.write(QByteArrayLiteral("[Peer]\nEndpoint = [2001:db8::1]:51820\n")) > 0);
+        config.close();
+
+        Profile profile;
+        profile.configPath = configPath;
+        bool valid = true;
+        QVERIFY(allExceptBypassRoutes(profile, {}, &valid).isEmpty());
+        QVERIFY(!valid);
+    }
+
+    void emptyForwardRoutesStillHaveTunnelBootstrapPlan()
+    {
+        Profile profile;
+        profile.routingMode = QStringLiteral("all-except");
+        bool valid = false;
+        const QStringList routes = allExceptBypassRoutes(
+                profile, { QStringLiteral("8.8.8.8") }, &valid);
+        QVERIFY(valid);
+        QCOMPARE(routes, QStringList { QStringLiteral("8.8.8.8") });
     }
 };
 
