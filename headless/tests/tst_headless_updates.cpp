@@ -76,6 +76,8 @@ private slots:
         const QString statePath = temporaryDirectory.filePath(QStringLiteral("state.json"));
         const QString updates = temporaryDirectory.filePath(QStringLiteral("updates"));
         QVERIFY(QDir().mkpath(updates));
+        const QString transaction = QDir(updates).filePath(QStringLiteral("transaction-test"));
+        QVERIFY(QDir().mkpath(transaction));
         const QString rollback = QDir(updates).filePath(QStringLiteral("rollback-test"));
         QVERIFY(QDir().mkpath(rollback));
         const QString digest = QString::fromLatin1(QCryptographicHash::hash(
@@ -99,6 +101,10 @@ private slots:
         QVERIFY(journal.open(QIODevice::WriteOnly));
         QVERIFY(journal.write(QJsonDocument(QJsonObject {
             { QStringLiteral("phase"), QStringLiteral("restart_pending") },
+            { QStringLiteral("version"), 1 },
+            { QStringLiteral("candidateVersion"), QStringLiteral("5.0.1.16") },
+            { QStringLiteral("installDirectory"), temporaryDirectory.path() },
+            { QStringLiteral("transactionDirectory"), transaction },
             { QStringLiteral("rollbackDirectory"), rollback },
             { QStringLiteral("currentVersion"), QStringLiteral("5.0.1.6") },
             { QStringLiteral("rollbackHashes"), QJsonObject {

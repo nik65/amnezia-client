@@ -169,7 +169,7 @@ bool LinuxRouteReconciler::removeFullTunnelRule(const QStringList &arguments)
     // iproute2 returns EX_TEMPFAIL-like status 2 when a requested owned
     // object is already absent. Clear is intentionally idempotent for that
     // case; all other failures remain fatal.
-    return result.ok || (result.exitCode == 2 && arguments.value(1) == QStringLiteral("del"));
+    return result.ok || (result.exitCode == 2 && arguments.contains(QStringLiteral("del")));
 }
 
 bool LinuxRouteReconciler::addFullTunnelRoute(const QStringList &arguments)
@@ -503,16 +503,17 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
             if (!bypassRoutes.contains(route) && owned
                 && !removeFullTunnelRule(bypassRuleArguments(QStringLiteral("del"),
                                                               previousBypassPriority, route))) {
-                if (!rollback()) {
-                    return failure(QStringLiteral("full_tunnel_rollback_failed"),
-                                   QStringLiteral("full-tunnel cleanup rollback failed"));
-                }
+                const bool rollbackOk = rollback();
+                bool retiredRestoreOk = true;
                 for (const QString &removed : removedPreviousBypassRoutes) {
                     if (!addFullTunnelRule(bypassRuleArguments(QStringLiteral("add"),
                                                                 previousBypassPriority, removed))) {
-                        return failure(QStringLiteral("full_tunnel_rollback_failed"),
-                                       QStringLiteral("full-tunnel stale-rule rollback failed"));
+                        retiredRestoreOk = false;
                     }
+                }
+                if (!rollbackOk || !retiredRestoreOk) {
+                    return failure(QStringLiteral("full_tunnel_rollback_failed"),
+                                   QStringLiteral("full-tunnel cleanup rollback failed"));
                 }
                 return failure(QStringLiteral("full_tunnel_rule_cleanup_failed"),
                                QStringLiteral("a stale full-tunnel bypass rule could not be removed"));

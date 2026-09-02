@@ -386,8 +386,11 @@ private slots:
         QVERIFY(!isSafePolicyEndpoint(profile,
                                       QStringLiteral("https://127.0.0.1/rules.json"),
                                       &error));
+        QVERIFY(!isSafePolicyEndpoint(profile,
+                                      QStringLiteral("https://policy.example/rules.json"),
+                                      &error));
         QVERIFY(isSafePolicyEndpoint(profile,
-                                     QStringLiteral("https://policy.example/rules.json"),
+                                     QStringLiteral("https://8.8.8.8/rules.json"),
                                      &error));
     }
 

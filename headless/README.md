@@ -175,7 +175,7 @@ containment, отсутствие symlink, root ownership и запрет group/
 восстановления переводит daemon в `recovery_required`; rollback выполняется только по
 проверенным SHA-256 и не скрывает ошибки.
 
-Политика маршрутизации требует HTTPS. Единственное исключение — буквальный IPv4 по HTTP,
+Политика маршрутизации требует HTTPS с буквальным IP endpoint. Единственное исключение — буквальный IPv4 по HTTP,
 который должен быть VPN-internal и содержаться в `forwardRoutes` (например, текущий ServerX
 `10.8.1.253:17864` при `10.8.1.0/24`). Внешний/plain HTTP, reserved hostnames и unsafe
 private endpoint отвергаются до сетевого запроса; redirects запрещены. Full-tunnel staging

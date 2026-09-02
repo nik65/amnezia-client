@@ -551,21 +551,7 @@ bool isSafePolicyEndpoint(const Profile &profile, const QString &rawUrl,
         return fail(QStringLiteral("policy endpoint hostname is reserved for local or internal resolution"));
     }
     if (literal.protocol() == QAbstractSocket::UnknownNetworkLayerProtocol) {
-        bool resolved = false;
-        const QHostInfo hostInfo = resolveHostBounded(url.host(), &resolved);
-        if (!resolved || hostInfo.addresses().isEmpty()) {
-            return fail(QStringLiteral("policy endpoint hostname could not be resolved safely"));
-        }
-        for (const QHostAddress &address : hostInfo.addresses()) {
-            if (!privateOrLocalAddress(address)) continue;
-            if (address.protocol() != QAbstractSocket::IPv4Protocol
-                || !std::any_of(profile.forwardRoutes.cbegin(), profile.forwardRoutes.cend(),
-                                [&address](const QString &route) {
-                return ipv4ContainedByRoute(address, route);
-            })) {
-                return fail(QStringLiteral("policy endpoint hostname resolves to an unsafe private address"));
-            }
-        }
+        return fail(QStringLiteral("policy endpoint must use a literal IP to prevent DNS rebinding"));
     }
     return true;
 }

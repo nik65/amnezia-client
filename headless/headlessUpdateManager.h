@@ -70,6 +70,7 @@ private:
                             QString *error) const;
     bool verifyInstalledFile(const QString &path, const QString &expectedSha256,
                              qint64 expectedSize, QString *error) const;
+    bool restoreCurrentPair(QString *error);
     static QString trustedUpdatePublicKeyPath();
     static QString sha256ForFile(const QString &path);
     static bool verifyEnvelope(const QJsonObject &envelope,
@@ -100,6 +101,7 @@ private:
     QMap<QString, QString> m_rollbackHashes;
     QString m_candidatePlatform;
     QString m_journalPath;
+    QString m_currentRollbackDirectory;
     bool m_stateValid = true;
     bool m_updateInProgress = false;
 };
