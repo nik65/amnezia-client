@@ -435,6 +435,19 @@ bool VpnBackend::sessionAlive() const
     return true;
 }
 
+bool VpnBackend::interfaceHealthy(const QString &interfaceName) const
+{
+    if (!m_session) return false;
+    if (interfaceName.trimmed().isEmpty()) return true;
+    const QString ip = m_runner->resolveExecutable(
+            { QStringLiteral("ip"), QStringLiteral("/usr/sbin/ip"), QStringLiteral("/sbin/ip") });
+    if (ip.isEmpty()) return false;
+    const CommandResult result = m_runner->runCaptured(
+            ip, { QStringLiteral("link"), QStringLiteral("show"),
+                  QStringLiteral("dev"), interfaceName });
+    return result.ok && result.output.contains(interfaceName);
+}
+
 BackendResult VpnBackend::lastError() const
 {
     return m_lastError;

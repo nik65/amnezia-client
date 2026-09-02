@@ -1,6 +1,9 @@
 #include <QtTest>
 
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 
 #include <algorithm>
@@ -31,7 +34,9 @@ public:
 
     QString resolveExecutable(const QStringList &candidates) const override
     {
-        return candidates.contains(QStringLiteral("ip")) ? QStringLiteral("ip") : QString();
+        if (candidates.contains(QStringLiteral("ip"))) return QStringLiteral("ip");
+        if (candidates.contains(QStringLiteral("resolvectl"))) return QStringLiteral("resolvectl");
+        return QString();
     }
 
     CommandResult run(const QString &program, const QStringList &arguments) override
@@ -54,10 +59,16 @@ public:
         if (capturedCalls <= 2) {
             return { true, 0, {}, {} };
         }
-        const bool ipv6 = arguments.contains(QStringLiteral("-6"));
-        return { true, 0, {}, ipv6
-            ? QStringLiteral("1100: from all lookup 51821\n")
-            : QStringLiteral("1000: to 10.8.1.4 lookup main\n1100: from all lookup 51821\n") };
+        if (arguments.contains(QStringLiteral("route"))) {
+            const bool ipv6 = arguments.contains(QStringLiteral("-6"));
+            return { true, 0, {}, ipv6
+                ? QStringLiteral("::/1 dev wg0 proto 186\n8000::/1 dev wg0 proto 186\n")
+                : QStringLiteral("0.0.0.0/1 dev wg0 proto 186\n128.0.0.0/1 dev wg0 proto 186\n") };
+        }
+        return { true, 0, {},
+            capturedCalls > 4
+                ? QStringLiteral("1000: to 10.8.1.4 lookup main\n1100: from all lookup 51821\n")
+                : QString() };
     }
 
     CommandResult start(const QString &, const QString &, const QStringList &) override
@@ -186,7 +197,8 @@ private slots:
         const QStringList expectedV4Route {
             QStringLiteral("route"), QStringLiteral("replace"),
             QStringLiteral("0.0.0.0/1"), QStringLiteral("dev"),
-            QStringLiteral("wg0"), QStringLiteral("table"), QStringLiteral("51821") };
+            QStringLiteral("wg0"), QStringLiteral("table"), QStringLiteral("51821"),
+            QStringLiteral("proto"), QStringLiteral("186") };
         const QStringList expectedBypassRule {
             QStringLiteral("rule"), QStringLiteral("add"),
             QStringLiteral("priority"), QStringLiteral("1000"), QStringLiteral("to"),
@@ -411,6 +423,86 @@ private slots:
         QCOMPARE(result.code, QStringLiteral("recovery_required"));
         QVERIFY(runner->calls.isEmpty());
         QVERIFY(reconciler.status().value(QStringLiteral("recoveryRequired")).toBool());
+    }
+
+    void foreignFullTunnelRouteIsNeverDeleted()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        auto initialRunner = std::make_shared<FakeCommandRunner>();
+        LinuxRouteReconciler initial(initialRunner, statePath);
+        QVERIFY(initial.applyAllExcept(QStringLiteral("wg0"), {}).ok);
+
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->capturedOutputs = {
+            QString(), QString(),
+            QStringLiteral("0.0.0.0/1 dev wg0 proto boot\n128.0.0.0/1 dev wg0 proto boot\n"),
+            QStringLiteral("::/1 dev wg0 proto boot\n8000::/1 dev wg0 proto boot\n")
+        };
+        LinuxRouteReconciler reconciler(runner, statePath);
+        const RouteReconcileResult result = reconciler.clear();
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("full_tunnel_ownership_ambiguous"));
+        QVERIFY(runner->calls.isEmpty());
+    }
+
+    void dnsDomainFailureRestoresPreviousReceipt()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
+        LinuxRouteReconciler reconciler(
+                runner, temporaryDirectory.filePath(QStringLiteral("routes.json")));
+        QVERIFY(reconciler.configureDns(QStringLiteral("wg0"),
+                                        { QStringLiteral("10.8.1.53") },
+                                        { QStringLiteral("~.") }).ok);
+        runner->failAtCall = runner->calls.size() + 2;
+        const RouteReconcileResult result = reconciler.configureDns(
+                QStringLiteral("wg0"), { QStringLiteral("10.8.1.54") },
+                { QStringLiteral("~corp") });
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("dns_configure_failed"));
+        QVERIFY(runner->calls.size() >= 7);
+        QCOMPARE(runner->calls.at(5).arguments,
+                 QStringList { QStringLiteral("dns"), QStringLiteral("wg0"),
+                               QStringLiteral("10.8.1.53") });
+        QCOMPARE(runner->calls.at(6).arguments,
+                 QStringList { QStringLiteral("domain"), QStringLiteral("wg0"),
+                               QStringLiteral("~.") });
+    }
+
+    void partialOwnedTableRemovesOnlyNewRoutesOnFailure()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        QFile state(statePath);
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        QVERIFY(state.write(QJsonDocument(QJsonObject {
+            { QStringLiteral("version"), 2 },
+            { QStringLiteral("mode"), QStringLiteral("all-except") },
+            { QStringLiteral("interface"), QStringLiteral("wg0") },
+            { QStringLiteral("routes"), QJsonArray() },
+            { QStringLiteral("bypassRoutes"), QJsonArray() },
+            { QStringLiteral("bypassRulePriority"), 1000 },
+            { QStringLiteral("fullRulePriority"), 1100 },
+        }).toJson(QJsonDocument::Compact)) > 0);
+        state.close();
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->capturedOutputs = {
+            QString(), QString(),
+            QStringLiteral("0.0.0.0/1 dev wg0 proto 186\n128.0.0.0/1 dev wg0 proto 186\n"),
+            QString()
+        };
+        runner->failAtCall = 4;
+        LinuxRouteReconciler reconciler(runner, statePath);
+        const RouteReconcileResult result = reconciler.applyAllExcept(QStringLiteral("wg0"), {});
+        QVERIFY(!result.ok);
+        QVERIFY(std::any_of(runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.arguments.contains(QStringLiteral("del"))
+                && call.arguments.contains(QStringLiteral("::/1"));
+        }));
     }
 };
 

@@ -14,7 +14,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
 include(GNUInstallDirs)
-find_package(Qt6 REQUIRED COMPONENTS Core Network Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Network)
+option(BUILD_TESTING "Build headless test executables" OFF)
+if(BUILD_TESTING)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+endif()
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 
 add_library(amnezia_headless_core STATIC
@@ -55,6 +59,7 @@ target_link_libraries(amneziad PRIVATE amnezia_headless_core Qt6::Core Qt6::Netw
 add_executable(amnezia-cli cli.cpp)
 target_link_libraries(amnezia-cli PRIVATE amnezia_headless_core Qt6::Core Qt6::Network)
 
+if(BUILD_TESTING)
 add_executable(headless_protocol_tests
     tests/tst_headless_protocol.cpp
 )
@@ -98,6 +103,7 @@ add_test(NAME headless_vpn_backend COMMAND headless_vpn_backend_tests)
 add_test(NAME headless_privileged_daemon_bridge COMMAND headless_privileged_daemon_bridge_tests)
 add_test(NAME headless_server_routing COMMAND headless_server_routing_tests)
 add_test(NAME headless_updates COMMAND headless_update_tests)
+endif()
 
 configure_file(
     "${CMAKE_CURRENT_LIST_DIR}/amneziad.service.in"

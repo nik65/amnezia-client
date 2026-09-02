@@ -1,6 +1,10 @@
 #include "headlessRoutingController.h"
 
 #include <QFile>
+#include <QDir>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonArray>
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QHostInfo>
@@ -8,6 +12,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QTimer>
 #include <QUrl>
 
@@ -104,6 +109,19 @@ bool privateOrLocalAddress(const QHostAddress &address)
     }
     if (address.protocol() == QAbstractSocket::IPv6Protocol) {
         const Q_IPV6ADDR bytes = address.toIPv6Address();
+        // IPv4-mapped IPv6 literals must receive the same private/loopback
+        // treatment as their IPv4 spelling; otherwise ::ffff:127.0.0.1 can
+        // bypass the endpoint policy.
+        bool mapped = true;
+        for (int i = 0; i < 10; ++i) mapped = mapped && bytes.c[i] == 0;
+        mapped = mapped && bytes.c[10] == 0xff && bytes.c[11] == 0xff;
+        if (mapped) {
+            const quint32 ipv4 = (static_cast<quint32>(bytes.c[12]) << 24)
+                    | (static_cast<quint32>(bytes.c[13]) << 16)
+                    | (static_cast<quint32>(bytes.c[14]) << 8)
+                    | static_cast<quint32>(bytes.c[15]);
+            return privateOrLocalIpv4(QHostAddress(ipv4));
+        }
         // fc00::/7 (ULA) is not a public policy endpoint.
         return (bytes.c[0] & 0xfe) == 0xfc;
     }
@@ -195,10 +213,11 @@ QStringList endpointHostsFromConfig(const Profile &profile)
         hosts.append(match.next().captured(1));
     }
 
-    // OpenVPN permits one or more "remote host [port]" lines.  Only the host
-    // is needed for an exact main-table bypass route.
+    // OpenVPN's canonical syntax is "remote host port proto".  Keep parsing
+    // strict and complete even though all-except currently fails closed for
+    // OpenVPN until its endpoint ownership can be reconciled safely.
     const QRegularExpression openVpnRemote(
-            QStringLiteral(R"(^\s*remote\s+(\S+)(?:\s+\S+)?\s*$)"),
+            QStringLiteral(R"(^\s*remote\s+(\S+)\s+(\d{1,5})\s+(udp|udp6|tcp|tcp6)(?:\s+\S+)*\s*$)"),
             QRegularExpression::MultilineOption | QRegularExpression::CaseInsensitiveOption);
     match = openVpnRemote.globalMatch(content);
     while (match.hasNext()) {
@@ -310,9 +329,12 @@ QStringList allExceptBypassRoutes(const Profile &profile,
 
 HeadlessRoutingController::HeadlessRoutingController(
         std::shared_ptr<CommandRunner> runner, QString routeStatePath)
-    : m_reconciler(runner ? std::move(runner) : std::make_shared<RealCommandRunner>(),
-                   std::move(routeStatePath))
+    : m_reconciler(runner ? runner : std::make_shared<RealCommandRunner>(),
+                   routeStatePath),
+      m_statePath(routeStatePath.isEmpty() ? QString() : QDir(QFileInfo(routeStatePath).absolutePath())
+                   .filePath(QStringLiteral("routing-controller.json")))
 {
+    loadState();
 }
 
 RoutingResult HeadlessRoutingController::connect(const Profile &profile)
@@ -321,9 +343,10 @@ RoutingResult HeadlessRoutingController::connect(const Profile &profile)
     const bool allExcept = profile.routingMode == QStringLiteral("all-except");
     const QString protocol = profile.protocol.trimmed().toLower();
     if (allExcept && (protocol == QStringLiteral("xray")
-                      || protocol == QStringLiteral("ssxray"))) {
+                      || protocol == QStringLiteral("ssxray")
+                      || protocol == QStringLiteral("openvpn"))) {
         return failure(QStringLiteral("routing_mode_unsupported"),
-                       QStringLiteral("all-except requires a VPN interface; XRay proxy mode cannot provide a full tunnel"));
+                       QStringLiteral("all-except is fail-closed for proxy/OpenVPN profiles until endpoint route ownership is proven"));
     }
     if (allExcept && profile.serverRulesUrl.isEmpty()) {
         return failure(QStringLiteral("server_policy_required"),
@@ -367,6 +390,7 @@ RoutingResult HeadlessRoutingController::disconnect()
     m_policySource.clear();
     m_hasPolicy = false;
     m_policyMetadata.reset();
+    saveState();
     return { true, {}, {} };
 }
 
@@ -388,9 +412,56 @@ RoutingResult HeadlessRoutingController::failure(const QString &code,
     return { false, code, message };
 }
 
+bool HeadlessRoutingController::loadState()
+{
+    if (m_statePath.isEmpty()) return true;
+    QFile file(m_statePath);
+    if (!file.exists() || !file.open(QIODevice::ReadOnly)) return !file.exists();
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) return false;
+    const QJsonObject object = document.object();
+    if (!object.value(QStringLiteral("version")).isDouble()
+        || object.value(QStringLiteral("version")).toDouble() != 1.0
+        || !object.value(QStringLiteral("activeProfile")).isString()
+        || !object.value(QStringLiteral("activeInterface")).isString()
+        || !object.value(QStringLiteral("policyRevision")).isString()
+        || !object.value(QStringLiteral("policyContentHash")).isString()
+        || !object.value(QStringLiteral("policySource")).isString()
+        || !object.value(QStringLiteral("policyLoaded")).isBool()) return false;
+    m_activeProfile = object.value(QStringLiteral("activeProfile")).toString();
+    m_activeInterface = object.value(QStringLiteral("activeInterface")).toString();
+    m_policyRevision = object.value(QStringLiteral("policyRevision")).toString();
+    m_policyContentHash = object.value(QStringLiteral("policyContentHash")).toString();
+    m_policySource = object.value(QStringLiteral("policySource")).toString();
+    m_hasPolicy = object.value(QStringLiteral("policyLoaded")).toBool();
+    return true;
+}
+
+bool HeadlessRoutingController::saveState() const
+{
+    if (m_statePath.isEmpty()) return true;
+    const QFileInfo info(m_statePath);
+    if (!QDir().mkpath(info.absolutePath())) return false;
+    QSaveFile file(m_statePath);
+    if (!file.open(QIODevice::WriteOnly)) return false;
+    const QJsonObject object {
+        { QStringLiteral("version"), 1 },
+        { QStringLiteral("activeProfile"), m_activeProfile },
+        { QStringLiteral("activeInterface"), m_activeInterface },
+        { QStringLiteral("policyRevision"), m_policyRevision },
+        { QStringLiteral("policyContentHash"), m_policyContentHash },
+        { QStringLiteral("policySource"), m_policySource },
+        { QStringLiteral("policyLoaded"), m_hasPolicy },
+    };
+    return file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) >= 0
+        && file.commit();
+}
+
 RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
 {
     const QString interfaceName = defaultInterfaceFor(profile);
+    const QJsonObject previousRouting = m_reconciler.status();
     if (interfaceName.isEmpty()) {
         return failure(QStringLiteral("invalid_interface"),
                        QStringLiteral("a VPN interface is required for managed routes"));
@@ -403,7 +474,13 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
         // profile's small bootstrap set before fetching the server policy.
         // Refreshes keep the last-known-good server routes in place and must
         // not clear them before a network request that may fail.
-        if (m_activeProfile != profile.id) {
+        const QJsonObject persistedRouting = m_reconciler.status();
+        const bool persistedFullTunnel =
+                persistedRouting.value(QStringLiteral("mode")).toString()
+                    == QStringLiteral("all-except")
+                && persistedRouting.value(QStringLiteral("interface")).toString()
+                    == interfaceName;
+        if (m_activeProfile != profile.id && !persistedFullTunnel) {
             const RoutingResult bootstrap = applyRoutes(profile, {});
             if (!bootstrap.ok) {
                 return bootstrap;
@@ -435,6 +512,7 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
         m_policySource = resolved.policy.source;
         m_hasPolicy = true;
         m_policyMetadata = resolved.policy.metadata;
+        saveState();
         return applied;
     }
 
@@ -475,17 +553,55 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
         const RouteReconcileResult dnsResult = m_reconciler.configureDns(
                 interfaceName, profile.dnsServers, profile.dnsDomains);
         if (!dnsResult.ok) {
-            const RouteReconcileResult dnsCleanup = m_reconciler.clearDns(interfaceName);
-            const RouteReconcileResult routeCleanup = m_reconciler.clear();
-            if (!dnsCleanup.ok || !routeCleanup.ok) {
+            // DNS is part of the same LKG transaction as policy routes.  Put
+            // both the previous route receipt and previous resolver binding
+            // back before exposing the failed refresh to the caller.
+            const QStringList oldBypass = [&previousRouting]() {
+                        QStringList values;
+                        for (const QJsonValue &value : previousRouting
+                                .value(QStringLiteral("bypassRoutes")).toArray()) {
+                            if (value.isString()) values.append(value.toString());
+                        }
+                        return values;
+                    }();
+            const QStringList oldRoutes = [&previousRouting]() {
+                QStringList values;
+                for (const QJsonValue &value : previousRouting
+                        .value(QStringLiteral("routes")).toArray()) {
+                    if (value.isString()) values.append(value.toString());
+                }
+                return values;
+            }();
+            RouteReconcileResult routeRestore;
+            if (previousRouting.value(QStringLiteral("mode")).toString()
+                    == QStringLiteral("all-except")) {
+                routeRestore = m_reconciler.applyAllExcept(
+                        previousRouting.value(QStringLiteral("interface")).toString(), oldBypass);
+            } else if (!oldRoutes.isEmpty()) {
+                routeRestore = m_reconciler.apply(
+                        previousRouting.value(QStringLiteral("interface")).toString(), oldRoutes);
+            } else {
+                routeRestore = m_reconciler.clear();
+            }
+            const QJsonArray oldDnsServers = previousRouting.value(QStringLiteral("dnsServers")).toArray();
+            const QJsonArray oldDnsDomains = previousRouting.value(QStringLiteral("dnsDomains")).toArray();
+            QStringList oldServers;
+            QStringList oldDomains;
+            for (const QJsonValue &value : oldDnsServers) if (value.isString()) oldServers.append(value.toString());
+            for (const QJsonValue &value : oldDnsDomains) if (value.isString()) oldDomains.append(value.toString());
+            const RouteReconcileResult dnsRestore = oldServers.isEmpty() || oldDomains.isEmpty()
+                    ? m_reconciler.clearDns(interfaceName)
+                    : m_reconciler.configureDns(interfaceName, oldServers, oldDomains);
+            if (!routeRestore.ok || !dnsRestore.ok) {
                 return failure(QStringLiteral("recovery_required"),
-                               QStringLiteral("DNS setup failed and managed routes or DNS could not be rolled back"));
+                               QStringLiteral("DNS refresh failed and the previous route/DNS receipt could not be restored"));
             }
             return failure(dnsResult.code, dnsResult.message);
         }
     }
     m_activeProfile = profile.id;
     m_activeInterface = interfaceName;
+    saveState();
     return { true, {}, {} };
 }
 

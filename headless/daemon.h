@@ -48,7 +48,7 @@ private:
     void processFrames(QLocalSocket *client);
     QByteArray handleRequest(const Request &request, QLocalSocket *client);
     QByteArray statusResponse(const QString &requestId);
-    QByteArray profileListResponse(const QString &requestId) const;
+    QByteArray profileListResponse(const Request &request) const;
     QByteArray importProfileResponse(const Request &request);
     QByteArray exportProfileResponse(const Request &request) const;
 
@@ -66,12 +66,14 @@ private:
     QLocalServer m_server;
     QString m_socketPath;
     QHash<QLocalSocket *, QByteArray> m_clientBuffers;
+    QHash<QLocalSocket *, QTimer *> m_clientFrameTimers;
     ProfileStore m_profileStore;
     VpnBackend m_vpnBackend;
     HeadlessRoutingController m_routingController;
     HeadlessUpdateManager m_updateManager;
     QTimer m_routingRefreshTimer;
     QTimer m_updateTimer;
+    QTimer m_healthTimer;
     int m_processedRequestCount = 0;
     QString m_state = QStringLiteral("disconnected");
     QString m_activeProfile;

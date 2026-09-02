@@ -54,6 +54,8 @@ private:
     static ServerRoutingPolicyResult fetchPolicy(
             const Profile &profile,
             const std::optional<amnezia::ManagedRoutePolicyMetadata> &current);
+    bool loadState();
+    bool saveState() const;
 
     LinuxRouteReconciler m_reconciler;
     QString m_activeProfile;
@@ -63,6 +65,7 @@ private:
     QString m_policySource;
     bool m_hasPolicy = false;
     std::optional<amnezia::ManagedRoutePolicyMetadata> m_policyMetadata;
+    QString m_statePath;
     mutable QString m_lastError;
 };
 

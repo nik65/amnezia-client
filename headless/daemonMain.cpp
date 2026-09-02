@@ -103,7 +103,11 @@ int main(int argc, char *argv[])
     QObject::connect(&application, &QCoreApplication::aboutToQuit,
                      &daemon, &amnezia::headless::Daemon::stop);
 #ifndef Q_OS_WIN
-    installTerminationHandler(application);
+    if (!installTerminationHandler(application)) {
+        QTextStream(stderr) << "amneziad: failed to install signal handler" << Qt::endl;
+        daemon.stop();
+        return 1;
+    }
 #endif
 
     return application.exec();

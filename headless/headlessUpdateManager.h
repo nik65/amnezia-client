@@ -26,7 +26,8 @@ class HeadlessUpdateManager final
 public:
     explicit HeadlessUpdateManager(std::shared_ptr<CommandRunner> runner = {},
                                    QString statePath = {},
-                                   QString installDirectory = {});
+                                   QString installDirectory = {},
+                                   bool requireRootOwnedFiles = true);
 
     // A check is deliberately synchronous: the daemon invokes it from its
     // low-frequency timer, while all network and archive bounds are finite.
@@ -50,6 +51,7 @@ private:
     HeadlessUpdateResult failure(const QString &code, const QString &message);
     HeadlessUpdateResult parseManifest(const QByteArray &manifest,
                                        const QUrl &manifestUrl,
+                                       const Profile &profile,
                                        const QString &publicKeyPath,
                                        const QString &currentVersion,
                                        Candidate &candidate) const;
@@ -80,7 +82,8 @@ private:
                              QByteArray &decoded);
     static bool validVersion(const QString &value);
     static bool validSha256(const QString &value);
-    static bool validArtifactUrl(const QUrl &manifestUrl,
+    static bool validArtifactUrl(const Profile &profile,
+                                 const QUrl &manifestUrl,
                                  const QString &rawUrl,
                                  QUrl &resolved);
     static bool runProcess(const QString &program, const QStringList &arguments,
@@ -104,6 +107,7 @@ private:
     QString m_currentRollbackDirectory;
     bool m_stateValid = true;
     bool m_updateInProgress = false;
+    bool m_requireRootOwnedFiles = true;
 };
 
 } // namespace amnezia::headless

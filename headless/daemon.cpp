@@ -16,6 +16,7 @@
 #endif
 
 #include <utility>
+#include <algorithm>
 
 namespace amnezia::headless
 {
@@ -42,6 +43,9 @@ Daemon::Daemon(QString socketPath, QString profileStorePath,
     m_updateTimer.setInterval(24 * 60 * 60 * 1000);
     connect(&m_updateTimer, &QTimer::timeout,
             this, &Daemon::checkAutomaticUpdates);
+    m_healthTimer.setInterval(30'000);
+    connect(&m_healthTimer, &QTimer::timeout,
+            this, &Daemon::ensureBackendHealthy);
 }
 
 Daemon::~Daemon()
@@ -59,6 +63,26 @@ bool Daemon::start(QString *error)
     if (!m_profileStore.load()) {
         setError(error, m_profileStore.lastError());
         return false;
+    }
+
+    // A crashed daemon cannot run its normal shutdown cleanup.  If persisted
+    // policy routes exist while no backend session is alive, reconcile them
+    // before accepting clients or reconnecting an automatic profile.
+    const QJsonObject routingReceipt = m_routingController.status();
+    const bool persistedRoutingState =
+            routingReceipt.value(QStringLiteral("mode")).toString()
+                == QStringLiteral("all-except")
+            || !routingReceipt.value(QStringLiteral("routes")).toArray().isEmpty()
+            || !routingReceipt.value(QStringLiteral("dnsInterface")).toString().isEmpty()
+            || routingReceipt.value(QStringLiteral("recoveryRequired")).toBool();
+    if (persistedRoutingState
+        && !m_vpnBackend.sessionAlive()) {
+        const RoutingResult recovered = m_routingController.disconnect();
+        if (!recovered.ok) {
+            m_state = QStringLiteral("recovery_required");
+            setError(error, QStringLiteral("orphaned VPN routes require manual recovery"));
+            return false;
+        }
     }
 
     const QFileInfo socketInfo(m_socketPath);
@@ -98,6 +122,7 @@ bool Daemon::start(QString *error)
 
     setError(error, {});
     m_updateTimer.start();
+    m_healthTimer.start();
     QTimer::singleShot(1000, this, &Daemon::connectAutomaticProfile);
     QTimer::singleShot(10'000, this, &Daemon::checkAutomaticUpdates);
     return true;
@@ -110,9 +135,11 @@ void Daemon::stop()
     // away and the next start will report any remaining host state.
     m_routingRefreshTimer.stop();
     m_updateTimer.stop();
-    m_routingController.disconnect();
-    m_vpnBackend.disconnect();
-    m_state = QStringLiteral("disconnected");
+    m_healthTimer.stop();
+    const RoutingResult routingResult = m_routingController.disconnect();
+    const BackendResult backendResult = m_vpnBackend.disconnect();
+    m_state = (!routingResult.ok || !backendResult.ok)
+            ? QStringLiteral("cleanup_failed") : QStringLiteral("disconnected");
     m_activeProfile.clear();
     m_activeProfileData.reset();
 
@@ -159,7 +186,19 @@ void Daemon::acceptConnections()
         if (!client) {
             continue;
         }
+        if (m_clientBuffers.size() >= 64) {
+            client->disconnectFromServer();
+            client->deleteLater();
+            continue;
+        }
         m_clientBuffers.insert(client, {});
+        auto *frameTimer = new QTimer(client);
+        frameTimer->setSingleShot(true);
+        frameTimer->setInterval(10'000);
+        m_clientFrameTimers.insert(client, frameTimer);
+        connect(frameTimer, &QTimer::timeout, client, [client]() {
+            client->disconnectFromServer();
+        });
         connect(client, &QLocalSocket::readyRead,
                 this, &Daemon::readFromClient);
         connect(client, &QLocalSocket::disconnected,
@@ -175,6 +214,9 @@ void Daemon::readFromClient()
     }
 
     m_clientBuffers[client].append(client->readAll());
+    if (!m_clientBuffers[client].contains('\n')) {
+        if (auto *timer = m_clientFrameTimers.value(client)) timer->start();
+    }
     processFrames(client);
 }
 
@@ -185,6 +227,7 @@ void Daemon::removeClient()
         return;
     }
     m_clientBuffers.remove(client);
+    m_clientFrameTimers.remove(client);
     client->deleteLater();
 }
 
@@ -213,6 +256,7 @@ void Daemon::processFrames(QLocalSocket *client)
 
         const QByteArray frame = buffer.left(newline + 1);
         buffer.remove(0, newline + 1);
+        if (auto *timer = m_clientFrameTimers.value(client)) timer->stop();
 
         Request request;
         QString error;
@@ -241,7 +285,7 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
     case Command::Status:
         return statusResponse(request.requestId);
     case Command::ListProfiles:
-        return profileListResponse(request.requestId);
+        return profileListResponse(request);
     case Command::Doctor: {
         QJsonObject result = m_vpnBackend.doctor();
         result.insert(QStringLiteral("state"), m_state);
@@ -335,15 +379,32 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
                        QStringLiteral("unknown daemon command"));
 }
 
-QByteArray Daemon::profileListResponse(const QString &requestId) const
+QByteArray Daemon::profileListResponse(const Request &request) const
 {
-    QJsonArray profiles;
-    for (const Profile &profile : m_profileStore.profiles()) {
-        profiles.append(m_profileStore.toJson(profile));
+    bool offsetOk = true;
+    bool limitOk = true;
+    const int offset = request.parameters.value(QStringLiteral("offset")).isUndefined()
+            ? 0 : request.parameters.value(QStringLiteral("offset")).toInt(&offsetOk);
+    const int limit = request.parameters.value(QStringLiteral("limit")).isUndefined()
+            ? 32 : request.parameters.value(QStringLiteral("limit")).toInt(&limitOk);
+    const QList<Profile> allProfiles = m_profileStore.profiles();
+    if (!offsetOk || !limitOk || offset < 0 || offset > allProfiles.size()
+        || limit < 1 || limit > 64) {
+        return encodeError(request.requestId, QStringLiteral("invalid_parameters"),
+                           QStringLiteral("list-profiles offset/limit is invalid"));
     }
-    return encodeResponse(requestId, QJsonObject {
+    QJsonArray profiles;
+    const int end = std::min(offset + limit, allProfiles.size());
+    for (int index = offset; index < end; ++index) {
+        profiles.append(m_profileStore.toJson(allProfiles.at(index)));
+    }
+    return encodeResponse(request.requestId, QJsonObject {
         { QStringLiteral("profiles"), profiles },
         { QStringLiteral("active"), m_activeProfile },
+        { QStringLiteral("offset"), offset },
+        { QStringLiteral("limit"), limit },
+        { QStringLiteral("total"), allProfiles.size() },
+        { QStringLiteral("nextOffset"), end < allProfiles.size() ? QJsonValue(end) : QJsonValue() },
     });
 }
 
@@ -425,7 +486,10 @@ QByteArray Daemon::statusResponse(const QString &requestId)
 
 void Daemon::ensureBackendHealthy()
 {
-    if (m_state != QStringLiteral("connected") || m_vpnBackend.sessionAlive()) {
+    const QString expectedInterface = m_routingController.status()
+            .value(QStringLiteral("interface")).toString();
+    if (m_state != QStringLiteral("connected")
+        || (m_vpnBackend.sessionAlive() && m_vpnBackend.interfaceHealthy(expectedInterface))) {
         return;
     }
     m_routingRefreshTimer.stop();

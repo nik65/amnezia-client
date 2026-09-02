@@ -86,12 +86,15 @@ QByteArray encodeRequest(const Request &request)
 
 QByteArray encodeResponse(const QString &requestId, const QJsonObject &result)
 {
-    return compactJsonLine(QJsonObject {
+    const QByteArray frame = compactJsonLine(QJsonObject {
         { QStringLiteral("protocol"), WireProtocolVersion },
         { QStringLiteral("id"), requestId },
         { QStringLiteral("ok"), true },
         { QStringLiteral("result"), result },
     });
+    if (frame.size() <= MaximumFrameSize) return frame;
+    return encodeError(requestId, QStringLiteral("response_too_large"),
+                       QStringLiteral("response exceeds the IPC frame limit"));
 }
 
 QByteArray encodeError(const QString &requestId, const QString &code, const QString &message)

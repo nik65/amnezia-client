@@ -1101,6 +1101,11 @@ def main() -> int:
         bool(args.previous_version),
         bool(args.rollback_artifact),
     ))
+    artifact_platforms = parse_artifact(args.artifact)
+    if args.payload_schema == 2 and any(is_headless_platform(platform) for platform in artifact_platforms):
+        raise SystemExit(
+            "Linux headless artifacts require --payload-schema 1 until the headless updater consumes releasePolicy"
+        )
     if args.payload_schema == 1 and restrictive_policy_requested:
         raise SystemExit(
             "rollout, eligibility, expiry, health, and rollback policy requires --payload-schema 2; "
@@ -1168,7 +1173,7 @@ def main() -> int:
             )
         reserved_file_names[reservation_key] = (file_name, platform)
 
-    for platform, artifact_path in parse_artifact(args.artifact).items():
+    for platform, artifact_path in artifact_platforms.items():
         reserve_file_name(platform, artifact_path.name)
         target, digest = copy_content_addressed_artifact(artifact_path, files_dir)
         artifact_metadata: dict[str, object] = {

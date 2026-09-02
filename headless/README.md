@@ -15,14 +15,15 @@
 
 ## Сборка
 
-Зависимости: Ubuntu/Linux, CMake 3.25+, C++17 и Qt 6 modules `Core`, `Network`, `Test`.
+Зависимости: Ubuntu/Linux, CMake 3.25+, C++17 и Qt 6 modules `Core`, `Network`.
+Модуль `Test` нужен только при `-DBUILD_TESTING=ON`; release-сборка принудительно
+использует `-DBUILD_TESTING=OFF`.
 
 Standalone-сборка target:
 
 ```bash
-cmake -S headless -B build-headless -DCMAKE_BUILD_TYPE=Release
+cmake -S headless -B build-headless -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 cmake --build build-headless --target amneziad amnezia-cli
-ctest --test-dir build-headless --output-on-failure
 ```
 
 При пакетировании ключ доверия provision-ится отдельным deployment-шагом, например
@@ -36,7 +37,11 @@ ctest --test-dir build-headless --output-on-failure
 Он создаёт tar.gz только с `amneziad` и `amnezia-cli`; затем
 `deploy/headless/make_headless_manifest.py` публикует подписанный
 `linux-headless-x64`-манифест. Обычный `linux-x64` GUI `.run` намеренно не считается
-подходящим headless-обновлением.
+подходящим headless-обновлением. Скрипт также создаёт отдельный provisioning bundle
+с unit-файлом, trust-anchor input, `runtime-dependencies.txt` и `SHA256SUMS`;
+`install_headless.sh` принимает путь и SHA-256 receipt trust anchor, проверяет команды,
+динамические библиотеки, целостность bundle, Ed25519 trust anchor, socket/health и только
+затем включает systemd unit: `sudo ./install_headless.sh /secure/update-public-key.pem <sha256>`.
 
 В составе основного проекта target включается явно:
 
@@ -122,7 +127,7 @@ Unix socket — локальный control plane. На Unix daemon выстав�
 HTTPS control plane
 пока не является частью target.
 
-## Что уже проверено
+## Что покрывают тесты
 
 - protocol encoding/validation;
 - daemon lifecycle и bounded malformed/oversized frame errors;
@@ -137,7 +142,11 @@ HTTPS control plane
   DNS и VPN endpoint;
 - подписанный headless update envelope: Ed25519, размер/SHA-256, отдельная платформа
   `linux-headless-x64`, безопасное содержимое tar и атомарная замена бинарей с rollback receipt;
-- Linux Release-сборка и полный CTest-набор в Ubuntu/WSL.
+- native Linux configure/build и полный CTest-набор должны быть выполнены в Linux/WSL
+  release job; локальная Windows-среда этот receipt не заменяет.
+
+Публикация на ServerX, установка на свежий Ubuntu и live-приёмка маршрутов/DNS не
+считаются доказанными без отдельного операционного receipt.
 
 ## Ограничения паритета с Windows-клиентом
 
@@ -150,8 +159,9 @@ Windows-клиента. Пока отсутствуют и не должны с�
   а XRay/SS-XRay остаются proxy-режимом;
 - управление self-hosted серверами, Docker-контейнерами и пользователями;
 - диагностика протокольных backend-ов и journald integration;
-- automatic update требует опубликованного артефакта `linux-headless-x64`, HTTPS manifest
-  и root-owned ключ строго `/etc/amnezia/update-public-key.pem`; поле ключа в профиле
+- automatic update требует опубликованного артефакта `linux-headless-x64` и root-owned ключ
+  строго `/etc/amnezia/update-public-key.pem`; HTTPS manifest обязателен, кроме буквального
+  private/VPN-internal IPv4 HTTP endpoint, содержащегося в `forwardRoutes`; поле ключа в профиле
   сохраняется для совместимости, но не может выбрать другой trust anchor;
 - HTTPS remote API;
 - автоматическая или zero-touch миграция AWG 2.0 → 3.1.
@@ -165,7 +175,7 @@ privileged adapter и kill-switch; текущий full-tunnel слой испо�
 
 ### Update и policy transport hardening
 
-Updater принимает только HTTPS manifest/artifact с Ed25519-подписью и проверяет canonical
+Updater принимает HTTPS manifest/artifact (либо узкий pinned internal HTTP transport) с Ed25519-подписью и проверяет canonical
 containment, отсутствие symlink, root ownership и запрет group/world-write для trust anchor,
 устанавливаемых бинарей и rollback evidence. Перед заменой создаётся durable journal с фазами
 `prepared`, `replaced`, `restart_pending`; после перезапуска daemon подтверждает здоровье пары

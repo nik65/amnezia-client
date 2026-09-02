@@ -88,6 +88,9 @@ private:
     QString m_interfaceName;
     QStringList m_routes;
     QStringList m_bypassRoutes;
+    QString m_dnsInterface;
+    QStringList m_dnsServers;
+    QStringList m_dnsDomains;
     int m_bypassRulePriority = FullTunnelBypassRulePriority;
     int m_fullRulePriority = FullTunnelRulePriority;
     bool m_stateValid = true;

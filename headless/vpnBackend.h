@@ -94,6 +94,7 @@ public:
 
     QString activeProfile() const;
     bool sessionAlive() const;
+    bool interfaceHealthy(const QString &interfaceName) const;
     BackendResult lastError() const;
 
 private:

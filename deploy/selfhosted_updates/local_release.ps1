@@ -168,6 +168,9 @@ function Assert-ReleaseInputs {
 }
 
 function Assert-SafeFleetPolicy {
+    if ($PayloadSchema -eq 2 -and ($BuildPlatform -contains "headless")) {
+        throw "Linux headless clients currently accept only payload schema 1; publish headless with -PayloadSchema 1 until schema-2 policy consumption is implemented."
+    }
     $restrictivePolicyRequested = (
         $Channel -ne "stable" -or
         $RolloutPercentage -ne 100 -or
@@ -823,9 +826,10 @@ if (-not $SkipBuild) {
             (Quote-Sh $repoWsl),
             (Quote-Sh $Version),
             (Quote-Sh $artifactDirWsl))
-        Invoke-WslBash $headlessScript
-        Assert-ExistingFile (Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64.tar.gz") "Linux headless update artifact"
-    }
+    Invoke-WslBash $headlessScript
+    Assert-ExistingFile (Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64.tar.gz") "Linux headless update artifact"
+    Assert-ExistingFile (Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64_provisioning.tar.gz") "Linux headless provisioning bundle"
+}
 }
 
 Remove-UnsupportedAndroidArtifacts $ArtifactDir $Version
