@@ -80,6 +80,8 @@ private slots:
         QVERIFY(QDir().mkpath(rollback));
         const QString digest = QString::fromLatin1(QCryptographicHash::hash(
                 QByteArrayLiteral("old"), QCryptographicHash::Sha256).toHex());
+        const QString candidateDigest = QString::fromLatin1(QCryptographicHash::hash(
+                QByteArrayLiteral("test"), QCryptographicHash::Sha256).toHex());
         for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
             QFile backup(QDir(rollback).filePath(name));
             QVERIFY(backup.open(QIODevice::WriteOnly));
@@ -102,6 +104,14 @@ private slots:
             { QStringLiteral("rollbackHashes"), QJsonObject {
                 { QStringLiteral("amneziad"), digest },
                 { QStringLiteral("amnezia-cli"), digest },
+            } },
+            { QStringLiteral("candidateHashes"), QJsonObject {
+                { QStringLiteral("amneziad"), candidateDigest },
+                { QStringLiteral("amnezia-cli"), candidateDigest },
+            } },
+            { QStringLiteral("candidateSizes"), QJsonObject {
+                { QStringLiteral("amneziad"), 4 },
+                { QStringLiteral("amnezia-cli"), 4 },
             } },
         }).toJson(QJsonDocument::Compact)) > 0);
         journal.close();

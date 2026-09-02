@@ -68,6 +68,8 @@ private:
     bool verifyInstallFile(const QString &path, QString *error) const;
     bool verifyRollbackFile(const QString &path, const QString &expectedSha256,
                             QString *error) const;
+    bool verifyInstalledFile(const QString &path, const QString &expectedSha256,
+                             qint64 expectedSize, QString *error) const;
     static QString trustedUpdatePublicKeyPath();
     static QString sha256ForFile(const QString &path);
     static bool verifyEnvelope(const QJsonObject &envelope,

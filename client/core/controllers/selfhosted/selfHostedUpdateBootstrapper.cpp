@@ -1096,11 +1096,13 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
     const auto abortUncommitted = [&reconcilePublication, &finalizeExact]() {
         const auto reconciliation = reconcilePublication();
         if (reconciliation == amnezia::selfhostedUpdates::BundledMutationReconciliation::NotApplied) {
-            finalizeExact(
+            if (!finalizeExact(
                     QStringLiteral("finalize-abort"),
                     QByteArrayLiteral("AMNEZIA_PUBLISH_FINALIZE_ABORT_V1"),
                     QByteArrayLiteral("NOT_APPLIED"),
-                    QByteArrayLiteral("finalized_aborted"));
+                    QByteArrayLiteral("finalized_aborted"))) {
+                return amnezia::selfhostedUpdates::BundledMutationReconciliation::Indeterminate;
+            }
         }
         return reconciliation;
     };
@@ -1167,11 +1169,14 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
 
     if (!verifyRemoteUpdateHost()) {
         if (expectedCurrent == candidateSha256) {
-            finalizeExact(
+            if (!finalizeExact(
                     QStringLiteral("finalize"),
                     QByteArrayLiteral("AMNEZIA_PUBLISH_FINALIZE_V1"),
                     QByteArrayLiteral("APPLIED"),
-                    QByteArrayLiteral("finalized"));
+                    QByteArrayLiteral("finalized"))) {
+                logger.error() << "RECOVERY_REQUIRED: finalization acknowledgement failed after pre-existing candidate verification";
+                return false;
+            }
             logger.error() << "Pre-existing bundled candidate failed endpoint verification; manifest was not changed";
             return false;
         }
@@ -1221,11 +1226,14 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
                 || rollbackReconciliation
                         == amnezia::selfhostedUpdates::BundledMutationReconciliation::AppliedWithoutAcknowledgement;
         if (rollbackSucceeded) {
-            finalizeExact(
+            if (!finalizeExact(
                     QStringLiteral("finalize-rollback"),
                     QByteArrayLiteral("AMNEZIA_PUBLISH_FINALIZE_ROLLBACK_V1"),
                     QByteArrayLiteral("APPLIED"),
-                    QByteArrayLiteral("rollback_finalized"));
+                    QByteArrayLiteral("rollback_finalized"))) {
+                logger.error() << "RECOVERY_REQUIRED: rollback succeeded but finalization acknowledgement failed";
+                return false;
+            }
             logger.error() << "Bundled candidate failed endpoint verification; previous manifest was restored";
             return false;
         }
@@ -1238,11 +1246,14 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
         return false;
     }
 
-    finalizeExact(
+    if (!finalizeExact(
             QStringLiteral("finalize"),
             QByteArrayLiteral("AMNEZIA_PUBLISH_FINALIZE_V1"),
             QByteArrayLiteral("APPLIED"),
-            QByteArrayLiteral("finalized"));
+            QByteArrayLiteral("finalized"))) {
+        logger.error() << "RECOVERY_REQUIRED: bundled publication finalization was not acknowledged";
+        return false;
+    }
 
     logger.info() << "Bundled self-hosted update payload published" << payload.version;
     return true;

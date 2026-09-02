@@ -25,6 +25,13 @@ cmake --build build-headless --target amneziad amnezia-cli
 ctest --test-dir build-headless --output-on-failure
 ```
 
+При пакетировании ключ доверия provision-ится отдельным deployment-шагом, например
+`cmake -S headless -B build-headless -DAMNEZIA_HEADLESS_UPDATE_PUBLIC_KEY=/secure/update-public-key.pem`.
+Установочный пакет копирует его в `/etc/amnezia/update-public-key.pem`; update tarball
+не имеет права заменять этот файл. Пакет также должен создать system group `amnezia`,
+установить `amneziad.service` и выполнить `systemctl daemon-reload`/`enable --now` с
+явным административным подтверждением.
+
 Для release-артефакта Ubuntu используется `deploy/headless/build_headless_release.sh`.
 Он создаёт tar.gz только с `amneziad` и `amnezia-cli`; затем
 `deploy/headless/make_headless_manifest.py` публикует подписанный

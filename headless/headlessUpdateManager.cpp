@@ -77,6 +77,21 @@ bool jsonInteger(const QJsonValue &value, qint64 minimum, qint64 maximum, qint64
     return true;
 }
 
+int effectiveHttpsPort(const QUrl &url)
+{
+    return url.port() == -1 && url.scheme() == QStringLiteral("https") ? 443 : url.port();
+}
+
+bool samePinnedUrl(const QUrl &expected, const QUrl &actual)
+{
+    return actual.isValid()
+        && actual.scheme().compare(expected.scheme(), Qt::CaseInsensitive) == 0
+        && actual.host().compare(expected.host(), Qt::CaseInsensitive) == 0
+        && effectiveHttpsPort(actual) == effectiveHttpsPort(expected)
+        && actual.path() == expected.path()
+        && actual.query() == expected.query();
+}
+
 } // namespace
 
 HeadlessUpdateManager::HeadlessUpdateManager(std::shared_ptr<CommandRunner> runner,
@@ -139,11 +154,40 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
                            QStringLiteral("headless update acknowledgement journal is missing or invalid"));
         }
         journal = journalDocument.object();
+        const QJsonObject candidateHashes = journal.value(QStringLiteral("candidateHashes")).toObject();
+        const QJsonObject candidateSizes = journal.value(QStringLiteral("candidateSizes")).toObject();
+        if (!candidateHashes.contains(QStringLiteral("amneziad"))
+            || !candidateHashes.contains(QStringLiteral("amnezia-cli"))) {
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("headless update journal has no candidate binary hashes"));
+        }
+        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+            if (!verifyInstalledFile(QDir(m_installDirectory).filePath(name),
+                                     candidateHashes.value(name).toString(),
+                                     candidateSizes.value(name).toInteger(-1), &healthError)) {
+                return failure(QStringLiteral("recovery_required"),
+                               QStringLiteral("installed headless binary does not match the acknowledged candidate"));
+            }
+        }
         journal.insert(QStringLiteral("phase"), QStringLiteral("acknowledged"));
         QString receiptError;
-        if (!writeJournal(journal, &receiptError) || !QFile::remove(m_journalPath)) {
+        if (!writeJournal(journal, &receiptError)) {
             return failure(QStringLiteral("recovery_required"),
                            QStringLiteral("headless update health acknowledgement could not be persisted"));
+        }
+        const QString transactionDirectory = journal.value(QStringLiteral("transactionDirectory")).toString();
+        const QString updateRoot = QFileInfo(m_updateRoot).canonicalFilePath();
+        const QString transactionPath = QFileInfo(transactionDirectory).canonicalFilePath();
+        if (!transactionPath.isEmpty() && transactionPath != updateRoot
+            && transactionPath.startsWith(updateRoot + QDir::separator())
+            && QFileInfo(transactionPath).isDir()
+            && !QDir(transactionPath).removeRecursively()) {
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("acknowledged update transaction directory could not be cleaned"));
+        }
+        if (!QFile::remove(m_journalPath)) {
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("headless update acknowledgement journal could not be retired"));
         }
         if (!saveState()) {
             return failure(QStringLiteral("recovery_required"),
@@ -153,14 +197,33 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
     if (m_lastState == QStringLiteral("rollback_restart_pending")
         && !m_rollbackVersion.isEmpty() && currentVersion == m_rollbackVersion) {
         QString healthError;
-        if (!verifyInstallFile(QDir(m_installDirectory).filePath(QStringLiteral("amneziad")), &healthError)
-            || !verifyInstallFile(QDir(m_installDirectory).filePath(QStringLiteral("amnezia-cli")), &healthError)) {
+        if (!verifyInstalledFile(QDir(m_installDirectory).filePath(QStringLiteral("amneziad")),
+                                 m_rollbackHashes.value(QStringLiteral("amneziad")), -1, &healthError)
+            || !verifyInstalledFile(QDir(m_installDirectory).filePath(QStringLiteral("amnezia-cli")),
+                                    m_rollbackHashes.value(QStringLiteral("amnezia-cli")), -1, &healthError)) {
             return failure(QStringLiteral("recovery_required"),
                            QStringLiteral("rolled-back headless binaries failed post-restart health validation"));
         }
         if (!m_rollbackDirectory.isEmpty() && !QDir(m_rollbackDirectory).removeRecursively()) {
             return failure(QStringLiteral("recovery_required"),
                            QStringLiteral("rollback evidence could not be retired after health acknowledgement"));
+        }
+        QFile rollbackJournalFile(m_journalPath);
+        QJsonParseError rollbackJournalError;
+        const QJsonDocument rollbackJournal = rollbackJournalFile.open(QIODevice::ReadOnly)
+                ? QJsonDocument::fromJson(rollbackJournalFile.readAll(), &rollbackJournalError) : QJsonDocument();
+        if (rollbackJournal.isObject()) {
+            const QString transactionDirectory = rollbackJournal.object()
+                    .value(QStringLiteral("transactionDirectory")).toString();
+            const QString updateRoot = QFileInfo(m_updateRoot).canonicalFilePath();
+            const QString transactionPath = QFileInfo(transactionDirectory).canonicalFilePath();
+            if (!transactionPath.isEmpty() && transactionPath != updateRoot
+                && transactionPath.startsWith(updateRoot + QDir::separator())
+                && QFileInfo(transactionPath).isDir()
+                && !QDir(transactionPath).removeRecursively()) {
+                return failure(QStringLiteral("recovery_required"),
+                               QStringLiteral("rollback transaction directory could not be cleaned"));
+            }
         }
         if (!m_journalPath.isEmpty()) QFile::remove(m_journalPath);
         m_rollbackDirectory.clear();
@@ -212,10 +275,15 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
                        QStringLiteral("headless update manifest request timed out"));
     }
     const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const bool finalUrlPinned = samePinnedUrl(request.url(), reply->url());
     const QByteArray manifest = reply->readAll();
     const QString networkError = reply->error() == QNetworkReply::NoError
             ? QString() : reply->errorString();
     reply->deleteLater();
+    if (!finalUrlPinned) {
+        return failure(QStringLiteral("update_redirect_rejected"),
+                       QStringLiteral("headless update manifest final URL changed unexpectedly"));
+    }
     if (!networkError.isEmpty()) {
         return failure(QStringLiteral("update_unreachable"),
                        QStringLiteral("headless update manifest request failed"));
@@ -290,6 +358,15 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
 
 HeadlessUpdateResult HeadlessUpdateManager::rollback()
 {
+    if (m_updateInProgress) {
+        return failure(QStringLiteral("update_in_progress"),
+                       QStringLiteral("a headless update transaction is already in progress"));
+    }
+    m_updateInProgress = true;
+    struct UpdateGuard {
+        bool &active;
+        ~UpdateGuard() { active = false; }
+    } updateGuard { m_updateInProgress };
     m_lastError.clear();
     QString error;
     if (m_rollbackDirectory.isEmpty()) {
@@ -495,6 +572,7 @@ bool HeadlessUpdateManager::download(const Candidate &candidate, const QString &
     }
     file.close();
     const bool ok = reply->isFinished() && !writeFailed
+            && samePinnedUrl(candidate.url, reply->url())
             && reply->error() == QNetworkReply::NoError
             && received == candidate.size
             && QString::fromLatin1(hash.result().toHex()) == candidate.sha256;
@@ -587,7 +665,19 @@ bool HeadlessUpdateManager::install(const Candidate &candidate,
         { QStringLiteral("installDirectory"), QFileInfo(m_installDirectory).canonicalFilePath() },
     };
     QJsonObject rollbackHashes;
+    QJsonObject candidateHashes;
+    QJsonObject candidateSizes;
     for (const QString &name : files) {
+        const QString source = QDir(payloadDirectory).filePath(name);
+        const QFileInfo sourceInfo(source);
+        const QString candidateDigest = sha256ForFile(source);
+        if (!sourceInfo.isFile() || sourceInfo.isSymLink() || candidateDigest.isEmpty()) {
+            QDir(rollbackDirectory).removeRecursively();
+            if (error) *error = QStringLiteral("headless candidate binary hash cannot be recorded");
+            return false;
+        }
+        candidateHashes.insert(name, candidateDigest);
+        candidateSizes.insert(name, QJsonValue(sourceInfo.size()));
         const QString destination = QDir(m_installDirectory).filePath(name);
         if (!verifyInstallFile(destination, error)
             || !QFile::copy(destination, QDir(rollbackDirectory).filePath(name))) {
@@ -605,6 +695,8 @@ bool HeadlessUpdateManager::install(const Candidate &candidate,
         rollbackHashes.insert(name, digest);
     }
     journal.insert(QStringLiteral("rollbackHashes"), rollbackHashes);
+    journal.insert(QStringLiteral("candidateHashes"), candidateHashes);
+    journal.insert(QStringLiteral("candidateSizes"), candidateSizes);
     if (!writeJournal(journal, error)) {
         QDir(rollbackDirectory).removeRecursively();
         return false;
@@ -1015,6 +1107,20 @@ bool HeadlessUpdateManager::verifyInstallFile(const QString &path, QString *erro
     return true;
 }
 
+bool HeadlessUpdateManager::verifyInstalledFile(const QString &path,
+                                                const QString &expectedSha256,
+                                                qint64 expectedSize,
+                                                QString *error) const
+{
+    if (!verifyInstallFile(path, error) || !validSha256(expectedSha256)
+        || sha256ForFile(path) != expectedSha256
+        || (expectedSize >= 0 && QFileInfo(path).size() != expectedSize)) {
+        if (error) *error = QStringLiteral("installed headless binary failed exact hash or size verification");
+        return false;
+    }
+    return true;
+}
+
 QString HeadlessUpdateManager::sha256ForFile(const QString &path)
 {
     QFile file(path);
@@ -1182,8 +1288,7 @@ bool HeadlessUpdateManager::validArtifactUrl(const QUrl &manifestUrl,
             && !resolved.host().isEmpty() && resolved.userInfo().isEmpty()
             && !resolved.hasFragment()
             && resolved.host().compare(manifestUrl.host(), Qt::CaseInsensitive) == 0
-            && (resolved.port() == -1 || manifestUrl.port() == -1
-                || resolved.port() == manifestUrl.port());
+            && effectiveHttpsPort(resolved) == effectiveHttpsPort(manifestUrl);
 }
 
 bool HeadlessUpdateManager::runProcess(const QString &program,

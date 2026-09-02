@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.25)
 
 project(AmneziaVPNHeadless LANGUAGES CXX)
 
+set(AMNEZIA_HEADLESS_UPDATE_PUBLIC_KEY "" CACHE FILEPATH
+    "Provisioning-time Ed25519 public key; never supplied by an update archive")
+
 if(NOT UNIX OR APPLE OR ANDROID OR IOS)
     message(FATAL_ERROR "AmneziaVPNHeadless requires a native Linux build")
 endif()
@@ -108,3 +111,9 @@ install(TARGETS amneziad amnezia-cli
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/amneziad.service"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/systemd/system"
 )
+if(AMNEZIA_HEADLESS_UPDATE_PUBLIC_KEY)
+    install(FILES "${AMNEZIA_HEADLESS_UPDATE_PUBLIC_KEY}"
+        DESTINATION "${CMAKE_INSTALL_SYSCONFDIR}/amnezia"
+        RENAME "update-public-key.pem"
+        PERMISSIONS OWNER_READ OWNER_WRITE GROUP_READ WORLD_READ)
+endif()

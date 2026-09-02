@@ -22,6 +22,7 @@ namespace
 constexpr int PolicyRequestTimeoutMs = 5000;
 constexpr qsizetype MaximumPolicyBytes = 1024 * 1024;
 constexpr qsizetype MaximumProfileConfigBytes = 1024 * 1024;
+constexpr int HostResolveTimeoutMs = 1500;
 
 bool parseIpv4Route(const QString &value, quint32 *address, int *prefix)
 {
@@ -106,6 +107,27 @@ bool privateOrLocalAddress(const QHostAddress &address)
     return false;
 }
 
+QHostInfo resolveHostBounded(const QString &host, bool *completed)
+{
+    QHostInfo result;
+    bool finished = false;
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    const int lookup = QHostInfo::lookupHost(
+            host, &loop, [&loop, &result, &finished](const QHostInfo &info) {
+        result = info;
+        finished = true;
+        loop.quit();
+    });
+    QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timer.start(HostResolveTimeoutMs);
+    loop.exec();
+    if (!finished && lookup != -1) QHostInfo::abortHostLookup(lookup);
+    if (completed) *completed = finished;
+    return result;
+}
+
 QStringList mergeRoutes(QStringList left, const QStringList &right, bool *valid)
 {
     left.append(right);
@@ -119,14 +141,14 @@ QStringList mergeRoutes(QStringList left, const QStringList &right, bool *valid)
     return routesValid ? left : QStringList();
 }
 
-void appendHostRoutes(QStringList &routes, const QString &rawHost)
+bool appendHostRoutes(QStringList &routes, const QString &rawHost)
 {
     QString host = rawHost.trimmed();
     if (host.startsWith(QLatin1Char('[')) && host.endsWith(QLatin1Char(']'))) {
         host = host.mid(1, host.size() - 2);
     }
     if (host.isEmpty()) {
-        return;
+        return false;
     }
 
     QHostAddress address;
@@ -134,15 +156,20 @@ void appendHostRoutes(QStringList &routes, const QString &rawHost)
         if (address.protocol() == QAbstractSocket::IPv4Protocol) {
             routes.append(address.toString() + QStringLiteral("/32"));
         }
-        return;
+        return address.protocol() == QAbstractSocket::IPv4Protocol;
     }
 
-    const QHostInfo info = QHostInfo::fromName(host);
+    bool resolved = false;
+    const QHostInfo info = resolveHostBounded(host, &resolved);
+    if (!resolved) return false;
+    bool added = false;
     for (const QHostAddress &resolved : info.addresses()) {
         if (resolved.protocol() == QAbstractSocket::IPv4Protocol) {
             routes.append(resolved.toString() + QStringLiteral("/32"));
+            added = true;
         }
     }
+    return added;
 }
 
 QStringList endpointHostsFromConfig(const Profile &profile)
@@ -193,11 +220,12 @@ QStringList protectedRoutesForProfile(const Profile &profile, bool *valid)
         QHostAddress address(normalizedEndpoint);
         bool hasIpv6 = address.protocol() == QAbstractSocket::IPv6Protocol;
         if (address.protocol() == QAbstractSocket::UnknownNetworkLayerProtocol) {
-            const QHostInfo resolved = QHostInfo::fromName(normalizedEndpoint);
-            hasIpv6 = std::any_of(resolved.addresses().cbegin(), resolved.addresses().cend(),
-                                  [](const QHostAddress &candidate) {
-                return candidate.protocol() == QAbstractSocket::IPv6Protocol;
-            });
+            // Do not perform an unbounded resolver call while preparing a
+            // full-tunnel bypass. A hostname can be DNS-rebound between the
+            // check and route installation; require a literal endpoint and
+            // let the backend's own resolver handle ordinary tunnel setup.
+            if (valid) *valid = false;
+            return {};
         }
         if (hasIpv6) {
             if (valid) {
@@ -205,7 +233,9 @@ QStringList protectedRoutesForProfile(const Profile &profile, bool *valid)
             }
             return {};
         }
-        appendHostRoutes(routes, endpoint);
+        if (!appendHostRoutes(routes, endpoint) && valid) {
+            *valid = false;
+        }
     }
     bool routesValid = false;
     routes = amnezia::managedRoutePolicy::validatedManagedRoutes(routes, &routesValid);
@@ -318,13 +348,14 @@ RoutingResult HeadlessRoutingController::refresh(const Profile &profile)
 
 RoutingResult HeadlessRoutingController::disconnect()
 {
+    const QString dnsInterface = m_activeInterface.isEmpty()
+            ? m_reconciler.status().value(QStringLiteral("interface")).toString()
+            : m_activeInterface;
     const RouteReconcileResult result = m_reconciler.clear();
-    if (!result.ok) {
-        return failure(result.code, result.message);
-    }
-    const RouteReconcileResult dnsResult = m_reconciler.clearDns(m_activeInterface);
-    if (!dnsResult.ok) {
-        return failure(dnsResult.code, dnsResult.message);
+    const RouteReconcileResult dnsResult = m_reconciler.clearDns(dnsInterface);
+    if (!result.ok || !dnsResult.ok) {
+        return failure(!result.ok ? result.code : dnsResult.code,
+                       QStringLiteral("route and DNS cleanup did not complete"));
     }
     m_activeProfile.clear();
     m_activeInterface.clear();
@@ -520,8 +551,12 @@ bool isSafePolicyEndpoint(const Profile &profile, const QString &rawUrl,
         return fail(QStringLiteral("policy endpoint hostname is reserved for local or internal resolution"));
     }
     if (literal.protocol() == QAbstractSocket::UnknownNetworkLayerProtocol) {
-        const QHostInfo resolved = QHostInfo::fromName(url.host());
-        for (const QHostAddress &address : resolved.addresses()) {
+        bool resolved = false;
+        const QHostInfo hostInfo = resolveHostBounded(url.host(), &resolved);
+        if (!resolved || hostInfo.addresses().isEmpty()) {
+            return fail(QStringLiteral("policy endpoint hostname could not be resolved safely"));
+        }
+        for (const QHostAddress &address : hostInfo.addresses()) {
             if (!privateOrLocalAddress(address)) continue;
             if (address.protocol() != QAbstractSocket::IPv4Protocol
                 || !std::any_of(profile.forwardRoutes.cbegin(), profile.forwardRoutes.cend(),

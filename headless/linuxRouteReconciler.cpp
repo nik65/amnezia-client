@@ -215,11 +215,11 @@ LinuxRouteReconciler::RuleSnapshot LinuxRouteReconciler::readRuleSnapshot() cons
             const int priority = match.captured(1).toInt();
             snapshot.occupied.insert(priority);
             snapshot.lines.append(line);
-            if (QRegularExpression(QStringLiteral("(?:^|\\s)lookup\\s+51821(?:\\s|$)")).match(line).hasMatch()) {
+            if (QRegularExpression(QStringLiteral("(?:^|\\s)from\\s+all\\s+lookup\\s+51821(?:\\s|$)")).match(line).hasMatch()) {
                 snapshot.ownedFull.insert(priority);
                 (family == 0 ? snapshot.ownedFullV4 : snapshot.ownedFullV6).insert(priority);
             }
-            if (QRegularExpression(QStringLiteral("(?:^|\\s)lookup\\s+main(?:\\s|$)")).match(line).hasMatch()) {
+            if (QRegularExpression(QStringLiteral("(?:^|\\s)to\\s+[^\\s]+\\s+lookup\\s+main(?:\\s|$)")).match(line).hasMatch()) {
                 snapshot.ownedBypass.insert(priority);
             }
         }
@@ -333,12 +333,21 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
         return failure(QStringLiteral("full_tunnel_rule_probe_failed"),
                        QStringLiteral("could not find safe policy-rule priorities"));
     }
+    QSet<QString> tableRoutes;
+    const QRegularExpression ownedTableRoute(
+            QStringLiteral("^\\s*(0\\.0\\.0\\.0/1|128\\.0\\.0\\.0/1|::/1|8000::/1)\\s+dev\\s+%1(?:\\s|$)")
+                .arg(QRegularExpression::escape(interfaceName)));
     for (const QString &line : ruleSnapshot.tableLines) {
-        if (!QRegularExpression(QStringLiteral("\\sdev\\s+%1(?:\\s|$)")
-                                .arg(QRegularExpression::escape(interfaceName))).match(line).hasMatch()) {
+        const QRegularExpressionMatch match = ownedTableRoute.match(line);
+        if (!match.hasMatch()) {
             return failure(QStringLiteral("full_tunnel_table_conflict"),
                            QStringLiteral("route table 51821 contains an unowned route"));
         }
+        tableRoutes.insert(match.captured(1));
+    }
+    if (tableRoutes.size() > 4) {
+        return failure(QStringLiteral("full_tunnel_table_conflict"),
+                       QStringLiteral("route table 51821 contains too many routes"));
     }
 
     const bool hadFullTunnel = m_mode == QStringLiteral("all-except");
