@@ -66,6 +66,7 @@ private:
     bool m_hasPolicy = false;
     std::optional<amnezia::ManagedRoutePolicyMetadata> m_policyMetadata;
     QString m_statePath;
+    bool m_stateValid = true;
     mutable QString m_lastError;
 };
 

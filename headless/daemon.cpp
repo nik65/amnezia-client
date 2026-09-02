@@ -394,8 +394,8 @@ QByteArray Daemon::profileListResponse(const Request &request) const
                            QStringLiteral("list-profiles offset/limit is invalid"));
     }
     QJsonArray profiles;
-    const int end = std::min(offset + limit, allProfiles.size());
-    for (int index = offset; index < end; ++index) {
+    const qsizetype end = std::min<qsizetype>(offset + limit, allProfiles.size());
+    for (qsizetype index = offset; index < end; ++index) {
         profiles.append(m_profileStore.toJson(allProfiles.at(index)));
     }
     return encodeResponse(request.requestId, QJsonObject {

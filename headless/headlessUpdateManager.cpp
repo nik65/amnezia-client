@@ -953,11 +953,20 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
     const QString journalPhase = journalObject.value(QStringLiteral("phase")).toString();
     const QString journalInstall = journalObject.value(QStringLiteral("installDirectory")).toString();
     const QString canonicalInstall = QFileInfo(m_installDirectory).canonicalFilePath();
+    const QString journalRollback = journalObject.value(QStringLiteral("rollbackDirectory")).toString();
+    const QString canonicalRollback = QFileInfo(m_rollbackDirectory).canonicalFilePath();
+    const QJsonObject journalRollbackHashes = journalObject.value(QStringLiteral("rollbackHashes")).toObject();
     if (!jsonInteger(journalObject.value(QStringLiteral("version")), 1, 1, journalVersion)
         || (journalPhase != QStringLiteral("restart_pending")
             && journalPhase != QStringLiteral("replaced")
-            && journalPhase != QStringLiteral("acknowledged")))
+            && journalPhase != QStringLiteral("prepared")
+            && journalPhase != QStringLiteral("acknowledged"))
         || journalInstall != canonicalInstall
+        || journalRollback != canonicalRollback
+        || journalRollbackHashes.value(QStringLiteral("amneziad")).toString()
+               != m_rollbackHashes.value(QStringLiteral("amneziad"))
+        || journalRollbackHashes.value(QStringLiteral("amnezia-cli")).toString()
+               != m_rollbackHashes.value(QStringLiteral("amnezia-cli"))
         || !validVersion(journalObject.value(QStringLiteral("candidateVersion")).toString())
         || !validVersion(journalObject.value(QStringLiteral("currentVersion")).toString())
         || journalObject.value(QStringLiteral("currentVersion")).toString() != m_rollbackVersion) {
@@ -1261,6 +1270,22 @@ bool HeadlessUpdateManager::loadState()
                 }
             }
         }
+        const QString journalRollbackPath = journalObject.value(QStringLiteral("rollbackDirectory")).toString();
+        const QString journalRollbackCanonical = QFileInfo(journalRollbackPath).canonicalFilePath();
+        const QString stateRollbackCanonical = QFileInfo(m_rollbackDirectory).canonicalFilePath();
+        const QJsonObject journalRollbackHashes = journalObject.value(QStringLiteral("rollbackHashes")).toObject();
+        if (!m_rollbackDirectory.isEmpty()
+            && (journalRollbackCanonical.isEmpty() || stateRollbackCanonical != journalRollbackCanonical
+                || m_rollbackVersion != journalCurrent
+                || journalRollbackHashes.value(QStringLiteral("amneziad")).toString()
+                       != m_rollbackHashes.value(QStringLiteral("amneziad"))
+                || journalRollbackHashes.value(QStringLiteral("amnezia-cli")).toString()
+                       != m_rollbackHashes.value(QStringLiteral("amnezia-cli")))) {
+            m_stateValid = false;
+            m_lastState = QStringLiteral("recovery_required");
+            m_lastError = QStringLiteral("headless rollback receipt is not bound to its transaction journal");
+            return false;
+        }
         if ((phase == QStringLiteral("restart_pending")
              || phase == QStringLiteral("rollback_restart_pending"))
             && (m_rollbackDirectory.isEmpty() || !validVersion(m_rollbackVersion)
@@ -1286,8 +1311,9 @@ bool HeadlessUpdateManager::loadState()
             // The final state was committed before journal retirement.  Keep
             // this receipt valid so a crash in the retirement window is
             // recoverable and harmless on the next start.
-            if (m_lastState != QStringLiteral("updated")
-                && m_lastState != QStringLiteral("rolled_back")) {
+            if (m_lastState == QStringLiteral("restart_pending")
+                || m_lastState == QStringLiteral("rollback_restart_pending")
+                || m_lastState == QStringLiteral("recovery_required")) {
                 m_stateValid = false;
                 m_lastState = QStringLiteral("recovery_required");
                 m_lastError = QStringLiteral("acknowledged transaction has an invalid final state");
@@ -1619,6 +1645,7 @@ bool HeadlessUpdateManager::validArtifactUrl(const Profile &profile,
     return safeUpdateUrl(profile, resolved)
             && !resolved.host().isEmpty() && resolved.userInfo().isEmpty()
             && !resolved.hasFragment()
+            && resolved.scheme().compare(manifestUrl.scheme(), Qt::CaseInsensitive) == 0
             && resolved.host().compare(manifestUrl.host(), Qt::CaseInsensitive) == 0
             && effectivePort(resolved) == effectivePort(manifestUrl);
 }

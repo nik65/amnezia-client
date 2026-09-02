@@ -52,6 +52,9 @@ install -m 0755 "$ROOT_DIR/deploy/headless/install_headless.sh" "$PACKAGE_DIR/in
 install -m 0755 "$STAGE_DIR/usr/local/bin/amneziad" "$PACKAGE_DIR/amneziad"
 install -m 0755 "$STAGE_DIR/usr/local/bin/amnezia-cli" "$PACKAGE_DIR/amnezia-cli"
 install -m 0644 "$STAGE_DIR/usr/local/lib/systemd/system/amneziad.service" "$PACKAGE_DIR/amneziad.service"
+cat > "$PACKAGE_DIR/package-manifest.json" <<EOF
+{"schema":1,"version":"$VERSION","platform":"linux-headless-x64","artifacts":["amneziad","amnezia-cli"],"service":"amneziad.service","trustAnchor":"external-ed25519-sha256-receipt","runtimeManifest":"runtime-dependencies.txt"}
+EOF
 cat > "$PACKAGE_DIR/runtime-dependencies.txt" <<'EOF'
 # Runtime requirements for dynamically linked headless binaries.
 # The provisioning preflight validates commands and shared libraries.
@@ -62,7 +65,7 @@ iproute2 (ip)
 tar (gzip support)
 WireGuard/AmneziaWG/OpenVPN/XRay backend binaries as used by imported profiles
 EOF
-(cd "$PACKAGE_DIR" && sha256sum amneziad amnezia-cli amneziad.service runtime-dependencies.txt > SHA256SUMS)
+(cd "$PACKAGE_DIR" && sha256sum amneziad amnezia-cli amneziad.service package-manifest.json runtime-dependencies.txt > SHA256SUMS)
 PACKAGE_ARCHIVE="$OUT_DIR/AmneziaHeadless_${VERSION}_linux_x64_provisioning.tar.gz"
 tar --create --gzip --file "$PACKAGE_ARCHIVE" --directory "$STAGE_DIR" \
     --owner=0 --group=0 --numeric-owner --sort=name headless-package

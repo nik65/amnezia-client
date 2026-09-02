@@ -37,8 +37,15 @@ if ldd "$PACKAGE_ROOT/amneziad" "$PACKAGE_ROOT/amnezia-cli" 2>&1 | grep -q 'not 
     echo "headless binaries have unresolved shared-library dependencies" >&2
     exit 3
 fi
-if [[ ! -f "$PACKAGE_ROOT/runtime-dependencies.txt" ]]; then
+if [[ ! -f "$PACKAGE_ROOT/runtime-dependencies.txt" || ! -f "$PACKAGE_ROOT/package-manifest.json" ]]; then
     echo "provisioning bundle is missing runtime-dependencies.txt" >&2
+    exit 3
+fi
+if ! { grep -q '"schema":1' "$PACKAGE_ROOT/package-manifest.json" \
+    && grep -q '"platform":"linux-headless-x64"' "$PACKAGE_ROOT/package-manifest.json" \
+    && grep -q '"amneziad"' "$PACKAGE_ROOT/package-manifest.json" \
+    && grep -q '"amnezia-cli"' "$PACKAGE_ROOT/package-manifest.json"; }; then
+    echo "provisioning package manifest is invalid" >&2
     exit 3
 fi
 if ! getent group amnezia >/dev/null 2>&1; then

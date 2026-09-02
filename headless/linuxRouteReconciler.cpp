@@ -727,10 +727,29 @@ RouteReconcileResult LinuxRouteReconciler::clearFullTunnel()
                                        QStringLiteral("del"), QStringLiteral("8000::/1"),
                                        QStringLiteral("table"), QString::number(FullTunnelRouteTable),
                                        QStringLiteral("proto"), QString::number(AmneziaRouteProtocol) };
+    const auto restoreOwnedTable = [&]() {
+        bool restored = true;
+        for (const QString &line : snapshot.tableLines) {
+            const QRegularExpressionMatch match = QRegularExpression(
+                    QStringLiteral("^\\s*(0\\.0\\.0\\.0/1|128\\.0\\.0\\.0/1|::/1|8000::/1)\\s+dev\\s+(\\S+)\\s+proto\\s+%1(?:\\s|$)")
+                        .arg(AmneziaRouteProtocol)).match(line);
+            if (!match.hasMatch()) continue;
+            QStringList restore { QStringLiteral("route"), QStringLiteral("replace"),
+                                  match.captured(1), QStringLiteral("dev"),
+                                  match.captured(2), QStringLiteral("table"),
+                                  QString::number(FullTunnelRouteTable), QStringLiteral("proto"),
+                                  QString::number(AmneziaRouteProtocol) };
+            if (match.captured(1).contains(QLatin1Char(':'))) restore.prepend(QStringLiteral("-6"));
+            restored = addFullTunnelRoute(restore) && restored;
+        }
+        return restored;
+    };
     if (!removeFullTunnelRoute(v4Route) || !removeFullTunnelRoute(v4RouteUpper)
         || !removeFullTunnelRoute(v6Route) || !removeFullTunnelRoute(v6RouteUpper)) {
+        const bool restored = restoreOwnedTable();
         return failure(QStringLiteral("full_tunnel_route_cleanup_failed"),
-                       QStringLiteral("the full-tunnel route table could not be removed"));
+                       restored ? QStringLiteral("the full-tunnel route table could not be removed")
+                               : QStringLiteral("the full-tunnel route table could not be removed and restoration failed"));
     }
 
     m_mode = QStringLiteral("only-forward");
@@ -821,16 +840,8 @@ RouteReconcileResult LinuxRouteReconciler::clearDns(const QString &interfaceName
     }
     const QString executable = resolvectlExecutable();
     if (executable.isEmpty()) {
-        m_dnsInterface.clear();
-        m_dnsServers.clear();
-        m_dnsDomains.clear();
-        if (!saveState()) {
-            m_stateValid = false;
-            m_mode = QStringLiteral("recovery_required");
-            return failure(QStringLiteral("recovery_required"),
-                           QStringLiteral("VPN DNS receipt could not be cleared"));
-        }
-        return { true, {}, {} };
+        return failure(QStringLiteral("dns_backend_unavailable"),
+                       QStringLiteral("cannot clear VPN DNS receipt without resolvectl"));
     }
     const CommandResult result = m_runner->run(
             executable, { QStringLiteral("revert"), interfaceName });
@@ -1039,6 +1050,9 @@ bool LinuxRouteReconciler::loadState()
         }
         if (m_dnsInterface.isEmpty() != m_dnsServers.isEmpty()
             || m_dnsServers.isEmpty() != m_dnsDomains.isEmpty()) return false;
+        if (!m_dnsInterface.isEmpty()
+            && (!validInterfaceName(m_dnsInterface)
+                || (!interfaceName.isEmpty() && m_dnsInterface != interfaceName))) return false;
     }
     m_mode = mode;
     m_interfaceName = interfaceName;

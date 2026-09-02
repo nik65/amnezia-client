@@ -334,12 +334,17 @@ HeadlessRoutingController::HeadlessRoutingController(
       m_statePath(routeStatePath.isEmpty() ? QString() : QDir(QFileInfo(routeStatePath).absolutePath())
                    .filePath(QStringLiteral("routing-controller.json")))
 {
-    loadState();
+    m_stateValid = loadState();
+    if (!m_stateValid) m_lastError = QStringLiteral("routing controller state is invalid");
 }
 
 RoutingResult HeadlessRoutingController::connect(const Profile &profile)
 {
     m_lastError.clear();
+    if (!m_stateValid) {
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("routing controller state is invalid; manual recovery is required"));
+    }
     const bool allExcept = profile.routingMode == QStringLiteral("all-except");
     const QString protocol = profile.protocol.trimmed().toLower();
     if (allExcept && (protocol == QStringLiteral("xray")
@@ -363,6 +368,10 @@ RoutingResult HeadlessRoutingController::connect(const Profile &profile)
 
 RoutingResult HeadlessRoutingController::refresh(const Profile &profile)
 {
+    if (!m_stateValid) {
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("routing controller state is invalid; manual recovery is required"));
+    }
     if (m_activeProfile != profile.id) {
         return failure(QStringLiteral("profile_not_active"),
                        QStringLiteral("cannot refresh routes for an inactive profile"));
@@ -374,8 +383,11 @@ RoutingResult HeadlessRoutingController::refresh(const Profile &profile)
 
 RoutingResult HeadlessRoutingController::disconnect()
 {
+    const QJsonObject receipt = m_reconciler.status();
     const QString dnsInterface = m_activeInterface.isEmpty()
-            ? m_reconciler.status().value(QStringLiteral("interface")).toString()
+            ? (receipt.value(QStringLiteral("dnsInterface")).toString().isEmpty()
+                   ? receipt.value(QStringLiteral("interface")).toString()
+                   : receipt.value(QStringLiteral("dnsInterface")).toString())
             : m_activeInterface;
     const RouteReconcileResult result = m_reconciler.clear();
     const RouteReconcileResult dnsResult = m_reconciler.clearDns(dnsInterface);
@@ -390,7 +402,11 @@ RoutingResult HeadlessRoutingController::disconnect()
     m_policySource.clear();
     m_hasPolicy = false;
     m_policyMetadata.reset();
-    saveState();
+    if (!saveState()) {
+        m_stateValid = false;
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("routing controller state could not be cleared"));
+    }
     return { true, {}, {} };
 }
 
@@ -402,6 +418,8 @@ QJsonObject HeadlessRoutingController::status() const
     result.insert(QStringLiteral("policyContentHash"), m_policyContentHash);
     result.insert(QStringLiteral("policySource"), m_policySource);
     result.insert(QStringLiteral("policyLoaded"), m_hasPolicy);
+    result.insert(QStringLiteral("recoveryRequired"), !m_stateValid
+                  || result.value(QStringLiteral("recoveryRequired")).toBool());
     return result;
 }
 
@@ -461,7 +479,6 @@ bool HeadlessRoutingController::saveState() const
 RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
 {
     const QString interfaceName = defaultInterfaceFor(profile);
-    const QJsonObject previousRouting = m_reconciler.status();
     if (interfaceName.isEmpty()) {
         return failure(QStringLiteral("invalid_interface"),
                        QStringLiteral("a VPN interface is required for managed routes"));
@@ -512,7 +529,11 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
         m_policySource = resolved.policy.source;
         m_hasPolicy = true;
         m_policyMetadata = resolved.policy.metadata;
-        saveState();
+        if (!saveState()) {
+            m_stateValid = false;
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("routing policy receipt could not be saved"));
+        }
         return applied;
     }
 
@@ -531,6 +552,7 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
                        QStringLiteral("profile and server managed routes exceed the safety boundary"));
     }
     const QString interfaceName = defaultInterfaceFor(profile);
+    const QJsonObject previousRouting = m_reconciler.status();
     RouteReconcileResult result;
     if (allExcept) {
         // forwardRoutes are VPN-internal (for example the ServerX 10.8.1.0/24
@@ -601,7 +623,11 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
     }
     m_activeProfile = profile.id;
     m_activeInterface = interfaceName;
-    saveState();
+    if (!saveState()) {
+        m_stateValid = false;
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("routing controller receipt could not be saved"));
+    }
     return { true, {}, {} };
 }
 

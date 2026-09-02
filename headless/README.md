@@ -42,6 +42,8 @@ cmake --build build-headless --target amneziad amnezia-cli
 `install_headless.sh` принимает путь и SHA-256 receipt trust anchor, проверяет команды,
 динамические библиотеки, целостность bundle, Ed25519 trust anchor, socket/health и только
 затем включает systemd unit: `sudo ./install_headless.sh /secure/update-public-key.pem <sha256>`.
+В общий self-hosted manifest headless публикуется только при `--payload-schema 1`:
+schema 2 содержит `releasePolicy`, которую этот daemon пока не потребляет.
 
 В составе основного проекта target включается явно:
 
