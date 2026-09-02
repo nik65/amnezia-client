@@ -189,7 +189,7 @@ launch it manually with Qt IFW's unattended arguments and the self-hosted
 handoff marker (Windows may still display its UAC consent prompt):
 
 ```powershell
-& .\dist\selfhosted-windows-client\5.0.1.12\AmneziaVPN_5.0.1.12_windows_x64_selfhosted.exe `
+& .\dist\selfhosted-windows-client\5.0.1.13\AmneziaVPN_5.0.1.13_windows_x64_selfhosted.exe `
   --accept-messages --accept-licenses --confirm-command install AmneziaSelfHostedUpdate=true
 ```
 
@@ -210,13 +210,16 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `5.0.1.12` with Android
-`versionCode` `2160`. The release includes the Linux headless client and the
+The current self-hosted release line is `5.0.1.13` with Android
+`versionCode` `2161`. The release includes the Linux headless client and the
 managed all-except/full-tunnel routing path.
 
-Release notes for `5.0.1.12`: this monotonic correction release supersedes
-`5.0.1.11` because the signed payload changed after the first publication;
-the bundled client refuses same-version content replacement by design. Managed
+Release notes for `5.0.1.13`: this monotonic correction release supersedes
+`5.0.1.12` because the headless updater now schedules its own service restart
+with `systemctl --no-block`, avoiding a self-restart wait deadlock. It also
+supersedes the earlier same-version correction release because the signed
+payload changed after the first publication; the bundled client refuses
+same-version content replacement by design. Managed
 routing publication makes the live
 container ready from the candidate last-known-good state before background DNS
 convergence, preserves deterministic CIDR routes including subnets, ignores

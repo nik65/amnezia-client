@@ -50,7 +50,8 @@ cmake --build build --target amneziad amnezia-cli
 amneziad \
   --socket "$XDG_RUNTIME_DIR/amneziad.sock" \
   --store "$HOME/.local/state/amnezia/profiles.json" \
-  --config-root "$HOME/.config/amnezia/profiles"
+  --config-root "$HOME/.config/amnezia/profiles" \
+  --staging-root "$XDG_RUNTIME_DIR"
 ```
 
 CLI подключается к тому же socket:
@@ -77,6 +78,8 @@ daemon возвращает `backend_unavailable` и не объявляет т�
 Реальные `wg-quick`, OpenVPN и XRay-сессии требуют привилегий Linux. Поэтому устанавливаемый
 unit является **system service**, а не user service. Он запускается как `root:amnezia`, использует
 `/run/amnezia/amneziad.sock` и `/var/lib/amnezia/profiles.json`, а директории ограничены unit-ом.
+Для `all-except` временная VPN-конфигурация создаётся в отдельном writable staging root
+(`/run/amnezia` в установленном unit), потому что `/tmp` может быть закрыт `ProtectSystem`/sandboxing.
 Пакетирование должно создать системную группу и добавить в неё разрешённых операторов:
 
 ```bash

@@ -101,6 +101,15 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
     m_lastError.clear();
     m_candidatePlatform.clear();
 
+    // The previous transaction persisted this receipt before asking systemd
+    // to restart us. Seeing the same version from a newly started daemon is
+    // the post-restart health acknowledgement; keep rollback available.
+    if (m_lastState == QStringLiteral("restart_pending")
+        && !m_lastAppliedVersion.isEmpty() && currentVersion == m_lastAppliedVersion) {
+        m_lastState = QStringLiteral("updated");
+        saveState();
+    }
+
     if (!profile.autoUpdate || profile.updateManifestUrl.isEmpty()
         || profile.updatePublicKeyPath.isEmpty()) {
         m_lastState = QStringLiteral("disabled");
@@ -187,8 +196,10 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
                        error.isEmpty() ? QStringLiteral("headless update installation failed") : error);
     }
     QDir(transaction).removeRecursively();
-    m_lastState = QStringLiteral("applied");
-    m_lastAppliedVersion = candidate.version;
+    if (m_lastState != QStringLiteral("restart_pending")) {
+        m_lastState = QStringLiteral("applied");
+        m_lastAppliedVersion = candidate.version;
+    }
     saveState();
     return { true, QStringLiteral("updated"), QStringLiteral("headless update installed") };
 }
@@ -502,10 +513,31 @@ bool HeadlessUpdateManager::install(const Candidate &candidate,
         if (error) *error = QStringLiteral("headless update receipt cannot be persisted");
         return false;
     }
-    if (!restartService(error)) {
-        restoreRollback(nullptr);
+    m_lastAppliedVersion = candidate.version;
+    m_lastState = QStringLiteral("restart_pending");
+    if (!saveState()) {
+        if (error) *error = QStringLiteral("headless restart receipt cannot be persisted");
+        for (const QString &name : files) {
+            atomicReplace(QDir(rollbackDirectory).filePath(name),
+                          QDir(m_installDirectory).filePath(name), nullptr);
+        }
+        QDir(rollbackDirectory).removeRecursively();
         m_rollbackDirectory.clear();
         m_rollbackVersion.clear();
+        m_lastAppliedVersion.clear();
+        m_lastState = QStringLiteral("update_install_failed");
+        return false;
+    }
+    if (!restartService(error)) {
+        for (const QString &name : files) {
+            atomicReplace(QDir(rollbackDirectory).filePath(name),
+                          QDir(m_installDirectory).filePath(name), nullptr);
+        }
+        QDir(rollbackDirectory).removeRecursively();
+        m_rollbackDirectory.clear();
+        m_rollbackVersion.clear();
+        m_lastAppliedVersion.clear();
+        m_lastState = QStringLiteral("update_install_failed");
         saveState();
         return false;
     }
@@ -515,13 +547,22 @@ bool HeadlessUpdateManager::install(const Candidate &candidate,
 
 bool HeadlessUpdateManager::restartService(QString *error) const
 {
-    const QString systemctl = m_runner->resolveExecutable({ QStringLiteral("systemctl"), QStringLiteral("/usr/bin/systemctl") });
-    if (systemctl.isEmpty()) {
-        if (error) *error = QStringLiteral("systemctl is not installed for headless update restart");
+    const QString systemdRun = m_runner->resolveExecutable(
+            { QStringLiteral("systemd-run"), QStringLiteral("/usr/bin/systemd-run") });
+    const QString systemctl = m_runner->resolveExecutable(
+            { QStringLiteral("systemctl"), QStringLiteral("/usr/bin/systemctl") });
+    if (systemdRun.isEmpty() || systemctl.isEmpty()) {
+        if (error) *error = QStringLiteral("systemd-run/systemctl is not installed for headless update restart");
         return false;
     }
-    if (!m_runner->run(systemctl,
-                       { QStringLiteral("restart"), QString::fromLatin1(UpdateServiceName) }).ok) {
+    const QString unit = QStringLiteral("amnezia-headless-restart-%1")
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    if (!m_runner->startDetached(systemdRun,
+                                  { QStringLiteral("--unit=%1").arg(unit),
+                                    QStringLiteral("--collect"),
+                                    QStringLiteral("--no-block"), systemctl,
+                                    QStringLiteral("restart"),
+                                    QString::fromLatin1(UpdateServiceName) }).ok) {
         if (error) *error = QStringLiteral("headless service restart failed");
         return false;
     }

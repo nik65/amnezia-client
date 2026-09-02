@@ -233,6 +233,36 @@ private slots:
         QCOMPARE(runner->calls.constLast().arguments.at(1), stagedPath);
         QVERIFY(!QFileInfo(QFileInfo(stagedPath).absolutePath()).exists());
     }
+
+    void allExceptReportsUnwritableStagingRootWithoutStartingBackend()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("source.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("[Interface]\nPrivateKey = test\n[Peer]\nAllowedIPs = 10.8.1.0/24\n");
+        config.close();
+        const QString stagingRoot = temporaryDirectory.filePath(QStringLiteral("not-a-directory"));
+        QFile stagingFile(stagingRoot);
+        QVERIFY(stagingFile.open(QIODevice::WriteOnly));
+        stagingFile.close();
+
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->availablePrograms.insert(QStringLiteral("wg-quick"));
+        VpnBackend backend(runner, {}, false, stagingRoot);
+        Profile work = profile(QStringLiteral("work"), QStringLiteral("wireguard"), configPath);
+        work.interfaceName = QStringLiteral("wg0");
+        work.routingMode = QStringLiteral("all-except");
+        work.serverRulesUrl = QStringLiteral("http://10.8.1.253:17864/rules.json");
+
+        const BackendResult result = backend.connect(work);
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("config_invalid"));
+        QVERIFY(result.message.contains(QStringLiteral("staging root")));
+        QVERIFY(runner->calls.isEmpty());
+        QVERIFY(backend.activeProfile().isEmpty());
+    }
 };
 
 QTEST_MAIN(VpnBackendTest)

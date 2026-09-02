@@ -27,6 +27,10 @@ public:
     virtual bool isAvailable(const QString &program) const = 0;
     virtual QString resolveExecutable(const QStringList &candidates) const = 0;
     virtual CommandResult run(const QString &program, const QStringList &arguments) = 0;
+    virtual CommandResult startDetached(const QString &program, const QStringList &arguments)
+    {
+        return run(program, arguments);
+    }
     virtual CommandResult start(const QString &id, const QString &program,
                                 const QStringList &arguments) = 0;
     virtual CommandResult stop(const QString &id) = 0;
@@ -41,6 +45,8 @@ public:
     bool isAvailable(const QString &program) const override;
     QString resolveExecutable(const QStringList &candidates) const override;
     CommandResult run(const QString &program, const QStringList &arguments) override;
+    CommandResult startDetached(const QString &program,
+                                const QStringList &arguments) override;
     CommandResult start(const QString &id, const QString &program,
                         const QStringList &arguments) override;
     CommandResult stop(const QString &id) override;
@@ -62,7 +68,8 @@ class VpnBackend final
 public:
     explicit VpnBackend(std::shared_ptr<CommandRunner> runner = {},
                         QString configRoot = {},
-                        bool requireRootOwnedConfig = false);
+                        bool requireRootOwnedConfig = false,
+                        QString stagingRoot = {});
 
     BackendResult connect(const Profile &profile);
     BackendResult disconnect();
@@ -105,6 +112,7 @@ private:
     std::shared_ptr<CommandRunner> m_runner;
     QString m_configRoot;
     bool m_requireRootOwnedConfig = false;
+    QString m_stagingRoot;
     std::unique_ptr<Session> m_session;
     BackendResult m_lastError;
 };

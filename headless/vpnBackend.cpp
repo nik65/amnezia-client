@@ -90,6 +90,15 @@ CommandResult RealCommandRunner::run(const QString &program, const QStringList &
     return { true, process.exitCode(), {} };
 }
 
+CommandResult RealCommandRunner::startDetached(const QString &program,
+                                               const QStringList &arguments)
+{
+    if (!QProcess::startDetached(program, arguments)) {
+        return { false, -1, QStringLiteral("unable to start detached helper") };
+    }
+    return { true, 0, {} };
+}
+
 CommandResult RealCommandRunner::start(const QString &id, const QString &program,
                                        const QStringList &arguments)
 {
@@ -141,10 +150,12 @@ CommandResult RealCommandRunner::stop(const QString &id)
 
 VpnBackend::VpnBackend(std::shared_ptr<CommandRunner> runner,
                        QString configRoot,
-                       bool requireRootOwnedConfig)
+                       bool requireRootOwnedConfig,
+                       QString stagingRoot)
     : m_runner(runner ? std::move(runner) : std::make_shared<RealCommandRunner>()),
       m_configRoot(std::move(configRoot)),
-      m_requireRootOwnedConfig(requireRootOwnedConfig)
+      m_requireRootOwnedConfig(requireRootOwnedConfig),
+      m_stagingRoot(std::move(stagingRoot))
 {
 }
 
@@ -290,10 +301,12 @@ bool VpnBackend::prepareFullTunnelConfig(const Profile &profile,
         interfaceName = protocol == QStringLiteral("amneziawg")
                 ? QStringLiteral("amn0") : QStringLiteral("wg0");
     }
-    QTemporaryDir temporary(QDir::temp().filePath(
+    const QString stagingRoot = m_stagingRoot.trimmed().isEmpty()
+            ? QDir::tempPath() : m_stagingRoot.trimmed();
+    QTemporaryDir temporary(QDir(stagingRoot).filePath(
             QStringLiteral("amnezia-headless-full-tunnel-XXXXXX")));
     if (!temporary.isValid()) {
-        if (error) *error = QStringLiteral("temporary full-tunnel configuration directory cannot be created");
+        if (error) *error = QStringLiteral("full-tunnel staging root is not writable");
         return false;
     }
     temporary.setAutoRemove(false);

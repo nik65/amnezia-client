@@ -2836,8 +2836,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.1.12)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2160)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.1.13)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2161)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -2846,6 +2846,25 @@ class SourceContractTests(unittest.TestCase):
         )
         self.assertIn(product_version, client_rc)
         self.assertIn(product_version, service_rc)
+
+    def test_headless_update_restart_is_non_blocking(self) -> None:
+        update_manager = (
+            REPO_ROOT / "headless/headlessUpdateManager.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'QStringLiteral("systemd-run")',
+            update_manager,
+        )
+        self.assertIn('startDetached', update_manager)
+        self.assertIn('QStringLiteral("--collect")', update_manager)
+        self.assertIn('QStringLiteral("--no-block")', update_manager)
+        self.assertIn('QStringLiteral("restart_pending")', update_manager)
+        self.assertIn('headless restart receipt cannot be persisted', update_manager)
+        self.assertIn('headless update source is not a regular file', update_manager)
+        self.assertNotIn(
+            '{ QStringLiteral("restart"), QString::fromLatin1(UpdateServiceName) }',
+            update_manager,
+        )
 
     def test_managed_routing_transaction_runs_in_one_remote_shell(self) -> None:
         install_controller = (

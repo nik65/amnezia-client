@@ -74,10 +74,14 @@ int main(int argc, char *argv[])
     QCommandLineOption requireRootOwnedConfigOption(
         QStringLiteral("require-root-owned-config"),
         QStringLiteral("Require root-owned, non-group/world-writable config files"));
+    QCommandLineOption stagingRootOption(
+        QStringLiteral("staging-root"),
+        QStringLiteral("Writable root for staged full-tunnel VPN configs"), QStringLiteral("path"));
     parser.addOption(socketOption);
     parser.addOption(storeOption);
     parser.addOption(configRootOption);
     parser.addOption(requireRootOwnedConfigOption);
+    parser.addOption(stagingRootOption);
     parser.process(application);
 
     const QString socketPath = parser.value(socketOption);
@@ -87,7 +91,9 @@ int main(int argc, char *argv[])
         storePath,
         {},
         parser.value(configRootOption),
-        parser.isSet(requireRootOwnedConfigOption));
+        parser.isSet(requireRootOwnedConfigOption),
+        nullptr,
+        parser.value(stagingRootOption));
     QString error;
     if (!daemon.start(&error)) {
         QTextStream(stderr) << "amneziad: failed to start: " << error << Qt::endl;

@@ -29,7 +29,8 @@ public:
                     std::shared_ptr<CommandRunner> runner = {},
                     QString configRoot = {},
                     bool requireRootOwnedConfig = false,
-                    QObject *parent = nullptr);
+                    QObject *parent = nullptr,
+                    QString stagingRoot = {});
     ~Daemon() override;
 
     bool start(QString *error = nullptr);

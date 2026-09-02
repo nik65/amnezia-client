@@ -14,11 +14,13 @@ Daemon::Daemon(QString socketPath, QString profileStorePath,
                std::shared_ptr<CommandRunner> runner,
                QString configRoot,
                bool requireRootOwnedConfig,
-               QObject *parent)
+               QObject *parent,
+               QString stagingRoot)
     : QObject(parent),
       m_socketPath(socketPath.trimmed().isEmpty() ? defaultSocketPath() : std::move(socketPath)),
       m_profileStore(std::move(profileStorePath)),
-      m_vpnBackend(runner, std::move(configRoot), requireRootOwnedConfig),
+      m_vpnBackend(runner, std::move(configRoot), requireRootOwnedConfig,
+                   std::move(stagingRoot)),
       m_routingController(runner, routeStatePathForStore(m_profileStore.path())),
       m_updateManager(runner, updateStatePathForStore(m_profileStore.path()))
 {
