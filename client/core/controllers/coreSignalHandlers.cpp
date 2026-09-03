@@ -420,7 +420,7 @@ void CoreSignalHandlers::initIosSettingsHandler()
 
 void CoreSignalHandlers::initNotificationHandler()
 {
-#if !defined(Q_OS_IOS)
+#if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
     m_coreController->m_notificationHandler = NotificationHandler::create(m_coreController);
 
     connect(m_coreController->m_connectionController, &ConnectionController::connectionStateChanged, m_coreController->m_notificationHandler,
@@ -471,7 +471,13 @@ void CoreSignalHandlers::initUpdateFoundHandler()
         QTimer::singleShot(5000, m_coreController->m_updateController, &UpdateController::checkForUpdates);
     });
 
-#if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
+#if defined(Q_OS_ANDROID)
+    // Android presents self-hosted updates in the existing QML changelog
+    // drawer.  Do not route this through the desktop news/tray notification
+    // handler (which is intentionally not created on Android).
+    connect(m_coreController->m_updateUiController, &UpdateUiController::updateFound,
+            m_coreController->m_pageController, &PageController::showChangelogDrawer);
+#elif !defined(Q_OS_IOS)
     connect(m_coreController->m_updateUiController, &UpdateUiController::updateFound, this, [this]() {
         const QString version = m_coreController->m_updateUiController->getVersion();
         const QString updateId = version.isEmpty() ? QStringLiteral("update") : QStringLiteral("update-%1").arg(version);

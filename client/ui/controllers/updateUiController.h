@@ -40,7 +40,7 @@ public:
 
 public slots:
     void checkForUpdates();
-    void runInstaller();
+    bool runInstaller();
     bool runPendingRollback();
 
 signals:
@@ -48,6 +48,7 @@ signals:
     void manualUpdateCheckStarted();
     void manualUpdateCheckNoUpdates();
     void manualUpdateCheckFailed(const QString &error);
+    void installerHandoffFailed(const QString &error);
     void checkingChanged();
     void releasePolicyChanged();
     void updateHealthReceiptChanged();

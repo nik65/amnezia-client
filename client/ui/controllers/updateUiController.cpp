@@ -9,6 +9,8 @@ UpdateUiController::UpdateUiController(UpdateController* updateController, QObje
                 this, &UpdateUiController::onUpdateCheckFinished);
         connect(m_updateController, &UpdateController::updateCheckFailed,
                 this, &UpdateUiController::onUpdateCheckFailed);
+        connect(m_updateController, &UpdateController::installerHandoffFailed,
+                this, &UpdateUiController::installerHandoffFailed);
         connect(m_updateController, &UpdateController::releasePolicyChanged,
                 this, &UpdateUiController::releasePolicyChanged);
         connect(m_updateController, &UpdateController::updateHealthReceiptChanged,
@@ -143,11 +145,9 @@ void UpdateUiController::checkForUpdates()
     }
 }
 
-void UpdateUiController::runInstaller()
+bool UpdateUiController::runInstaller()
 {
-    if (m_updateController) {
-        m_updateController->runInstaller();
-    }
+    return m_updateController && m_updateController->runInstaller();
 }
 
 bool UpdateUiController::runPendingRollback()
@@ -176,5 +176,9 @@ void UpdateUiController::onUpdateCheckFailed(const QString &error)
         return;
     }
     m_manualCheckFailed = true;
+    if (m_isChecking) {
+        m_isChecking = false;
+        emit checkingChanged();
+    }
     emit manualUpdateCheckFailed(error);
 }

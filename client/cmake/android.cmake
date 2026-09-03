@@ -98,13 +98,37 @@ find_package(openvpn-pt-android REQUIRED)
 set(LIBS ${LIBS} amnezia::openvpn-pt-android)
 set_property(TARGET ${PROJECT} APPEND PROPERTY QT_ANDROID_EXTRA_LIBS ${OPENVPN_PT_ANDROID_LIBCK_OVPN_PLUGIN_PATH})
 
-set(APP_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/android)
+set(_amnezia_selfhosted_update_sync_host "$ENV{SELFHOSTED_UPDATE_SYNC_HOST}")
+if(_amnezia_selfhosted_update_sync_host STREQUAL "")
+    set(_amnezia_selfhosted_update_sync_host "172.29.172.252")
+endif()
+# The shipped self-hosted update channel is HTTP on the VPN/LAN. Android's
+# cleartext exception must therefore be generated from the exact compiled host,
+# and only private IPv4 literals are permitted. HTTPS/hostname deployments must
+# provide a different transport contract instead of silently broadening
+# cleartext trust.
+if(NOT _amnezia_selfhosted_update_sync_host MATCHES
+       "^(10\\.|127\\.|169\\.254\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.)[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$")
+    message(FATAL_ERROR
+        "SELFHOSTED_UPDATE_SYNC_HOST must be a private IPv4 literal for Android HTTP updates: ${_amnezia_selfhosted_update_sync_host}")
+endif()
+
+# Always package a generated Android resource.  Using the source tree directly
+# leaves the resource stale when a release workstation changes the compiled
+# self-hosted host, which makes a signed manifest reachable from Qt but blocked
+# by Android's network-security policy.
+set(APP_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/android-package-source)
+file(REMOVE_RECURSE ${APP_ANDROID_PACKAGE_SOURCE_DIR})
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/android/ DESTINATION ${APP_ANDROID_PACKAGE_SOURCE_DIR})
+set(_amnezia_network_security_config
+    ${APP_ANDROID_PACKAGE_SOURCE_DIR}/res/xml/network_security_config.xml)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/android/res/xml/network_security_config.xml
+    ${_amnezia_network_security_config}
+    @ONLY
+)
 
 if(APP_ANDROID_MAX_SDK)
-    set(APP_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/android-package-source)
-    file(REMOVE_RECURSE ${APP_ANDROID_PACKAGE_SOURCE_DIR})
-    file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/android/ DESTINATION ${APP_ANDROID_PACKAGE_SOURCE_DIR})
-
     set(manifest_path ${APP_ANDROID_PACKAGE_SOURCE_DIR}/AndroidManifest.xml)
     set(manifest_anchor "android:installLocation=\"auto\">")
     file(READ ${manifest_path} manifest_contents)

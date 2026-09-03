@@ -82,6 +82,25 @@ namespace
     using amnezia::selfhostedUpdatePolicy::RollbackLeaseDisposition;
     using amnezia::selfhostedUpdatePolicy::shouldTryNextManifest;
 
+    bool samePinnedUrl(const QUrl &expected, const QUrl &actual)
+    {
+        if (!expected.isValid() || !actual.isValid()) {
+            return false;
+        }
+        const auto effectivePort = [](const QUrl &url) {
+            if (url.port() >= 0) {
+                return url.port();
+            }
+            return url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0
+                    ? 443 : 80;
+        };
+        return expected.scheme().compare(actual.scheme(), Qt::CaseInsensitive) == 0
+                && expected.host().compare(actual.host(), Qt::CaseInsensitive) == 0
+                && effectivePort(expected) == effectivePort(actual)
+                && expected.path() == actual.path()
+                && expected.query(QUrl::FullyEncoded) == actual.query(QUrl::FullyEncoded);
+    }
+
 #if defined(Q_OS_WINDOWS)
     const QLatin1String kInstallerRemoteFileNamePattern("AmneziaVPN_%1_windows_x64.exe");
 #elif defined(Q_OS_MACOS) && !defined(MACOS_NE)
@@ -559,6 +578,17 @@ UpdateController::UpdateController(SecureAppSettingsRepository* appSettingsRepos
     connect(m_updateCheckTimeoutTimer, &QTimer::timeout, this, [this]() {
         if (m_updateCheckRunning) {
             logger.warning() << "Update check timed out";
+            // Abort every request belonging to this generation before
+            // publishing the terminal signal.  The callbacks are still
+            // allowed to run, but their generation token makes them inert.
+            ++m_updateCheckGeneration;
+            const auto replies = m_updateCheckReplies;
+            m_updateCheckReplies.clear();
+            for (QNetworkReply *reply : replies) {
+                if (reply) {
+                    reply->abort();
+                }
+            }
             finishUpdateCheck(QStringLiteral("update_check_timeout"));
         }
     });
@@ -2628,6 +2658,7 @@ bool UpdateController::checkForUpdates()
         return false;
     }
     m_updateCheckRunning = true;
+    ++m_updateCheckGeneration;
     m_updateFoundDuringCheck = false;
     if (m_updateCheckTimeoutTimer) {
         m_updateCheckTimeoutTimer->start();
@@ -2691,9 +2722,13 @@ void UpdateController::fetchSelfHostedManifestFromUrls(const QList<QUrl> &manife
 
     const QUrl manifestUrl = manifestUrls.at(urlIndex);
     QNetworkRequest request(manifestUrl);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::ManualRedirectPolicy);
     request.setTransferTimeout(kManifestTransferTimeoutMs);
 
     QNetworkReply *reply = amnApp->networkManager()->get(request);
+    const quint64 generation = m_updateCheckGeneration;
+    m_updateCheckReplies.insert(reply);
     auto *manifestData = new QByteArray();
     auto *manifestTooLarge = new bool(false);
     QObject::connect(reply, &QIODevice::readyRead, this, [reply, manifestData, manifestTooLarge]() {
@@ -2714,8 +2749,10 @@ void UpdateController::fetchSelfHostedManifestFromUrls(const QList<QUrl> &manife
         }
     });
     QObject::connect(reply, &QNetworkReply::finished, this,
-                     [this, reply, manifestData, manifestTooLarge, manifestUrls, urlIndex, manifestUrl]() {
-        if (!m_updateCheckRunning) {
+                     [this, reply, manifestData, manifestTooLarge, manifestUrls, urlIndex,
+                      manifestUrl, generation]() {
+        m_updateCheckReplies.remove(reply);
+        if (!m_updateCheckRunning || generation != m_updateCheckGeneration) {
             reply->deleteLater();
             delete manifestData;
             delete manifestTooLarge;
@@ -2728,7 +2765,9 @@ void UpdateController::fetchSelfHostedManifestFromUrls(const QList<QUrl> &manife
         reply->deleteLater();
 
         const bool responseValid = ok && statusCode >= 200 && statusCode < 300
-                && !*manifestTooLarge && data.size() <= kManifestMaxPayloadBytes;
+                && !*manifestTooLarge && data.size() <= kManifestMaxPayloadBytes
+                && samePinnedUrl(manifestUrl, reply->url())
+                && !reply->attribute(QNetworkRequest::RedirectionTargetAttribute).isValid();
         const ManifestProcessResult processResult = responseValid
                 ? processSelfHostedManifest(manifestUrl, data)
                 : ManifestProcessResult::Invalid;
@@ -2764,9 +2803,17 @@ void UpdateController::doGetAsync(const QString &endpoint, std::function<void(bo
     req.setUrl(QUrl(fullUrl));
 
     QNetworkReply *reply = amnApp->networkManager()->get(req);
+    const quint64 generation = m_updateCheckGeneration;
+    m_updateCheckReplies.insert(reply);
     setupNetworkErrorHandling(reply, endpoint);
 
-    QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, endpoint, onDone]() {
+    QObject::connect(reply, &QNetworkReply::finished, this,
+                     [this, reply, endpoint, onDone, generation]() {
+        m_updateCheckReplies.remove(reply);
+        if (!m_updateCheckRunning || generation != m_updateCheckGeneration) {
+            reply->deleteLater();
+            return;
+        }
         const bool ok = (reply->error() == QNetworkReply::NoError);
         QByteArray data;
         if (ok) {
@@ -3795,6 +3842,8 @@ bool UpdateController::startArtifactDownload()
     QNetworkRequest request;
     request.setTransferTimeout(kInstallerTransferTimeoutMs);
     request.setUrl(m_selectedArtifact.url);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::ManualRedirectPolicy);
 
     QNetworkReply *reply = amnApp->networkManager()->get(request);
     auto *totalDeadlineTimer = new QTimer(reply);
@@ -3859,7 +3908,10 @@ bool UpdateController::startArtifactDownload()
             }
         }
         const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        if (reply->error() != QNetworkReply::NoError || statusCode < 200 || statusCode >= 300) {
+        const bool finalUrlPinned = samePinnedUrl(m_selectedArtifact.url, reply->url())
+                && !reply->attribute(QNetworkRequest::RedirectionTargetAttribute).isValid();
+        if (reply->error() != QNetworkReply::NoError || statusCode < 200 || statusCode >= 300
+            || !finalUrlPinned) {
             logger.error() << (*totalDeadlineExceeded
                                        ? "Self-hosted installer hard total deadline exceeded:"
                                        : "Self-hosted installer download failed:")
@@ -4085,6 +4137,7 @@ void UpdateController::finishSelfHostedInstallerAttempt(InstallerHandoffResult r
     m_handoffReceiptPrepared = false;
     m_androidApkInstallPermissionPending = false;
     m_selfHostedInstallInProgress = false;
+    emit installerHandoffFailed(QStringLiteral("installer_handoff_failed"));
     clearPendingAutoInstallAttempt();
     clearInstallSelection();
 }

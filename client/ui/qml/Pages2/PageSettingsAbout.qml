@@ -28,6 +28,10 @@ PageType {
         function onManualUpdateCheckFailed(error) {
             PageController.showErrorMessage(qsTr("Unable to check for updates"))
         }
+
+        function onInstallerHandoffFailed(error) {
+            PageController.showErrorMessage(qsTr("Unable to start the update installer"))
+        }
     }
 
     BackButtonType {

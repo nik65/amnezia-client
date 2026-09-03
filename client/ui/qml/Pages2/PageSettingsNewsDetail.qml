@@ -90,9 +90,13 @@ PageType {
                     if (!root.isUpdateItem)
                         return
                     PageController.showBusyIndicator(true)
-                    UpdateController.runInstaller()
+                    var started = UpdateController.runInstaller()
                     PageController.showBusyIndicator(false)
-                    PageController.closePage()
+                    if (started) {
+                        PageController.closePage()
+                    } else {
+                        PageController.showErrorMessage(qsTr("Unable to start the update installer"))
+                    }
                 }
             }
 

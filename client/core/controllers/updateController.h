@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QJsonObject>
 #include <QNetworkReply>
+#include <QSet>
 #include <QUrl>
 #include <QVariantMap>
 
@@ -57,6 +58,7 @@ signals:
     void updateFound();
     void updateCheckFinished(bool updateAvailable);
     void updateCheckFailed(const QString &error);
+    void installerHandoffFailed(const QString &error);
     void releasePolicyChanged();
     void updateHealthReceiptChanged();
     void rollbackAvailabilityChanged();
@@ -250,6 +252,8 @@ private:
     bool m_useSelfHostedArtifact = false;
     bool m_updateCheckRunning = false;
     bool m_updateFoundDuringCheck = false;
+    quint64 m_updateCheckGeneration = 0;
+    QSet<QNetworkReply*> m_updateCheckReplies;
     QTimer *m_updateCheckTimeoutTimer = nullptr;
     bool m_selfHostedInstallInProgress = false;
     bool m_androidApkInstallPermissionPending = false;

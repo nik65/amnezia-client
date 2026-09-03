@@ -71,9 +71,13 @@ DrawerType2 {
 
             clickedFunc: function() {
                 PageController.showBusyIndicator(true)
-                UpdateController.runInstaller()
+                var started = UpdateController.runInstaller()
                 PageController.showBusyIndicator(false)
-                root.closeTriggered()
+                if (started) {
+                    root.closeTriggered()
+                } else {
+                    PageController.showErrorMessage(qsTr("Unable to start the update installer"))
+                }
             }
         }
 

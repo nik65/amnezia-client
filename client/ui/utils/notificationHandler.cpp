@@ -7,7 +7,7 @@
 
 #if defined(Q_OS_IOS)
 #  include "platforms/ios/iosnotificationhandler.h"
-#else
+#elif !defined(Q_OS_ANDROID)
 #  include "systemTrayNotificationHandler.h"
 #endif
 
@@ -16,8 +16,13 @@
 NotificationHandler* NotificationHandler::create(QObject* parent) {
 #if defined(Q_OS_IOS)
     return new IOSNotificationHandler(parent);
-#else
+#elif !defined(Q_OS_ANDROID)
     return new SystemTrayNotificationHandler(parent);
+#else
+    Q_UNUSED(parent);
+    // Android has its own notification/Activity integration.  The desktop
+    // tray implementation must never be instantiated on Android.
+    return nullptr;
 #endif
 }
 

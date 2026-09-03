@@ -7,6 +7,8 @@
 #include <QDeadlineTimer>
 #include <QDataStream>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
 #include <QIODevice>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -15,6 +17,7 @@
 #include <QRandomGenerator>
 #include <QSharedPointer>
 #include <QSet>
+#include <QStandardPaths>
 #include <QThread>
 #include <QWaitCondition>
 
@@ -448,14 +451,38 @@ namespace {
 #if defined(Q_OS_ANDROID)
     QString androidSettingsFilePath()
     {
-        QString directory = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
-        if (directory.isEmpty()) {
-            directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        // Do not construct QSettings with an empty filename.  On Android the
+        // NativeFormat fallback can resolve to a read-only/invalid location
+        // and reports AccessError only when a durable value is written.  Pick
+        // an app-private directory that is proven writable before constructing
+        // the settings object.
+        const QStringList candidates {
+            QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation),
+            QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation),
+            QStandardPaths::writableLocation(QStandardPaths::AppDataLocation),
+            QStandardPaths::writableLocation(QStandardPaths::TempLocation)
+        };
+        for (const QString &candidate : candidates) {
+            const QString directory = QDir::cleanPath(candidate);
+            if (directory.isEmpty() || !QDir().mkpath(directory)) {
+                continue;
+            }
+            const QString probePath = QDir(directory).filePath(
+                    QStringLiteral(".amnezia-settings-write-probe"));
+            QFile probe(probePath);
+            if (!probe.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                continue;
+            }
+            const bool probeOk = probe.write("ok", 2) == 2 && probe.flush();
+            probe.close();
+            (void)QFile::remove(probePath);
+            if (probeOk) {
+                return QDir(directory).filePath(QStringLiteral("settings.ini"));
+            }
         }
-        if (directory.isEmpty() || !QDir().mkpath(directory)) {
-            return {};
-        }
-        return QDir(directory).filePath(QStringLiteral("settings.ini"));
+        qCritical() << "SecureQSettings: no writable app-private Android settings directory";
+        return QDir(QDir::tempPath()).filePath(
+                QStringLiteral("amnezia-settings-unavailable.ini"));
     }
 #endif
 }
@@ -475,6 +502,13 @@ SecureQSettings::SecureQSettings(const QString &organization, const QString &app
       m_accessMode(accessMode)
 {
 #if defined(Q_OS_ANDROID)
+    // Some Android filesystems do not support QSettings' temporary rename
+    // used for atomic sync even though direct writes to the app-private file
+    // are valid. The path was already proven writable above; disable only the
+    // failing rename requirement, while retaining the explicit sync/readback
+    // checks for every durable updater value.
+    m_settings.setAtomicSyncRequired(false);
+    m_settings.setFallbacksEnabled(false);
     // Preserve values from an older APK when the new private file has not
     // been created yet. A failed legacy read is ignored; new writes remain
     // fail-closed through the normal sync/status check below.
