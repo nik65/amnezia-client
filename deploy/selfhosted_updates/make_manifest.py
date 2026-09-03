@@ -197,9 +197,7 @@ def is_android_platform(platform: object) -> bool:
 
 
 def is_headless_platform(platform: object) -> bool:
-    return isinstance(platform, str) and (
-        platform == "linux-headless" or platform.startswith("linux-headless-")
-    )
+    return isinstance(platform, str) and platform in {"linux-headless", "linux-headless-x64"}
 
 
 def validate_platform_vocabulary(platform: object, context: str) -> None:
@@ -1189,7 +1187,11 @@ def main() -> int:
     if any(is_headless_platform(platform) for platform in artifact_platforms):
         base = urlparse(base_url)
         try:
-            ipaddress.ip_address(base.hostname or "")
+            address = ipaddress.ip_address(base.hostname or "")
+            if base.scheme == "http" and not (
+                address.is_private or address.is_loopback or address.is_link_local
+            ):
+                raise ValueError
             if base.port is not None and not 1 <= base.port <= 65535:
                 raise ValueError
         except ValueError as error:
@@ -1357,6 +1359,10 @@ def main() -> int:
         platform, url = value.split("=", 1)
         platform = platform.strip()
         validate_platform_vocabulary(platform, "--external")
+        if is_headless_platform(platform):
+            raise SystemExit(
+                "Linux headless artifacts must be local --artifact entries; --external is unsupported"
+            )
         add_platform(platform, {
             "url": validate_external_url(platform, url),
             "openExternal": True,

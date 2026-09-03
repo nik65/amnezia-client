@@ -210,8 +210,10 @@ ServerRoutingPolicyResult ServerRoutingPolicy::resolve(
     for (const QString &domain : std::as_const(policy.unresolvedSites)) {
         const int remaining = deadlineMs - static_cast<int>(elapsed.elapsed());
         if (remaining < MinimumLookupTimeoutMs) {
-            return failure(QStringLiteral("managed_dns_timeout"),
-                           QStringLiteral("managed DNS resolution deadline exceeded"));
+            // Availability-first policy: unresolved names are deliberately
+            // omitted from the bypass set (fail closed), while direct CIDRs
+            // and previous server-provided fallbacks remain usable.
+            break;
         }
 
         QHostInfo result;
@@ -230,12 +232,10 @@ ServerRoutingPolicyResult ServerRoutingPolicy::resolve(
         loop.exec();
         if (!completed) {
             QHostInfo::abortHostLookup(lookupId);
-            return failure(QStringLiteral("managed_dns_timeout"),
-                           QStringLiteral("managed DNS resolution deadline exceeded"));
+            break;
         }
         if (result.error() != QHostInfo::NoError) {
-            return failure(QStringLiteral("managed_dns_unresolved"),
-                           QStringLiteral("a managed site could not be resolved"));
+            continue;
         }
 
         QStringList addresses;
@@ -253,8 +253,7 @@ ServerRoutingPolicyResult ServerRoutingPolicy::resolve(
             }
         }
         if (addresses.isEmpty()) {
-            return failure(QStringLiteral("managed_dns_unresolved"),
-                           QStringLiteral("a managed site has no allowed IPv4 address"));
+            continue;
         }
         policy.resolvedSites.insert(domain, addresses.join(QStringLiteral(", ")));
         policy.routes.append(addresses);
@@ -269,7 +268,6 @@ ServerRoutingPolicyResult ServerRoutingPolicy::resolve(
     }
     policy.routes.removeDuplicates();
     policy.routes.sort();
-    policy.unresolvedSites.clear();
     return { true, {}, {}, std::move(policy) };
 }
 

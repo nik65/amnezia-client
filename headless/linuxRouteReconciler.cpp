@@ -635,7 +635,13 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
             }
         } else if (previousInterface != interfaceName && !previousInterface.isEmpty()) {
             for (const QStringList &route : fullRoutes) {
-                if (!tableRoutes.contains(fullRoutePrefix(route))) continue;
+                const QString prefix = fullRoutePrefix(route);
+                if (!tableRoutes.contains(prefix)) {
+                    QStringList deletion = route;
+                    deletion.replace(deletion.indexOf(QStringLiteral("replace")), QStringLiteral("del"));
+                    ok = removeFullTunnelRoute(deletion) && ok;
+                    continue;
+                }
                 QStringList restore = route;
                 restore.replace(restore.indexOf(interfaceName), previousInterface);
                 ok = addFullTunnelRoute(restore) && ok;
@@ -1072,6 +1078,10 @@ RouteReconcileResult LinuxRouteReconciler::configureDns(const QString &interface
 
 RouteReconcileResult LinuxRouteReconciler::clearDns(const QString &interfaceName)
 {
+    if (!m_stateValid) {
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("managed route state is invalid; refusing DNS cleanup mutation"));
+    }
     if (!m_stateValid || m_mode == QStringLiteral("recovery_required")) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("managed DNS state is invalid; refusing to mutate resolver state"));
@@ -1161,8 +1171,18 @@ RouteReconcileResult LinuxRouteReconciler::clear()
         return failure(QStringLiteral("route_backend_unavailable"),
                        QStringLiteral("the Linux ip command is not installed"));
     }
+    const QString previousInterface = m_interfaceName;
+    const QStringList previousRoutes = m_routes;
+    const QString previousMode = m_mode;
+    const QStringList previousBypassRoutes = m_bypassRoutes;
+    QStringList removedRoutes;
     QString failedRoute;
-    if (!removeRoutes(m_interfaceName, m_routes, &failedRoute)) {
+    if (!removeRoutes(previousInterface, previousRoutes, &failedRoute, &removedRoutes)) {
+        if (!restoreRoutes(previousInterface, removedRoutes)) {
+            markRecoveryRequired(QStringLiteral("managed route cleanup rollback failed"));
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("managed route cleanup failed and removed routes could not be restored"));
+        }
         return failure(QStringLiteral("route_remove_failed"),
                        QStringLiteral("failed to clear a managed route"));
     }
@@ -1171,8 +1191,14 @@ RouteReconcileResult LinuxRouteReconciler::clear()
     m_mode = QStringLiteral("only-forward");
     m_bypassRoutes.clear();
     if (!saveState()) {
-        m_stateValid = false;
-        m_mode = QStringLiteral("recovery_required");
+        const bool restored = restoreRoutes(previousInterface, previousRoutes);
+        m_interfaceName = previousInterface;
+        m_routes = previousRoutes;
+        m_mode = previousMode;
+        m_bypassRoutes = previousBypassRoutes;
+        markRecoveryRequired(restored
+                                 ? QStringLiteral("managed route cleanup state save failed after host rollback")
+                                 : QStringLiteral("managed route cleanup state save and host rollback failed"));
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("managed route state could not be cleared"));
     }
@@ -1211,7 +1237,24 @@ bool LinuxRouteReconciler::markRecoveryRequired(const QString &message)
     m_stateValid = false;
     m_mode = QStringLiteral("recovery_required");
     m_lastError = message;
-    return saveState();
+    const bool saved = saveState();
+    const QString markerPath = m_statePath.isEmpty() ? QString() : m_statePath + QStringLiteral(".recovery-required");
+    if (saved) {
+        if (!markerPath.isEmpty()) QFile::remove(markerPath);
+        return true;
+    }
+    // Keep an independent, tiny marker when the JSON receipt cannot be
+    // replaced. On the next start this marker is enough to keep the daemon
+    // fail-closed instead of trusting an older receipt.
+    if (markerPath.isEmpty()) return false;
+    QSaveFile marker(markerPath);
+    if (!marker.open(QIODevice::WriteOnly)
+        || marker.write(message.toUtf8()) < 0
+        || !marker.commit()) {
+        return false;
+    }
+    QFile::setPermissions(markerPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    return false;
 }
 
 QString LinuxRouteReconciler::ipExecutable() const
@@ -1243,7 +1286,22 @@ bool LinuxRouteReconciler::loadState()
         return true;
     }
     const QFileInfo stateInfo(m_statePath);
+    if (QFileInfo::exists(m_statePath + QStringLiteral(".recovery-required"))) {
+        return false;
+    }
     if (!stateInfo.exists()) {
+        // A missing receipt is not proof that the kernel is clean. Probe the
+        // owned table/rules before allowing a fresh daemon to mutate routes;
+        // a crash between kernel mutation and receipt commit must fail closed.
+        if (!ipExecutable().isEmpty()) {
+            const RuleSnapshot snapshot = readRuleSnapshot();
+            if (!snapshot.valid) return false;
+            if (!snapshot.tableLines.isEmpty()
+                || !snapshot.ownedFull.isEmpty()
+                || !snapshot.ownedBypass.isEmpty()) {
+                return false;
+            }
+        }
         return true;
     }
     if (stateInfo.isSymLink() || !stateInfo.isFile()) {
@@ -1383,6 +1441,36 @@ bool LinuxRouteReconciler::loadState()
     }
     m_bypassRulePriority = storedBypassPriority;
     m_fullRulePriority = storedFullPriority;
+    // A receipt is not the only startup evidence.  If a previous crash left
+    // policy objects in the reserved namespace while the persisted mode says
+    // only-forward, do not let the daemon listen and later overwrite them.
+    // Conversely, a foreign/ambiguous object in the reserved table or rule
+    // priorities must never be treated as an orphan owned by this process.
+    if (!ipExecutable().isEmpty()) {
+        const RuleSnapshot snapshot = readRuleSnapshot();
+        if (!snapshot.valid) return false;
+        if (mode == QStringLiteral("only-forward")
+            && (!snapshot.tableLines.isEmpty()
+                || !snapshot.ownedFull.isEmpty()
+                || !snapshot.ownedBypass.isEmpty())) {
+            return false;
+        }
+        if (mode == QStringLiteral("all-except")) {
+            const QRegularExpression ownedTableRoute(
+                    QStringLiteral("^\\s*(0\\.0\\.0\\.0/1|128\\.0\\.0\\.0/1|::/1|8000::/1)\\s+dev\\s+%1\\s+proto\\s+%2(?:\\s|$)")
+                        .arg(QRegularExpression::escape(interfaceName))
+                        .arg(AmneziaRouteProtocol));
+            for (const QString &line : snapshot.tableLines) {
+                if (!ownedTableRoute.match(line).hasMatch()) return false;
+            }
+            if ((snapshot.occupied.contains(storedBypassPriority)
+                 && !snapshot.ownedBypass.contains(storedBypassPriority))
+                || (snapshot.occupied.contains(storedFullPriority)
+                    && !snapshot.ownedFull.contains(storedFullPriority))) {
+                return false;
+            }
+        }
+    }
     return true;
 }
 

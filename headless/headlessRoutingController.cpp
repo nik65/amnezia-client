@@ -352,10 +352,9 @@ RoutingResult HeadlessRoutingController::connect(const Profile &profile)
     const bool allExcept = profile.routingMode == QStringLiteral("all-except");
     const QString protocol = profile.protocol.trimmed().toLower();
     if (allExcept && (protocol == QStringLiteral("xray")
-                      || protocol == QStringLiteral("ssxray")
-                      || protocol == QStringLiteral("openvpn"))) {
+                      || protocol == QStringLiteral("ssxray"))) {
         return failure(QStringLiteral("routing_mode_unsupported"),
-                       QStringLiteral("all-except is fail-closed for proxy/OpenVPN profiles until endpoint route ownership is proven"));
+                       QStringLiteral("all-except requires a native VPN interface; XRay proxy mode is not a full tunnel"));
     }
     if (allExcept && profile.serverRulesUrl.isEmpty()) {
         return failure(QStringLiteral("server_policy_required"),

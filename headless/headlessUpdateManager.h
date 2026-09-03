@@ -71,6 +71,8 @@ private:
     bool verifyTrustedKey(const QString &configuredPath, QString *error) const;
     bool verifyInstallFile(const QString &path, QString *error) const;
     bool verifyManagedInstallFile(const QString &name, QString *error) const;
+    bool verifyManagedInstalledFile(const QString &name, const QString &expectedSha256,
+                                    qint64 expectedSize, QString *error) const;
     bool verifyRollbackFile(const QString &path, const QString &expectedSha256,
                             QString *error) const;
     bool verifyInstalledFile(const QString &path, const QString &expectedSha256,

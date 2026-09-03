@@ -17,7 +17,8 @@ if [[ "$(id -u)" -ne 0 ]]; then
     echo "run this provisioning step as root" >&2
     exit 2
 fi
-for required in systemctl systemd-run getent tar ip ldd sha256sum openssl python3 dpkg-query dpkg; do
+for required in systemctl systemd-run getent tar ip ldd sha256sum openssl python3 dpkg-query dpkg \
+    groupadd install chown chmod mktemp grep awk; do
     if ! command -v "$required" >/dev/null 2>&1; then
         echo "required runtime command is missing: $required" >&2
         exit 3
@@ -30,8 +31,20 @@ for candidate in /etc/systemd/system/amneziad.service /lib/systemd/system/amnezi
         break
     fi
 done
-if [[ "$MODE" == "fresh" && -n "$EXISTING_SERVICE" ]]; then
-    echo "amneziad.service already exists; pass 'upgrade' explicitly" >&2
+EXISTING_COMPONENTS=0
+for candidate in /usr/local/bin/amneziad /usr/local/bin/amnezia-cli \
+    /etc/systemd/system/amneziad.service /lib/systemd/system/amneziad.service \
+    /etc/amnezia/update-public-key.pem; do
+    if [[ -e "$candidate" || -L "$candidate" ]]; then
+        EXISTING_COMPONENTS=$((EXISTING_COMPONENTS + 1))
+    fi
+done
+if [[ "$MODE" == "fresh" && "$EXISTING_COMPONENTS" -ne 0 ]]; then
+    echo "a partial or complete installation already exists; pass 'upgrade' explicitly" >&2
+    exit 4
+fi
+if [[ "$MODE" == "upgrade" && "$EXISTING_COMPONENTS" -eq 0 ]]; then
+    echo "upgrade requested but no existing installation identity was found; use 'fresh'" >&2
     exit 4
 fi
 if [[ ! -f "$PACKAGE_ROOT/SHA256SUMS" ]] || ! (cd "$PACKAGE_ROOT" && sha256sum --strict --check SHA256SUMS); then
@@ -58,14 +71,25 @@ if ! { grep -q '"schema":1' "$PACKAGE_ROOT/package-manifest.json" \
     && grep -q '"platform":"linux-headless-x64"' "$PACKAGE_ROOT/package-manifest.json" \
     && grep -q '"installMode":"fresh-or-upgrade"' "$PACKAGE_ROOT/package-manifest.json" \
     && grep -q '"distribution":"ubuntu"' "$PACKAGE_ROOT/runtime-dependencies.json" \
-    && grep -q '"architectures":\["amd64"\]' "$PACKAGE_ROOT/runtime-dependencies.json" \
-    && grep -q '"amneziad"' "$PACKAGE_ROOT/package-manifest.json" \
-    && grep -q '"amnezia-cli"' "$PACKAGE_ROOT/package-manifest.json"; }; then
+     && grep -q '"architectures":\["amd64"\]' "$PACKAGE_ROOT/runtime-dependencies.json" \
+     && grep -q '"amneziad"' "$PACKAGE_ROOT/package-manifest.json" \
+     && grep -q '"amnezia-cli"' "$PACKAGE_ROOT/package-manifest.json" \
+     && grep -q '"amneziad.service"' "$PACKAGE_ROOT/package-manifest.json"; }; then
     echo "provisioning package manifest is invalid" >&2
     exit 3
 fi
 if [[ "$(dpkg --print-architecture)" != "amd64" ]]; then
     echo "headless provisioning bundle is only supported on amd64 Ubuntu" >&2
+    exit 3
+fi
+if [[ ! -r /etc/os-release ]]; then
+    echo "Ubuntu release metadata is unavailable" >&2
+    exit 3
+fi
+. /etc/os-release
+if [[ "${ID:-}" != "ubuntu" || ! "${VERSION_ID:-}" =~ ^[0-9]+\.[0-9]+$ \
+    || "${VERSION_ID%%.*}" -lt 22 ]]; then
+    echo "headless provisioning requires Ubuntu 22.04 or newer on amd64" >&2
     exit 3
 fi
 if ! python3 - "$PACKAGE_ROOT/runtime-dependencies.json" <<'PY'
@@ -115,18 +139,30 @@ fi
 
 BACKUP_DIR=""
 SERVICE_WAS_ACTIVE=0
+SERVICE_WAS_ENABLED=unknown
+SERVICE_WAS_MASKED=0
 INSTALL_OK=0
+BACKUP_DIR="$(mktemp -d /var/lib/amnezia-headless-transaction.XXXXXX)"
 if [[ "$MODE" == "upgrade" ]]; then
-    BACKUP_DIR="$(mktemp -d /var/lib/amnezia-headless-upgrade.XXXXXX)"
-    for item in /usr/local/bin/amneziad /usr/local/bin/amnezia-cli \
-        /etc/systemd/system/amneziad.service /etc/amnezia/update-public-key.pem; do
-        name="$(basename "$item")"
-        if [[ -e "$item" || -L "$item" ]]; then
-            cp -a -- "$item" "$BACKUP_DIR/$name"
-        else
-            touch "$BACKUP_DIR/.missing-$name"
+    SERVICE_WAS_ENABLED="$(systemctl is-enabled amneziad.service 2>/dev/null || true)"
+    if [[ "$SERVICE_WAS_ENABLED" == "masked" ]]; then
+        SERVICE_WAS_MASKED=1
+        if ! systemctl unmask amneziad.service; then
+            echo "masked amneziad.service could not be prepared for upgrade" >&2
+            exit 4
         fi
-    done
+    fi
+fi
+for item in /usr/local/bin/amneziad /usr/local/bin/amnezia-cli \
+    /etc/systemd/system/amneziad.service /etc/amnezia/update-public-key.pem; do
+    name="$(basename "$item")"
+    if [[ -e "$item" || -L "$item" ]]; then
+        cp -a -- "$item" "$BACKUP_DIR/$name"
+    else
+        touch "$BACKUP_DIR/.missing-$name"
+    fi
+done
+if [[ "$MODE" == "upgrade" ]]; then
     if systemctl is-active --quiet amneziad.service; then
         SERVICE_WAS_ACTIVE=1
         systemctl stop amneziad.service
@@ -134,8 +170,9 @@ if [[ "$MODE" == "upgrade" ]]; then
 fi
 
 rollback_upgrade() {
-    if [[ "$MODE" != "upgrade" || "$INSTALL_OK" -eq 1 ]]; then return 0; fi
+    if [[ "$INSTALL_OK" -eq 1 ]]; then return 0; fi
     set +e
+    local rollback_ok=1
     systemctl stop amneziad.service >/dev/null 2>&1
     for pair in \
         "/usr/local/bin/amneziad amneziad" \
@@ -145,15 +182,38 @@ rollback_upgrade() {
         target="${pair% *}"
         name="${pair#* }"
         if [[ -f "$BACKUP_DIR/.missing-$name" ]]; then
-            rm -f -- "$target"
+            rm -f -- "$target" || rollback_ok=0
         elif [[ -e "$BACKUP_DIR/$name" ]]; then
-            install -D -m 0644 "$BACKUP_DIR/$name" "$target"
-            if [[ "$target" == /usr/local/bin/* ]]; then chmod 0755 "$target"; fi
+            install -D -m 0644 "$BACKUP_DIR/$name" "$target" || rollback_ok=0
+            if [[ "$target" == /usr/local/bin/* ]]; then chmod 0755 "$target" || rollback_ok=0; fi
         fi
     done
-    systemctl daemon-reload >/dev/null 2>&1
+    systemctl daemon-reload >/dev/null 2>&1 || rollback_ok=0
+    if [[ "$MODE" == "upgrade" ]]; then
+        if [[ "$SERVICE_WAS_MASKED" -eq 1 ]]; then
+            systemctl mask amneziad.service >/dev/null 2>&1 || rollback_ok=0
+        elif [[ "$SERVICE_WAS_ENABLED" == "enabled" ]]; then
+            systemctl enable amneziad.service >/dev/null 2>&1 || rollback_ok=0
+        else
+            systemctl disable amneziad.service >/dev/null 2>&1 || rollback_ok=0
+        fi
+    fi
     if [[ "$SERVICE_WAS_ACTIVE" -eq 1 ]]; then
-        systemctl start amneziad.service >/dev/null 2>&1
+        systemctl start amneziad.service >/dev/null 2>&1 || rollback_ok=0
+    else
+        systemctl stop amneziad.service >/dev/null 2>&1 || rollback_ok=0
+    fi
+    if [[ "$rollback_ok" -eq 1 ]] && systemctl is-active --quiet amneziad.service 2>/dev/null; then
+        :
+    elif [[ "$SERVICE_WAS_ACTIVE" -eq 1 ]]; then
+        rollback_ok=0
+    fi
+    if [[ "$rollback_ok" -ne 1 ]]; then
+        install -d -m 0750 /var/lib/amnezia
+        printf '%s\n' "rollback failed; manual recovery is required" > /var/lib/amnezia/headless-recovery-required
+        chmod 0600 /var/lib/amnezia/headless-recovery-required
+        echo "headless upgrade rollback failed; manual recovery is required" >&2
+        exit 5
     fi
     echo "headless upgrade failed; previous installation was restored" >&2
 }

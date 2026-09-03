@@ -175,6 +175,28 @@ bool checkableUpdateState(const QString &state)
         || state == QStringLiteral("rollback_restart_pending");
 }
 
+bool hasExactManagedFileSet(const QJsonObject &object)
+{
+    if (object.size() != managedPayloadFiles().size()) {
+        return false;
+    }
+    for (const QString &name : managedPayloadFiles()) {
+        if (!object.contains(name)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool hasExactManagedHashMap(const QMap<QString, QString> &hashes)
+{
+    if (hashes.size() != managedPayloadFiles().size()) {
+        return false;
+    }
+    return std::all_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+                       [&hashes](const QString &name) { return hashes.contains(name); });
+}
+
 } // namespace
 
 HeadlessUpdateManager::HeadlessUpdateManager(std::shared_ptr<CommandRunner> runner,
@@ -243,10 +265,11 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
     if (m_lastState == QStringLiteral("restart_pending")
         && !m_lastAppliedVersion.isEmpty() && currentVersion == m_lastAppliedVersion) {
         QString healthError;
-        if (!verifyInstallFile(QDir(m_installDirectory).filePath(QStringLiteral("amneziad")), &healthError)
-            || !verifyInstallFile(QDir(m_installDirectory).filePath(QStringLiteral("amnezia-cli")), &healthError)) {
-            return failure(QStringLiteral("recovery_required"),
-                           QStringLiteral("updated headless binaries failed post-restart health validation"));
+        for (const QString &name : managedPayloadFiles()) {
+            if (!verifyManagedInstallFile(name, &healthError)) {
+                return failure(QStringLiteral("recovery_required"),
+                               QStringLiteral("updated headless managed files failed post-restart health validation"));
+            }
         }
         m_lastState = QStringLiteral("updated");
         QJsonObject journal;
@@ -261,15 +284,15 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
         journal = journalDocument.object();
         const QJsonObject candidateHashes = journal.value(QStringLiteral("candidateHashes")).toObject();
         const QJsonObject candidateSizes = journal.value(QStringLiteral("candidateSizes")).toObject();
-        if (!candidateHashes.contains(QStringLiteral("amneziad"))
-            || !candidateHashes.contains(QStringLiteral("amnezia-cli"))) {
+        if (!hasExactManagedFileSet(candidateHashes)
+            || !hasExactManagedFileSet(candidateSizes)) {
             return failure(QStringLiteral("recovery_required"),
                            QStringLiteral("headless update journal has no candidate binary hashes"));
         }
-        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+        for (const QString &name : managedPayloadFiles()) {
             qint64 candidateSize = -1;
             if (!jsonInteger(candidateSizes.value(name), 1, MaximumArtifactBytes, candidateSize)
-                || !verifyInstalledFile(QDir(m_installDirectory).filePath(name),
+                || !verifyManagedInstalledFile(name,
                                          candidateHashes.value(name).toString(),
                                          candidateSize, &healthError)) {
                 return failure(QStringLiteral("recovery_required"),
@@ -291,7 +314,18 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
             return failure(QStringLiteral("recovery_required"),
                            receiptError.isEmpty()
                                ? QStringLiteral("headless rollback receipt could not be persisted")
-                               : receiptError);
+                                : receiptError);
+        }
+        const QString transactionDirectory = journal.value(QStringLiteral("transactionDirectory")).toString();
+        const QString updateRootPath = QFileInfo(m_updateRoot).canonicalFilePath();
+        const QString transactionPath = QFileInfo(transactionDirectory).canonicalFilePath();
+        if (transactionPath.isEmpty()
+            || updateRootPath.isEmpty()
+            || !transactionPath.startsWith(updateRootPath + QDir::separator())
+            || transactionPath == updateRootPath
+            || !QFileInfo(transactionPath).isDir()) {
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("headless update transaction evidence has an unsafe path"));
         }
         // The rollback receipt is in the state file and is independently
         // hash-bound to the installation.  Retire the active transaction
@@ -300,18 +334,27 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
         // in-flight transaction.  If removal loses a crash race, loadState()
         // accepts the acknowledged phase and the next check retries it.
         if (!m_journalPath.isEmpty() && QFileInfo::exists(m_journalPath)) {
-            QFile::remove(m_journalPath);
+            if (!QFile::remove(m_journalPath)) {
+                return failure(QStringLiteral("recovery_required"),
+                               QStringLiteral("headless update acknowledgement journal could not be retired"));
+            }
+        }
+        // Retire the bounded transaction tree only after the acknowledgement,
+        // rollback receipt, and journal are durable.  A crash before this
+        // point leaves harmless evidence; a missing tree is already retired.
+        if (QFileInfo::exists(transactionPath) && !QDir(transactionPath).removeRecursively()) {
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("headless update transaction evidence could not be retired"));
         }
     }
     if (m_lastState == QStringLiteral("rollback_restart_pending")
         && !m_rollbackVersion.isEmpty() && currentVersion == m_rollbackVersion) {
         QString healthError;
-        if (!verifyInstalledFile(QDir(m_installDirectory).filePath(QStringLiteral("amneziad")),
-                                 m_rollbackHashes.value(QStringLiteral("amneziad")), -1, &healthError)
-            || !verifyInstalledFile(QDir(m_installDirectory).filePath(QStringLiteral("amnezia-cli")),
-                                    m_rollbackHashes.value(QStringLiteral("amnezia-cli")), -1, &healthError)) {
-            return failure(QStringLiteral("recovery_required"),
-                           QStringLiteral("rolled-back headless binaries failed post-restart health validation"));
+        for (const QString &name : managedPayloadFiles()) {
+            if (!verifyManagedInstalledFile(name, m_rollbackHashes.value(name), -1, &healthError)) {
+                return failure(QStringLiteral("recovery_required"),
+                               QStringLiteral("rolled-back headless managed files failed post-restart health validation"));
+            }
         }
         QFile rollbackJournalFile(m_journalPath);
         QJsonParseError rollbackJournalError;
@@ -532,9 +575,9 @@ HeadlessUpdateResult HeadlessUpdateManager::rollback()
     if ((!m_stateValid || m_lastState == QStringLiteral("recovery_required"))
         && (m_rollbackDirectory.isEmpty()
             || !validVersion(m_rollbackVersion)
-            || m_rollbackHashes.size() != 2
-            || !m_rollbackHashes.contains(QStringLiteral("amneziad"))
-            || !m_rollbackHashes.contains(QStringLiteral("amnezia-cli")))) {
+            || m_rollbackHashes.size() != managedPayloadFiles().size()
+            || std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+                           [this](const QString &name) { return !m_rollbackHashes.contains(name); })) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("headless update state is invalid; manual recovery is required"));
     }
@@ -546,11 +589,12 @@ HeadlessUpdateResult HeadlessUpdateManager::rollback()
     m_lastError.clear();
     QString error;
     if (m_lastState == QStringLiteral("rollback_restart_pending")) {
-        const bool rollbackAlreadyInstalled =
-                verifyInstalledFile(QDir(m_installDirectory).filePath(QStringLiteral("amneziad")),
-                                    m_rollbackHashes.value(QStringLiteral("amneziad")), -1, nullptr)
-                && verifyInstalledFile(QDir(m_installDirectory).filePath(QStringLiteral("amnezia-cli")),
-                                       m_rollbackHashes.value(QStringLiteral("amnezia-cli")), -1, nullptr);
+        bool rollbackAlreadyInstalled = true;
+        for (const QString &name : managedPayloadFiles()) {
+            rollbackAlreadyInstalled = verifyManagedInstalledFile(name,
+                                                                    m_rollbackHashes.value(name), -1, nullptr)
+                    && rollbackAlreadyInstalled;
+        }
         if (rollbackAlreadyInstalled) {
             if (!restartService(&error)) {
                 m_lastState = QStringLiteral("rollback_failed");
@@ -576,7 +620,10 @@ HeadlessUpdateResult HeadlessUpdateManager::rollback()
                        error.isEmpty() ? QStringLiteral("headless rollback failed") : error);
     }
     m_lastState = QStringLiteral("rollback_restart_pending");
-    m_lastAppliedVersion.clear();
+    // The restored version is the currently installed version.  Keeping it in
+    // the receipt makes a successful rollback stable across the next daemon
+    // restart and avoids manufacturing a recovery error from an empty version.
+    m_lastAppliedVersion = m_rollbackVersion;
     if (!saveState()) {
         m_stateValid = false;
         m_lastState = QStringLiteral("recovery_required");
@@ -910,7 +957,7 @@ bool HeadlessUpdateManager::install(const Candidate &candidate,
                                     const QString &currentVersion,
                                     QString *error)
 {
-    const QStringList files { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") };
+    const QStringList files = managedPayloadFiles();
     const QFileInfo installInfo(m_installDirectory);
     if (!installInfo.isDir() || installInfo.isSymLink()) {
         if (error) *error = QStringLiteral("headless install directory is not a safe directory");
@@ -946,8 +993,8 @@ bool HeadlessUpdateManager::install(const Candidate &candidate,
         }
         candidateHashes.insert(name, candidateDigest);
         candidateSizes.insert(name, QJsonValue(sourceInfo.size()));
-        const QString destination = QDir(m_installDirectory).filePath(name);
-        if (!verifyInstallFile(destination, error)
+        const QString destination = managedInstallPath(name);
+        if (!verifyManagedInstallFile(name, error)
             || !QFile::copy(destination, QDir(rollbackDirectory).filePath(name))) {
             QDir(rollbackDirectory).removeRecursively();
             if (error) *error = QStringLiteral("existing headless binary cannot be backed up");
@@ -974,14 +1021,14 @@ bool HeadlessUpdateManager::install(const Candidate &candidate,
     QStringList replaced;
     for (const QString &name : files) {
         const QString source = QDir(payloadDirectory).filePath(name);
-        const QString destination = QDir(m_installDirectory).filePath(name);
+        const QString destination = managedInstallPath(name);
         bool destinationRemoved = false;
         if (!atomicReplace(source, destination, error, &destinationRemoved)) {
             if (destinationRemoved && !replaced.contains(name)) replaced.append(name);
             QString rollbackError;
             for (const QString &restored : replaced) {
                 if (!atomicReplace(QDir(rollbackDirectory).filePath(restored),
-                                   QDir(m_installDirectory).filePath(restored), &rollbackError)) {
+                                   managedInstallPath(restored), &rollbackError)) {
                     const QString message = QStringLiteral("headless update failed and rollback also failed; recovery is required");
                     if (error) *error = message;
                     m_lastState = QStringLiteral("recovery_required");
@@ -1055,6 +1102,10 @@ bool HeadlessUpdateManager::restartService(QString *error) const
         if (error) *error = QStringLiteral("systemd-run/systemctl is not installed for headless update restart");
         return false;
     }
+    if (!m_runner->run(systemctl, { QStringLiteral("daemon-reload") }).ok) {
+        if (error) *error = QStringLiteral("headless service daemon-reload failed");
+        return false;
+    }
     const QString unit = QStringLiteral("amnezia-headless-restart-%1")
             .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     if (!m_runner->startDetached(systemdRun,
@@ -1075,7 +1126,7 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
         if (error) *error = QStringLiteral("no rollback directory is recorded");
         return false;
     }
-    const QStringList files { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") };
+    const QStringList files = managedPayloadFiles();
     // Validate the complete backup pair before touching the installation.
     for (const QString &name : files) {
         const QString backup = QDir(m_rollbackDirectory).filePath(name);
@@ -1146,8 +1197,8 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
             receiptHashes.insert(it.key(), it.value());
         }
         journalObject.insert(QStringLiteral("rollbackHashes"), receiptHashes);
-        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
-            const QString path = QDir(m_installDirectory).filePath(name);
+        for (const QString &name : managedPayloadFiles()) {
+            const QString path = managedInstallPath(name);
             currentHashes.insert(name, sha256ForFile(path));
             currentSizes.insert(name, QJsonValue(QFileInfo(path).size()));
         }
@@ -1168,10 +1219,10 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
             && journalPhase != QStringLiteral("acknowledged"))
         || journalInstall != canonicalInstall
         || journalRollback != canonicalRollback
-        || journalRollbackHashes.value(QStringLiteral("amneziad")).toString()
-               != m_rollbackHashes.value(QStringLiteral("amneziad"))
-        || journalRollbackHashes.value(QStringLiteral("amnezia-cli")).toString()
-               != m_rollbackHashes.value(QStringLiteral("amnezia-cli"))
+         || std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+                        [&journalRollbackHashes, this](const QString &name) {
+             return journalRollbackHashes.value(name).toString() != m_rollbackHashes.value(name);
+         })
         || !validVersion(journalObject.value(QStringLiteral("candidateVersion")).toString())
         || !validVersion(journalObject.value(QStringLiteral("currentVersion")).toString())
         || journalObject.value(QStringLiteral("currentVersion")).toString() != m_rollbackVersion) {
@@ -1212,7 +1263,7 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
         QJsonObject previousHashes;
         QJsonObject previousSizes;
         for (const QString &name : files) {
-            const QString current = QDir(m_installDirectory).filePath(name);
+            const QString current = managedInstallPath(name);
             if (!verifyInstallFile(current, error)
                 || !QFile::copy(current, QDir(currentDirectory).filePath(name))) {
                 QDir(currentDirectory).removeRecursively();
@@ -1245,7 +1296,7 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
                     QStringLiteral(".%1.restore-%2").arg(name,
                         QUuid::createUuid().toString(QUuid::WithoutBraces)));
             ok = QFile::copy(QDir(currentDirectory).filePath(name), staged) && ok;
-            ok = atomicReplace(staged, QDir(m_installDirectory).filePath(name), nullptr) && ok;
+            ok = atomicReplace(staged, managedInstallPath(name), nullptr) && ok;
         }
         return ok;
     };
@@ -1256,7 +1307,7 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
                     QUuid::createUuid().toString(QUuid::WithoutBraces)));
         bool destinationRemoved = false;
         if (!QFile::copy(backup, staged)
-            || !atomicReplace(staged, QDir(m_installDirectory).filePath(name), error,
+            || !atomicReplace(staged, managedInstallPath(name), error,
                               &destinationRemoved)) {
             if (destinationRemoved && !replaced.contains(name)) replaced.append(name);
             if (error && error->isEmpty()) *error = QStringLiteral("rollback binary could not be staged");
@@ -1271,7 +1322,10 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
                 // mixed installation unrecoverable.
                 return false;
             }
-            journalObject.insert(QStringLiteral("phase"), QStringLiteral("acknowledged"));
+            // The installed pair was restored, but rollback did not commit.
+            // Keep a valid transaction phase so the next explicit rollback
+            // can stage fresh current-pair evidence and retry safely.
+            journalObject.insert(QStringLiteral("phase"), QStringLiteral("replaced"));
             QString receiptError;
             if (!writeJournal(journalObject, &receiptError)) {
                 m_lastState = QStringLiteral("recovery_required");
@@ -1293,7 +1347,7 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
             saveState();
             return false;
         }
-        journalObject.insert(QStringLiteral("phase"), QStringLiteral("acknowledged"));
+        journalObject.insert(QStringLiteral("phase"), QStringLiteral("replaced"));
         QString receiptError;
         if (!writeJournal(journalObject, &receiptError)) {
             m_lastState = QStringLiteral("recovery_required");
@@ -1314,13 +1368,13 @@ bool HeadlessUpdateManager::restoreCurrentPair(QString *error)
         return false;
     }
     bool ok = true;
-    for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+    for (const QString &name : managedPayloadFiles()) {
         const QString backup = QDir(m_currentRollbackDirectory).filePath(name);
         const QString staged = QDir(m_currentRollbackDirectory).filePath(
                 QStringLiteral(".%1.restore-%2").arg(name,
                     QUuid::createUuid().toString(QUuid::WithoutBraces)));
         ok = QFile::copy(backup, staged) && ok;
-        ok = atomicReplace(staged, QDir(m_installDirectory).filePath(name), error) && ok;
+        ok = atomicReplace(staged, managedInstallPath(name), error) && ok;
     }
     if (ok && !QDir(m_currentRollbackDirectory).removeRecursively()) ok = false;
     if (ok) m_currentRollbackDirectory.clear();
@@ -1467,10 +1521,7 @@ bool HeadlessUpdateManager::loadState()
     }
     const QJsonObject rollbackHashes = object.value(QStringLiteral("rollbackHashes")).isObject()
             ? object.value(QStringLiteral("rollbackHashes")).toObject() : QJsonObject();
-    if (rollbackHashes.size() > 0
-        && (rollbackHashes.size() != 2
-            || !rollbackHashes.contains(QStringLiteral("amneziad"))
-            || !rollbackHashes.contains(QStringLiteral("amnezia-cli")))) {
+        if (!rollbackHashes.isEmpty() && !hasExactManagedFileSet(rollbackHashes)) {
         m_stateValid = false;
         m_lastState = QStringLiteral("recovery_required");
         m_lastError = QStringLiteral("headless rollback hash receipt contains an unexpected file");
@@ -1505,14 +1556,13 @@ bool HeadlessUpdateManager::loadState()
             m_lastError = QStringLiteral("headless rollback receipt is outside the trusted update root");
             return false;
         }
-        if (!m_rollbackHashes.contains(QStringLiteral("amneziad"))
-            || !m_rollbackHashes.contains(QStringLiteral("amnezia-cli"))) {
+        if (!hasExactManagedHashMap(m_rollbackHashes)) {
             m_stateValid = false;
             m_lastState = QStringLiteral("recovery_required");
             m_lastError = QStringLiteral("headless rollback receipt is incomplete");
             return false;
         }
-        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+        for (const QString &name : managedPayloadFiles()) {
             if (!verifyRollbackFile(QDir(m_rollbackDirectory).filePath(name),
                                     m_rollbackHashes.value(name), nullptr)) {
                 m_stateValid = false;
@@ -1634,7 +1684,13 @@ bool HeadlessUpdateManager::loadState()
         }
         const QJsonObject candidateHashes = journalObject.value(QStringLiteral("candidateHashes")).toObject();
         const QJsonObject candidateSizes = journalObject.value(QStringLiteral("candidateSizes")).toObject();
-        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+        if (!hasExactManagedFileSet(candidateHashes) || !hasExactManagedFileSet(candidateSizes)) {
+            m_stateValid = false;
+            m_lastState = QStringLiteral("recovery_required");
+            m_lastError = QStringLiteral("headless transaction journal managed-file receipt is incomplete");
+            return false;
+        }
+        for (const QString &name : managedPayloadFiles()) {
             qint64 candidateSize = -1;
             if (!candidateHashes.value(name).isString()
                 || !validSha256(candidateHashes.value(name).toString())
@@ -1659,9 +1715,9 @@ bool HeadlessUpdateManager::loadState()
                 m_lastError = QStringLiteral("acknowledged journal candidate does not match state");
                 return false;
             }
-            for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+            for (const QString &name : managedPayloadFiles()) {
                 qint64 candidateSize = -1;
-                if (!verifyInstalledFile(QDir(m_installDirectory).filePath(name),
+                if (!verifyManagedInstalledFile(name,
                                          candidateHashes.value(name).toString(),
                                          jsonInteger(candidateSizes.value(name), 1, MaximumArtifactBytes,
                                                      candidateSize) ? candidateSize : -1, nullptr)) {
@@ -1695,11 +1751,12 @@ bool HeadlessUpdateManager::loadState()
         }
         const QString stateRollbackCanonical = QFileInfo(m_rollbackDirectory).canonicalFilePath();
         const QJsonObject journalRollbackHashes = journalObject.value(QStringLiteral("rollbackHashes")).toObject();
-        if (journalRollbackHashes.size() != 2
-            || !journalRollbackHashes.value(QStringLiteral("amneziad")).isString()
-            || !journalRollbackHashes.value(QStringLiteral("amnezia-cli")).isString()
-            || !validSha256(journalRollbackHashes.value(QStringLiteral("amneziad")).toString())
-            || !validSha256(journalRollbackHashes.value(QStringLiteral("amnezia-cli")).toString())) {
+        if (!hasExactManagedFileSet(journalRollbackHashes)
+            || std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+                           [&journalRollbackHashes](const QString &name) {
+                return !journalRollbackHashes.value(name).isString()
+                    || !validSha256(journalRollbackHashes.value(name).toString());
+            })) {
             m_stateValid = false;
             m_lastState = QStringLiteral("recovery_required");
             m_lastError = QStringLiteral("headless transaction journal rollback hash receipt is invalid");
@@ -1707,19 +1764,21 @@ bool HeadlessUpdateManager::loadState()
         }
         if (!m_rollbackDirectory.isEmpty()
             && (journalRollbackCanonical.isEmpty() || stateRollbackCanonical != journalRollbackCanonical
-                || m_rollbackVersion != journalCurrent
-                || journalRollbackHashes.value(QStringLiteral("amneziad")).toString()
-                       != m_rollbackHashes.value(QStringLiteral("amneziad"))
-                || journalRollbackHashes.value(QStringLiteral("amnezia-cli")).toString()
-                       != m_rollbackHashes.value(QStringLiteral("amnezia-cli")))) {
+             || m_rollbackVersion != journalCurrent
+             || std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+                            [&journalRollbackHashes, this](const QString &name) {
+                 return journalRollbackHashes.value(name).toString() != m_rollbackHashes.value(name);
+             })) {
             m_stateValid = false;
             m_lastState = QStringLiteral("recovery_required");
             m_lastError = QStringLiteral("headless rollback receipt is not bound to its transaction journal");
             return false;
         }
         if (adoptingJournalRollback && phase != QStringLiteral("acknowledged")
-            && phase != QStringLiteral("restart_pending")
-            && phase != QStringLiteral("rollback_restart_pending")) {
+             && phase != QStringLiteral("restart_pending")
+             && phase != QStringLiteral("rollback_restart_pending")
+             && phase != QStringLiteral("replaced")
+             && phase != QStringLiteral("prepared")) {
             m_stateValid = false;
             m_lastState = QStringLiteral("recovery_required");
             m_lastError = QStringLiteral("unbound journal rollback evidence cannot be adopted");
@@ -1727,10 +1786,11 @@ bool HeadlessUpdateManager::loadState()
         }
         if ((phase == QStringLiteral("restart_pending")
              || phase == QStringLiteral("rollback_restart_pending")
-             || phase == QStringLiteral("acknowledged"))
+             || phase == QStringLiteral("acknowledged")
+             || phase == QStringLiteral("replaced")
+             || phase == QStringLiteral("prepared"))
             && (m_rollbackDirectory.isEmpty() || !validVersion(m_rollbackVersion)
-                || !m_rollbackHashes.contains(QStringLiteral("amneziad"))
-                || !m_rollbackHashes.contains(QStringLiteral("amnezia-cli")))) {
+                || !hasExactManagedHashMap(m_rollbackHashes))) {
             m_stateValid = false;
             m_lastState = QStringLiteral("recovery_required");
             m_lastError = QStringLiteral("headless transaction journal has incomplete rollback evidence");
@@ -1742,10 +1802,11 @@ bool HeadlessUpdateManager::loadState()
             if (canonicalPrevious.isEmpty()
                 || !canonicalPrevious.startsWith(canonicalUpdateRoot + QDir::separator())
                 || !QFileInfo(canonicalPrevious).isDir()
-                || !verifyRollbackFile(QDir(canonicalPrevious).filePath(QStringLiteral("amneziad")),
-                                       candidateHashes.value(QStringLiteral("amneziad")).toString(), nullptr)
-                || !verifyRollbackFile(QDir(canonicalPrevious).filePath(QStringLiteral("amnezia-cli")),
-                                       candidateHashes.value(QStringLiteral("amnezia-cli")).toString(), nullptr)) {
+                 || std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+                                [this, &canonicalPrevious, &candidateHashes](const QString &name) {
+                     return !verifyRollbackFile(QDir(canonicalPrevious).filePath(name),
+                                                candidateHashes.value(name).toString(), nullptr);
+                 })) {
                 m_stateValid = false;
                 m_lastState = QStringLiteral("recovery_required");
                 m_lastError = QStringLiteral("rollback current-pair evidence is invalid");
@@ -1756,10 +1817,11 @@ bool HeadlessUpdateManager::loadState()
         if ((phase == QStringLiteral("restart_pending")
              || phase == QStringLiteral("rollback_restart_pending")
              || phase == QStringLiteral("acknowledged"))
-            && (!verifyRollbackFile(QDir(m_rollbackDirectory).filePath(QStringLiteral("amneziad")),
-                                    m_rollbackHashes.value(QStringLiteral("amneziad")), nullptr)
-                || !verifyRollbackFile(QDir(m_rollbackDirectory).filePath(QStringLiteral("amnezia-cli")),
-                                       m_rollbackHashes.value(QStringLiteral("amnezia-cli")), nullptr))) {
+             && std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+                            [this](const QString &name) {
+                 return !verifyRollbackFile(QDir(m_rollbackDirectory).filePath(name),
+                                            m_rollbackHashes.value(name), nullptr);
+             })) {
             m_stateValid = false;
             m_lastState = QStringLiteral("recovery_required");
             m_lastError = QStringLiteral("headless transaction journal rollback evidence is unsafe");
@@ -1772,13 +1834,13 @@ bool HeadlessUpdateManager::loadState()
             const QString previousPath = QFileInfo(previousDirectory).canonicalFilePath();
             if (previousPath.isEmpty() || rootPath.isEmpty()
                 || !previousPath.startsWith(rootPath + QDir::separator())
-                || previousHashes.size() != 2) {
+            || !hasExactManagedFileSet(previousHashes)) {
                 m_stateValid = false;
                 m_lastState = QStringLiteral("recovery_required");
                 m_lastError = QStringLiteral("rollback restart current-pair receipt is invalid");
                 return false;
             }
-            for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+            for (const QString &name : managedPayloadFiles()) {
                 if (!previousHashes.value(name).isString()
                     || !validSha256(previousHashes.value(name).toString())
                     || !verifyRollbackFile(QDir(previousPath).filePath(name),
@@ -1910,8 +1972,7 @@ bool HeadlessUpdateManager::writeRollbackReceipt(QString *error) const
 {
     if (m_rollbackReceiptPath.isEmpty()) return true;
     if (m_rollbackDirectory.isEmpty() || !validVersion(m_rollbackVersion)
-        || !m_rollbackHashes.contains(QStringLiteral("amneziad"))
-        || !m_rollbackHashes.contains(QStringLiteral("amnezia-cli"))) {
+        || !hasExactManagedHashMap(m_rollbackHashes)) {
         if (error) *error = QStringLiteral("rollback receipt is incomplete");
         return false;
     }
@@ -1994,14 +2055,14 @@ bool HeadlessUpdateManager::loadRollbackReceipt()
             return false;
         }
         const QJsonObject stateHashes = receipt.value(QStringLiteral("rollbackHashes")).toObject();
-        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+        for (const QString &name : managedPayloadFiles()) {
             if (m_rollbackHashes.value(name) != stateHashes.value(name).toString()) return false;
         }
     }
     QMap<QString, QString> hashes;
     const QJsonObject hashObject = receipt.value(QStringLiteral("rollbackHashes")).toObject();
-    if (hashObject.size() != 2) return false;
-    for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+    if (!hasExactManagedFileSet(hashObject)) return false;
+    for (const QString &name : managedPayloadFiles()) {
         if (!hashObject.value(name).isString() || !validSha256(hashObject.value(name).toString())
             || !verifyRollbackFile(QDir(canonical).filePath(name),
                                    hashObject.value(name).toString(), nullptr)) {
@@ -2065,18 +2126,6 @@ bool HeadlessUpdateManager::verifyInstallFile(const QString &path, QString *erro
 QString HeadlessUpdateManager::managedInstallPath(const QString &name) const
 {
     if (!managedPayloadFiles().contains(name)) return {};
-    if (name == QStringLiteral("amneziad") || name == QStringLiteral("amnezia-cli")) {
-        return QDir(m_installDirectory).filePath(name);
-    }
-    const QString installRoot = QDir::cleanPath(QFileInfo(m_installDirectory).absoluteFilePath());
-    if (installRoot == QStringLiteral("/usr/local/bin")) {
-        if (name == QStringLiteral("amneziad.service")) {
-            return QStringLiteral("/etc/systemd/system/amneziad.service");
-        }
-        return QDir(QStringLiteral("/usr/local/libexec/amnezia")).filePath(name);
-    }
-    // Unit tests and relocatable developer installs remain contained under
-    // the explicitly supplied installation directory.
     return QDir(m_installDirectory).filePath(name);
 }
 
@@ -2087,23 +2136,22 @@ bool HeadlessUpdateManager::verifyManagedInstallFile(const QString &name, QStrin
         if (error) *error = QStringLiteral("headless managed install file name is invalid");
         return false;
     }
-    if (name == QStringLiteral("amneziad") || name == QStringLiteral("amnezia-cli")) {
-        return verifyInstallFile(path, error);
-    }
-    const QFileInfo info(path);
-    if (!info.isFile() || info.isSymLink()
-        || QDir::cleanPath(info.absoluteFilePath()) != QDir::cleanPath(path)) {
-        if (error) *error = QStringLiteral("headless managed install file is missing or unsafe");
+    return verifyInstallFile(path, error);
+}
+
+bool HeadlessUpdateManager::verifyManagedInstalledFile(const QString &name,
+                                                       const QString &expectedSha256,
+                                                       qint64 expectedSize,
+                                                       QString *error) const
+{
+    const QString path = managedInstallPath(name);
+    if (!verifyManagedInstallFile(name, error)
+        || !validSha256(expectedSha256)
+        || sha256ForFile(path) != expectedSha256
+        || (expectedSize >= 0 && QFileInfo(path).size() != expectedSize)) {
+        if (error) *error = QStringLiteral("installed headless managed file failed exact hash or size verification");
         return false;
     }
-#ifndef Q_OS_WIN
-    if (m_requireRootOwnedFiles
-        && (info.ownerId() != 0
-            || (info.permissions() & (QFileDevice::WriteGroup | QFileDevice::WriteOther)) != 0)) {
-        if (error) *error = QStringLiteral("headless managed install file ownership is invalid");
-        return false;
-    }
-#endif
     return true;
 }
 
@@ -2351,13 +2399,20 @@ bool HeadlessUpdateManager::atomicReplace(const QString &source,
         return false;
     }
 #else
-    if (!QFile::remove(destination)) {
+    const bool hadDestination = QFileInfo::exists(destination);
+    if (hadDestination && !QFile::remove(destination)) {
         QFile::remove(temporary);
         if (error) *error = QStringLiteral("headless update destination cannot be removed");
         return false;
     }
-    if (destinationRemoved) *destinationRemoved = true;
+    if (destinationRemoved) *destinationRemoved = hadDestination;
     if (!QFile::rename(temporary, destination)) {
+        // The destination may already have been removed.  Preserve a best
+        // effort recovery copy so a failed replacement cannot turn a missing
+        // managed file into an unrecoverable gap without evidence.
+        if (!QFileInfo::exists(destination)) {
+            QFile::copy(temporary, destination);
+        }
         QFile::remove(temporary);
         if (error) *error = QStringLiteral("headless update binary cannot be replaced");
         return false;

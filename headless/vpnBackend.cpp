@@ -9,6 +9,8 @@
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QStandardPaths>
+#include <QElapsedTimer>
+#include <QThread>
 
 #include <utility>
 
@@ -268,19 +270,42 @@ BackendResult VpnBackend::connect(const Profile &profile)
         return failure(QStringLiteral("backend_failed"), message);
     }
 
+    const QString interfaceName = profile.interfaceName.isEmpty()
+            ? (protocol == QStringLiteral("wireguard") ? QStringLiteral("wg0")
+               : protocol == QStringLiteral("amneziawg") ? QStringLiteral("amn0")
+               : protocol == QStringLiteral("openvpn") ? QStringLiteral("tun0") : QString())
+            : profile.interfaceName;
     m_session = std::make_unique<Session>(Session {
         profile.id,
         protocol,
         effectiveConfigPath,
         temporaryConfigDirectory,
         executable,
-        profile.interfaceName.isEmpty()
-            ? (protocol == QStringLiteral("wireguard") ? QStringLiteral("wg0")
-               : protocol == QStringLiteral("amneziawg") ? QStringLiteral("amn0")
-               : protocol == QStringLiteral("openvpn") ? QStringLiteral("tun0") : QString())
-            : profile.interfaceName,
+        interfaceName,
         longRunning ? SessionKind::LongRunning : SessionKind::OneShot,
     });
+    if (profile.routingMode == QStringLiteral("all-except")
+        && protocol == QStringLiteral("openvpn")) {
+        const QString ip = m_runner->resolveExecutable({ QStringLiteral("ip"),
+                                                          QStringLiteral("/usr/sbin/ip"),
+                                                          QStringLiteral("/sbin/ip") });
+        QElapsedTimer timer;
+        timer.start();
+        bool ready = false;
+        while (!ip.isEmpty() && timer.elapsed() < 5000) {
+            ready = m_runner->runCaptured(ip, { QStringLiteral("link"), QStringLiteral("show"),
+                                                QStringLiteral("dev"), interfaceName }).ok;
+            if (ready) break;
+            QThread::msleep(100);
+        }
+        if (!ready) {
+            m_runner->stop(profile.id);
+            if (!temporaryConfigDirectory.isEmpty()) QDir(temporaryConfigDirectory).removeRecursively();
+            m_session.reset();
+            return failure(QStringLiteral("backend_not_ready"),
+                           QStringLiteral("OpenVPN did not create its native interface in time"));
+        }
+    }
     return { true, {}, {} };
 }
 

@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Create a signed manifest for the native Ubuntu headless artifact."""
+"""Create a signed manifest for the native Ubuntu headless artifacts.
+
+The standalone helper is retained for compatibility, but a provisioning
+bundle should always be supplied so the signed manifest binds the service unit
+and installer to the published release.
+"""
 
 from __future__ import annotations
 
 import argparse
 import base64
 import hashlib
+import ipaddress
 import json
 import shutil
 import sys
@@ -25,8 +31,17 @@ def version(value: str) -> str:
 
 def base_url(value: str) -> str:
     parsed = urlparse(value.rstrip("/"))
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
-        raise argparse.ArgumentTypeError("base URL must be an http(s) URL without credentials")
+    if (parsed.scheme not in {"http", "https"} or not parsed.netloc
+        or not parsed.hostname or parsed.username or parsed.password
+        or parsed.query or parsed.fragment):
+        raise argparse.ArgumentTypeError("base URL must be an http(s) URL without credentials/query/fragment")
+    try:
+        ipaddress.ip_address(parsed.hostname)
+        port = parsed.port
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("headless base URL must use a literal IP and valid TCP port") from error
+    if port is not None and not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("headless base URL port must be from 1 to 65535")
     return value.rstrip("/")
 
 
@@ -36,6 +51,8 @@ def main() -> int:
     parser.add_argument("--base-url", required=True, type=base_url)
     parser.add_argument("--private-key", required=True, type=Path)
     parser.add_argument("--artifact", required=True, type=Path)
+    parser.add_argument("--provisioning", type=Path,
+                        help="signed provisioning bundle for the same release")
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--auto-install", action="store_true")
     args = parser.parse_args()
@@ -46,6 +63,9 @@ def main() -> int:
     private_key = args.private_key.expanduser().resolve()
     if not private_key.is_file():
         parser.error(f"private key does not exist: {private_key}")
+    provisioning = args.provisioning.expanduser().resolve() if args.provisioning else None
+    if provisioning is not None and not provisioning.is_file():
+        parser.error(f"provisioning bundle does not exist: {provisioning}")
 
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
     out_dir = args.out_dir.expanduser().resolve()
@@ -72,6 +92,20 @@ def main() -> int:
         "schema": 1,
         "version": args.version,
     }
+    if provisioning is not None:
+        provisioning_digest = hashlib.sha256(provisioning.read_bytes()).hexdigest()
+        provisioning_target = out_dir / "files" / "artifacts" / provisioning_digest / provisioning.name
+        provisioning_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(provisioning, provisioning_target)
+        payload["headlessProvisioning"] = {
+            "format": "amnezia-headless-provisioning-tar-v1",
+            "sha256": provisioning_digest,
+            "size": provisioning_target.stat().st_size,
+            "url": f"files/artifacts/{provisioning_digest}/{quote(provisioning_target.name, safe='')}",
+            "version": args.version,
+        }
+    else:
+        print("warning: no --provisioning bundle supplied; use local_release.ps1 for a complete release", file=sys.stderr)
     payload_bytes = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     signature = base64.b64decode(sign_payload(private_key, payload_bytes))
     manifest = {

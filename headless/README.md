@@ -191,7 +191,13 @@ containment, отсутствие symlink, root ownership и запрет group/
 который должен быть VPN-internal и содержаться в `forwardRoutes` (например, текущий ServerX
 `10.8.1.253:17864` при `10.8.1.0/24`). Внешний/plain HTTP, reserved hostnames и unsafe
 private endpoint отвергаются до сетевого запроса; redirects запрещены. Full-tunnel staging
-добавляет `Table = off`, чтобы только reconciler владел таблицей `51821` и его правилами.
+  добавляет `Table = off`, чтобы только reconciler владел таблицей `51821` и его правилами.
+  Таблица `51821`, route protocol `186` и диапазон приоритетов `1000..1999` являются
+  зарезервированным namespace этого reconciler-а. Другой процесс с `root` или
+  `CAP_NET_ADMIN` может создать неотличимые kernel objects; поэтому marker без
+  валидного receipt не удаляется и не перенимается, а daemon останавливается с
+  `recovery_required`. Это граница доверия host/network namespace, а не изоляция
+  от привилегированного администратора.
 
 ## Безопасность разработки
 

@@ -851,7 +851,8 @@ $requiredArtifactNames = @{
     "android-arm64-v8a" = "AmneziaVPN_${Version}_android9+_arm64-v8a.apk"
     "linux-headless-x64" = "AmneziaHeadless_${Version}_linux_x64.tar.gz"
 }
-if (($BuildPlatform -contains "headless") -and ($RequirePlatform -notcontains "linux-headless-x64")) {
+$headlessRequested = ($BuildPlatform -contains "headless") -or ($RequirePlatform -contains "linux-headless-x64")
+if ($headlessRequested -and ($RequirePlatform -notcontains "linux-headless-x64")) {
     $RequirePlatform += "linux-headless-x64"
 }
 $manifestArgs = @(
@@ -868,7 +869,7 @@ $manifestArgs = @(
     "--cohort-salt-id", $CohortSaltId,
     "--health-deadline-seconds", [string] $HealthDeadlineSeconds
 )
-if ($BuildPlatform -contains "headless") {
+if ($headlessRequested) {
     $provisioningPath = Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64_provisioning.tar.gz"
     Assert-ExistingFile $provisioningPath "Linux headless provisioning bundle"
     $manifestArgs += @("--headless-provisioning", $provisioningPath)

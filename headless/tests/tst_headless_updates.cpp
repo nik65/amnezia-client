@@ -6,6 +6,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QCryptographicHash>
+#include <QStringList>
 
 #include "headlessUpdateManager.h"
 
@@ -74,7 +75,9 @@ private slots:
     {
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
-        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+        const QStringList managedFiles { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli"),
+                                         QStringLiteral("amneziad.service") };
+        for (const QString &name : managedFiles) {
             QFile binary(temporaryDirectory.filePath(name));
             QVERIFY(binary.open(QIODevice::WriteOnly));
             QVERIFY(binary.write("test") > 0);
@@ -91,7 +94,7 @@ private slots:
                 QByteArrayLiteral("old"), QCryptographicHash::Sha256).toHex());
         const QString candidateDigest = QString::fromLatin1(QCryptographicHash::hash(
                 QByteArrayLiteral("test"), QCryptographicHash::Sha256).toHex());
-        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+        for (const QString &name : managedFiles) {
             QFile backup(QDir(rollback).filePath(name));
             QVERIFY(backup.open(QIODevice::WriteOnly));
             QVERIFY(backup.write("old") > 0);
@@ -123,16 +126,19 @@ private slots:
             { QStringLiteral("rollbackDirectory"), rollback },
             { QStringLiteral("currentVersion"), QStringLiteral("5.0.1.6") },
             { QStringLiteral("rollbackHashes"), QJsonObject {
-                { QStringLiteral("amneziad"), digest },
-                { QStringLiteral("amnezia-cli"), digest },
+                 { QStringLiteral("amneziad"), digest },
+                 { QStringLiteral("amnezia-cli"), digest },
+                 { QStringLiteral("amneziad.service"), digest },
             } },
             { QStringLiteral("candidateHashes"), QJsonObject {
-                { QStringLiteral("amneziad"), candidateDigest },
-                { QStringLiteral("amnezia-cli"), candidateDigest },
+                 { QStringLiteral("amneziad"), candidateDigest },
+                 { QStringLiteral("amnezia-cli"), candidateDigest },
+                 { QStringLiteral("amneziad.service"), candidateDigest },
             } },
             { QStringLiteral("candidateSizes"), QJsonObject {
-                { QStringLiteral("amneziad"), 4 },
-                { QStringLiteral("amnezia-cli"), 4 },
+                 { QStringLiteral("amneziad"), 4 },
+                 { QStringLiteral("amnezia-cli"), 4 },
+                 { QStringLiteral("amneziad.service"), 4 },
             } },
         }).toJson(QJsonDocument::Compact)) > 0);
         journal.close();
@@ -143,6 +149,7 @@ private slots:
         QVERIFY(result.ok);
         QCOMPARE(result.code, QStringLiteral("disabled"));
         QVERIFY(!QFileInfo::exists(QDir(updates).filePath(QStringLiteral("transaction.json"))));
+        QVERIFY(!QFileInfo::exists(transaction));
         QVERIFY(QFileInfo::exists(QDir(updates).filePath(QStringLiteral("rollback-receipt.json"))));
         QCOMPARE(manager.status().value(QStringLiteral("state")).toString(),
                  QStringLiteral("disabled"));

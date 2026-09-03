@@ -2886,6 +2886,27 @@ class SourceContractTests(unittest.TestCase):
             update_manager,
         )
 
+    def test_headless_update_archive_has_two_managed_files_and_provisioning_is_separate(self) -> None:
+        update_manager = (REPO_ROOT / "headless/headlessUpdateManager.cpp").read_text(encoding="utf-8")
+        build_script = (REPO_ROOT / "deploy/headless/build_headless_release.sh").read_text(encoding="utf-8")
+        self.assertIn('QStringLiteral("amneziad"), QStringLiteral("amnezia-cli")', update_manager)
+        self.assertNotIn('QStringLiteral("amneziad.service")', update_manager)
+        self.assertIn("amneziad amnezia-cli", build_script)
+        archive_start = build_script.index('tar --create --gzip --file "$ARCHIVE"')
+        archive_end = build_script.index('sha256sum "$ARCHIVE"', archive_start)
+        self.assertNotIn("amneziad.service", build_script[archive_start:archive_end])
+        self.assertIn('sha256sum install_headless.sh', build_script)
+        self.assertIn("headless-package", build_script)
+        self.assertIn("amneziad.service", build_script)
+
+    def test_headless_route_cleanup_is_transactional_and_probes_orphans(self) -> None:
+        reconciler = (REPO_ROOT / "headless/linuxRouteReconciler.cpp").read_text(encoding="utf-8")
+        self.assertIn("QStringList removedRoutes", reconciler)
+        self.assertIn("restoreRoutes(previousInterface, removedRoutes)", reconciler)
+        self.assertIn('QStringLiteral(".recovery-required")', reconciler)
+        self.assertIn("readRuleSnapshot()", reconciler)
+        self.assertIn("CAP_NET_ADMIN", (REPO_ROOT / "headless/README.md").read_text(encoding="utf-8"))
+
     def test_managed_routing_transaction_runs_in_one_remote_shell(self) -> None:
         install_controller = (
             REPO_ROOT / "client/core/controllers/selfhosted/installController.cpp"
