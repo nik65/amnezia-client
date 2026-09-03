@@ -53,7 +53,7 @@ install -m 0755 "$STAGE_DIR/usr/local/bin/amneziad" "$PACKAGE_DIR/amneziad"
 install -m 0755 "$STAGE_DIR/usr/local/bin/amnezia-cli" "$PACKAGE_DIR/amnezia-cli"
 install -m 0644 "$STAGE_DIR/usr/local/lib/systemd/system/amneziad.service" "$PACKAGE_DIR/amneziad.service"
 cat > "$PACKAGE_DIR/package-manifest.json" <<EOF
-{"schema":1,"version":"$VERSION","platform":"linux-headless-x64","installMode":"fresh-only","artifacts":["amneziad","amnezia-cli"],"service":"amneziad.service","trustAnchor":"external-ed25519-sha256-receipt","runtimeManifest":"runtime-dependencies.json"}
+{"schema":1,"version":"$VERSION","platform":"linux-headless-x64","installMode":"fresh-or-upgrade","artifacts":["amneziad","amnezia-cli"],"service":"amneziad.service","trustAnchor":"external-ed25519-sha256-receipt","runtimeManifest":"runtime-dependencies.json"}
 EOF
 cat > "$PACKAGE_DIR/runtime-dependencies.json" <<'EOF'
 {"schema":1,"distribution":"ubuntu","architectures":["amd64"],"packages":[

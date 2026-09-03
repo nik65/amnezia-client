@@ -345,6 +345,10 @@ RoutingResult HeadlessRoutingController::connect(const Profile &profile)
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("routing controller state is invalid; manual recovery is required"));
     }
+    if (m_reconciler.status().value(QStringLiteral("recoveryRequired")).toBool()) {
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("managed route state is invalid; manual route recovery is required"));
+    }
     const bool allExcept = profile.routingMode == QStringLiteral("all-except");
     const QString protocol = profile.protocol.trimmed().toLower();
     if (allExcept && (protocol == QStringLiteral("xray")
@@ -358,6 +362,10 @@ RoutingResult HeadlessRoutingController::connect(const Profile &profile)
                        QStringLiteral("all-except requires a server routing policy URL"));
     }
     if (!allExcept && profile.serverRulesUrl.isEmpty() && profile.forwardRoutes.isEmpty()) {
+        if (m_reconciler.status().value(QStringLiteral("recoveryRequired")).toBool()) {
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("managed route state is invalid; manual route recovery is required"));
+        }
         m_activeProfile = profile.id;
         m_activeInterface.clear();
         m_hasPolicy = false;
@@ -388,7 +396,15 @@ RoutingResult HeadlessRoutingController::refresh(const Profile &profile)
 
 RoutingResult HeadlessRoutingController::disconnect()
 {
+    if (!m_stateValid) {
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("routing controller state is invalid; manual recovery is required"));
+    }
     const QJsonObject receipt = m_reconciler.status();
+    if (receipt.value(QStringLiteral("recoveryRequired")).toBool()) {
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("managed route receipt is invalid; refusing cleanup mutation"));
+    }
     // DNS ownership is independent from the route interface.  Clear it
     // first using the persisted receipt, so a route cleanup cannot erase the
     // only interface identity needed to revert systemd-resolved.
@@ -579,10 +595,16 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
     if (!result.ok) {
         return failure(result.code, result.message);
     }
+    const QString previousDnsInterface = previousRouting.value(QStringLiteral("dnsInterface")).toString();
+    RouteReconcileResult dnsResult { true, {}, {} };
     if (!profile.dnsServers.isEmpty()) {
-        const RouteReconcileResult dnsResult = m_reconciler.configureDns(
-                interfaceName, profile.dnsServers, profile.dnsDomains);
-        if (!dnsResult.ok) {
+        dnsResult = m_reconciler.configureDns(interfaceName, profile.dnsServers, profile.dnsDomains);
+    } else if (!previousDnsInterface.isEmpty()) {
+        // A profile without DNS ownership must remove the previous profile's
+        // resolver binding rather than carrying stale DNS into the new one.
+        dnsResult = m_reconciler.clearDns(previousDnsInterface);
+    }
+    if (!dnsResult.ok) {
             // DNS is part of the same LKG transaction as policy routes.  Put
             // both the previous route receipt and previous resolver binding
             // back before exposing the failed refresh to the caller.
@@ -619,15 +641,15 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
             QStringList oldDomains;
             for (const QJsonValue &value : oldDnsServers) if (value.isString()) oldServers.append(value.toString());
             for (const QJsonValue &value : oldDnsDomains) if (value.isString()) oldDomains.append(value.toString());
+            const QString oldDnsInterface = previousRouting.value(QStringLiteral("dnsInterface")).toString();
             const RouteReconcileResult dnsRestore = oldServers.isEmpty() || oldDomains.isEmpty()
-                    ? m_reconciler.clearDns(interfaceName)
-                    : m_reconciler.configureDns(interfaceName, oldServers, oldDomains);
+                    ? m_reconciler.clearDns(oldDnsInterface)
+                    : m_reconciler.configureDns(oldDnsInterface, oldServers, oldDomains);
             if (!routeRestore.ok || !dnsRestore.ok) {
                 return failure(QStringLiteral("recovery_required"),
                                QStringLiteral("DNS refresh failed and the previous route/DNS receipt could not be restored"));
             }
-            return failure(dnsResult.code, dnsResult.message);
-        }
+        return failure(dnsResult.code, dnsResult.message);
     }
     m_activeProfile = profile.id;
     m_activeInterface = interfaceName;

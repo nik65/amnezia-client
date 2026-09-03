@@ -70,11 +70,13 @@ private:
     bool loadRollbackReceipt();
     bool verifyTrustedKey(const QString &configuredPath, QString *error) const;
     bool verifyInstallFile(const QString &path, QString *error) const;
+    bool verifyManagedInstallFile(const QString &name, QString *error) const;
     bool verifyRollbackFile(const QString &path, const QString &expectedSha256,
                             QString *error) const;
     bool verifyInstalledFile(const QString &path, const QString &expectedSha256,
                              qint64 expectedSize, QString *error) const;
     bool restoreCurrentPair(QString *error);
+    QString managedInstallPath(const QString &name) const;
     static QString trustedUpdatePublicKeyPath();
     static QString sha256ForFile(const QString &path);
     static bool verifyEnvelope(const QJsonObject &envelope,
@@ -91,7 +93,7 @@ private:
     static bool runProcess(const QString &program, const QStringList &arguments,
                            int timeoutMs, QString *output, QString *error);
     static bool atomicReplace(const QString &source, const QString &destination,
-                              QString *error);
+                              QString *error, bool *destinationRemoved = nullptr);
 
     std::shared_ptr<CommandRunner> m_runner;
     QString m_statePath;

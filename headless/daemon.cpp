@@ -84,6 +84,15 @@ bool Daemon::start(QString *error)
             return false;
         }
     }
+    // Re-check both the controller receipt and the reconciler receipt after
+    // orphan cleanup.  A failed cleanup must never leave a listening daemon
+    // that can accept connect/auto-connect requests.
+    const QJsonObject postCleanupRouting = m_routingController.status();
+    if (postCleanupRouting.value(QStringLiteral("recoveryRequired")).toBool()) {
+        m_state = QStringLiteral("recovery_required");
+        setError(error, QStringLiteral("managed routing state requires manual recovery"));
+        return false;
+    }
 
     const QFileInfo socketInfo(m_socketPath);
     const QString parentPath = socketInfo.absolutePath();
@@ -522,12 +531,22 @@ void Daemon::refreshManagedRoutes()
         // Refreshes retain the previous route set.  The warning is bounded and
         // intentionally omits the URL, domains and any profile material.
         qWarning() << "Headless managed route refresh failed:" << result.code;
+        if (result.code == QStringLiteral("recovery_required")
+            || m_routingController.status().value(QStringLiteral("recoveryRequired")).toBool()) {
+            m_routingRefreshTimer.stop();
+            m_state = QStringLiteral("recovery_required");
+        }
     }
 }
 
 void Daemon::connectAutomaticProfile()
 {
     if (m_state != QStringLiteral("disconnected")) {
+        return;
+    }
+    if (m_routingController.status().value(QStringLiteral("recoveryRequired")).toBool()) {
+        m_state = QStringLiteral("recovery_required");
+        m_routingRefreshTimer.stop();
         return;
     }
 

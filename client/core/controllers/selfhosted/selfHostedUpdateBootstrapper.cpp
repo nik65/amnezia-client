@@ -16,6 +16,7 @@
 #include <QVariant>
 
 #include <cmath>
+#include <limits>
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -512,6 +513,54 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
             continue;
         }
         if (!appendLocalArtifact(platform, platformObject, false, QString(), QString())) {
+            return false;
+        }
+    }
+
+    // The Ubuntu provisioning bundle is a signed release input as well.  It
+    // is not a runnable client artifact, but it must travel through the same
+    // content-addressed upload and publication transaction so ServerX cannot
+    // receive an unsigned service unit or installer script beside a signed
+    // manifest.  Convert its dedicated metadata into the common PayloadFile
+    // list after validating the stronger format/version contract.
+    const QJsonValue provisioningValue = decodedPayload.value(QStringLiteral("headlessProvisioning"));
+    if (!provisioningValue.isUndefined()) {
+        if (!provisioningValue.isObject()
+            || !platforms.contains(QStringLiteral("linux-headless-x64"))) {
+            logger.warning() << "Bundled update manifest has invalid headless provisioning metadata";
+            return false;
+        }
+        const QJsonObject provisioning = provisioningValue.toObject();
+        if (provisioning.size() != 5
+            || !provisioning.contains(QStringLiteral("url"))
+            || !provisioning.contains(QStringLiteral("sha256"))
+            || !provisioning.contains(QStringLiteral("size"))
+            || !provisioning.contains(QStringLiteral("format"))
+            || !provisioning.contains(QStringLiteral("version"))
+            || provisioning.value(QStringLiteral("version")).toString() != manifestIdentity.version
+            || provisioning.value(QStringLiteral("format")).toString()
+                   != QStringLiteral("amnezia-headless-provisioning-tar-v1")
+            || !provisioning.value(QStringLiteral("url")).isString()
+            || !provisioning.value(QStringLiteral("sha256")).isString()
+            || !amnezia::selfhostedUpdates::isCanonicalSha256(
+                       provisioning.value(QStringLiteral("sha256")).toString())) {
+            logger.warning() << "Bundled update manifest has malformed headless provisioning metadata";
+            return false;
+        }
+        const QJsonValue sizeValue = provisioning.value(QStringLiteral("size"));
+        const double rawSize = sizeValue.isDouble() ? sizeValue.toDouble(-1.0) : -1.0;
+        if (!std::isfinite(rawSize) || rawSize <= 0.0 || std::floor(rawSize) != rawSize
+            || rawSize > static_cast<double>(std::numeric_limits<qint64>::max())) {
+            logger.warning() << "Bundled update manifest has invalid headless provisioning size";
+            return false;
+        }
+        QJsonObject artifact {
+            { QStringLiteral("url"), provisioning.value(QStringLiteral("url")) },
+            { QStringLiteral("sha256"), provisioning.value(QStringLiteral("sha256")) },
+            { QStringLiteral("size"), sizeValue },
+        };
+        if (!appendLocalArtifact(QStringLiteral("linux-headless-provisioning"), artifact,
+                                  false, QString(), QString())) {
             return false;
         }
     }

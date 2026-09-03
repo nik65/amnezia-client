@@ -42,6 +42,7 @@ MAX_POLICY_VALIDITY_HOURS = 365 * 24
 # pass it through policy validation so the boundary is deterministic.
 MAX_GENERATED_AT_FUTURE_SKEW = timedelta(minutes=5)
 MAX_MANIFEST_RESPONSE_BYTES = 1024 * 1024
+HEADLESS_PROVISIONING_FORMAT = "amnezia-headless-provisioning-tar-v1"
 ED25519_PUBLIC_KEY_DER_PREFIX = bytes.fromhex("302a300506032b6570032100")
 ED25519_PUBLIC_KEY_DER_BYTES = len(ED25519_PUBLIC_KEY_DER_PREFIX) + 32
 # QJson stores numbers as IEEE-754 doubles. Keep the signed policy counter in
@@ -141,13 +142,26 @@ def validate_base_url(value: str) -> str:
         raise SystemExit("--base-url must be an http(s) endpoint URL with a host, for example http://172.29.172.252:17865")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise SystemExit("--base-url must not contain userinfo, query, or fragment parts")
-    if "/" in parsed.hostname:
-        raise SystemExit("--base-url host must be a single host or IP address, not a CIDR route")
     try:
-        ipaddress.ip_address(parsed.hostname)
+        port = parsed.port
+    except ValueError as error:
+        raise SystemExit("--base-url must contain a valid TCP port from 1 to 65535") from error
+    if port is not None and not 1 <= port <= 65535:
+        raise SystemExit("--base-url must contain a valid TCP port from 1 to 65535")
+    hostname = parsed.hostname or ""
+    try:
+        ipaddress.ip_address(hostname)
         host_is_ip = True
     except ValueError:
         host_is_ip = False
+        if len(hostname) > 253 or not re.fullmatch(
+            r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
+            r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?",
+            hostname,
+        ):
+            raise SystemExit("--base-url host must be a valid DNS hostname or IP address")
+    if "/" in parsed.hostname:
+        raise SystemExit("--base-url host must be a single host or IP address, not a CIDR route")
     if host_is_ip and parsed.path.count("/") == 1 and parsed.path[1:].isdigit():
         raise SystemExit("--base-url must point to an update endpoint, not a CIDR route such as 10.8.1.0/1")
     return normalized
@@ -569,6 +583,23 @@ def validate_external_url(platform: str, value: str) -> str:
         validate_ios_external_url(normalized)
     elif parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise SystemExit(f"external URL for {platform} must use HTTP or HTTPS")
+    if parsed.scheme in {"http", "https"}:
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise SystemExit(f"external URL for {platform} has an invalid TCP port") from error
+        if port is not None and not 1 <= port <= 65535:
+            raise SystemExit(f"external URL for {platform} has an invalid TCP port")
+        hostname = parsed.hostname or ""
+        try:
+            ipaddress.ip_address(hostname)
+        except ValueError:
+            if len(hostname) > 253 or not re.fullmatch(
+                r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
+                r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?",
+                hostname,
+            ):
+                raise SystemExit(f"external URL for {platform} has an invalid hostname")
     return normalized
 
 
@@ -899,6 +930,37 @@ def verify_manifest(
             raise SystemExit("Generated manifest is missing top-level autoInstall=true")
         if any(artifact.get("autoInstall") is not True for artifact in platforms.values()):
             raise SystemExit("Generated manifest is missing autoInstall=true for a platform")
+    provisioning = payload.get("headlessProvisioning")
+    if provisioning is not None:
+        if not isinstance(provisioning, dict) or set(provisioning) != {
+            "url", "sha256", "size", "format", "version"
+        }:
+            raise SystemExit("Generated manifest headlessProvisioning metadata is invalid")
+        if (
+            not isinstance(provisioning["url"], str)
+            or not provisioning["url"].startswith("files/artifacts/")
+            or not isinstance(provisioning["sha256"], str)
+            or not SHA256_RE.fullmatch(provisioning["sha256"])
+            or provisioning["format"] != HEADLESS_PROVISIONING_FORMAT
+            or provisioning["version"] != expected_version
+            or isinstance(provisioning["size"], bool)
+            or not isinstance(provisioning["size"], int)
+            or provisioning["size"] <= 0
+        ):
+            raise SystemExit("Generated manifest headlessProvisioning metadata is invalid")
+        relative_path = PurePosixPath(unquote(provisioning["url"]))
+        provisioning_path = (manifest_path.parent / Path(*relative_path.parts)).resolve()
+        if (
+            provisioning_path.parent != manifest_path.parent.resolve()
+            and manifest_path.parent.resolve() not in provisioning_path.parents
+        ):
+            raise SystemExit("Generated manifest headlessProvisioning URL escapes the output tree")
+        if (
+            not provisioning_path.is_file()
+            or sha256(provisioning_path) != provisioning["sha256"]
+            or provisioning_path.stat().st_size != provisioning["size"]
+        ):
+            raise SystemExit("Generated manifest headlessProvisioning file does not match signed metadata")
     verify_payload_signature(private_key, payload_bytes, signature)
 
 
@@ -1012,6 +1074,11 @@ def main() -> int:
             "Signed Android package versionCode for every local Android artifact; "
             "required for Android in payload schema 2"
         ),
+    )
+    parser.add_argument(
+        "--headless-provisioning",
+        type=Path,
+        help="Signed metadata for the operator-invoked Ubuntu headless provisioning bundle",
     )
     parser.add_argument("--require-platform", action="append", default=[])
     parser.add_argument(
@@ -1187,6 +1254,7 @@ def main() -> int:
 
     platforms: dict[str, dict[str, object]] = {}
     reserved_file_names: dict[str, tuple[str, str]] = {}
+    headless_provisioning: dict[str, object] | None = None
     def add_platform(platform: str, artifact: dict[str, object]) -> None:
         if platform in platforms:
             raise SystemExit(f"duplicate manifest platform: {platform}")
@@ -1288,11 +1356,38 @@ def main() -> int:
             raise SystemExit(f"external must be platform=url, got {value!r}")
         platform, url = value.split("=", 1)
         platform = platform.strip()
+        validate_platform_vocabulary(platform, "--external")
         add_platform(platform, {
             "url": validate_external_url(platform, url),
             "openExternal": True,
             "autoInstall": args.auto_install,
         })
+
+    for platform in platforms:
+        validate_platform_vocabulary(platform, "manifest")
+    has_headless_platform = any(is_headless_platform(platform) for platform in platforms)
+    if args.headless_provisioning and not has_headless_platform:
+        raise SystemExit("--headless-provisioning requires a Linux headless platform artifact")
+    if args.payload_schema == 2 and has_headless_platform:
+        raise SystemExit(
+            "Linux headless artifacts require --payload-schema 1 until the headless updater consumes releasePolicy"
+        )
+
+    if args.headless_provisioning:
+        provisioning_path = args.headless_provisioning.expanduser().resolve()
+        if not provisioning_path.is_file():
+            raise SystemExit(f"headless provisioning bundle does not exist: {provisioning_path}")
+        reserve_file_name("headless-provisioning", provisioning_path.name)
+        provisioning_target, provisioning_digest = copy_content_addressed_artifact(
+            provisioning_path, files_dir
+        )
+        headless_provisioning = {
+            "url": relative_artifact_file_url(provisioning_digest, provisioning_target.name),
+            "sha256": provisioning_digest,
+            "size": provisioning_target.stat().st_size,
+            "format": HEADLESS_PROVISIONING_FORMAT,
+            "version": version,
+        }
 
     if not platforms:
         raise SystemExit("at least one --artifact or --external entry is required")
@@ -1325,6 +1420,8 @@ def main() -> int:
         "autoInstall": args.auto_install,
         "platforms": platforms,
     }
+    if headless_provisioning is not None:
+        payload["headlessProvisioning"] = headless_provisioning
     if args.payload_schema == 2:
         payload["releasePolicy"] = build_release_policy(
             version=version,

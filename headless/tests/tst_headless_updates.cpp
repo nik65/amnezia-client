@@ -176,6 +176,67 @@ private slots:
         QCOMPARE(manager.status().value(QStringLiteral("state")).toString(),
                  QStringLiteral("recovery_required"));
     }
+
+    void malformedStableVersionFailsClosed()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("state.json"));
+        const QString updates = temporaryDirectory.filePath(QStringLiteral("updates"));
+        QVERIFY(QDir().mkpath(updates));
+        QFile state(statePath);
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        QVERIFY(state.write(QJsonDocument(QJsonObject {
+            { QStringLiteral("version"), 2 },
+            { QStringLiteral("state"), QStringLiteral("updated") },
+            { QStringLiteral("lastCheckedAt"), QString() },
+            { QStringLiteral("lastAppliedVersion"), QStringLiteral("5.0.1.not-a-version") },
+            { QStringLiteral("rollbackDirectory"), QString() },
+            { QStringLiteral("rollbackVersion"), QString() },
+            { QStringLiteral("rollbackHashes"), QJsonObject() },
+            { QStringLiteral("installDirectory"), temporaryDirectory.path() },
+            { QStringLiteral("updateRoot"), QDir(updates).canonicalPath() },
+            { QStringLiteral("lastError"), QString() },
+        }).toJson(QJsonDocument::Compact)) > 0);
+        state.close();
+
+        HeadlessUpdateManager manager({}, statePath, temporaryDirectory.path(), false);
+        QVERIFY(manager.status().value(QStringLiteral("recoveryRequired")).toBool());
+        QCOMPARE(manager.status().value(QStringLiteral("state")).toString(),
+                 QStringLiteral("recovery_required"));
+    }
+
+    void missingRollbackReceiptFailsClosed()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("state.json"));
+        const QString updates = temporaryDirectory.filePath(QStringLiteral("updates"));
+        QVERIFY(QDir().mkpath(updates));
+        QFile state(statePath);
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        QVERIFY(state.write(QJsonDocument(QJsonObject {
+            { QStringLiteral("version"), 2 },
+            { QStringLiteral("state"), QStringLiteral("disabled") },
+            { QStringLiteral("lastCheckedAt"), QString() },
+            { QStringLiteral("lastAppliedVersion"), QStringLiteral("5.0.1.12") },
+            { QStringLiteral("rollbackDirectory"), temporaryDirectory.filePath(QStringLiteral("gone")) },
+            { QStringLiteral("rollbackVersion"), QStringLiteral("5.0.1.11") },
+            { QStringLiteral("rollbackHashes"), QJsonObject {
+                { QStringLiteral("amneziad"), QString(64, QLatin1Char('a')) },
+                { QStringLiteral("amnezia-cli"), QString(64, QLatin1Char('b')) },
+            } },
+            { QStringLiteral("installDirectory"), temporaryDirectory.path() },
+            { QStringLiteral("updateRoot"), QDir(updates).canonicalPath() },
+            { QStringLiteral("lastError"), QString() },
+        }).toJson(QJsonDocument::Compact)) > 0);
+        state.close();
+
+        HeadlessUpdateManager manager({}, statePath, temporaryDirectory.path(), false);
+        QVERIFY(manager.status().value(QStringLiteral("recoveryRequired")).toBool());
+        QCOMPARE(manager.status().value(QStringLiteral("state")).toString(),
+                 QStringLiteral("recovery_required"));
+    }
 };
 
 QTEST_MAIN(HeadlessUpdateTest)

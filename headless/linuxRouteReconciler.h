@@ -42,6 +42,7 @@ public:
 
 private:
     RouteReconcileResult failure(const QString &code, const QString &message) const;
+    bool markRecoveryRequired(const QString &message);
     QString ipExecutable() const;
     QString resolvectlExecutable() const;
     bool loadState();
@@ -74,7 +75,9 @@ private:
     QStringList fullRuleArguments(const QString &operation, int priority,
                                   bool ipv6) const;
     bool removeRoutes(const QString &interfaceName, const QStringList &routes,
-                      QString *failedRoute = nullptr);
+                      QString *failedRoute = nullptr,
+                      QStringList *removedRoutes = nullptr);
+    bool restoreRoutes(const QString &interfaceName, const QStringList &routes);
     static bool validInterfaceName(const QString &value);
 
     static constexpr int FullTunnelRouteTable = 51821;

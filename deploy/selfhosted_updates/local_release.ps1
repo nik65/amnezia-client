@@ -851,6 +851,9 @@ $requiredArtifactNames = @{
     "android-arm64-v8a" = "AmneziaVPN_${Version}_android9+_arm64-v8a.apk"
     "linux-headless-x64" = "AmneziaHeadless_${Version}_linux_x64.tar.gz"
 }
+if (($BuildPlatform -contains "headless") -and ($RequirePlatform -notcontains "linux-headless-x64")) {
+    $RequirePlatform += "linux-headless-x64"
+}
 $manifestArgs = @(
     "deploy/selfhosted_updates/make_manifest.py",
     "--version", $Version,
@@ -865,6 +868,11 @@ $manifestArgs = @(
     "--cohort-salt-id", $CohortSaltId,
     "--health-deadline-seconds", [string] $HealthDeadlineSeconds
 )
+if ($BuildPlatform -contains "headless") {
+    $provisioningPath = Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64_provisioning.tar.gz"
+    Assert-ExistingFile $provisioningPath "Linux headless provisioning bundle"
+    $manifestArgs += @("--headless-provisioning", $provisioningPath)
+}
 $hasAndroidManifestArtifact = @(
     $RequirePlatform | Where-Object { $_ -match "^(?i:android(?:-.+)?)$" }
 ).Count -gt 0

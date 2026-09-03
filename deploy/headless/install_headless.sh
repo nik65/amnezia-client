@@ -7,20 +7,33 @@ set -euo pipefail
 PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PUBLIC_KEY="${1:-}"
 EXPECTED_KEY_SHA256="${2:-${AMNEZIA_HEADLESS_UPDATE_PUBLIC_KEY_SHA256:-}}"
-if [[ -z "$PUBLIC_KEY" || ! -f "$PUBLIC_KEY" || ! "$EXPECTED_KEY_SHA256" =~ ^[[:xdigit:]]{64}$ ]]; then
-    echo "usage: $0 /path/to/update-public-key.pem expected-key-sha256" >&2
+MODE="${3:-fresh}"
+if [[ -z "$PUBLIC_KEY" || ! -f "$PUBLIC_KEY" || ! "$EXPECTED_KEY_SHA256" =~ ^[[:xdigit:]]{64}$ \
+    || ("$MODE" != "fresh" && "$MODE" != "upgrade") ]]; then
+    echo "usage: $0 /path/to/update-public-key.pem expected-key-sha256 [fresh|upgrade]" >&2
     exit 2
 fi
 if [[ "$(id -u)" -ne 0 ]]; then
     echo "run this provisioning step as root" >&2
     exit 2
 fi
-for required in systemctl systemd-run getent tar ip ldd sha256sum openssl; do
+for required in systemctl systemd-run getent tar ip ldd sha256sum openssl python3 dpkg-query dpkg; do
     if ! command -v "$required" >/dev/null 2>&1; then
         echo "required runtime command is missing: $required" >&2
         exit 3
     fi
 done
+EXISTING_SERVICE=""
+for candidate in /etc/systemd/system/amneziad.service /lib/systemd/system/amneziad.service; do
+    if [[ -f "$candidate" ]]; then
+        EXISTING_SERVICE="$candidate"
+        break
+    fi
+done
+if [[ "$MODE" == "fresh" && -n "$EXISTING_SERVICE" ]]; then
+    echo "amneziad.service already exists; pass 'upgrade' explicitly" >&2
+    exit 4
+fi
 if [[ ! -f "$PACKAGE_ROOT/SHA256SUMS" ]] || ! (cd "$PACKAGE_ROOT" && sha256sum --strict --check SHA256SUMS); then
     echo "provisioning bundle integrity check failed" >&2
     exit 3
@@ -43,7 +56,7 @@ if [[ ! -f "$PACKAGE_ROOT/runtime-dependencies.txt" || ! -f "$PACKAGE_ROOT/runti
 fi
 if ! { grep -q '"schema":1' "$PACKAGE_ROOT/package-manifest.json" \
     && grep -q '"platform":"linux-headless-x64"' "$PACKAGE_ROOT/package-manifest.json" \
-    && grep -q '"installMode":"fresh-only"' "$PACKAGE_ROOT/package-manifest.json" \
+    && grep -q '"installMode":"fresh-or-upgrade"' "$PACKAGE_ROOT/package-manifest.json" \
     && grep -q '"distribution":"ubuntu"' "$PACKAGE_ROOT/runtime-dependencies.json" \
     && grep -q '"architectures":\["amd64"\]' "$PACKAGE_ROOT/runtime-dependencies.json" \
     && grep -q '"amneziad"' "$PACKAGE_ROOT/package-manifest.json" \
@@ -51,9 +64,100 @@ if ! { grep -q '"schema":1' "$PACKAGE_ROOT/package-manifest.json" \
     echo "provisioning package manifest is invalid" >&2
     exit 3
 fi
+if [[ "$(dpkg --print-architecture)" != "amd64" ]]; then
+    echo "headless provisioning bundle is only supported on amd64 Ubuntu" >&2
+    exit 3
+fi
+if ! python3 - "$PACKAGE_ROOT/runtime-dependencies.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if document.get("schema") != 1 or document.get("distribution") != "ubuntu" or not document.get("packages"):
+    raise SystemExit("invalid runtime dependency manifest")
+for entry in document["packages"]:
+    if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not isinstance(entry.get("minimum"), str):
+        raise SystemExit("invalid runtime dependency entry")
+PY
+then
+    echo "runtime dependency manifest cannot be validated" >&2
+    exit 3
+fi
+while IFS=$'\t' read -r package minimum; do
+    installed="$(dpkg-query -W -f='${Status}\t${Version}' "$package" 2>/dev/null || true)"
+    if [[ "$installed" != "install ok installed"$'\t'* ]]; then
+        echo "declared runtime dependency is not installed: $package >= $minimum" >&2
+        exit 3
+    fi
+    installed_version="${installed#*$'\t'}"
+    if ! dpkg --compare-versions "$installed_version" ge "$minimum"; then
+        echo "declared runtime dependency is too old: $package $installed_version < $minimum" >&2
+        exit 3
+    fi
+done < <(python3 - "$PACKAGE_ROOT/runtime-dependencies.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+document = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if document.get("schema") != 1 or document.get("distribution") != "ubuntu":
+    raise SystemExit("invalid runtime dependency manifest")
+for entry in document.get("packages", []):
+    if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not isinstance(entry.get("minimum"), str):
+        raise SystemExit("invalid runtime dependency entry")
+    print(entry["name"] + "\t" + entry["minimum"])
+PY
+)
 if ! getent group amnezia >/dev/null 2>&1; then
     groupadd --system amnezia
 fi
+
+BACKUP_DIR=""
+SERVICE_WAS_ACTIVE=0
+INSTALL_OK=0
+if [[ "$MODE" == "upgrade" ]]; then
+    BACKUP_DIR="$(mktemp -d /var/lib/amnezia-headless-upgrade.XXXXXX)"
+    for item in /usr/local/bin/amneziad /usr/local/bin/amnezia-cli \
+        /etc/systemd/system/amneziad.service /etc/amnezia/update-public-key.pem; do
+        name="$(basename "$item")"
+        if [[ -e "$item" || -L "$item" ]]; then
+            cp -a -- "$item" "$BACKUP_DIR/$name"
+        else
+            touch "$BACKUP_DIR/.missing-$name"
+        fi
+    done
+    if systemctl is-active --quiet amneziad.service; then
+        SERVICE_WAS_ACTIVE=1
+        systemctl stop amneziad.service
+    fi
+fi
+
+rollback_upgrade() {
+    if [[ "$MODE" != "upgrade" || "$INSTALL_OK" -eq 1 ]]; then return 0; fi
+    set +e
+    systemctl stop amneziad.service >/dev/null 2>&1
+    for pair in \
+        "/usr/local/bin/amneziad amneziad" \
+        "/usr/local/bin/amnezia-cli amnezia-cli" \
+        "/etc/systemd/system/amneziad.service amneziad.service" \
+        "/etc/amnezia/update-public-key.pem update-public-key.pem"; do
+        target="${pair% *}"
+        name="${pair#* }"
+        if [[ -f "$BACKUP_DIR/.missing-$name" ]]; then
+            rm -f -- "$target"
+        elif [[ -e "$BACKUP_DIR/$name" ]]; then
+            install -D -m 0644 "$BACKUP_DIR/$name" "$target"
+            if [[ "$target" == /usr/local/bin/* ]]; then chmod 0755 "$target"; fi
+        fi
+    done
+    systemctl daemon-reload >/dev/null 2>&1
+    if [[ "$SERVICE_WAS_ACTIVE" -eq 1 ]]; then
+        systemctl start amneziad.service >/dev/null 2>&1
+    fi
+    echo "headless upgrade failed; previous installation was restored" >&2
+}
+trap rollback_upgrade EXIT
 
 install -d -o root -g root -m 0755 /usr/local/bin
 install -d -o root -g amnezia -m 0750 /var/lib/amnezia /run/amnezia /etc/amnezia/profiles
@@ -76,5 +180,9 @@ fi
 if ! /usr/local/bin/amnezia-cli --socket /run/amnezia/amneziad.sock doctor --json >/dev/null; then
     echo "headless daemon doctor check failed" >&2
     exit 4
+fi
+INSTALL_OK=1
+if [[ -n "$BACKUP_DIR" ]]; then
+    rm -rf -- "$BACKUP_DIR"
 fi
 echo "headless provisioning complete: service, trust anchor and state directories installed"

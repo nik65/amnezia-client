@@ -1126,6 +1126,8 @@ class SourceContractTests(unittest.TestCase):
             "https://user:pass@updates.example.invalid",
             "https://updates.example.invalid/update?token=secret",
             "https://updates.example.invalid/update#manifest",
+            "https://updates.example.invalid:65536",
+            "https://bad_host.example.invalid",
         ):
             with self.assertRaises(SystemExit):
                 make_manifest.validate_base_url(invalid_base_url)
@@ -1181,6 +1183,20 @@ class SourceContractTests(unittest.TestCase):
             make_manifest.validate_external_url("android", "https://updates.example.invalid/files/AmneziaVPN.apk"),
             "https://updates.example.invalid/files/AmneziaVPN.apk",
         )
+
+    def test_manifest_rejects_external_headless_platform_alias(self) -> None:
+        with self.assertRaises(SystemExit):
+            make_manifest.validate_platform_vocabulary("headless-x64", "--external")
+
+    def test_signed_headless_provisioning_metadata_is_shape_checked(self) -> None:
+        metadata = {
+            "url": "files/artifacts/" + "a" * 64 + "/bundle.tar.gz",
+            "sha256": "b" * 64,
+            "size": 123,
+            "format": make_manifest.HEADLESS_PROVISIONING_FORMAT,
+            "version": "9.9.9.9",
+        }
+        self.assertEqual(metadata["format"], "amnezia-headless-provisioning-tar-v1")
 
     def test_manifest_tool_rejects_duplicate_platforms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2541,6 +2557,10 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("relativeUrlPath", bootstrapper_h)
         self.assertIn("bundledArtifactRequestPath", bootstrapper_h)
         self.assertIn("bundledArtifactRequestPath(urlText)", bootstrapper)
+        self.assertIn("headlessProvisioning", bootstrapper)
+        self.assertIn("amnezia-headless-provisioning-tar-v1", bootstrapper)
+        self.assertIn("linux-headless-provisioning", bootstrapper)
+        self.assertIn("uploadLocalFileToHost(credentials, file.localPath, remotePath)", bootstrapper)
         self.assertIn('if (!path.startsWith(u\'/\'))', bootstrapper_h)
         self.assertIn("kWindowsPlatform", bootstrapper)
         self.assertIn("platforms.value(QString::fromLatin1(kWindowsPlatform))", bootstrapper)
@@ -5688,7 +5708,7 @@ class ManifestPublisherTests(unittest.TestCase):
                 "--version",
                 version,
                 "--base-url",
-                "https://updates.example.invalid",
+                "https://192.0.2.10:17865",
                 "--private-key",
                 str(self.private_key),
                 "--out-dir",
