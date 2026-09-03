@@ -243,10 +243,11 @@ private slots:
         const QByteArray complete = encodeRequest(
                 Request { Command::Status, QStringLiteral("tail-1"), {} });
         QVERIFY(client.write(complete + QByteArrayLiteral("{\"protocol\":")) > 0);
-        QVERIFY(client.waitForReadyRead(1000));
+        QVERIFY(client.flush());
+        QVERIFY(client.waitForBytesWritten(1000) || client.bytesToWrite() == 0);
+        QTRY_VERIFY_WITH_TIMEOUT(client.bytesAvailable() > 0, 1000);
         QTest::qWait(10'200);
-        QVERIFY(client.state() == QLocalSocket::UnconnectedState
-                || client.waitForDisconnected(1000));
+        QTRY_VERIFY_WITH_TIMEOUT(client.state() == QLocalSocket::UnconnectedState, 2000);
         daemon.stop();
     }
 
@@ -348,6 +349,18 @@ private slots:
         config.write("[Interface]\n");
         config.close();
 
+        const QJsonObject profile {
+            { QStringLiteral("id"), QStringLiteral("work") },
+            { QStringLiteral("name"), QStringLiteral("Work VPN") },
+            { QStringLiteral("protocol"), QStringLiteral("wireguard") },
+            { QStringLiteral("configPath"), configPath },
+        };
+        ProfileStore preloadedStore(storePath);
+        QVERIFY(preloadedStore.load());
+        Profile parsedProfile;
+        QVERIFY(preloadedStore.fromJson(profile, parsedProfile));
+        QVERIFY(preloadedStore.add(parsedProfile));
+
         auto runner = std::make_shared<FakeCommandRunner>(true);
         Daemon daemon(socketPath, storePath, runner);
         QVERIFY(daemon.start());
@@ -356,24 +369,13 @@ private slots:
         client.connectToServer(socketPath, QIODevice::ReadWrite);
         QVERIFY(client.waitForConnected(1000));
 
-        const QJsonObject profile {
-            { QStringLiteral("id"), QStringLiteral("work") },
-            { QStringLiteral("name"), QStringLiteral("Work VPN") },
-            { QStringLiteral("protocol"), QStringLiteral("wireguard") },
-            { QStringLiteral("configPath"), configPath },
-        };
-        sendRequest(client, Request {
-            Command::Import, QStringLiteral("import-1"),
-            QJsonObject { { QStringLiteral("profile"), profile } },
-        });
-        QCOMPARE(readResponse(client).object().value(QStringLiteral("ok")).toBool(), true);
-
         sendRequest(client, Request {
             Command::Connect, QStringLiteral("connect-1"),
             QJsonObject { { QStringLiteral("profile"), QStringLiteral("work") } },
         });
         const QJsonDocument connectResponse = readResponse(client);
-        QVERIFY(connectResponse.object().value(QStringLiteral("ok")).toBool());
+        QVERIFY2(connectResponse.object().value(QStringLiteral("ok")).toBool(),
+                 qPrintable(QJsonDocument(connectResponse).toJson(QJsonDocument::Compact)));
 
         sendRequest(client, Request { Command::Status, QStringLiteral("status-2"), {} });
         const QJsonObject connectedStatus = readResponse(client).object()

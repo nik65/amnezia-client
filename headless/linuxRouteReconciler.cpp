@@ -591,7 +591,7 @@ LinuxRouteReconciler::RuleSnapshot LinuxRouteReconciler::readRuleSnapshot() cons
         const QStringList lines = result.output.split(QRegularExpression(QStringLiteral("[\\r\\n]")),
                                                        Qt::SkipEmptyParts);
         for (const QString &line : lines) {
-            if (!QRegularExpression(QStringLiteral("^\\s*\\d+:")).match(line).hasMatch()) {
+            if (!QRegularExpression(QStringLiteral("^\\s*\\d+:\\s+")).match(line).hasMatch()) {
                 snapshot.tableLines.append(line);
             }
         }

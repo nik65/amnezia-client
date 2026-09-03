@@ -368,7 +368,7 @@ bool ProfileStore::validate(const Profile &profile, bool checkDuplicate) const
         }
     }
     static const QRegularExpression dnsDomainPattern(
-            QStringLiteral("^~?[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252}[A-Za-z0-9])?$") );
+            QStringLiteral("^(?:~\\.|~?[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252}[A-Za-z0-9])?)$") );
     for (const QString &domain : profile.dnsDomains) {
         if (domain.isEmpty() || domain.size() > 254
             || !dnsDomainPattern.match(domain).hasMatch()) {

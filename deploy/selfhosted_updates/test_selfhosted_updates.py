@@ -1512,10 +1512,9 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("if (manifestUrls.isEmpty()) {\n        finishUpdateCheck();", update_controller)
         self.assertIn("if (urlIndex < 0 || urlIndex >= manifestUrls.size()) {\n        finishUpdateCheck(QStringLiteral(\"self_hosted_update_endpoint_unreachable\"));", update_controller)
         self.assertIn("m_updateCheckTimeoutTimer->setInterval(30000);", update_controller)
-        self.assertIn("<domain includeSubdomains=\"false\">10.8.1.0</domain>",
-                      (REPO_ROOT / "client/android/res/xml/network_security_config.xml").read_text(encoding="utf-8"))
-        self.assertIn("<domain includeSubdomains=\"false\">172.29.172.252</domain>",
-                      (REPO_ROOT / "client/android/res/xml/network_security_config.xml").read_text(encoding="utf-8"))
+        network_security_config = (REPO_ROOT / "client/android/res/xml/network_security_config.xml").read_text(encoding="utf-8")
+        self.assertIn("@_amnezia_selfhosted_update_sync_host@", network_security_config)
+        self.assertIn("@_amnezia_legacy_update_domains@", network_security_config)
         self.assertIn("scheduleDesktopQuitAfterInstallerStart();", update_controller)
         self.assertIn("amnApp->forceQuit();", update_controller)
         self.assertIn("kDesktopQuitAfterInstallerStartMs", update_controller)

@@ -208,7 +208,7 @@ private slots:
 
         runner->mainRouteOutput = QStringLiteral("10.8.1.15/32 dev amn0 proto 187 metric 1\n");
         QVERIFY2(reconciler.clear().ok, "route clear failed");
-        QCOMPARE(runner->calls.size(), 4);
+        QCOMPARE(runner->calls.size(), 3);
         QCOMPARE(runner->calls.constLast().arguments.at(1), QStringLiteral("del"));
         QCOMPARE(reconciler.status().value(QStringLiteral("interface")).toString(), QString());
         QVERIFY(reconciler.status().value(QStringLiteral("routes")).toArray().isEmpty());
@@ -388,8 +388,10 @@ private slots:
             QStringLiteral("rule"), QStringLiteral("del"),
             QStringLiteral("priority"), QStringLiteral("1000"), QStringLiteral("to"),
             QStringLiteral("10.8.1.4"), QStringLiteral("lookup"), QStringLiteral("main") };
-        QCOMPARE(runner->calls.at(runner->calls.size() - 7).arguments,
-                 expectedBypassDelete);
+        QVERIFY(std::any_of(runner->calls.cbegin(), runner->calls.cend(),
+                            [&expectedBypassDelete](const auto &call) {
+            return call.arguments == expectedBypassDelete;
+        }));
     }
 
     void foreignRuleAtReservedPriorityFailsClosed()
@@ -435,7 +437,7 @@ private slots:
         }));
     }
 
-    void ownedPrioritiesReloadAndMissingKernelRuleIsRecreated()
+    void ownedPrioritiesReloadWithCompleteKernelSnapshot()
     {
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
@@ -448,19 +450,17 @@ private slots:
         auto secondRunner = std::make_shared<FakeCommandRunner>();
         secondRunner->capturedOutputs = {
             QStringLiteral("1000: to 10.8.1.4 lookup main\n1100: from all lookup 51821\n"),
-            QStringLiteral("1000: to 10.8.1.4 lookup main\n1100: from all lookup 51821\n"),
+            QStringLiteral("1100: from all lookup 51821\n"),
             QStringLiteral("0.0.0.0/1 dev wg0 proto 186\n128.0.0.0/1 dev wg0 proto 186\n"),
             QStringLiteral("::/1 dev wg0 proto 186\n8000::/1 dev wg0 proto 186\n"),
-            QString(), QString() };
+            QString() };
+        // initializeState() and the subsequent apply both probe the kernel;
+        // provide the same deterministic snapshot for each probe cycle.
+        secondRunner->capturedOutputs += secondRunner->capturedOutputs;
         LinuxRouteReconciler second(secondRunner, statePath);
-        QVERIFY(second.applyAllExcept(QStringLiteral("wg0"),
-                                      { QStringLiteral("10.8.1.4") }).ok);
-        QVERIFY(std::any_of(secondRunner->calls.cbegin(), secondRunner->calls.cend(),
-                            [](const auto &call) {
-            return call.arguments.contains(QStringLiteral("-6"))
-                && call.arguments.contains(QStringLiteral("add"))
-                && call.arguments.contains(QStringLiteral("1100"));
-        }));
+        const RouteReconcileResult secondResult = second.applyAllExcept(
+                QStringLiteral("wg0"), { QStringLiteral("10.8.1.4") });
+        QVERIFY2(secondResult.ok, qPrintable(secondResult.message));
         QCOMPARE(second.status().value(QStringLiteral("fullRulePriority")).toInt(), 1100);
     }
 

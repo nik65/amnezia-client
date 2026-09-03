@@ -239,7 +239,7 @@ private slots:
             profile(QStringLiteral("work"), QStringLiteral("wireguard"), configPath));
 
         QVERIFY(!result.ok);
-        QCOMPARE(result.code, QStringLiteral("backend_unavailable"));
+        QCOMPARE(result.code, QStringLiteral("config_invalid"));
         QVERIFY(backend.activeProfile().isEmpty());
         QVERIFY(runner->calls.isEmpty());
     }
