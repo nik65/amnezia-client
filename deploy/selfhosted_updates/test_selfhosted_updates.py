@@ -1389,7 +1389,15 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("fun installApk(fileName: String): Int", activity)
         self.assertIn("private fun startApkInstaller(fileName: String, openSettingsIfBlocked: Boolean): Int", activity)
         self.assertIn("pendingInstallApkPath?.let { outState.putString(KEY_PENDING_INSTALL_APK_PATH, it) }", activity)
-        self.assertIn("pendingInstallApkPath != null && !installApkDeliveryScheduled", activity)
+        self.assertIn("pendingInstallApkPath == null || installApkDeliveryScheduled || !isActivityResumed", activity)
+        self.assertIn("Prefs.load<String>(KEY_PENDING_INSTALL_APK_PATH)", activity)
+        self.assertIn("persistPendingInstallApkPath(fileName)", activity)
+        self.assertIn("if (!editor.commit())", activity)
+        self.assertIn("apk_pending_state_persist_failed", activity)
+        self.assertIn("startActivity(intent)", activity)
+        self.assertIn("persistPendingInstallApkPath(null)", activity)
+        self.assertIn("installApkDeliveryScheduled = false", activity)
+        self.assertIn("schedulePendingApkInstallDelivery()", activity)
         self.assertIn("qtInitialized.await()", activity)
         self.assertIn('startApkInstaller(apkPath, openSettingsIfBlocked = false)', activity)
         self.assertIn('failApkInstaller(fileName, "apk_install_permission_missing")', activity)
@@ -1408,6 +1416,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('{"onApkInstallerStarted", "(Ljava/lang/String;)V"', android_controller_cpp)
         self.assertIn("emit AndroidController::instance()->apkInstallerStarted", android_controller_cpp)
         self.assertIn("InstallerHandoffResult", update_controller_h)
+        self.assertIn("apk_pending_state_persist_failed", update_controller)
         self.assertIn("m_androidApkInstallPermissionPending || !m_appSettingsRepository", update_controller)
         self.assertIn("kAndroidApkInstallPermissionWaitMs", update_controller)
         self.assertIn("kAndroidApkInstallPermissionSettingsOpened", update_controller)
@@ -3028,8 +3037,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.1.16)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2164)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.1.17)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2165)", cmake)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -3038,6 +3047,8 @@ class SourceContractTests(unittest.TestCase):
         )
         self.assertIn(product_version, client_rc)
         self.assertIn(product_version, service_rc)
+        self.assertIn("5.0.1.16", readme)
+        self.assertIn("historical", readme.lower())
 
     def test_headless_update_restart_is_non_blocking(self) -> None:
         update_manager = (
@@ -3106,6 +3117,10 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("restoreRoutes(previousInterface, removedRoutes)", reconciler)
         self.assertIn('QStringLiteral(".recovery-required")', reconciler)
         self.assertIn("readRuleSnapshot()", reconciler)
+        self.assertIn("Retire stale allow-list rules before reusing priority 1000", reconciler)
+        self.assertIn("restoreRemovedPreviousBypassRoutes", reconciler)
+        self.assertIn("priorityWasFreedForReplacement", reconciler)
+        self.assertIn("stale full-tunnel allow-list rule removal failed", reconciler)
         self.assertIn("CAP_NET_ADMIN", (REPO_ROOT / "headless/README.md").read_text(encoding="utf-8"))
 
     def test_managed_routing_transaction_runs_in_one_remote_shell(self) -> None:
@@ -8118,7 +8133,7 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
             'component.addElevatedOperation("Execute", systemSc, "failure", serviceName()'
         )
         install_start = self.qif_component_script.find(
-            'component.addElevatedOperation("Execute", "{0,1056}", systemSc, "start", serviceName()'
+            'component.addElevatedOperation("Execute", ["{0,1056}", systemSc, "start", serviceName()])'
         )
         self.assertGreaterEqual(install_recovery, 0)
         self.assertGreater(install_start, install_recovery)
@@ -8182,6 +8197,10 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
             "function restoreWindowsMainServiceAfterAbortedUpgrade",
             self.qif_control_script,
         )
+        controller = self.function_body(
+            "function recoverWindowsServiceUpgradeJournalIfPresent",
+            self.qif_control_script,
+        )
         query_service = self.function_body(
             "function queryWindowsMainServiceConfig",
             self.qif_control_script,
@@ -8195,9 +8214,32 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertIn('failureFields["RESET_PERIOD (IN SECONDS)"]', query_service)
         self.assertIn('failureFields["REBOOT_MESSAGE"]', query_service)
         self.assertIn('failureFields["COMMAND_LINE"]', query_service)
-        self.assertIn('failureFlagFields["FAILURE_ACTIONS_FLAG"]', query_service)
-        self.assertIn('failureActionsFlag !== "0"', query_service)
+        self.assertIn('failureFlagFields["FAILURE_ACTIONS_ON_NONCRASH_FAILURES"]', query_service)
+        self.assertIn("normalizeWindowsFailureActionsFlag", query_service)
+        self.assertIn('failureActionsFlag === ""', query_service)
+        self.assertIn("windowsServiceIdentityMatches", query_service)
         self.assertIn('installer.execute(systemSc, ["qfailureflag", serviceName])', query_service)
+        self.assertIn("queryWindowsMainServiceIdentity", query_service)
+        self.assertIn("serviceType", self.qif_control_script)
+        self.assertIn("LocalSystem", self.qif_control_script)
+        self.assertIn('"identity-image-path"', self.qif_control_script)
+        self.assertIn('"identity-dependencies"', self.qif_control_script)
+        self.assertIn("AmneziaVPN-Recovery/upgrade-service-journal.json", self.qif_control_script)
+        self.assertIn("[IO.File]::Move($Temp,$Path)", self.qif_control_script)
+        self.assertIn("$BackupPath=$Path+'.bak-'+[Guid]::NewGuid().ToString('N')", self.qif_control_script)
+        self.assertIn("[IO.File]::Replace($Temp,$Path,$BackupPath,$true)", self.qif_control_script)
+        self.assertIn("$Stream.Flush($true)", self.qif_control_script)
+        self.assertIn("$CleanupOk", self.qif_control_script)
+        self.assertIn("AreAccessRulesProtected", self.qif_control_script)
+        self.assertIn("S-1-5-32-544", self.qif_control_script)
+        self.assertIn("Program Files (x86)/AmneziaVPN/AmneziaVPN-service.exe", self.qif_control_script)
+        self.assertIn("Program Files (x86)/AmneziaVPN/mullvad-split-tunnel.sys", self.qif_control_script)
+        self.assertIn("persistWindowsServiceUpgradeJournal", prepare_legacy)
+        self.assertIn(
+            "recoverWindowsServiceUpgradeJournalIfPresent",
+            self.qif_control_script,
+        )
+        self.assertIn("deleted service from stale installer state", self.qif_control_script)
         self.assertIn(
             '["failure", serviceName, "reset=", "100", "actions=",',
             restore_legacy,
@@ -8361,6 +8403,19 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
             "function scFieldsHaveOnly", self.qif_control_script
         )
         query = self.function_body("function queryWindowsMainServiceConfig", self.qif_control_script)
+        identity = self.function_body("function queryWindowsMainServiceIdentity", self.qif_control_script)
+        normalize_flag = self.function_body(
+            "function normalizeWindowsFailureActionsFlag", self.qif_control_script
+        )
+        normalize_image = self.function_body(
+            "function normalizeWindowsServiceImagePath", self.qif_control_script
+        )
+        identity_matches = self.function_body(
+            "function windowsServiceIdentityMatches", self.qif_control_script
+        )
+        identity_reason = self.function_body(
+            "function windowsServiceIdentityFailureReason", self.qif_control_script
+        )
         standard_failure = """[SC] QueryServiceConfig2 SUCCESS
 
 SERVICE_NAME : AmneziaVPN-service
@@ -8376,31 +8431,50 @@ REBOOT_MESSAGE :
         harness = f"""
 {parser}
 {field_guard}
+function normalizeWindowsFailureActionsFlag(value)
+{normalize_flag}
+function normalizeWindowsServiceImagePath(value)
+{normalize_image}
+function windowsServiceIdentityMatches(identity, expectedStart, allowDisabled)
+{identity_matches}
+function windowsServiceIdentityFailureReason(identity, expectedStart, allowDisabled)
+{identity_reason}
+function queryWindowsMainServiceIdentity(serviceName)
+{identity}
 function queryWindowsMainServiceConfig(serviceName)
-{{
 {query}
-}}
 function runningOnWindows() {{ return true; }}
 var outputs = {{}};
 var installer = {{
     execute: function(_path, args) {{
+        if (args.indexOf("-Command") >= 0) {{
+            return [outputs.identity || "", outputs.identityExit === undefined ? 0 : outputs.identityExit];
+        }}
         return [outputs[args[0]] || "", 0];
     }}
 }};
-function evaluate(startOutput, failureOutput) {{
+function evaluate(startOutput, failureOutput, failureFlagOutput) {{
     outputs = {{
         query: "SERVICE_NAME : AmneziaVPN-service",
         qc: startOutput,
         qfailure: failureOutput,
-        qfailureflag: "FAILURE_ACTIONS_FLAG : 0"
+        qfailureflag: failureFlagOutput,
+        identity: JSON.stringify({{
+            name: "AmneziaVPN-service", serviceType: 16, errorControl: 1, start: 2,
+            delayedAutoStart: startOutput.indexOf("(DELAYED)") >= 0 ? 1 : 0,
+            startName: "LocalSystem",
+            imagePath: "C:/Program Files/AmneziaVPN/AmneziaVPN-service.exe",
+            dependencies: "BFE,nsi"
+        }})
     }};
     return queryWindowsMainServiceConfig("AmneziaVPN-service");
 }}
 process.stdout.write(JSON.stringify({{
-    standard: evaluate("START_TYPE : 2 AUTO_START", {json.dumps(standard_failure)}),
-    delayed: evaluate("START_TYPE : 2 AUTO_START (DELAYED)", {json.dumps(standard_failure)}),
-    unsupported: evaluate("START_TYPE : 3 DEMAND_START", {json.dumps(standard_failure)}),
-    nonstandard: evaluate("START_TYPE : 2 AUTO_START", {json.dumps(nonstandard_failure)})
+    standard: evaluate("START_TYPE : 2 AUTO_START", {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+    delayed: evaluate("START_TYPE : 2 AUTO_START (DELAYED)", {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : TRUE"),
+    unsupported: evaluate("START_TYPE : 3 DEMAND_START", {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+    nonstandard: evaluate("START_TYPE : 2 AUTO_START", {json.dumps(nonstandard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+    localized: evaluate("START_TYPE : 2 AUTO_START", {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : НЕИЗВЕСТНО")
 }}));
 """
         completed = subprocess.run(
@@ -8417,11 +8491,14 @@ process.stdout.write(JSON.stringify({{
                 "start": "auto",
                 "failureActions": "restart/2000/restart/2000/restart/2000",
                 "failureActionsFlag": "0",
+                "failureActionsFlagRaw": "FALSE",
             },
         )
         self.assertEqual(result["delayed"]["start"], "delayed-auto")
+        self.assertEqual(result["delayed"]["failureActionsFlag"], "1")
         self.assertIsNone(result["unsupported"])
         self.assertIsNone(result["nonstandard"])
+        self.assertIsNone(result["localized"])
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is required")
     def test_qif_windows_legacy_wait_requires_consecutive_combined_states(self) -> None:
@@ -8782,7 +8859,7 @@ process.stdout.write(JSON.stringify(outcome));
         )
         service_create = create_body.find('[systemSc, "create", serviceName()')
         service_delete_undo = create_body.find(
-            '"UNDOEXECUTE", "{0,1060,1072}", systemSc, "delete", serviceName()'
+            '"UNDOEXECUTE", ["{0,1060}", systemSc, "delete", serviceName()]'
         )
         cleanup_undo = create_body.find(
             '"UNDOEXECUTE", windowsPowerShell, "-NoLogo", "-NoProfile"'
@@ -8792,8 +8869,8 @@ process.stdout.write(JSON.stringify(outcome));
             "serviceName()"
         )
         start_service = create_body.find(
-            'component.addElevatedOperation("Execute", "{0,1056}", systemSc, '
-            '"start", serviceName())'
+            'component.addElevatedOperation("Execute", ["{0,1056}", systemSc, '
+            '"start", serviceName()])'
         )
 
         self.assertGreaterEqual(service_create, 0)

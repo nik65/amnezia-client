@@ -4181,6 +4181,7 @@ void UpdateController::onAndroidApkInstallerStartFailed(const QString &fileName,
         QStringLiteral("apk_signer_invalid"),
         QStringLiteral("apk_signer_mismatch"),
         QStringLiteral("apk_install_permission_missing"),
+        QStringLiteral("apk_pending_state_persist_failed"),
         QStringLiteral("apk_authorization_rejected"),
         QStringLiteral("apk_installer_unavailable"),
         QStringLiteral("apk_installer_start_failed")

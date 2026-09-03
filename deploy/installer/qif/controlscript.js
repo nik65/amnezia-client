@@ -1,17 +1,19 @@
 var requestToQuitFromApp = false;
 var updaterCompleted = 0;
 var desktopAppProcessRunning = false;
-var appInstalledUninstallerPath;
-var appInstalledUninstallerPath_x86;
+var appInstalledUninstallerPath = "C:/Program Files/AmneziaVPN/maintenancetool.exe";
+var appInstalledUninstallerPath_x86 = "C:/Program Files (x86)/AmneziaVPN/maintenancetool.exe";
 var windowsMainServicePrepared = false;
 var windowsMainServiceConfigSnapshot = null;
 var windowsUpgradeAdminRightsAcquired = false;
 var windowsUpgradePrepareFailureReason = "";
+var windowsMainServiceConfigSnapshotFailureReason = "";
 var windowsUpgradeReplacementRequested = false;
 var windowsUpgradeContinuationRequested = false;
 var windowsUpgradeNextRequested = false;
 var windowsUpgradeCommitRequested = false;
 var windowsInstallerLogSession = "installer-" + new Date().getTime();
+var windowsServiceUpgradeJournalPath = "C:/Program Files/AmneziaVPN-Recovery/upgrade-service-journal.json";
 
 function writeWindowsInstallerLog(phase, detail)
 {
@@ -282,7 +284,10 @@ function windowsUpgradeCleanupIsComplete()
         "C:/Program Files/AmneziaVPN/maintenancetool.exe",
         "C:/Program Files (x86)/AmneziaVPN/maintenancetool.exe",
         "C:/Program Files/AmneziaVPN/AmneziaVPN-service.exe",
+        "C:/Program Files (x86)/AmneziaVPN/AmneziaVPN-service.exe",
+        "C:/Program Files (x86)/AmneziaVPN/AmneziaVPN.exe",
         "C:/Program Files/AmneziaVPN/mullvad-split-tunnel.sys",
+        "C:/Program Files (x86)/AmneziaVPN/mullvad-split-tunnel.sys",
         "C:/Program Files/AmneziaVPN-Recovery/uninstall-cleanup-failed.txt",
         "C:/Program Files/AmneziaVPN-Recovery/uninstall-recovery-required.txt"
     ];
@@ -371,6 +376,182 @@ function scFieldsHaveOnly(fields, allowedFields)
     return true;
 }
 
+function normalizeWindowsFailureActionsFlag(value)
+{
+    var normalized = String(value || "").trim().toUpperCase();
+    if (normalized === "FALSE") {
+        return "0";
+    }
+    if (normalized === "TRUE") {
+        return "1";
+    }
+    return "";
+}
+
+function normalizeWindowsServiceImagePath(value)
+{
+    var imagePath = String(value || "").trim().replace(/\//g, "\\");
+    if (imagePath.length >= 2 && imagePath.charAt(0) === '"'
+            && imagePath.charAt(imagePath.length - 1) === '"') {
+        imagePath = imagePath.substr(1, imagePath.length - 2).trim();
+    }
+    // The supported service has no arguments. Reject a quoted executable with
+    // trailing arguments instead of trying to parse an attacker-controlled
+    // command line in installer JavaScript.
+    if (imagePath.indexOf('"') >= 0 || imagePath.indexOf(" ", imagePath.toLowerCase().lastIndexOf(".exe") + 4) >= 0) {
+        return "";
+    }
+    return imagePath;
+}
+
+function windowsServiceIdentityMatches(identity, expectedStart, allowDisabled)
+{
+    if (identity === null || typeof identity !== "object"
+            || String(identity.name || "") !== "AmneziaVPN-service"
+            || Number(identity.serviceType) !== 16
+            || Number(identity.errorControl) !== 1
+            || (Number(identity.start) !== 2 && !(allowDisabled && Number(identity.start) === 4))
+            || String(identity.startName || "") !== "LocalSystem") {
+        return false;
+    }
+    var expectedDelayed = expectedStart === "delayed-auto" ? 1 : 0;
+    if (Number(identity.delayedAutoStart) !== expectedDelayed) {
+        return false;
+    }
+    var dependencies = String(identity.dependencies || "").split(",");
+    dependencies = dependencies.filter(function(value) { return value !== ""; });
+    dependencies.sort();
+    if (dependencies.length !== 2 || dependencies[0].toUpperCase() !== "BFE"
+            || dependencies[1].toUpperCase() !== "NSI") {
+        return false;
+    }
+    var imagePath = normalizeWindowsServiceImagePath(identity.imagePath);
+    var expected64 = "C:\\Program Files\\AmneziaVPN\\AmneziaVPN-service.exe";
+    var expected86 = "C:\\Program Files (x86)\\AmneziaVPN\\AmneziaVPN-service.exe";
+    return imagePath.toLowerCase() === expected64.toLowerCase()
+        || imagePath.toLowerCase() === expected86.toLowerCase();
+}
+
+function windowsServiceIdentityFailureReason(identity, expectedStart, allowDisabled)
+{
+    if (identity === null || typeof identity !== "object") {
+        return windowsMainServiceConfigSnapshotFailureReason || "identity-unavailable";
+    }
+    if (String(identity.name || "") !== "AmneziaVPN-service") {
+        return "identity-name";
+    }
+    if (Number(identity.serviceType) !== 16) {
+        return "identity-service-type";
+    }
+    if (Number(identity.errorControl) !== 1) {
+        return "identity-error-control";
+    }
+    if (Number(identity.start) !== 2 && !(allowDisabled && Number(identity.start) === 4)) {
+        return "identity-start-mode";
+    }
+    if (String(identity.startName || "") !== "LocalSystem") {
+        return "identity-account";
+    }
+    if (Number(identity.delayedAutoStart) !== (expectedStart === "delayed-auto" ? 1 : 0)) {
+        return "identity-delayed-auto";
+    }
+    var dependencies = String(identity.dependencies || "").split(",");
+    dependencies = dependencies.filter(function(value) { return value !== ""; });
+    dependencies.sort();
+    if (dependencies.length !== 2 || dependencies[0].toUpperCase() !== "BFE"
+            || dependencies[1].toUpperCase() !== "NSI") {
+        return "identity-dependencies";
+    }
+    var imagePath = normalizeWindowsServiceImagePath(identity.imagePath);
+    var expected64 = "C:\\Program Files\\AmneziaVPN\\AmneziaVPN-service.exe";
+    var expected86 = "C:\\Program Files (x86)\\AmneziaVPN\\AmneziaVPN-service.exe";
+    if (imagePath.toLowerCase() !== expected64.toLowerCase()
+            && imagePath.toLowerCase() !== expected86.toLowerCase()) {
+        return "identity-image-path";
+    }
+    return "identity-mismatch";
+}
+
+function queryWindowsMainServiceIdentity(serviceName)
+{
+    var script = "& { param($ServiceName) $ErrorActionPreference='Stop'; try { "
+        + "$Service=Get-CimInstance -ClassName Win32_Service | Where-Object { $_.Name -ceq $ServiceName } | Select-Object -First 1; "
+        + "if ($null -eq $Service) { exit 1060 }; "
+        + "$Key='HKLM:\\SYSTEM\\CurrentControlSet\\Services\\'+$ServiceName; "
+        + "$Reg=Get-ItemProperty -LiteralPath $Key; "
+        + "$Deps=[array]$Reg.DependOnService; "
+        + "$Record=New-Object System.Collections.Specialized.OrderedDictionary; "
+        + "$Record.Add('name',[string]$Service.Name); $Record.Add('serviceType',[int]$Reg.Type); "
+        + "$Record.Add('errorControl',[int]$Reg.ErrorControl); $Record.Add('start',[int]$Reg.Start); "
+        + "$Record.Add('delayedAutoStart',([int]$Reg.DelayedAutoStart)); "
+        + "$Record.Add('startName',[string]$Service.StartName); "
+        + "$Record.Add('imagePath',[string]$Reg.ImagePath); "
+        + "$Record.Add('dependencies',([string]::Join(',',($Deps | ForEach-Object { [string]$_ })))); "
+        + "$Record | ConvertTo-Json -Compress; exit 0 } catch { exit 97 } }";
+    var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                                   ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                                    "-Command", script, serviceName]);
+    var exitCode = result.length >= 2 ? Number(result[1]) : -1;
+    if (exitCode !== 0) {
+        windowsMainServiceConfigSnapshotFailureReason = "identity-query-exit-" + exitCode;
+        return null;
+    }
+    try {
+        return JSON.parse(String(result[0] || ""));
+    } catch (error) {
+        windowsMainServiceConfigSnapshotFailureReason = "identity-json-invalid";
+        return null;
+    }
+}
+
+function persistWindowsServiceUpgradeJournal(snapshot)
+{
+    // QIF embeds this command in Windows PowerShell 5.1.  Keep the journal
+    // write compatible with its two-argument File.Move API: create the target
+    // with Move when absent, and use File.Replace only after an ACL/reparse
+    // check when an earlier journal exists.  There is no handle-bound rename
+    // primitive exposed by IFW's JavaScript bridge, so the protected ACL gate
+    // is repeated immediately before every privileged path operation.
+    var script = "& { param($Path,$ServiceName,$Start,$Actions,$Flag,$FlagRaw) $ErrorActionPreference='Stop'; $Temp=''; $BackupPath=''; "
+        + "$TestAcl={ param($Target,$Directory) try { $Item=Get-Item -LiteralPath $Target -Force; if ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }; $Acl=if ($Directory) { [IO.Directory]::GetAccessControl($Target) } else { [IO.File]::GetAccessControl($Target) }; if (-not $Acl.AreAccessRulesProtected) { return $false }; $Allowed='S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'; $OwnerSid=(New-Object Security.Principal.NTAccount($Acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value; if ($Allowed -notcontains $OwnerSid) { return $false }; $Dangerous=[Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::CreateDirectories -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::WriteAttributes -bor [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership; foreach ($Rule in $Acl.Access) { if ($Rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and ($Rule.FileSystemRights -band $Dangerous) -ne 0) { $Sid=$Rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; if ($Allowed -notcontains $Sid) { return $false } } }; return $true } catch { return $false } }; "
+        + "$Root=[IO.Path]::GetDirectoryName($Path); if (Test-Path -LiteralPath $Root) { if (-not [bool](& $TestAcl $Root $true)) { exit 92 } } else { New-Item -ItemType Directory -Path $Root | Out-Null; & 'C:\\Windows\\System32\\icacls.exe' $Root '/inheritance:r' | Out-Null; if ($LASTEXITCODE -ne 0) { exit 93 }; & 'C:\\Windows\\System32\\icacls.exe' $Root '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null; if ($LASTEXITCODE -ne 0 -or -not [bool](& $TestAcl $Root $true)) { exit 94 } }; "
+        + "$Temp=$Path+'.tmp-'+[Guid]::NewGuid().ToString('N'); $Record=New-Object System.Collections.Specialized.OrderedDictionary; $Record.Add('schema',1); $Record.Add('serviceName',$ServiceName); $Record.Add('phase','prepared'); $Record.Add('start',$Start); $Record.Add('failureActions',$Actions); $Record.Add('failureActionsFlag',$Flag); $Record.Add('failureActionsFlagRaw',$FlagRaw); $Bytes=(New-Object Text.UTF8Encoding($false)).GetBytes($Record | ConvertTo-Json -Compress); $Stream=New-Object IO.FileStream($Temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); try { $Stream.Write($Bytes,0,$Bytes.Length); $Stream.Flush($true) } finally { $Stream.Dispose() }; if (-not [bool](& $TestAcl $Temp $false)) { exit 95 }; if (Test-Path -LiteralPath $Path) { if (-not [bool](& $TestAcl $Path $false)) { exit 96 }; $BackupPath=$Path+'.bak-'+[Guid]::NewGuid().ToString('N'); [IO.File]::Replace($Temp,$Path,$BackupPath,$true); if (-not (Test-Path -LiteralPath $Path)) { exit 98 }; if (Test-Path -LiteralPath $BackupPath) { Remove-Item -LiteralPath $BackupPath -Force -ErrorAction Stop } } else { [IO.File]::Move($Temp,$Path) }; if (Test-Path -LiteralPath $Temp) { exit 98 }; if (-not [bool](& $TestAcl $Path $false)) { exit 99 }; exit 0 } catch { $CleanupOk=$true; if ($Temp -and (Test-Path -LiteralPath $Temp)) { try { Remove-Item -LiteralPath $Temp -Force -ErrorAction Stop } catch { $CleanupOk=$false } }; if ($BackupPath -and (Test-Path -LiteralPath $BackupPath)) { try { if (-not (Test-Path -LiteralPath $Path)) { [IO.File]::Move($BackupPath,$Path) } else { Remove-Item -LiteralPath $BackupPath -Force -ErrorAction Stop } } catch { $CleanupOk=$false } }; if (-not $CleanupOk) { exit 98 }; exit 97 } }";
+    var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                                   ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                                    "-Command", script, windowsServiceUpgradeJournalPath,
+                                    "AmneziaVPN-service", snapshot.start, snapshot.failureActions,
+                                    snapshot.failureActionsFlag, snapshot.failureActionsFlagRaw]);
+    return result.length >= 2 && Number(result[1]) === 0;
+}
+
+function readWindowsServiceUpgradeJournal()
+{
+    if (!installer.fileExists(windowsServiceUpgradeJournalPath)) {
+        return null;
+    }
+    var script = "& { param($Path) $ErrorActionPreference='Stop'; try { $Item=Get-Item -LiteralPath $Path -Force; $Root=Get-Item -LiteralPath ([IO.Path]::GetDirectoryName($Path)) -Force; if ($Item.PSIsContainer -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or -not $Root.PSIsContainer -or ($Root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { exit 91 }; $Acl=[IO.Directory]::GetAccessControl($Root.FullName); $Allowed='S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'; $OwnerSid=(New-Object Security.Principal.NTAccount($Acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value; if (-not $Acl.AreAccessRulesProtected -or $Allowed -notcontains $OwnerSid) { exit 92 }; $Dangerous=[Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership; foreach ($Rule in $Acl.Access) { if ($Rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and ($Rule.FileSystemRights -band $Dangerous) -ne 0 -and $Allowed -notcontains $Rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value) { exit 92 } }; $FileAcl=[IO.File]::GetAccessControl($Item.FullName); if (-not $FileAcl.AreAccessRulesProtected) { exit 92 }; Get-Content -LiteralPath $Item.FullName -Raw; exit 0 } catch { exit 97 } }";
+    var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                                   ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                                    "-Command", script, windowsServiceUpgradeJournalPath]);
+    if (result.length < 2 || Number(result[1]) !== 0) {
+        return null;
+    }
+    try {
+        return JSON.parse(String(result[0] || ""));
+    } catch (error) {
+        return null;
+    }
+}
+
+function clearWindowsServiceUpgradeJournal()
+{
+    var script = "& { param($Path) $ErrorActionPreference='Stop'; try { if (-not (Test-Path -LiteralPath $Path)) { exit 0 }; $Item=Get-Item -LiteralPath $Path -Force; $Root=Get-Item -LiteralPath ([IO.Path]::GetDirectoryName($Path)) -Force; if ($Item.PSIsContainer -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($Root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { exit 91 }; $Acl=[IO.Directory]::GetAccessControl($Root.FullName); $Allowed='S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'; $OwnerSid=(New-Object Security.Principal.NTAccount($Acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value; if (-not $Acl.AreAccessRulesProtected -or $Allowed -notcontains $OwnerSid) { exit 92 }; $Dangerous=[Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership; foreach ($Rule in $Acl.Access) { if ($Rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and ($Rule.FileSystemRights -band $Dangerous) -ne 0 -and $Allowed -notcontains $Rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value) { exit 92 } }; $FileAcl=[IO.File]::GetAccessControl($Item.FullName); if (-not $FileAcl.AreAccessRulesProtected) { exit 92 }; Remove-Item -LiteralPath $Item.FullName -Force; if (Test-Path -LiteralPath $Path) { exit 92 }; exit 0 } catch { exit 97 } }";
+    var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                                   ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                                    "-Command", script, windowsServiceUpgradeJournalPath]);
+    return result.length >= 2 && Number(result[1]) === 0;
+}
+
 function queryWindowsMainServiceConfig(serviceName)
 {
     if (!runningOnWindows()) {
@@ -380,6 +561,7 @@ function queryWindowsMainServiceConfig(serviceName)
     // SCM is authoritative for the service configuration. Only the exact
     // configuration emitted by the supported QIF install is round-tripped;
     // an unrecognised/custom configuration fails closed before any mutation.
+    windowsMainServiceConfigSnapshotFailureReason = "";
     var systemSc = "C:/Windows/System32/sc.exe";
     var queryResult = installer.execute(systemSc, ["query", serviceName]);
     var configResult = installer.execute(systemSc, ["qc", serviceName]);
@@ -389,6 +571,11 @@ function queryWindowsMainServiceConfig(serviceName)
             || configResult.length < 2 || Number(configResult[1]) !== 0
             || failureResult.length < 2 || Number(failureResult[1]) !== 0
             || failureFlagResult.length < 2 || Number(failureFlagResult[1]) !== 0) {
+        windowsMainServiceConfigSnapshotFailureReason = "sc-query-exit-"
+                + (queryResult.length < 2 ? "query" : Number(queryResult[1])) + "/"
+                + (configResult.length < 2 ? "qc" : Number(configResult[1])) + "/"
+                + (failureResult.length < 2 ? "qfailure" : Number(failureResult[1])) + "/"
+                + (failureFlagResult.length < 2 ? "qfailureflag" : Number(failureFlagResult[1]));
         return null;
     }
 
@@ -410,7 +597,7 @@ function queryWindowsMainServiceConfig(serviceName)
         "COMMAND_LINE",
         "FAILURE_ACTIONS"
     ];
-    var allowedFailureFlagFields = ["SERVICE_NAME", "FAILURE_ACTIONS_FLAG"];
+    var allowedFailureFlagFields = ["SERVICE_NAME", "FAILURE_ACTIONS_ON_NONCRASH_FAILURES"];
     var expectedFailureActions =
         "RESTART -- DELAY = 2000 MILLISECONDS. RESTART -- DELAY = 2000 MILLISECONDS. "
         + "RESTART -- DELAY = 2000 MILLISECONDS.";
@@ -423,28 +610,37 @@ function queryWindowsMainServiceConfig(serviceName)
         : String(failureFields["REBOOT_MESSAGE"] || "");
     var commandLine = failureFields === null ? "not-empty"
         : String(failureFields["COMMAND_LINE"] || "");
-    var failureActionsFlag = failureFlagFields === null ? ""
-        : String(failureFlagFields["FAILURE_ACTIONS_FLAG"] || "").trim();
+    var failureActionsFlagRaw = failureFlagFields === null ? ""
+        : String(failureFlagFields["FAILURE_ACTIONS_ON_NONCRASH_FAILURES"] || "").trim();
+    var failureActionsFlag = normalizeWindowsFailureActionsFlag(failureActionsFlagRaw);
+    var identity = queryWindowsMainServiceIdentity(serviceName);
     if (startType === ""
+            || !windowsServiceIdentityMatches(identity, startType)
             || !scFieldsHaveOnly(failureFields, allowedFailureFields)
             || !scFieldsHaveOnly(failureFlagFields, allowedFailureFlagFields)
             || !Object.prototype.hasOwnProperty.call(failureFields || {}, "RESET_PERIOD (IN SECONDS)")
             || !Object.prototype.hasOwnProperty.call(failureFields || {}, "REBOOT_MESSAGE")
             || !Object.prototype.hasOwnProperty.call(failureFields || {}, "COMMAND_LINE")
             || !Object.prototype.hasOwnProperty.call(failureFields || {}, "FAILURE_ACTIONS")
-            || !Object.prototype.hasOwnProperty.call(failureFlagFields || {}, "FAILURE_ACTIONS_FLAG")
+            || !Object.prototype.hasOwnProperty.call(failureFlagFields || {}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES")
             || resetPeriod !== "100"
             || rebootMessage.trim() !== ""
             || commandLine.trim() !== ""
             || failureActions !== expectedFailureActions
-            || failureActionsFlag !== "0") {
+            || failureActionsFlag === "") {
+        if (windowsMainServiceConfigSnapshotFailureReason === "") {
+            windowsMainServiceConfigSnapshotFailureReason = startType === ""
+                    ? "unsupported-start-type"
+                    : windowsServiceIdentityFailureReason(identity, startType, false);
+        }
         return null;
     }
 
     return {
         start: startType,
         failureActions: "restart/2000/restart/2000/restart/2000",
-        failureActionsFlag: failureActionsFlag
+        failureActionsFlag: failureActionsFlag,
+        failureActionsFlagRaw: failureActionsFlagRaw
     };
 }
 
@@ -453,10 +649,71 @@ function windowsMainServiceConfigMatches(left, right)
     return left !== null && right !== null
         && left.start === right.start
         && left.failureActions === right.failureActions
-        && left.failureActionsFlag === right.failureActionsFlag;
+        && left.failureActionsFlag === right.failureActionsFlag
+        && left.failureActionsFlagRaw === right.failureActionsFlagRaw;
 }
 
-function restoreWindowsMainServiceAfterAbortedUpgrade()
+function recoverWindowsServiceUpgradeJournalIfPresent()
+{
+    if (!installer.fileExists(windowsServiceUpgradeJournalPath)) {
+        return true;
+    }
+    if (!ensureWindowsUpgradeAdminRights()) {
+        return false;
+    }
+    var journal = readWindowsServiceUpgradeJournal();
+    var expectedActions = "restart/2000/restart/2000/restart/2000";
+    var expectedFlag = journal === null ? "" : normalizeWindowsFailureActionsFlag(journal.failureActionsFlagRaw);
+    if (journal === null || Number(journal.schema) !== 1
+            || String(journal.serviceName || "") !== "AmneziaVPN-service"
+            || String(journal.phase || "") !== "prepared"
+            || (journal.start !== "auto" && journal.start !== "delayed-auto")
+            || String(journal.failureActions || "") !== expectedActions
+            || String(journal.failureActionsFlag || "") !== expectedFlag
+            || expectedFlag === "") {
+        windowsUpgradePrepareFailureReason = "service-journal-invalid";
+        console.log("Refusing to consume malformed protected Windows service upgrade journal");
+        return false;
+    }
+
+    var systemSc = "C:/Windows/System32/sc.exe";
+    var queryResult = installer.execute(systemSc, ["query", "AmneziaVPN-service"]);
+    var queryExitCode = queryResult.length >= 2 ? Number(queryResult[1]) : -1;
+    if (queryExitCode === 1060) {
+        // The service is already gone. Clear only the journal; never recreate a
+        // deleted service from stale installer state.
+        var clearedMissing = clearWindowsServiceUpgradeJournal();
+        if (!clearedMissing) {
+            windowsUpgradePrepareFailureReason = "service-journal-clear-failed";
+        }
+        releaseWindowsUpgradeAdminRights();
+        return clearedMissing;
+    }
+    if (queryExitCode !== 0) {
+        windowsUpgradePrepareFailureReason = "service-journal-service-query-failed-" + queryExitCode;
+        console.log("Unable to inspect the service named by the protected upgrade journal; sc.exe exit code: "
+                    + queryExitCode);
+        releaseWindowsUpgradeAdminRights();
+        return false;
+    }
+
+    windowsMainServiceConfigSnapshot = {
+        start: String(journal.start),
+        failureActions: expectedActions,
+        failureActionsFlag: expectedFlag,
+        failureActionsFlagRaw: String(journal.failureActionsFlagRaw)
+    };
+    windowsMainServicePrepared = true;
+    var restored = restoreWindowsMainServiceAfterAbortedUpgrade(true);
+    if (!restored) {
+        windowsUpgradePrepareFailureReason = "service-journal-restore-failed-"
+                + (windowsMainServiceConfigSnapshotFailureReason || "unknown");
+    }
+    releaseWindowsUpgradeAdminRights();
+    return restored;
+}
+
+function restoreWindowsMainServiceAfterAbortedUpgrade(allowMissingInstallation)
 {
     if (!windowsMainServicePrepared) {
         return true;
@@ -473,18 +730,28 @@ function restoreWindowsMainServiceAfterAbortedUpgrade()
     if (queryExitCode === 1060) {
         // The old service was removed; there is no configuration left for the
         // cancellation path to restore. Never recreate a deleted service here.
+        var clearedDeleted = clearWindowsServiceUpgradeJournal();
         windowsMainServicePrepared = false;
         windowsMainServiceConfigSnapshot = null;
-        return true;
+        return clearedDeleted;
     }
     if (queryExitCode !== 0) {
         console.log("Unable to verify the old AmneziaVPN service before restoring its configuration; sc.exe exit code: "
                     + queryExitCode);
         return false;
     }
+    var currentIdentity = queryWindowsMainServiceIdentity(serviceName);
+    if (!windowsServiceIdentityMatches(currentIdentity, windowsMainServiceConfigSnapshot.start, true)) {
+        windowsMainServiceConfigSnapshotFailureReason = windowsServiceIdentityFailureReason(
+                currentIdentity, windowsMainServiceConfigSnapshot.start, true);
+        console.log("Refusing to restore an untrusted AmneziaVPN service identity; reason: "
+                    + windowsMainServiceConfigSnapshotFailureReason);
+        return false;
+    }
     // Never race the legacy maintenance tool. Its elevated child may still be
     // deleting the service or its files even after the bootstrap returned.
-    if (!appInstalled() || windowsLegacyMaintenanceToolProcessState() !== 0) {
+    if ((!allowMissingInstallation && !appInstalled())
+            || windowsLegacyMaintenanceToolProcessState() !== 0) {
         console.log("Refusing to restore the old AmneziaVPN service while legacy cleanup is active or ambiguous");
         return false;
     }
@@ -514,6 +781,10 @@ function restoreWindowsMainServiceAfterAbortedUpgrade()
     var restoredSnapshot = queryWindowsMainServiceConfig(serviceName);
     if (!windowsMainServiceConfigMatches(windowsMainServiceConfigSnapshot, restoredSnapshot)) {
         console.log("Previous AmneziaVPN service configuration did not verify after restoration");
+        return false;
+    }
+    if (!clearWindowsServiceUpgradeJournal()) {
+        console.log("Previous AmneziaVPN service was restored, but its durable upgrade journal could not be cleared");
         return false;
     }
     windowsMainServicePrepared = false;
@@ -599,7 +870,14 @@ function prepareWindowsMainServiceForUpgrade()
     windowsMainServiceConfigSnapshot = queryWindowsMainServiceConfig(serviceName);
     if (windowsMainServiceConfigSnapshot === null) {
         windowsUpgradePrepareFailureReason = "service-config-snapshot-unavailable";
-        console.log("Unable to snapshot the previous AmneziaVPN service start/recovery configuration");
+        console.log("Unable to snapshot the previous AmneziaVPN service start/recovery configuration; reason: "
+                    + windowsMainServiceConfigSnapshotFailureReason);
+        return false;
+    }
+    if (!persistWindowsServiceUpgradeJournal(windowsMainServiceConfigSnapshot)) {
+        windowsUpgradePrepareFailureReason = "service-journal-persist-failed";
+        console.log("Unable to durably persist the previous AmneziaVPN service configuration before mutation");
+        windowsMainServiceConfigSnapshot = null;
         return false;
     }
     // Set this before the first mutation so every partial failure has an
@@ -937,6 +1215,18 @@ function Controller () {
         installer.setValue("AllUsers", "true");
     }
 
+    if (runningOnWindows() && installer.isInstaller()
+            && !recoverWindowsServiceUpgradeJournalIfPresent()) {
+        writeWindowsInstallerLog("service-journal-recovery", windowsUpgradePrepareFailureReason);
+        releaseWindowsUpgradeAdminRights();
+        QMessageBox.critical(
+            "windows.service.upgrade.journal.recovery.failed",
+            appName(),
+            qsTr("A previous AmneziaVPN Windows service upgrade did not complete safely. The installer stopped before changing files or services. Resolve the protected recovery state, then run this full offline installer again."));
+        installer.setCancelled();
+        return;
+    }
+
     if (installer.isInstaller()) {
         if (runningOnWindows()) {
             writeWindowsInstallerLog("installer-start", "installer");
@@ -1120,6 +1410,16 @@ function Controller () {
         }
         if (runningOnWindows()) {
             writeWindowsInstallerLog("cleanup-verdict", "complete");
+            if (!clearWindowsServiceUpgradeJournal()) {
+                writeWindowsInstallerLog("service-journal-clear", "failed");
+                releaseWindowsUpgradeAdminRights();
+                QMessageBox.critical(
+                    "windows.service.upgrade.journal.clear.failed",
+                    appName(),
+                    qsTr("The previous AmneziaVPN Windows service was removed, but its protected upgrade journal could not be cleared. No new files were installed. Run this full offline installer again after resolving the protected recovery state."));
+                installer.setCancelled();
+                return;
+            }
             // The old service is now proven absent. Do not retain its snapshot
             // into the new product installation, where an interrupted later
             // operation must never overwrite the new service configuration.

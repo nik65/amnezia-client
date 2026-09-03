@@ -464,6 +464,58 @@ private slots:
         QCOMPARE(second.status().value(QStringLiteral("fullRulePriority")).toInt(), 1100);
     }
 
+    void allExceptRetiresStaleAllowListBeforeReusingPriority()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        QFile state(statePath);
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        QVERIFY(state.write(QJsonDocument(QJsonObject {
+            { QStringLiteral("version"), 2 },
+            { QStringLiteral("mode"), QStringLiteral("all-except") },
+            { QStringLiteral("interface"), QStringLiteral("wg0") },
+            { QStringLiteral("routes"), QJsonArray() },
+            { QStringLiteral("bypassRoutes"), QJsonArray { QStringLiteral("10.8.1.4") } },
+            { QStringLiteral("bypassRulePriority"), 1000 },
+            { QStringLiteral("fullRulePriority"), 1100 },
+        }).toJson(QJsonDocument::Compact)) > 0);
+        state.close();
+
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->capturedOutputs = {
+            QStringLiteral("1000: to 10.8.1.4 lookup main\n1100: from all lookup 51821\n"),
+            QStringLiteral("1100: from all lookup 51821\n"),
+            QStringLiteral("0.0.0.0/1 dev wg0 proto 186\n128.0.0.0/1 dev wg0 proto 186\n"),
+            QStringLiteral("::/1 dev wg0 proto 186\n8000::/1 dev wg0 proto 186\n"),
+            QString(),
+        };
+        // The receipt load probes the kernel once, then applyAllExcept probes
+        // it again. Feed both deterministic probe cycles to the fake runner.
+        runner->capturedOutputs += runner->capturedOutputs;
+        LinuxRouteReconciler reconciler(runner, statePath);
+        const RouteReconcileResult result = reconciler.applyAllExcept(
+                QStringLiteral("wg0"), { QStringLiteral("10.8.1.5") });
+        QVERIFY2(result.ok, qPrintable(result.message));
+
+        const QStringList staleDelete {
+            QStringLiteral("rule"), QStringLiteral("del"),
+            QStringLiteral("priority"), QStringLiteral("1000"), QStringLiteral("to"),
+            QStringLiteral("10.8.1.4"), QStringLiteral("lookup"), QStringLiteral("main") };
+        const QStringList replacementAdd {
+            QStringLiteral("rule"), QStringLiteral("add"),
+            QStringLiteral("priority"), QStringLiteral("1000"), QStringLiteral("to"),
+            QStringLiteral("10.8.1.5"), QStringLiteral("lookup"), QStringLiteral("main") };
+        int deleteIndex = -1;
+        int addIndex = -1;
+        for (int index = 0; index < runner->calls.size(); ++index) {
+            if (runner->calls.at(index).arguments == staleDelete) deleteIndex = index;
+            if (runner->calls.at(index).arguments == replacementAdd) addIndex = index;
+        }
+        QVERIFY(deleteIndex >= 0);
+        QVERIFY(addIndex > deleteIndex);
+    }
+
     void fullTunnelNeverTouchesUnderlayTable501()
     {
         QTemporaryDir temporaryDirectory;

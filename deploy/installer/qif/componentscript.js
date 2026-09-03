@@ -129,7 +129,7 @@ Component.prototype.createOperations = function()
         component.addElevatedOperation("Execute",
                                        [systemSc, "create", serviceName(), "binpath=", serviceImagePath,
                                          "start=", "auto", "depend=", "BFE/nsi"],
-                                       "UNDOEXECUTE", "{0,1060,1072}", systemSc, "delete", serviceName());
+                                       "UNDOEXECUTE", ["{0,1060}", systemSc, "delete", serviceName()]);
         // Run product cleanup first during rollback/uninstall. If it fails and
         // IFW continues, the service-create undo above still deregisters the
         // LocalSystem service without executing more TargetDir content.
@@ -148,7 +148,7 @@ Component.prototype.createOperations = function()
         component.addElevatedOperation("Execute", systemSc, "failure", serviceName(),
                                        "reset=", "100", "actions=",
                                        "restart/2000/restart/2000/restart/2000");
-        component.addElevatedOperation("Execute", "{0,1056}", systemSc, "start", serviceName());
+        component.addElevatedOperation("Execute", ["{0,1056}", systemSc, "start", serviceName()]);
     } else if (runningOnMacOS()) {
         component.addElevatedOperation("Execute", "@TargetDir@/post_install.sh", "UNDOEXECUTE", "@TargetDir@/post_uninstall.sh");
     } else if (runningOnLinux()) {

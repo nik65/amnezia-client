@@ -865,6 +865,58 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
           QStringLiteral("table"), QString::number(FullTunnelRouteTable),
           QStringLiteral("proto"), QString::number(AmneziaRouteProtocol) },
     };
+    // Retire stale allow-list rules before reusing priority 1000.  `ip rule
+    // add` permits duplicate priorities, which can leave an old allow-list
+    // entry active or make rule selection order-dependent.  Delete only exact
+    // protocol/priority/route-owned entries; the existing full-tunnel rule
+    // keeps non-allow-listed traffic on the VPN while this replacement runs.
+    QStringList removedPreviousBypassRoutes;
+    if (hadFullTunnel) {
+        for (const QString &route : previousBypassRoutes) {
+            if (bypassRoutes.contains(route)) {
+                continue;
+            }
+            bool owned = false;
+            for (const QString &line : ruleSnapshot.linesV4) {
+                if (ruleLineMatches(line, previousBypassPriority,
+                                    QStringLiteral("to %1 ").arg(route))) {
+                    owned = true;
+                    break;
+                }
+            }
+            if (!owned) {
+                continue;
+            }
+            if (!removeFullTunnelRule(bypassRuleArguments(QStringLiteral("del"),
+                                                          previousBypassPriority, route))) {
+                bool restored = true;
+                for (const QString &removed : removedPreviousBypassRoutes) {
+                    restored = addFullTunnelRule(
+                            bypassRuleArguments(QStringLiteral("add"),
+                                                previousBypassPriority, removed)) && restored;
+                }
+                const bool persisted = markRecoveryRequired(
+                        QStringLiteral("stale full-tunnel allow-list rule removal failed"));
+                return failure(QStringLiteral("recovery_required"),
+                               restored && persisted
+                                   ? QStringLiteral("stale full-tunnel allow-list rules could not be retired")
+                                   : QStringLiteral("stale allow-list removal and recovery receipt both failed"));
+            }
+            removedPreviousBypassRoutes.append(route);
+        }
+    }
+    const auto restoreRemovedPreviousBypassRoutes = [&]() {
+        bool restored = true;
+        for (const QString &removed : std::as_const(removedPreviousBypassRoutes)) {
+            restored = addFullTunnelRule(
+                    bypassRuleArguments(QStringLiteral("add"),
+                                        previousBypassPriority, removed)) && restored;
+        }
+        if (restored) {
+            removedPreviousBypassRoutes.clear();
+        }
+        return restored;
+    };
     int installedRoutes = 0;
     for (const QStringList &arguments : fullRoutes) {
         if (!addFullTunnelRoute(arguments)) {
@@ -907,13 +959,15 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
                     rollbackOk = addFullTunnelRoute(restore) && rollbackOk;
                 }
             }
-            if (!rollbackOk) {
+            const bool staleRestored = restoreRemovedPreviousBypassRoutes();
+            if (!rollbackOk || !staleRestored) {
                 const bool persisted = markRecoveryRequired(
-                        QStringLiteral("full-tunnel route rollback was incomplete"));
+                        staleRestored ? QStringLiteral("full-tunnel route rollback was incomplete")
+                                      : QStringLiteral("stale full-tunnel allow-list restore failed"));
                 return failure(QStringLiteral("recovery_required"),
                                persisted
                                    ? QStringLiteral("failed to install the full-tunnel route table and rollback was incomplete")
-                                   : QStringLiteral("full-tunnel rollback and durable recovery receipt both failed"));
+                               : QStringLiteral("full-tunnel rollback and durable recovery receipt both failed"));
             }
             return failure(QStringLiteral("full_tunnel_route_failed"),
                            QStringLiteral("failed to install the full-tunnel route table"));
@@ -970,6 +1024,7 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
                 ok = addFullTunnelRoute(restore) && ok;
             }
         }
+        ok = restoreRemovedPreviousBypassRoutes() && ok;
         return ok;
     };
 
@@ -981,15 +1036,36 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
                                        QStringLiteral("to %1 ").arg(route));
             });
             const bool ambiguous = std::any_of(ruleSnapshot.linesV4.cbegin(), ruleSnapshot.linesV4.cend(),
-                                               [bypassPriority, &bypassRoutes](const QString &line) {
-                return QRegularExpression(QStringLiteral("^\\s*%1:").arg(bypassPriority)).match(line).hasMatch()
-                    && !std::any_of(bypassRoutes.cbegin(), bypassRoutes.cend(),
-                                    [bypassPriority, &line](const QString &candidate) {
-                return ruleLineMatches(line, bypassPriority,
-                                       QStringLiteral("to %1 ").arg(candidate));
+                                               [bypassPriority, &bypassRoutes,
+                                                &removedPreviousBypassRoutes](const QString &line) {
+                if (!QRegularExpression(QStringLiteral("^\\s*%1:").arg(bypassPriority))
+                             .match(line).hasMatch()) {
+                    return false;
+                }
+                const bool wasRetired = std::any_of(
+                        removedPreviousBypassRoutes.cbegin(), removedPreviousBypassRoutes.cend(),
+                        [bypassPriority, &line](const QString &candidate) {
+                    return ruleLineMatches(line, bypassPriority,
+                                           QStringLiteral("to %1 ").arg(candidate));
+                });
+                return !wasRetired && !std::any_of(
+                        bypassRoutes.cbegin(), bypassRoutes.cend(),
+                        [bypassPriority, &line](const QString &candidate) {
+                    return ruleLineMatches(line, bypassPriority,
+                                           QStringLiteral("to %1 ").arg(candidate));
+                });
             });
-            });
-            if (!exactOwned || ambiguous) {
+            const bool priorityWasFreedForReplacement = !removedPreviousBypassRoutes.isEmpty()
+                    && !ambiguous;
+            if ((!exactOwned && !priorityWasFreedForReplacement) || ambiguous) {
+                const bool staleRestored = restoreRemovedPreviousBypassRoutes();
+                if (!staleRestored) {
+                    const bool persisted = markRecoveryRequired(
+                            QStringLiteral("stale full-tunnel allow-list restore failed"));
+                    return failure(QStringLiteral("recovery_required"),
+                                   persisted ? QStringLiteral("stale allow-list restore failed")
+                                             : QStringLiteral("stale allow-list restore and recovery receipt both failed"));
+                }
                 return failure(QStringLiteral("full_tunnel_rule_conflict"),
                                QStringLiteral("the bypass-rule priority is occupied by an ambiguous rule"));
             }
@@ -1047,42 +1123,9 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
         addedFullV6 = true;
     }
 
-    QStringList removedPreviousBypassRoutes;
     QStringList removedSplitRoutes;
     if (hadFullTunnel) {
-        for (const QString &route : previousBypassRoutes) {
-            bool owned = false;
-            for (const QString &line : ruleSnapshot.linesV4) {
-                if (ruleLineMatches(line, previousBypassPriority,
-                                    QStringLiteral("to %1 ").arg(route))) {
-                    owned = true;
-                    break;
-                }
-            }
-            if (!bypassRoutes.contains(route) && owned
-                && !removeFullTunnelRule(bypassRuleArguments(QStringLiteral("del"),
-                                                              previousBypassPriority, route))) {
-                const bool rollbackOk = rollback();
-                bool retiredRestoreOk = true;
-                for (const QString &removed : removedPreviousBypassRoutes) {
-                    if (!addFullTunnelRule(bypassRuleArguments(QStringLiteral("add"),
-                                                                previousBypassPriority, removed))) {
-                        retiredRestoreOk = false;
-                    }
-                }
-                if (!rollbackOk || !retiredRestoreOk) {
-                    const bool persisted = markRecoveryRequired(QStringLiteral("full-tunnel cleanup rollback failed"));
-                    return failure(QStringLiteral("recovery_required"), persisted
-                                       ? QStringLiteral("full-tunnel cleanup rollback failed")
-                                       : QStringLiteral("full-tunnel cleanup recovery receipt could not be persisted"));
-                }
-                return failure(QStringLiteral("full_tunnel_rule_cleanup_failed"),
-                               QStringLiteral("a stale full-tunnel bypass rule could not be removed"));
-            }
-            if (!bypassRoutes.contains(route) && owned) {
-                removedPreviousBypassRoutes.append(route);
-            }
-        }
+        // Stale rules were retired before the replacement priority was reused.
     } else if (!m_routes.isEmpty()) {
         if (!removeRoutes(m_interfaceName, m_routes, nullptr, &removedSplitRoutes)) {
             const bool routesRestored = restoreRoutes(m_interfaceName, removedSplitRoutes);
@@ -1106,10 +1149,6 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     if (!saveState()) {
         bool restored = rollback();
         restored = restoreRoutes(previousInterface, removedSplitRoutes) && restored;
-        for (const QString &route : removedPreviousBypassRoutes) {
-            restored = addFullTunnelRule(bypassRuleArguments(QStringLiteral("add"),
-                                                              previousBypassPriority, route)) && restored;
-        }
         markRecoveryRequired(restored
                                  ? QStringLiteral("full-tunnel state save failed after host rollback")
                                  : QStringLiteral("full-tunnel state save and host rollback both failed"));

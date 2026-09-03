@@ -189,7 +189,7 @@ launch it manually with Qt IFW's unattended arguments and the self-hosted
 handoff marker (Windows may still display its UAC consent prompt):
 
 ```powershell
-& .\dist\selfhosted-windows-client\5.0.1.16\AmneziaVPN_5.0.1.16_windows_x64_selfhosted.exe `
+& .\dist\selfhosted-windows-client\5.0.1.17\AmneziaVPN_5.0.1.17_windows_x64_selfhosted.exe `
   --accept-messages --accept-licenses --confirm-command install AmneziaSelfHostedUpdate=true
 ```
 
@@ -217,9 +217,21 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `5.0.1.16` with Android
-`versionCode` `2164`. The release includes the Linux headless client and the
+The current self-hosted release line is `5.0.1.17` with Android
+`versionCode` `2165`. The release includes the Linux headless client and the
 managed all-except/full-tunnel routing path.
+
+Release notes for `5.0.1.17`: the Windows QIF upgrade preflight now parses the
+native `FAILURE_ACTIONS_ON_NONCRASH_FAILURES : TRUE|FALSE` output and preserves
+its exact normalized value, verifies the existing service identity and trusted
+image path before SCM mutation, and writes an atomic protected recovery journal
+that is consumed on the next installer run without recreating a deleted service.
+The component script uses Qt IFW string-array Execute vectors and accepts only
+the clean-install `0`/`1060` undo result. Android unknown-sources handoff state
+is persisted synchronously and rehydrated after activity/process recreation.
+
+The `5.0.1.16` artifacts and fixtures remain historical compatibility inputs;
+new releases must not reuse that version or Android code.
 
 Release notes for `5.0.1.16`: this monotonic routing safety release supersedes
 `5.0.1.12` because the headless updater now schedules its own service restart

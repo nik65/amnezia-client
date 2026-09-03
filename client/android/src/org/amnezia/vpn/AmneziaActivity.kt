@@ -243,6 +243,8 @@ class AmneziaActivity : QtActivity() {
         )
         pendingOpenFileUri = savedInstanceState?.getString(KEY_PENDING_OPEN_FILE_URI)
         pendingInstallApkPath = savedInstanceState?.getString(KEY_PENDING_INSTALL_APK_PATH)
+            ?.takeIf { it.isNotBlank() }
+            ?: Prefs.load<String>(KEY_PENDING_INSTALL_APK_PATH).takeIf { it.isNotBlank() }
         openFileDeliveryScheduled = false
         installApkDeliveryScheduled = false
         registerBroadcastReceivers()
@@ -254,6 +256,21 @@ class AmneziaActivity : QtActivity() {
         super.onSaveInstanceState(outState)
         pendingOpenFileUri?.let { outState.putString(KEY_PENDING_OPEN_FILE_URI, it) }
         pendingInstallApkPath?.let { outState.putString(KEY_PENDING_INSTALL_APK_PATH, it) }
+        persistPendingInstallApkPath(pendingInstallApkPath)
+    }
+
+    private fun persistPendingInstallApkPath(path: String?): Boolean {
+        val editor = Prefs.prefs.edit()
+        if (path.isNullOrBlank()) {
+            editor.remove(KEY_PENDING_INSTALL_APK_PATH)
+        } else {
+            editor.putString(KEY_PENDING_INSTALL_APK_PATH, path)
+        }
+        if (!editor.commit()) {
+            Log.e(TAG, "Failed to persist pending APK installer path")
+            return false
+        }
+        return true
     }
 
     private fun loadLibs() {
@@ -340,21 +357,27 @@ class AmneziaActivity : QtActivity() {
         if (!hasFocus) {
             // Cancel pending operations if window loses focus
             resumeHandler.removeCallbacksAndMessages(null)
-        } else if (isActivityResumed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            window.decorView.apply {
-                invalidate()
-                resumeHandler.postDelayed({
-                    if (isActivityResumed && hasWindowFocus && !isFinishing && !isDestroyed) {
-                        sendTouch(1f, 1f)
-                    }
-                }, 50)
-                resumeHandler.postDelayed({
-                    if (isActivityResumed && hasWindowFocus && !isFinishing && !isDestroyed) {
-                        sendTouch(2f, 2f)
-                        requestLayout()
-                        invalidate()
-                    }
-                }, 150)
+            openFileDeliveryScheduled = false
+            installApkDeliveryScheduled = false
+            installApkDeliveryGeneration++
+        } else {
+            schedulePendingApkInstallDelivery()
+            if (isActivityResumed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                window.decorView.apply {
+                    invalidate()
+                    resumeHandler.postDelayed({
+                        if (isActivityResumed && hasWindowFocus && !isFinishing && !isDestroyed) {
+                            sendTouch(1f, 1f)
+                        }
+                    }, 50)
+                    resumeHandler.postDelayed({
+                        if (isActivityResumed && hasWindowFocus && !isFinishing && !isDestroyed) {
+                            sendTouch(2f, 2f)
+                            requestLayout()
+                            invalidate()
+                        }
+                    }, 150)
+                }
             }
         }
     }
@@ -434,30 +457,7 @@ class AmneziaActivity : QtActivity() {
             }, OPEN_FILE_AFTER_RESUME_DELAY_MS)
         }
 
-        if (pendingInstallApkPath != null && !installApkDeliveryScheduled) {
-            val apkPath = pendingInstallApkPath!!
-            val deliveryGeneration = ++installApkDeliveryGeneration
-            installApkDeliveryScheduled = true
-            resumeHandler.postDelayed({
-                if (!isFinishing && !isDestroyed && isActivityResumed) {
-                    mainScope.launch {
-                        qtInitialized.await()
-                        if (deliveryGeneration != installApkDeliveryGeneration) {
-                            return@launch
-                        }
-                        installApkDeliveryScheduled = false
-                        if (pendingInstallApkPath == apkPath
-                            && isActivityResumed
-                            && !isFinishing
-                            && !isDestroyed) {
-                            startApkInstaller(apkPath, openSettingsIfBlocked = false)
-                        }
-                    }
-                } else if (deliveryGeneration == installApkDeliveryGeneration) {
-                    installApkDeliveryScheduled = false
-                }
-            }, OPEN_FILE_AFTER_RESUME_DELAY_MS)
-        }
+        schedulePendingApkInstallDelivery()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             window.decorView.apply {
@@ -484,6 +484,38 @@ class AmneziaActivity : QtActivity() {
                 }, 250)
             }
         }
+    }
+
+    private fun schedulePendingApkInstallDelivery() {
+        if (pendingInstallApkPath == null || installApkDeliveryScheduled || !isActivityResumed) {
+            return
+        }
+        val apkPath = pendingInstallApkPath!!
+        val deliveryGeneration = ++installApkDeliveryGeneration
+        installApkDeliveryScheduled = true
+        resumeHandler.postDelayed({
+            if (!isFinishing && !isDestroyed && isActivityResumed && hasWindowFocus) {
+                mainScope.launch {
+                    qtInitialized.await()
+                    if (deliveryGeneration != installApkDeliveryGeneration) {
+                        return@launch
+                    }
+                    installApkDeliveryScheduled = false
+                    if (pendingInstallApkPath == apkPath
+                        && isActivityResumed
+                        && hasWindowFocus
+                        && !isFinishing
+                        && !isDestroyed) {
+                        startApkInstaller(apkPath, openSettingsIfBlocked = false)
+                    }
+                }
+            } else if (deliveryGeneration == installApkDeliveryGeneration) {
+                installApkDeliveryScheduled = false
+                if (isActivityResumed && hasWindowFocus) {
+                    schedulePendingApkInstallDelivery()
+                }
+            }
+        }, OPEN_FILE_AFTER_RESUME_DELAY_MS)
     }
 
     private fun configureWindowForEdgeToEdge() {
@@ -1060,6 +1092,10 @@ class AmneziaActivity : QtActivity() {
     fun installApk(fileName: String): Int {
         Log.i(TAG, "Install APK: $fileName")
         pendingInstallApkPath = fileName
+        if (!persistPendingInstallApkPath(fileName)) {
+            pendingInstallApkPath = null
+            return failApkInstaller(fileName, "apk_pending_state_persist_failed")
+        }
         return startApkInstaller(fileName, openSettingsIfBlocked = true)
     }
 
@@ -1157,6 +1193,7 @@ class AmneziaActivity : QtActivity() {
 
     private fun failApkInstaller(fileName: String, reason: String): Int {
         pendingInstallApkPath = null
+        persistPendingInstallApkPath(null)
         try {
             QtAndroidController.onApkInstallerStartFailed(
                 fileName,
@@ -1216,8 +1253,12 @@ class AmneziaActivity : QtActivity() {
                 Log.e(TAG, "Native update authorization rejected APK installer launch: $fileName")
                 return failApkInstaller(fileName, "apk_authorization_rejected")
             }
-            pendingInstallApkPath = null
             startActivity(intent)
+            // Retain the durable path until Android has accepted the intent.
+            // If startActivity throws, the catch path reports failure and
+            // removes the pending state instead.
+            pendingInstallApkPath = null
+            persistPendingInstallApkPath(null)
             try {
                 QtAndroidController.onApkInstallerStarted(fileName)
             } catch (e: Throwable) {
