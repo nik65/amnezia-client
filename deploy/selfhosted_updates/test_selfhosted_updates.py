@@ -1205,8 +1205,25 @@ class SourceContractTests(unittest.TestCase):
         )
 
     def test_manifest_rejects_external_headless_platform_alias(self) -> None:
-        with self.assertRaises(SystemExit):
-            make_manifest.validate_platform_vocabulary("headless-x64", "--external")
+        for alias in ("headless-x64", "linux-headless"):
+            with self.subTest(alias=alias):
+                with self.assertRaises(SystemExit):
+                    make_manifest.validate_platform_vocabulary(alias, "--external")
+
+    def test_headless_verifier_pins_key_uses_rawin_and_extracts_one_private_copy(self) -> None:
+        verifier = (REPO_ROOT / "deploy/headless/verify_provisioning_bundle.py").read_text(encoding="utf-8")
+        self.assertIn("validate_release_version", verifier)
+        self.assertNotIn("is_canonical_release_version", verifier)
+        self.assertIn('parser.add_argument("--expected-public-key-sha256", required=True)', verifier)
+        self.assertIn('"-rawin"', verifier)
+        self.assertIn("_copy_archive_to_private_temp", verifier)
+        self.assertIn("_copy_regular_file_to_private_temp", verifier)
+        self.assertIn('"manifest.json"', verifier)
+        self.assertIn('"update-public-key.pem"', verifier)
+        self.assertIn("exact_copy", verifier)
+        self.assertIn("sha256(exact_copy)", verifier)
+        self.assertIn("hashlib.sha256(manifest_data).hexdigest()", verifier)
+        self.assertIn("private provisioning archive changed after verification", verifier)
 
     def test_headless_manifest_requires_provisioning_binding(self) -> None:
         helper = (REPO_ROOT / "deploy/headless/make_headless_manifest.py").read_text(encoding="utf-8")
@@ -1239,6 +1256,8 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('"packageFiles"', manifest_tool)
         self.assertIn("hasHeadlessPlatform != !provisioningValue.isUndefined()", bootstrapper)
         self.assertIn("provisioning.size() != 9", bootstrapper)
+        self.assertIn("non-canonical Linux headless platform", bootstrapper)
+        self.assertIn('QStringLiteral("amnezia-headless-tar-v1")', bootstrapper)
 
     def test_provisioning_verifier_is_verify_only_by_default(self) -> None:
         verifier = (REPO_ROOT / "deploy/headless/verify_provisioning_bundle.py").read_text(encoding="utf-8")
@@ -1261,6 +1280,24 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('"groupdel"', builder)
         self.assertNotIn("id command;", installer)
         self.assertNotIn('"command"', builder)
+
+    def test_provisioning_receipt_is_bound_to_signed_manifest_and_fresh_state_is_ambiguous(self) -> None:
+        installer = (REPO_ROOT / "deploy/headless/install_headless.sh").read_text(encoding="utf-8")
+        self.assertIn("EXPECTED_SIGNED_MANIFEST_SHA256", installer)
+        self.assertIn('receipt["manifestSha256"] != expected_signed_manifest.lower()', installer)
+        self.assertIn("/var/lib/amnezia /run/amnezia /etc/amnezia /etc/amnezia/profiles", installer)
+        self.assertIn("preexisting-state installation already exists", installer)
+        self.assertIn("systemctl disable amneziad.service", installer)
+        self.assertIn('rmdir -- "$state_dir"', installer)
+        self.assertIn('groupdel --system amnezia', installer)
+
+    def test_headless_standalone_manifest_writes_through_private_staging(self) -> None:
+        helper = (REPO_ROOT / "deploy/headless/make_headless_manifest.py").read_text(encoding="utf-8")
+        self.assertIn("def atomic_copy", helper)
+        self.assertIn("def atomic_write", helper)
+        self.assertIn("os.replace(staged_path, target)", helper)
+        self.assertIn("os.fsync(staged.fileno())", helper)
+        self.assertIn("replace_output_tree(out_dir, requested_out_dir)", helper)
 
     def test_manifest_tool_rejects_duplicate_platforms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2962,7 +2999,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('QStringLiteral("amneziad"), QStringLiteral("amnezia-cli")', managed_files)
         self.assertNotIn('QStringLiteral("amneziad.service")', managed_files)
         self.assertIn("amneziad amnezia-cli", build_script)
-        archive_start = build_script.index('tar --create --gzip --file "$ARCHIVE"')
+        archive_start = build_script.index('tar --create --gzip --file "$ARCHIVE_TMP"')
         archive_end = build_script.index('sha256sum "$ARCHIVE"', archive_start)
         self.assertNotIn("amneziad.service", build_script[archive_start:archive_end])
         self.assertIn('sha256sum install_headless.sh', build_script)
@@ -2976,6 +3013,9 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('@("windows", "linux", "android", "headless")', local_release)
         self.assertIn('PSBoundParameters.ContainsKey("BuildPlatform")', local_release)
         self.assertIn('$headlessArtifactPresent', local_release)
+        self.assertIn('"linux-headless-x64"', local_release)
+        self.assertIn('$BuildPlatform.Count -eq 1 -and $BuildPlatform[0] -eq "headless"', local_release)
+        self.assertIn('$RequirePlatform = @("linux-headless-x64")', local_release)
 
     def test_headless_installer_requires_strict_identity_and_transactional_restore(self) -> None:
         installer = (REPO_ROOT / "deploy/headless/install_headless.sh").read_text(encoding="utf-8")
