@@ -63,7 +63,7 @@ QStringList routesFromSites(const QJsonObject &sites,
                         it.value().toString(), &valueValid);
         if (!valueValid) {
             isValid = false;
-            break;
+            continue;
         }
         if (fallbackRoutes.isEmpty()) {
             if (unresolvedSites) {
@@ -109,8 +109,10 @@ ServerRoutingPolicyResult ServerRoutingPolicy::failure(const QString &code,
 ServerRoutingPolicyResult ServerRoutingPolicy::parse(
         const QByteArray &payload,
         const std::optional<amnezia::ManagedRoutePolicyMetadata> &current,
-        const QString &source)
+        const QString &source,
+        const QJsonObject &previousResolvedSites)
 {
+    Q_UNUSED(previousResolvedSites);
     if (payload.isEmpty() || payload.size() > MaximumPayloadBytes) {
         return failure(QStringLiteral("policy_too_large"),
                        QStringLiteral("server routing policy exceeds the byte limit"));
@@ -156,6 +158,14 @@ ServerRoutingPolicyResult ServerRoutingPolicy::parse(
         return failure(QStringLiteral("invalid_policy"),
                        QStringLiteral("resolved managed sites are not bound to source sites"));
     }
+    // Literal CIDRs do not require DNS or server-side resolver output.  Keep
+    // them deterministic even when the server's resolved alias omits them.
+    for (auto it = sourceSites.constBegin(); it != sourceSites.constEnd(); ++it) {
+        if (!amnezia::managedRoutePolicy::canonicalManagedIpv4Route(it.key()).isEmpty()
+            && !resolvedSites.contains(it.key())) {
+            resolvedSites.insert(it.key(), it.value());
+        }
+    }
 
     QString metadataError;
     const auto metadata = amnezia::managedRoutePolicy::validateCandidate(
@@ -196,7 +206,8 @@ ServerRoutingPolicyResult ServerRoutingPolicy::parse(
 }
 
 ServerRoutingPolicyResult ServerRoutingPolicy::resolve(
-        ServerRoutingPolicySnapshot policy, int deadlineMs)
+        ServerRoutingPolicySnapshot policy, int deadlineMs,
+        const QJsonObject &previousResolvedSites)
 {
     if (deadlineMs < MinimumLookupTimeoutMs || policy.unresolvedSites.size()
         > amnezia::managedRoutePolicy::maximumSiteCount) {
@@ -207,13 +218,25 @@ ServerRoutingPolicyResult ServerRoutingPolicy::resolve(
     QElapsedTimer elapsed;
     elapsed.start();
     QObject context;
+    const auto appendPreviousResolution = [&policy, &previousResolvedSites](const QString &domain) {
+        const QString fallback = previousResolvedSites.value(domain).toString();
+        bool fallbackValid = false;
+        const QStringList fallbackRoutes =
+                amnezia::managedRoutePolicy::validatedManagedRouteTokens(
+                        fallback, &fallbackValid);
+        if (policy.sourceSites.contains(domain) && fallbackValid && !fallbackRoutes.isEmpty()) {
+            policy.resolvedSites.insert(domain, fallback);
+            policy.routes.append(fallbackRoutes);
+        }
+    };
     for (const QString &domain : std::as_const(policy.unresolvedSites)) {
         const int remaining = deadlineMs - static_cast<int>(elapsed.elapsed());
         if (remaining < MinimumLookupTimeoutMs) {
             // Availability-first policy: unresolved names are deliberately
             // omitted from the bypass set (fail closed), while direct CIDRs
             // and previous server-provided fallbacks remain usable.
-            break;
+            appendPreviousResolution(domain);
+            continue;
         }
 
         QHostInfo result;
@@ -232,9 +255,11 @@ ServerRoutingPolicyResult ServerRoutingPolicy::resolve(
         loop.exec();
         if (!completed) {
             QHostInfo::abortHostLookup(lookupId);
-            break;
+            appendPreviousResolution(domain);
+            continue;
         }
         if (result.error() != QHostInfo::NoError) {
+            appendPreviousResolution(domain);
             continue;
         }
 
@@ -253,6 +278,7 @@ ServerRoutingPolicyResult ServerRoutingPolicy::resolve(
             }
         }
         if (addresses.isEmpty()) {
+            appendPreviousResolution(domain);
             continue;
         }
         policy.resolvedSites.insert(domain, addresses.join(QStringLiteral(", ")));

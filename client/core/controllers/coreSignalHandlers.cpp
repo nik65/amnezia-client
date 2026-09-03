@@ -448,6 +448,10 @@ void CoreSignalHandlers::initUpdateFoundHandler()
             &UpdateController::checkForUpdates);
 
 #ifdef Q_OS_WIN
+    // The bundled Windows client is the only publication vehicle. Its
+    // self-hosted payload deliberately contains the Windows, Linux, Android,
+    // and headless artifacts; Android/iOS clients only consume the published
+    // artifact and keep installation under the platform OS/package manager.
     connect(m_coreController->m_selfHostedUpdateBootstrapper, &SelfHostedUpdateBootstrapper::publishFinished, this, [scheduleUpdateCheck](bool) {
         scheduleUpdateCheck();
     });

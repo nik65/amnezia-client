@@ -253,6 +253,7 @@ private:
     bool m_androidApkInstallPermissionPending = false;
     bool m_rollbackInstallAttempt = false;
     bool m_handoffReceiptPrepared = false;
+    bool m_desktopQuitScheduled = false;
 
 #if defined(Q_OS_WINDOWS)
     int runWindowsInstaller(const QString &installerPath,

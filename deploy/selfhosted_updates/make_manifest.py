@@ -20,6 +20,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
@@ -51,6 +52,20 @@ MAX_POLICY_GENERATION = (1 << 53) - 1
 MAX_VERSION_COMPONENT = (1 << 31) - 1
 MAX_ANDROID_VERSION_CODE = 2_100_000_000
 HEADLESS_ARTIFACT_FORMAT = "amnezia-headless-tar-v1"
+HEADLESS_PROVISIONING_FILES = (
+    "install_headless.sh",
+    "amneziad",
+    "amnezia-cli",
+    "amneziad.service",
+    "package-manifest.json",
+    "runtime-dependencies.json",
+    "runtime-dependencies.txt",
+    "SHA256SUMS",
+)
+HEADLESS_PACKAGE_MANIFEST_KEYS = {
+    "schema", "version", "platform", "installModes", "artifacts", "service",
+    "servicePaths", "trustAnchor", "runtimeManifest", "checksums", "runtimeText",
+}
 
 
 def openssl_command() -> str:
@@ -76,6 +91,109 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def inspect_headless_provisioning(
+    archive: Path, expected_version: str | None = None
+) -> dict[str, object]:
+    """Inspect the provisioning tar without extracting or executing it.
+
+    The archive is a signed release input, so its member set, regular-file
+    type, package identity, and internal checksum receipt are all validated
+    before the caller publishes or hands it to an operator.
+    """
+
+    if not archive.is_file() or archive.is_symlink():
+        raise SystemExit("headless provisioning archive must be a regular file")
+    if archive.stat().st_size <= 0:
+        raise SystemExit("headless provisioning archive is empty")
+    try:
+        with tarfile.open(archive, mode="r:gz") as tar:
+            members = tar.getmembers()
+            names: list[str] = []
+            files: dict[str, bytes] = {}
+            for member in members:
+                name = member.name
+                path = PurePosixPath(name)
+                if name == "headless-package" and member.isdir():
+                    continue
+                if (
+                    path.is_absolute()
+                    or ".." in path.parts
+                    or len(path.parts) != 2
+                    or path.parts[0] != "headless-package"
+                    or path.parts[1] in {"", "."}
+                    or name != str(path)
+                    or not member.isreg()
+                    or member.name in names
+                ):
+                    raise SystemExit(f"unsafe headless provisioning tar member: {name!r}")
+                names.append(name)
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    raise SystemExit(f"headless provisioning member is unreadable: {name!r}")
+                data = extracted.read(8 * 1024 * 1024 + 1)
+                if len(data) > 8 * 1024 * 1024:
+                    raise SystemExit(f"headless provisioning member is too large: {name!r}")
+                files[path.parts[1]] = data
+    except (tarfile.TarError, OSError) as error:
+        raise SystemExit(f"cannot safely inspect headless provisioning archive: {archive}") from error
+
+    expected_members = {f"headless-package/{name}" for name in HEADLESS_PROVISIONING_FILES}
+    if set(names) != expected_members:
+        raise SystemExit(
+            "headless provisioning archive has an unexpected file set: "
+            + ", ".join(sorted(names))
+        )
+    try:
+        package_manifest = json.loads(files["package-manifest.json"].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit("headless package-manifest.json is not valid UTF-8 JSON") from error
+    if (
+        not isinstance(package_manifest, dict)
+        or set(package_manifest) != HEADLESS_PACKAGE_MANIFEST_KEYS
+        or package_manifest.get("schema") != 2
+        or package_manifest.get("platform") != "linux-headless-x64"
+        or package_manifest.get("installModes") != ["fresh", "upgrade"]
+        or package_manifest.get("artifacts") != ["amneziad", "amnezia-cli", "amneziad.service"]
+        or package_manifest.get("service") != "amneziad.service"
+        or package_manifest.get("servicePaths") != [
+            "/etc/systemd/system/amneziad.service",
+            "/lib/systemd/system/amneziad.service",
+        ]
+        or package_manifest.get("trustAnchor") != "external-ed25519-sha256-receipt"
+        or package_manifest.get("runtimeManifest") != "runtime-dependencies.json"
+        or package_manifest.get("checksums") != "SHA256SUMS"
+        or package_manifest.get("runtimeText") != "runtime-dependencies.txt"
+    ):
+        raise SystemExit("headless package-manifest.json has an invalid exact package contract")
+    package_version = package_manifest.get("version")
+    if not isinstance(package_version, str) or not VERSION_RE.fullmatch(package_version):
+        raise SystemExit("headless package-manifest.json has an invalid version")
+    if expected_version is not None and package_version != expected_version:
+        raise SystemExit(
+            f"headless provisioning package version {package_version!r} does not match release {expected_version!r}"
+        )
+
+    checksum_lines = files["SHA256SUMS"].decode("utf-8").splitlines()
+    checksums: dict[str, str] = {}
+    for line in checksum_lines:
+        match = re.fullmatch(r"([0-9a-f]{64})  ([^\t\r\n]+)", line)
+        if not match or match.group(2) in checksums:
+            raise SystemExit("headless provisioning SHA256SUMS is not a strict checksum receipt")
+        checksums[match.group(2)] = match.group(1)
+    if set(checksums) != set(HEADLESS_PROVISIONING_FILES) - {"SHA256SUMS"}:
+        raise SystemExit("headless provisioning SHA256SUMS does not cover the exact package files")
+    for name, expected_digest in checksums.items():
+        if hashlib.sha256(files[name]).hexdigest() != expected_digest:
+            raise SystemExit(f"headless provisioning inner checksum mismatch: {name}")
+
+    return {
+        "version": package_version,
+        "files": list(HEADLESS_PROVISIONING_FILES),
+        "packageManifestSha256": hashlib.sha256(files["package-manifest.json"]).hexdigest(),
+        "checksumsSha256": hashlib.sha256(files["SHA256SUMS"]).hexdigest(),
+    }
 
 
 def verify_content_address(target: Path, expected_digest: str) -> None:
@@ -164,6 +282,33 @@ def validate_base_url(value: str) -> str:
         raise SystemExit("--base-url host must be a single host or IP address, not a CIDR route")
     if host_is_ip and parsed.path.count("/") == 1 and parsed.path[1:].isdigit():
         raise SystemExit("--base-url must point to an update endpoint, not a CIDR route such as 10.8.1.0/1")
+    return normalized
+
+
+def validate_headless_base_url(value: str) -> str:
+    """Enforce the URL contract consumed by the native headless updater."""
+
+    normalized = validate_base_url(value)
+    parsed = urlparse(normalized)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise SystemExit("Linux headless base URL must contain a valid TCP port") from error
+    if port is None or not 1 <= port <= 65535:
+        raise SystemExit("Linux headless base URL must contain an explicit TCP port from 1 to 65535")
+    hostname = parsed.hostname or ""
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is None:
+        raise SystemExit("Linux headless publication requires a literal IP compatible with runtime pinning")
+    if parsed.scheme == "http" and not (
+        address.is_private or address.is_loopback or address.is_link_local
+    ):
+        raise SystemExit(
+            "Linux headless HTTP publication requires a private, loopback, or link-local literal IP"
+        )
     return normalized
 
 
@@ -929,9 +1074,12 @@ def verify_manifest(
         if any(artifact.get("autoInstall") is not True for artifact in platforms.values()):
             raise SystemExit("Generated manifest is missing autoInstall=true for a platform")
     provisioning = payload.get("headlessProvisioning")
+    if any(is_headless_platform(platform) for platform in platforms) and provisioning is None:
+        raise SystemExit("Generated manifest headless payload is missing headlessProvisioning metadata")
     if provisioning is not None:
         if not isinstance(provisioning, dict) or set(provisioning) != {
-            "url", "sha256", "size", "format", "version"
+            "url", "sha256", "size", "format", "version", "packageManifestSha256",
+            "checksumsSha256", "packageVersion", "packageFiles",
         }:
             raise SystemExit("Generated manifest headlessProvisioning metadata is invalid")
         if (
@@ -941,6 +1089,12 @@ def verify_manifest(
             or not SHA256_RE.fullmatch(provisioning["sha256"])
             or provisioning["format"] != HEADLESS_PROVISIONING_FORMAT
             or provisioning["version"] != expected_version
+            or provisioning["packageVersion"] != expected_version
+            or provisioning["packageFiles"] != list(HEADLESS_PROVISIONING_FILES)
+            or not isinstance(provisioning["packageManifestSha256"], str)
+            or not SHA256_RE.fullmatch(provisioning["packageManifestSha256"])
+            or not isinstance(provisioning["checksumsSha256"], str)
+            or not SHA256_RE.fullmatch(provisioning["checksumsSha256"])
             or isinstance(provisioning["size"], bool)
             or not isinstance(provisioning["size"], int)
             or provisioning["size"] <= 0
@@ -954,11 +1108,21 @@ def verify_manifest(
         ):
             raise SystemExit("Generated manifest headlessProvisioning URL escapes the output tree")
         if (
-            not provisioning_path.is_file()
+            relative_path.parts[:2] != ("files", "artifacts")
+            or relative_path.parts[2:3] != (provisioning["sha256"],)
+            or provisioning_path.is_symlink()
+            or not provisioning_path.is_file()
             or sha256(provisioning_path) != provisioning["sha256"]
             or provisioning_path.stat().st_size != provisioning["size"]
         ):
             raise SystemExit("Generated manifest headlessProvisioning file does not match signed metadata")
+        inspected = inspect_headless_provisioning(provisioning_path, expected_version)
+        if (
+            inspected["packageManifestSha256"] != provisioning["packageManifestSha256"]
+            or inspected["checksumsSha256"] != provisioning["checksumsSha256"]
+            or inspected["files"] != provisioning["packageFiles"]
+        ):
+            raise SystemExit("Generated manifest headless provisioning inner receipt does not match the archive")
     verify_payload_signature(private_key, payload_bytes, signature)
 
 
@@ -1185,19 +1349,7 @@ def main() -> int:
     for platform in artifact_platforms:
         validate_platform_vocabulary(platform, "--artifact")
     if any(is_headless_platform(platform) for platform in artifact_platforms):
-        base = urlparse(base_url)
-        try:
-            address = ipaddress.ip_address(base.hostname or "")
-            if base.scheme == "http" and not (
-                address.is_private or address.is_loopback or address.is_link_local
-            ):
-                raise ValueError
-            if base.port is not None and not 1 <= base.port <= 65535:
-                raise ValueError
-        except ValueError as error:
-            raise SystemExit(
-                "Linux headless publication requires a literal IP base URL with a valid port"
-            ) from error
+        validate_headless_base_url(base_url)
     if args.payload_schema == 2 and any(
         isinstance(platform, str) and "headless" in platform.lower()
         for platform in artifact_platforms
@@ -1372,7 +1524,9 @@ def main() -> int:
     for platform in platforms:
         validate_platform_vocabulary(platform, "manifest")
     has_headless_platform = any(is_headless_platform(platform) for platform in platforms)
-    if args.headless_provisioning and not has_headless_platform:
+    if has_headless_platform != bool(args.headless_provisioning):
+        if has_headless_platform:
+            raise SystemExit("Linux headless artifacts require --headless-provisioning")
         raise SystemExit("--headless-provisioning requires a Linux headless platform artifact")
     if args.payload_schema == 2 and has_headless_platform:
         raise SystemExit(
@@ -1387,12 +1541,17 @@ def main() -> int:
         provisioning_target, provisioning_digest = copy_content_addressed_artifact(
             provisioning_path, files_dir
         )
+        package_receipt = inspect_headless_provisioning(provisioning_path, version)
         headless_provisioning = {
             "url": relative_artifact_file_url(provisioning_digest, provisioning_target.name),
             "sha256": provisioning_digest,
             "size": provisioning_target.stat().st_size,
             "format": HEADLESS_PROVISIONING_FORMAT,
             "version": version,
+            "packageManifestSha256": package_receipt["packageManifestSha256"],
+            "checksumsSha256": package_receipt["checksumsSha256"],
+            "packageVersion": package_receipt["version"],
+            "packageFiles": package_receipt["files"],
         }
 
     if not platforms:

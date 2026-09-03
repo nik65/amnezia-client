@@ -38,11 +38,24 @@ public:
                                       const QStringList &dnsDomains);
     RouteReconcileResult clearDns(const QString &interfaceName);
     RouteReconcileResult clear();
+    // Force a durable fail-closed state when a controller-level receipt cannot
+    // be committed after host mutation.
+    bool requireRecovery(const QString &message);
     QJsonObject status() const;
 
 private:
     RouteReconcileResult failure(const QString &code, const QString &message) const;
     bool markRecoveryRequired(const QString &message);
+    bool beginMutation(const QString &operation,
+                       const QString &interfaceName,
+                       const QStringList &routes,
+                       const QStringList &bypassRoutes);
+    bool finishMutation();
+    bool saveTransactionIntent(const QString &operation,
+                               const QJsonObject &target) const;
+    bool clearTransactionIntent() const;
+    RouteReconcileResult finishTransaction(RouteReconcileResult result);
+    QString transactionIntentPath() const;
     QString ipExecutable() const;
     QString resolvectlExecutable() const;
     bool loadState();
@@ -63,6 +76,7 @@ private:
         QSet<int> ownedFullV6;
         QStringList lines;
         QStringList tableLines;
+        QStringList mainRouteLines;
         bool valid = false;
     };
     RuleSnapshot readRuleSnapshot() const;
@@ -70,6 +84,9 @@ private:
                               int *bypassPriority, int *fullPriority) const;
     static bool ruleLineMatches(const QString &line, int priority,
                                 const QString &needle);
+    static bool managedMainRouteLineMatches(const QString &line,
+                                            const QString &prefix,
+                                            const QString &interfaceName);
     QStringList bypassRuleArguments(const QString &operation, int priority,
                                     const QString &route) const;
     QStringList fullRuleArguments(const QString &operation, int priority,
@@ -87,6 +104,7 @@ private:
 
     std::shared_ptr<CommandRunner> m_runner;
     QString m_statePath;
+    QString m_intentPath;
     QString m_mode = QStringLiteral("only-forward");
     QString m_interfaceName;
     QStringList m_routes;

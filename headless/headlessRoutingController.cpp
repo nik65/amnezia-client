@@ -17,6 +17,7 @@
 #include <QUrl>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace amnezia::headless
@@ -28,6 +29,98 @@ constexpr int PolicyRequestTimeoutMs = 5000;
 constexpr qsizetype MaximumPolicyBytes = 1024 * 1024;
 constexpr qsizetype MaximumProfileConfigBytes = 1024 * 1024;
 constexpr int HostResolveTimeoutMs = 1500;
+
+std::optional<amnezia::ManagedRoutePolicyMetadata> policyMetadataFromJson(
+        const QJsonValue &value)
+{
+    if (!value.isObject()) return std::nullopt;
+    const QJsonObject object = value.toObject();
+    const QStringList allowed {
+        QStringLiteral("schemaVersion"), QStringLiteral("policyType"),
+        QStringLiteral("revision"), QStringLiteral("revisionNumber"),
+        QStringLiteral("contentHash"), QStringLiteral("declaredContentHash"),
+        QStringLiteral("contentMatchesDeclaration"), QStringLiteral("trustState"),
+        QStringLiteral("issuedAt"), QStringLiteral("expiresAt"),
+        QStringLiteral("acceptedAt"), QStringLiteral("source")
+    };
+    for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+        if (!allowed.contains(it.key())) return std::nullopt;
+    }
+    const QJsonValue schema = object.value(QStringLiteral("schemaVersion"));
+    if (!schema.isDouble() || schema.toDouble() != 1.0
+        || !object.value(QStringLiteral("policyType")).isString()
+        || !object.value(QStringLiteral("revision")).isString()
+        || !object.value(QStringLiteral("contentMatchesDeclaration")).isBool()
+        || !object.value(QStringLiteral("trustState")).isString()) {
+        return std::nullopt;
+    }
+    const QString policyType = object.value(QStringLiteral("policyType")).toString();
+    if (policyType != QStringLiteral("legacy") && policyType != QStringLiteral("versioned")) {
+        return std::nullopt;
+    }
+    amnezia::ManagedRoutePolicyMetadata metadata;
+    metadata.schemaVersion = 1;
+    metadata.versioned = policyType == QStringLiteral("versioned");
+    metadata.revision = object.value(QStringLiteral("revision")).toString();
+    metadata.contentMatchesDeclaration = object.value(
+            QStringLiteral("contentMatchesDeclaration")).toBool();
+    metadata.trustState = object.value(QStringLiteral("trustState")).toString();
+    if (metadata.revision.isEmpty() || metadata.trustState.isEmpty()) return std::nullopt;
+    if (object.contains(QStringLiteral("contentHash"))) {
+        if (!object.value(QStringLiteral("contentHash")).isString()) return std::nullopt;
+        metadata.contentHash = object.value(QStringLiteral("contentHash")).toString();
+    }
+    if (object.contains(QStringLiteral("declaredContentHash"))) {
+        if (!object.value(QStringLiteral("declaredContentHash")).isString()) return std::nullopt;
+        metadata.declaredContentHash = object.value(QStringLiteral("declaredContentHash")).toString();
+    }
+    const auto validPolicyHash = [](const QString &hash) {
+        if (!hash.startsWith(QStringLiteral("sha256:")) || hash.size() != 71) return false;
+        for (qsizetype index = 7; index < hash.size(); ++index) {
+            const QChar ch = hash.at(index);
+            if (!ch.isDigit() && (ch < QLatin1Char('a') || ch > QLatin1Char('f'))) return false;
+        }
+        return true;
+    };
+    if (!validPolicyHash(metadata.contentHash)
+        || !validPolicyHash(metadata.declaredContentHash)
+        || !metadata.contentMatchesDeclaration
+        || metadata.contentHash != metadata.declaredContentHash) return std::nullopt;
+    if (metadata.versioned) {
+        const QJsonValue revisionNumber = object.value(QStringLiteral("revisionNumber"));
+        constexpr double maxExactJsonInteger = 9007199254740991.0;
+        if (!revisionNumber.isDouble() || revisionNumber.toDouble() < 1.0
+            || revisionNumber.toDouble() > maxExactJsonInteger
+            || revisionNumber.toDouble() != std::floor(revisionNumber.toDouble())) {
+            return std::nullopt;
+        }
+        metadata.revisionNumber = static_cast<qint64>(revisionNumber.toDouble());
+        if (metadata.revision != QString::number(metadata.revisionNumber)) return std::nullopt;
+    } else if (object.contains(QStringLiteral("revisionNumber"))) {
+        return std::nullopt;
+    }
+    const auto readDate = [&object](const QString &key, QDateTime &target) {
+        if (!object.contains(key)) return true;
+        if (!object.value(key).isString()) return false;
+        target = QDateTime::fromString(object.value(key).toString(), Qt::ISODateWithMs);
+        if (!target.isValid()) target = QDateTime::fromString(object.value(key).toString(), Qt::ISODate);
+        if (!target.isValid()) return false;
+        target = target.toUTC();
+        return true;
+    };
+    if (!readDate(QStringLiteral("issuedAt"), metadata.issuedAt)
+        || !readDate(QStringLiteral("expiresAt"), metadata.expiresAt)
+        || !readDate(QStringLiteral("acceptedAt"), metadata.acceptedAt)) {
+        return std::nullopt;
+    }
+    if (object.contains(QStringLiteral("source"))) {
+        if (!object.value(QStringLiteral("source")).isString()) return std::nullopt;
+        metadata.source = object.value(QStringLiteral("source")).toString();
+    }
+    if (metadata.issuedAt.isValid() && metadata.expiresAt.isValid()
+        && metadata.expiresAt <= metadata.issuedAt) return std::nullopt;
+    return metadata;
+}
 
 bool parseIpv4Route(const QString &value, quint32 *address, int *prefix)
 {
@@ -356,6 +449,18 @@ RoutingResult HeadlessRoutingController::connect(const Profile &profile)
         return failure(QStringLiteral("routing_mode_unsupported"),
                        QStringLiteral("all-except requires a native VPN interface; XRay proxy mode is not a full tunnel"));
     }
+    if (allExcept) {
+        for (const QString &endpoint : endpointHostsFromConfig(profile)) {
+            QString literal = endpoint;
+            if (literal.startsWith(QLatin1Char('[')) && literal.endsWith(QLatin1Char(']'))) {
+                literal = literal.mid(1, literal.size() - 2);
+            }
+            if (QHostAddress(literal).protocol() == QAbstractSocket::IPv6Protocol) {
+                return failure(QStringLiteral("ipv6_endpoint_unsupported"),
+                               QStringLiteral("all-except currently requires an IPv4 VPN endpoint"));
+            }
+        }
+    }
     if (allExcept && profile.serverRulesUrl.isEmpty()) {
         return failure(QStringLiteral("server_policy_required"),
                        QStringLiteral("all-except requires a server routing policy URL"));
@@ -367,9 +472,14 @@ RoutingResult HeadlessRoutingController::connect(const Profile &profile)
         }
         m_activeProfile = profile.id;
         m_activeInterface.clear();
+        m_policyRevision.clear();
+        m_policyContentHash.clear();
+        m_policySource.clear();
+        m_policyEndpoint.clear();
+        m_policyResolvedSites = {};
         m_hasPolicy = false;
         if (!saveState()) {
-            m_stateValid = false;
+            markRecoveryRequired(QStringLiteral("routing controller receipt could not be saved"));
             return failure(QStringLiteral("recovery_required"),
                            QStringLiteral("routing controller receipt could not be saved"));
         }
@@ -423,10 +533,11 @@ RoutingResult HeadlessRoutingController::disconnect()
     m_policyRevision.clear();
     m_policyContentHash.clear();
     m_policySource.clear();
+    m_policyResolvedSites = {};
     m_hasPolicy = false;
     m_policyMetadata.reset();
     if (!saveState()) {
-        m_stateValid = false;
+        markRecoveryRequired(QStringLiteral("routing controller state could not be cleared"));
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("routing controller state could not be cleared"));
     }
@@ -440,42 +551,181 @@ QJsonObject HeadlessRoutingController::status() const
     result.insert(QStringLiteral("policyRevision"), m_policyRevision);
     result.insert(QStringLiteral("policyContentHash"), m_policyContentHash);
     result.insert(QStringLiteral("policySource"), m_policySource);
+    result.insert(QStringLiteral("policyEndpoint"), m_policyEndpoint);
     result.insert(QStringLiteral("policyLoaded"), m_hasPolicy);
+    result.insert(QStringLiteral("policyMetadata"), m_policyMetadata.has_value()
+                  ? QJsonValue(m_policyMetadata->toJson()) : QJsonValue(QJsonValue::Null));
     result.insert(QStringLiteral("recoveryRequired"), !m_stateValid
                   || result.value(QStringLiteral("recoveryRequired")).toBool());
     return result;
 }
 
 RoutingResult HeadlessRoutingController::failure(const QString &code,
-                                                 const QString &message) const
+                                                  const QString &message) const
 {
     m_lastError = message;
     return { false, code, message };
 }
 
+bool HeadlessRoutingController::markRecoveryRequired(const QString &message)
+{
+    m_stateValid = false;
+    m_lastError = message;
+    const bool routingMarked = m_reconciler.requireRecovery(message);
+    const bool controllerSaved = saveState();
+    if (controllerSaved && routingMarked) return true;
+    if (!m_statePath.isEmpty()) {
+        QSaveFile marker(m_statePath + QStringLiteral(".recovery-required"));
+        if (marker.open(QIODevice::WriteOnly)
+            && marker.write(message.toUtf8()) >= 0
+            && marker.commit()) {
+            QFile::setPermissions(m_statePath + QStringLiteral(".recovery-required"),
+                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        }
+    }
+    return false;
+}
+
 bool HeadlessRoutingController::loadState()
 {
     if (m_statePath.isEmpty()) return true;
+    if (QFileInfo::exists(m_statePath + QStringLiteral(".recovery-required"))) return false;
     QFile file(m_statePath);
     if (!file.exists() || !file.open(QIODevice::ReadOnly)) return !file.exists();
     QJsonParseError error;
     const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
     if (error.error != QJsonParseError::NoError || !document.isObject()) return false;
     const QJsonObject object = document.object();
+    const QStringList allowedFields {
+        QStringLiteral("version"), QStringLiteral("activeProfile"),
+        QStringLiteral("activeInterface"), QStringLiteral("policyRevision"),
+         QStringLiteral("policyContentHash"), QStringLiteral("policySource"),
+         QStringLiteral("policyEndpoint"),
+         QStringLiteral("policyResolvedSites"), QStringLiteral("policyLoaded"),
+         QStringLiteral("policyMetadata"),
+         QStringLiteral("recoveryRequired")
+    };
+    for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+        if (!allowedFields.contains(it.key())) return false;
+    }
+    const double stateVersion = object.value(QStringLiteral("version")).toDouble();
     if (!object.value(QStringLiteral("version")).isDouble()
-        || object.value(QStringLiteral("version")).toDouble() != 1.0
+        || (stateVersion != 1.0 && stateVersion != 2.0)
         || !object.value(QStringLiteral("activeProfile")).isString()
         || !object.value(QStringLiteral("activeInterface")).isString()
         || !object.value(QStringLiteral("policyRevision")).isString()
         || !object.value(QStringLiteral("policyContentHash")).isString()
         || !object.value(QStringLiteral("policySource")).isString()
-        || !object.value(QStringLiteral("policyLoaded")).isBool()) return false;
+        || !object.value(QStringLiteral("policyLoaded")).isBool()
+        || (object.contains(QStringLiteral("policyEndpoint"))
+            && !object.value(QStringLiteral("policyEndpoint")).isString())) return false;
+    if (object.contains(QStringLiteral("recoveryRequired"))
+        && (!object.value(QStringLiteral("recoveryRequired")).isBool()
+            || object.value(QStringLiteral("recoveryRequired")).toBool())) return false;
     m_activeProfile = object.value(QStringLiteral("activeProfile")).toString();
     m_activeInterface = object.value(QStringLiteral("activeInterface")).toString();
     m_policyRevision = object.value(QStringLiteral("policyRevision")).toString();
     m_policyContentHash = object.value(QStringLiteral("policyContentHash")).toString();
     m_policySource = object.value(QStringLiteral("policySource")).toString();
+    m_policyEndpoint = object.value(QStringLiteral("policyEndpoint")).toString();
     m_hasPolicy = object.value(QStringLiteral("policyLoaded")).toBool();
+    m_policyMetadata.reset();
+    if (object.contains(QStringLiteral("policyMetadata"))) {
+        if (!object.value(QStringLiteral("policyMetadata")).isNull()
+            && !object.value(QStringLiteral("policyMetadata")).isObject()) return false;
+        if (!object.value(QStringLiteral("policyMetadata")).isNull()) {
+            m_policyMetadata = policyMetadataFromJson(object.value(QStringLiteral("policyMetadata")));
+            if (!m_policyMetadata.has_value()) return false;
+        }
+    }
+    if (object.contains(QStringLiteral("policyResolvedSites"))) {
+        if (!object.value(QStringLiteral("policyResolvedSites")).isObject()) return false;
+        m_policyResolvedSites = object.value(QStringLiteral("policyResolvedSites")).toObject();
+        if (m_policyResolvedSites.size() > amnezia::managedRoutePolicy::maximumSiteCount) {
+            return false;
+        }
+        for (auto it = m_policyResolvedSites.constBegin();
+             it != m_policyResolvedSites.constEnd(); ++it) {
+            if (it.key().trimmed().isEmpty() || !it.value().isString()) return false;
+            bool routesValid = false;
+            amnezia::managedRoutePolicy::validatedManagedRouteTokens(
+                    it.value().toString(), &routesValid);
+            if (!routesValid) return false;
+        }
+    }
+    if (m_hasPolicy) {
+        if (m_activeProfile.isEmpty() || m_activeInterface.isEmpty()
+            || m_policyRevision.isEmpty() || m_policyContentHash.isEmpty()
+            || m_policySource.isEmpty()
+            || !QRegularExpression(QStringLiteral("^[A-Za-z0-9_.-]{1,15}$"))
+                    .match(m_activeInterface).hasMatch()) {
+            return false;
+        }
+        // Version-1 controller receipts predate the complete metadata object.
+        // Reconstruct a conservative legacy identity so the next policy fetch
+        // still has a monotonic content/hash anchor; new receipts always write
+        // the complete metadata below.
+        // v2 receipts always carry the complete metadata object.  Only v1 may
+        // synthesize legacy metadata from its three legacy identity fields.
+        if (stateVersion == 2.0 && !m_policyMetadata.has_value()) {
+            return false;
+        }
+        if (!m_policyMetadata.has_value()) {
+            if (m_policyRevision.isEmpty() || m_policyContentHash.isEmpty()) return false;
+            amnezia::ManagedRoutePolicyMetadata legacy;
+            legacy.revision = m_policyRevision;
+            legacy.contentHash = m_policyContentHash;
+            legacy.declaredContentHash = m_policyContentHash;
+            legacy.source = m_policySource;
+            legacy.acceptedAt = QDateTime::currentDateTimeUtc();
+            bool numericRevision = !m_policyRevision.isEmpty();
+            for (const QChar ch : m_policyRevision) numericRevision = numericRevision && ch.isDigit();
+            bool revisionOk = false;
+            const qlonglong revisionNumber = m_policyRevision.toLongLong(&revisionOk);
+            if (numericRevision && revisionOk && revisionNumber > 0
+                && revisionNumber <= 9007199254740991LL) {
+                legacy.versioned = true;
+                legacy.revisionNumber = revisionNumber;
+            }
+            m_policyMetadata = legacy;
+        }
+        if (stateVersion == 2.0) {
+            const QJsonObject metadata = m_policyMetadata->toJson();
+            if (metadata.value(QStringLiteral("revision")).toString() != m_policyRevision
+                || metadata.value(QStringLiteral("contentHash")).toString()
+                    != m_policyContentHash
+                || metadata.value(QStringLiteral("declaredContentHash")).toString()
+                    != m_policyContentHash
+                || metadata.value(QStringLiteral("source")).toString() != m_policySource
+                || m_policyEndpoint.isEmpty()) {
+                return false;
+            }
+        }
+    } else if (!m_activeInterface.isEmpty()
+               || !m_policyRevision.isEmpty() || !m_policyContentHash.isEmpty()
+               || !m_policySource.isEmpty() || !m_policyResolvedSites.isEmpty()
+               || m_policyMetadata.has_value() || !m_policyEndpoint.isEmpty()) {
+        return false;
+    }
+    const QJsonObject routing = m_reconciler.status();
+    if (routing.value(QStringLiteral("recoveryRequired")).toBool()) return false;
+    if (m_hasPolicy) {
+        const QString routeInterface = routing.value(QStringLiteral("interface")).toString();
+        const QString routeMode = routing.value(QStringLiteral("mode")).toString();
+        if (routeInterface.isEmpty() || routeInterface != m_activeInterface
+            || (routeMode != QStringLiteral("only-forward")
+                && routeMode != QStringLiteral("all-except"))) {
+            return false;
+        }
+        if (routeMode == QStringLiteral("all-except")
+            && routing.value(QStringLiteral("bypassRoutes")).toArray().isEmpty()) {
+            return false;
+        }
+    } else if (!routing.value(QStringLiteral("interface")).toString().isEmpty()
+               || !routing.value(QStringLiteral("routes")).toArray().isEmpty()
+               || routing.value(QStringLiteral("mode")).toString() == QStringLiteral("all-except")) {
+        return false;
+    }
     return true;
 }
 
@@ -487,16 +737,87 @@ bool HeadlessRoutingController::saveState() const
     QSaveFile file(m_statePath);
     if (!file.open(QIODevice::WriteOnly)) return false;
     const QJsonObject object {
-        { QStringLiteral("version"), 1 },
+        { QStringLiteral("version"), 2 },
         { QStringLiteral("activeProfile"), m_activeProfile },
         { QStringLiteral("activeInterface"), m_activeInterface },
         { QStringLiteral("policyRevision"), m_policyRevision },
         { QStringLiteral("policyContentHash"), m_policyContentHash },
         { QStringLiteral("policySource"), m_policySource },
+        { QStringLiteral("policyEndpoint"), m_policyEndpoint },
+        { QStringLiteral("policyResolvedSites"), m_policyResolvedSites },
         { QStringLiteral("policyLoaded"), m_hasPolicy },
+        { QStringLiteral("policyMetadata"), m_policyMetadata.has_value()
+              ? QJsonValue(m_policyMetadata->toJson()) : QJsonValue(QJsonValue::Null) },
+        { QStringLiteral("recoveryRequired"), !m_stateValid },
     };
-    return file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) >= 0
+    const bool committed = file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) >= 0
         && file.commit();
+    if (committed && m_stateValid) {
+        QFile::remove(m_statePath + QStringLiteral(".recovery-required"));
+    }
+    return committed;
+}
+
+bool HeadlessRoutingController::restoreRoutingSnapshot(const QJsonObject &snapshot,
+                                                       QString *error)
+{
+    const QString mode = snapshot.value(QStringLiteral("mode")).toString();
+    const QString interfaceName = snapshot.value(QStringLiteral("interface")).toString();
+    QStringList routes;
+    for (const QJsonValue &value : snapshot.value(QStringLiteral("routes")).toArray()) {
+        if (!value.isString()) {
+            if (error) *error = QStringLiteral("previous route receipt is malformed");
+            return false;
+        }
+        routes.append(value.toString());
+    }
+    QStringList bypassRoutes;
+    for (const QJsonValue &value : snapshot.value(QStringLiteral("bypassRoutes")).toArray()) {
+        if (!value.isString()) {
+            if (error) *error = QStringLiteral("previous bypass receipt is malformed");
+            return false;
+        }
+        bypassRoutes.append(value.toString());
+    }
+    RouteReconcileResult routing;
+    if (mode == QStringLiteral("all-except")) {
+        if (interfaceName.isEmpty()) return false;
+        routing = m_reconciler.applyAllExcept(interfaceName, bypassRoutes);
+    } else if (mode == QStringLiteral("only-forward") && !interfaceName.isEmpty()) {
+        routing = m_reconciler.apply(interfaceName, routes);
+    } else if (mode == QStringLiteral("only-forward")) {
+        routing = m_reconciler.clear();
+    } else {
+        if (error) *error = QStringLiteral("previous route receipt has an unsupported mode");
+        return false;
+    }
+    if (!routing.ok) {
+        if (error) *error = routing.message;
+        return false;
+    }
+    const QString currentDnsInterface = m_reconciler.status()
+            .value(QStringLiteral("dnsInterface")).toString();
+    const QString dnsInterface = snapshot.value(QStringLiteral("dnsInterface")).toString();
+    QStringList dnsServers;
+    QStringList dnsDomains;
+    for (const QJsonValue &value : snapshot.value(QStringLiteral("dnsServers")).toArray()) {
+        if (!value.isString()) return false;
+        dnsServers.append(value.toString());
+    }
+    for (const QJsonValue &value : snapshot.value(QStringLiteral("dnsDomains")).toArray()) {
+        if (!value.isString()) return false;
+        dnsDomains.append(value.toString());
+    }
+    const RouteReconcileResult dns = dnsInterface.isEmpty()
+            ? m_reconciler.clearDns(currentDnsInterface)
+            : (dnsServers.isEmpty() || dnsDomains.isEmpty()
+               ? m_reconciler.clearDns(dnsInterface)
+               : m_reconciler.configureDns(dnsInterface, dnsServers, dnsDomains));
+    if (!dns.ok) {
+        if (error) *error = dns.message;
+        return false;
+    }
+    return true;
 }
 
 RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
@@ -515,14 +836,51 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
         // Refreshes keep the last-known-good server routes in place and must
         // not clear them before a network request that may fail.
         const QJsonObject persistedRouting = m_reconciler.status();
-        const bool persistedFullTunnel =
+        const bool persistedSameRouting =
                 persistedRouting.value(QStringLiteral("mode")).toString()
-                    == QStringLiteral("all-except")
+                    == profile.routingMode
                 && persistedRouting.value(QStringLiteral("interface")).toString()
                     == interfaceName;
-        if (m_activeProfile != profile.id && !persistedFullTunnel) {
+        const bool bootstrapRequired = m_activeProfile != profile.id || !persistedSameRouting;
+        const QJsonObject previousController {
+            { QStringLiteral("activeProfile"), m_activeProfile },
+            { QStringLiteral("activeInterface"), m_activeInterface },
+            { QStringLiteral("policyRevision"), m_policyRevision },
+            { QStringLiteral("policyContentHash"), m_policyContentHash },
+            { QStringLiteral("policySource"), m_policySource },
+            { QStringLiteral("policyEndpoint"), m_policyEndpoint },
+            { QStringLiteral("policyResolvedSites"), m_policyResolvedSites },
+            { QStringLiteral("policyLoaded"), m_hasPolicy },
+        };
+        const std::optional<amnezia::ManagedRoutePolicyMetadata> previousMetadata = m_policyMetadata;
+        const auto restoreBootstrap = [&]() {
+            QString restoreError;
+            const bool routesRestored = restoreRoutingSnapshot(persistedRouting, &restoreError);
+            m_activeProfile = previousController.value(QStringLiteral("activeProfile")).toString();
+            m_activeInterface = previousController.value(QStringLiteral("activeInterface")).toString();
+            m_policyRevision = previousController.value(QStringLiteral("policyRevision")).toString();
+            m_policyContentHash = previousController.value(QStringLiteral("policyContentHash")).toString();
+            m_policySource = previousController.value(QStringLiteral("policySource")).toString();
+            m_policyEndpoint = previousController.value(QStringLiteral("policyEndpoint")).toString();
+            m_policyResolvedSites = previousController.value(QStringLiteral("policyResolvedSites")).toObject();
+            m_hasPolicy = previousController.value(QStringLiteral("policyLoaded")).toBool();
+            m_policyMetadata = previousMetadata;
+            if (!routesRestored || !saveState()) {
+                if (!markRecoveryRequired(restoreError.isEmpty()
+                                           ? QStringLiteral("policy bootstrap rollback failed") : restoreError)) {
+                    m_lastError = QStringLiteral("policy bootstrap rollback and durable recovery marker failed");
+                }
+                return false;
+            }
+            return true;
+        };
+        if (bootstrapRequired) {
             const RoutingResult bootstrap = applyRoutes(profile, {});
             if (!bootstrap.ok) {
+                if (!restoreBootstrap()) {
+                    return failure(QStringLiteral("recovery_required"),
+                                   QStringLiteral("policy bootstrap failed and previous state could not be restored"));
+                }
                 return bootstrap;
             }
         }
@@ -530,19 +888,38 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
 
         QString policyUrlError;
         if (!isSafePolicyEndpoint(profile, profile.serverRulesUrl, &policyUrlError)) {
+            if (bootstrapRequired && !restoreBootstrap()) {
+                return failure(QStringLiteral("recovery_required"),
+                               QStringLiteral("policy endpoint was rejected and bootstrap state could not be restored"));
+            }
             return failure(QStringLiteral("policy_transport_invalid"), policyUrlError);
         }
         const ServerRoutingPolicyResult fetched = fetchPolicy(profile, current);
         if (!fetched.ok) {
+            if (bootstrapRequired && !restoreBootstrap()) {
+                return failure(QStringLiteral("recovery_required"),
+                               QStringLiteral("policy fetch failed and bootstrap state could not be restored"));
+            }
             return failure(fetched.code, fetched.message);
         }
-        const ServerRoutingPolicyResult resolved = ServerRoutingPolicy::resolve(fetched.policy);
+        const QJsonObject previousResolvedSites = m_policyEndpoint == profile.serverRulesUrl
+                ? m_policyResolvedSites : QJsonObject {};
+        const ServerRoutingPolicyResult resolved = ServerRoutingPolicy::resolve(
+                fetched.policy, 4000, previousResolvedSites);
         if (!resolved.ok) {
+            if (bootstrapRequired && !restoreBootstrap()) {
+                return failure(QStringLiteral("recovery_required"),
+                               QStringLiteral("policy resolution failed and bootstrap state could not be restored"));
+            }
             return failure(resolved.code, resolved.message);
         }
         serverRoutes = resolved.policy.routes;
         const RoutingResult applied = applyRoutes(profile, serverRoutes);
         if (!applied.ok) {
+            if (bootstrapRequired && !restoreBootstrap()) {
+                return failure(QStringLiteral("recovery_required"),
+                               QStringLiteral("policy apply failed and bootstrap state could not be restored"));
+            }
             return applied;
         }
         // Advance the policy receipt only after the route transaction commits;
@@ -550,10 +927,16 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
         m_policyRevision = resolved.policy.revision;
         m_policyContentHash = resolved.policy.contentHash;
         m_policySource = resolved.policy.source;
+        m_policyEndpoint = profile.serverRulesUrl;
+        m_policyResolvedSites = resolved.policy.resolvedSites;
         m_hasPolicy = true;
         m_policyMetadata = resolved.policy.metadata;
+        // The controller receipt binds policy metadata to the transport
+        // endpoint.  The generic policy validator intentionally does not own
+        // that transport identity, so stamp it here before persisting v2.
+        m_policyMetadata->source = m_policySource;
         if (!saveState()) {
-            m_stateValid = false;
+            markRecoveryRequired(QStringLiteral("routing policy receipt could not be saved"));
             return failure(QStringLiteral("recovery_required"),
                            QStringLiteral("routing policy receipt could not be saved"));
         }
@@ -561,6 +944,20 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
     }
 
     const RoutingResult applied = applyRoutes(profile, serverRoutes);
+    if (applied.ok) {
+        m_policyRevision.clear();
+        m_policyContentHash.clear();
+        m_policySource.clear();
+        m_policyEndpoint.clear();
+        m_policyResolvedSites = {};
+        m_hasPolicy = false;
+        m_policyMetadata.reset();
+        if (!saveState()) {
+            markRecoveryRequired(QStringLiteral("routing controller receipt could not be saved"));
+            return failure(QStringLiteral("recovery_required"),
+                           QStringLiteral("routing controller receipt could not be saved"));
+        }
+    }
     return applied;
 }
 
@@ -641,10 +1038,16 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
             for (const QJsonValue &value : oldDnsServers) if (value.isString()) oldServers.append(value.toString());
             for (const QJsonValue &value : oldDnsDomains) if (value.isString()) oldDomains.append(value.toString());
             const QString oldDnsInterface = previousRouting.value(QStringLiteral("dnsInterface")).toString();
+            const QString currentDnsInterface = m_reconciler.status()
+                    .value(QStringLiteral("dnsInterface")).toString();
             const RouteReconcileResult dnsRestore = oldServers.isEmpty() || oldDomains.isEmpty()
-                    ? m_reconciler.clearDns(oldDnsInterface)
+                    ? m_reconciler.clearDns(oldDnsInterface.isEmpty()
+                                                ? currentDnsInterface : oldDnsInterface)
                     : m_reconciler.configureDns(oldDnsInterface, oldServers, oldDomains);
             if (!routeRestore.ok || !dnsRestore.ok) {
+                const QString recoveryMessage = QStringLiteral(
+                        "DNS refresh failed and previous route/DNS state could not be restored");
+                markRecoveryRequired(recoveryMessage);
                 return failure(QStringLiteral("recovery_required"),
                                QStringLiteral("DNS refresh failed and the previous route/DNS receipt could not be restored"));
             }
@@ -653,7 +1056,7 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
     m_activeProfile = profile.id;
     m_activeInterface = interfaceName;
     if (!saveState()) {
-        m_stateValid = false;
+        markRecoveryRequired(QStringLiteral("routing controller receipt could not be saved"));
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("routing controller receipt could not be saved"));
     }

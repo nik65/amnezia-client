@@ -2,7 +2,7 @@
 param(
     [string] $Version = "",
     [ValidateSet("windows", "linux", "android", "headless")]
-    [string[]] $BuildPlatform = @("windows", "linux", "android"),
+    [string[]] $BuildPlatform = @("windows", "linux", "android", "headless"),
     [string[]] $RequirePlatform = @(
         "windows-x64",
         "linux-x64",
@@ -44,6 +44,10 @@ param(
     [switch] $NoBundleUpdatesInWindowsClient,
     [switch] $Preflight
 )
+
+if (-not $PSBoundParameters.ContainsKey("BuildPlatform") -and -not $PSBoundParameters.ContainsKey("RequirePlatform")) {
+    $RequirePlatform += "linux-headless-x64"
+}
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -168,7 +172,7 @@ function Assert-ReleaseInputs {
 }
 
 function Assert-SafeFleetPolicy {
-    if ($PayloadSchema -eq 2 -and ($BuildPlatform -contains "headless")) {
+    if ($PayloadSchema -eq 2 -and (($BuildPlatform -contains "headless") -or ($RequirePlatform -contains "linux-headless-x64"))) {
         throw "Linux headless clients currently accept only payload schema 1; publish headless with -PayloadSchema 1 until schema-2 policy consumption is implemented."
     }
     $restrictivePolicyRequested = (
@@ -826,10 +830,10 @@ if (-not $SkipBuild) {
             (Quote-Sh $repoWsl),
             (Quote-Sh $Version),
             (Quote-Sh $artifactDirWsl))
-    Invoke-WslBash $headlessScript
-    Assert-ExistingFile (Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64.tar.gz") "Linux headless update artifact"
-    Assert-ExistingFile (Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64_provisioning.tar.gz") "Linux headless provisioning bundle"
-}
+        Invoke-WslBash $headlessScript
+        Assert-ExistingFile (Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64.tar.gz") "Linux headless update artifact"
+        Assert-ExistingFile (Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64_provisioning.tar.gz") "Linux headless provisioning bundle"
+    }
 }
 
 Remove-UnsupportedAndroidArtifacts $ArtifactDir $Version
@@ -851,7 +855,8 @@ $requiredArtifactNames = @{
     "android-arm64-v8a" = "AmneziaVPN_${Version}_android9+_arm64-v8a.apk"
     "linux-headless-x64" = "AmneziaHeadless_${Version}_linux_x64.tar.gz"
 }
-$headlessRequested = ($BuildPlatform -contains "headless") -or ($RequirePlatform -contains "linux-headless-x64")
+$headlessArtifactPresent = Test-Path -LiteralPath (Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64.tar.gz") -PathType Leaf
+$headlessRequested = ($BuildPlatform -contains "headless") -or ($RequirePlatform -contains "linux-headless-x64") -or $headlessArtifactPresent
 if ($headlessRequested -and ($RequirePlatform -notcontains "linux-headless-x64")) {
     $RequirePlatform += "linux-headless-x64"
 }
@@ -869,6 +874,7 @@ $manifestArgs = @(
     "--cohort-salt-id", $CohortSaltId,
     "--health-deadline-seconds", [string] $HealthDeadlineSeconds
 )
+
 if ($headlessRequested) {
     $provisioningPath = Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64_provisioning.tar.gz"
     Assert-ExistingFile $provisioningPath "Linux headless provisioning bundle"

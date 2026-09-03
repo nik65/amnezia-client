@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
@@ -295,6 +296,29 @@ namespace
         return result;
     }
 
+    bool hasExactHeadlessProvisioningFiles(const QJsonValue &value)
+    {
+        if (!value.isArray()) {
+            return false;
+        }
+        static const QStringList expected {
+            QStringLiteral("install_headless.sh"), QStringLiteral("amneziad"),
+            QStringLiteral("amnezia-cli"), QStringLiteral("amneziad.service"),
+            QStringLiteral("package-manifest.json"), QStringLiteral("runtime-dependencies.json"),
+            QStringLiteral("runtime-dependencies.txt"), QStringLiteral("SHA256SUMS")
+        };
+        const QJsonArray files = value.toArray();
+        if (files.size() != expected.size()) {
+            return false;
+        }
+        for (qsizetype index = 0; index < files.size(); ++index) {
+            if (!files.at(index).isString() || files.at(index).toString() != expected.at(index)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
 }
 
 SelfHostedUpdateBootstrapper::SelfHostedUpdateBootstrapper(SecureServersRepository *serversRepository, QObject *parent)
@@ -523,27 +547,41 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
     // receive an unsigned service unit or installer script beside a signed
     // manifest.  Convert its dedicated metadata into the common PayloadFile
     // list after validating the stronger format/version contract.
+    const bool hasHeadlessPlatform = platforms.contains(QStringLiteral("linux-headless-x64"));
     const QJsonValue provisioningValue = decodedPayload.value(QStringLiteral("headlessProvisioning"));
+    if (hasHeadlessPlatform != !provisioningValue.isUndefined()) {
+        logger.warning() << "Bundled update manifest must bind Linux headless artifacts to provisioning metadata";
+        return false;
+    }
     if (!provisioningValue.isUndefined()) {
-        if (!provisioningValue.isObject()
-            || !platforms.contains(QStringLiteral("linux-headless-x64"))) {
+        if (!provisioningValue.isObject()) {
             logger.warning() << "Bundled update manifest has invalid headless provisioning metadata";
             return false;
         }
         const QJsonObject provisioning = provisioningValue.toObject();
-        if (provisioning.size() != 5
+        if (provisioning.size() != 9
             || !provisioning.contains(QStringLiteral("url"))
             || !provisioning.contains(QStringLiteral("sha256"))
             || !provisioning.contains(QStringLiteral("size"))
             || !provisioning.contains(QStringLiteral("format"))
             || !provisioning.contains(QStringLiteral("version"))
+            || !provisioning.contains(QStringLiteral("packageManifestSha256"))
+            || !provisioning.contains(QStringLiteral("checksumsSha256"))
+            || !provisioning.contains(QStringLiteral("packageVersion"))
+            || !provisioning.contains(QStringLiteral("packageFiles"))
             || provisioning.value(QStringLiteral("version")).toString() != manifestIdentity.version
+            || provisioning.value(QStringLiteral("packageVersion")).toString() != manifestIdentity.version
             || provisioning.value(QStringLiteral("format")).toString()
                    != QStringLiteral("amnezia-headless-provisioning-tar-v1")
             || !provisioning.value(QStringLiteral("url")).isString()
             || !provisioning.value(QStringLiteral("sha256")).isString()
             || !amnezia::selfhostedUpdates::isCanonicalSha256(
-                       provisioning.value(QStringLiteral("sha256")).toString())) {
+                       provisioning.value(QStringLiteral("sha256")).toString())
+            || !amnezia::selfhostedUpdates::isCanonicalSha256(
+                       provisioning.value(QStringLiteral("packageManifestSha256")).toString())
+            || !amnezia::selfhostedUpdates::isCanonicalSha256(
+                       provisioning.value(QStringLiteral("checksumsSha256")).toString())
+            || !hasExactHeadlessProvisioningFiles(provisioning.value(QStringLiteral("packageFiles")))) {
             logger.warning() << "Bundled update manifest has malformed headless provisioning metadata";
             return false;
         }
@@ -659,7 +697,7 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
         return false;
     }
     const auto cleanupRemoteTmp = [&sshSession, &credentials, &remoteTmp]() {
-        sshSession.runScript(credentials, QStringLiteral("rm -rf -- %1").arg(shellQuote(remoteTmp)));
+        return sshSession.runScript(credentials, QStringLiteral("rm -rf -- %1").arg(shellQuote(remoteTmp)));
     };
 
     QFile publisherScriptFile(QString::fromLatin1(kBundledPublishScript));
@@ -1302,6 +1340,14 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
             QByteArrayLiteral("finalized"))) {
         logger.error() << "RECOVERY_REQUIRED: bundled publication finalization was not acknowledged";
         return false;
+    }
+
+    const amnezia::ErrorCode cleanupError = cleanupRemoteTmp();
+    if (cleanupError != amnezia::ErrorCode::NoError) {
+        // Publication is already atomically acknowledged; retain that result
+        // while surfacing a bounded hygiene warning for the operator.
+        logger.warning() << "Bundled self-hosted publication succeeded but remote staging cleanup failed"
+                         << "errorCode" << static_cast<int>(cleanupError);
     }
 
     logger.info() << "Bundled self-hosted update payload published" << payload.version;

@@ -46,6 +46,11 @@ public:
             failAtCall = -1;
             return { false, 1, QStringLiteral("simulated failure") };
         }
+        if (arguments.contains(QStringLiteral("table"))
+            && arguments.contains(QStringLiteral("51821"))) {
+            if (arguments.contains(QStringLiteral("replace"))) fullTunnelInstalled = true;
+            if (arguments.contains(QStringLiteral("del"))) fullTunnelInstalled = false;
+        }
         return runResult;
     }
 
@@ -53,10 +58,17 @@ public:
                               const QStringList &arguments) override
     {
         ++capturedCalls;
+        if (program == QStringLiteral("ip")
+            && arguments.endsWith(QStringLiteral("main"))) {
+            return { true, 0, {}, mainRouteOutput };
+        }
         if (!capturedOutputs.isEmpty()) {
             return { true, 0, {}, capturedOutputs.value(capturedCalls - 1) };
         }
         if (capturedCalls <= 2) {
+            return { true, 0, {}, {} };
+        }
+        if (!fullTunnelInstalled) {
             return { true, 0, {}, {} };
         }
         if (arguments.contains(QStringLiteral("route"))) {
@@ -86,6 +98,8 @@ public:
     int capturedCalls = 0;
     int failAtCall = -1;
     QStringList capturedOutputs;
+    QString mainRouteOutput;
+    bool fullTunnelInstalled = false;
 };
 
 } // namespace
@@ -117,6 +131,23 @@ private slots:
         QVERIFY2(result.ok, qPrintable(result.message));
         QCOMPARE(result.policy.routes, QStringList { QStringLiteral("10.8.1.4") });
         QVERIFY(result.policy.unresolvedSites.isEmpty());
+    }
+
+    void preservesPreviousDomainResolutionWhenLookupFails()
+    {
+        const QByteArray payload = R"json({
+            "managedSplitTunnelExceptSourceSites": {"does-not-exist.invalid": ""},
+            "serverExcept": {"does-not-exist.invalid": ""}
+        })json";
+        const ServerRoutingPolicyResult parsed = ServerRoutingPolicy::parse(payload);
+        QVERIFY2(parsed.ok, qPrintable(parsed.message));
+        const ServerRoutingPolicyResult resolved = ServerRoutingPolicy::resolve(
+                parsed.policy, 50,
+                QJsonObject { { QStringLiteral("does-not-exist.invalid"), QStringLiteral("10.8.1.4") } });
+        QVERIFY2(resolved.ok, qPrintable(resolved.message));
+        QVERIFY(resolved.policy.routes.contains(QStringLiteral("10.8.1.4")));
+        QCOMPARE(resolved.policy.resolvedSites.value(QStringLiteral("does-not-exist.invalid")).toString(),
+                 QStringLiteral("10.8.1.4"));
     }
 
     void acceptsWindowsServerExceptKey()
@@ -157,10 +188,12 @@ private slots:
         const QStringList initialArguments {
             QStringLiteral("route"), QStringLiteral("replace"),
             QStringLiteral("10.8.1.0/24"), QStringLiteral("dev"),
-            QStringLiteral("amn0"), QStringLiteral("metric"), QStringLiteral("1")
+            QStringLiteral("amn0"), QStringLiteral("proto"), QStringLiteral("187"),
+            QStringLiteral("metric"), QStringLiteral("1")
         };
         QCOMPARE(runner->calls.constFirst().arguments, initialArguments);
 
+        runner->mainRouteOutput = QStringLiteral("10.8.1.0/24 dev amn0 proto 187 metric 1\n");
         QVERIFY2(reconciler.apply(
                         QStringLiteral("amn0"), { QStringLiteral("10.8.1.15") }).ok,
                  "route replacement failed");
@@ -168,11 +201,42 @@ private slots:
         QCOMPARE(runner->calls.at(1).arguments.at(1), QStringLiteral("replace"));
         QCOMPARE(runner->calls.at(2).arguments.at(1), QStringLiteral("del"));
 
+        runner->mainRouteOutput = QStringLiteral("10.8.1.15/32 dev amn0 proto 187 metric 1\n");
         QVERIFY2(reconciler.clear().ok, "route clear failed");
         QCOMPARE(runner->calls.size(), 4);
         QCOMPARE(runner->calls.constLast().arguments.at(1), QStringLiteral("del"));
         QCOMPARE(reconciler.status().value(QStringLiteral("interface")).toString(), QString());
         QVERIFY(reconciler.status().value(QStringLiteral("routes")).toArray().isEmpty());
+    }
+
+    void foreignMainRouteIsRejectedBeforeMutation()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->mainRouteOutput = QStringLiteral("10.8.1.0/24 dev amn0 proto 99 metric 1\n");
+        LinuxRouteReconciler reconciler(
+                runner, temporaryDirectory.filePath(QStringLiteral("routes.json")));
+        const RouteReconcileResult result = reconciler.apply(
+                QStringLiteral("amn0"), { QStringLiteral("10.8.1.0/24") });
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("only_forward_route_conflict"));
+        QVERIFY(runner->calls.isEmpty());
+    }
+
+    void unfinishedMutationIntentFailsClosedAtStartup()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        QFile intent(statePath + QStringLiteral(".mutation-intent"));
+        QVERIFY(intent.open(QIODevice::WriteOnly));
+        QVERIFY(intent.write("{\"version\":1,\"operation\":\"only-forward\"}") > 0);
+        intent.close();
+        auto runner = std::make_shared<FakeCommandRunner>();
+        LinuxRouteReconciler reconciler(runner, statePath);
+        QVERIFY(reconciler.status().value(QStringLiteral("recoveryRequired")).toBool());
+        QVERIFY(runner->calls.isEmpty());
     }
 
     void routeReconcilerAppliesFullTunnelAndServerBypassRules()

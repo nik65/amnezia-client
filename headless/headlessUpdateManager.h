@@ -62,6 +62,7 @@ private:
     bool install(const Candidate &candidate, const QString &payloadDirectory,
                  const QString &currentVersion, QString *error);
     bool restartService(QString *error) const;
+    bool retireAcknowledgedJournal(QString *error);
     bool restoreRollback(QString *error);
     bool loadState();
     bool saveState() const;
@@ -95,7 +96,9 @@ private:
     static bool runProcess(const QString &program, const QStringList &arguments,
                            int timeoutMs, QString *output, QString *error);
     static bool atomicReplace(const QString &source, const QString &destination,
-                              QString *error, bool *destinationRemoved = nullptr);
+                              QString *error, bool *destinationRemoved = nullptr,
+                              const QString &expectedSha256 = {},
+                              qint64 expectedSize = -1);
 
     std::shared_ptr<CommandRunner> m_runner;
     QString m_statePath;

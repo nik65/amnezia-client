@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include <QDir>
+#include <QDateTime>
 #include <QFile>
 #include <QTemporaryDir>
 
@@ -41,6 +42,22 @@ public:
     CommandResult run(const QString &program, const QStringList &arguments) override
     {
         calls.append({ QStringLiteral("run"), {}, program, arguments });
+        return runResult;
+    }
+
+    CommandResult runCaptured(const QString &program,
+                              const QStringList &arguments) override
+    {
+        if ((program == QStringLiteral("wg") || program == QStringLiteral("awg"))
+            && arguments.contains(QStringLiteral("latest-handshakes"))) {
+            return { true, 0, {}, QStringLiteral("peer %1\n")
+                                      .arg(QDateTime::currentSecsSinceEpoch() - 1) };
+        }
+        if (program == QStringLiteral("ip")
+            && arguments.contains(QStringLiteral("link"))) {
+            return { true, 0, {}, QStringLiteral("7: %1: <POINTOPOINT>\n")
+                                      .arg(arguments.constLast()) };
+        }
         return runResult;
     }
 
@@ -88,6 +105,8 @@ private slots:
 
         auto runner = std::make_shared<FakeCommandRunner>();
         runner->availablePrograms.insert(QStringLiteral("wg-quick"));
+        runner->availablePrograms.insert(QStringLiteral("wg"));
+        runner->availablePrograms.insert(QStringLiteral("ip"));
         VpnBackend backend(runner);
 
         const Profile work = profile(QStringLiteral("work"), QStringLiteral("wireguard"), configPath);
@@ -111,6 +130,26 @@ private slots:
         QVERIFY(backend.activeProfile().isEmpty());
     }
 
+    void nativeBackendDoesNotReportConnectedWithoutInterface()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("work.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("[Interface]\n");
+        config.close();
+
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->availablePrograms.insert(QStringLiteral("wg-quick"));
+        VpnBackend backend(runner);
+        const BackendResult result = backend.connect(
+                profile(QStringLiteral("work"), QStringLiteral("wireguard"), configPath));
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("backend_not_ready"));
+        QVERIFY(backend.activeProfile().isEmpty());
+    }
+
     void amneziaWireGuardResolvesAwgQuickAlias()
     {
         QTemporaryDir temporaryDirectory;
@@ -123,6 +162,8 @@ private slots:
 
         auto runner = std::make_shared<FakeCommandRunner>();
         runner->availablePrograms.insert(QStringLiteral("awg-quick"));
+        runner->availablePrograms.insert(QStringLiteral("awg"));
+        runner->availablePrograms.insert(QStringLiteral("ip"));
         VpnBackend backend(runner);
 
         QVERIFY2(backend.connect(profile(QStringLiteral("awg"), QStringLiteral("amneziawg"), configPath)).ok,
@@ -190,6 +231,8 @@ private slots:
 
         auto runner = std::make_shared<FakeCommandRunner>();
         runner->availablePrograms.insert(QStringLiteral("wg-quick"));
+        runner->availablePrograms.insert(QStringLiteral("wg"));
+        runner->availablePrograms.insert(QStringLiteral("ip"));
         VpnBackend backend(runner, trustedDirectory);
         const BackendResult result = backend.connect(
             profile(QStringLiteral("outside"), QStringLiteral("wireguard"), outsideConfigPath));
@@ -212,6 +255,8 @@ private slots:
 
         auto runner = std::make_shared<FakeCommandRunner>();
         runner->availablePrograms.insert(QStringLiteral("wg-quick"));
+        runner->availablePrograms.insert(QStringLiteral("wg"));
+        runner->availablePrograms.insert(QStringLiteral("ip"));
         VpnBackend backend(runner);
         Profile work = profile(QStringLiteral("work"), QStringLiteral("wireguard"), configPath);
         work.interfaceName = QStringLiteral("wg0");
@@ -252,6 +297,7 @@ private slots:
 
         auto runner = std::make_shared<FakeCommandRunner>();
         runner->availablePrograms.insert(QStringLiteral("wg-quick"));
+        runner->availablePrograms.insert(QStringLiteral("ip"));
         VpnBackend backend(runner, {}, false, stagingRoot);
         Profile work = profile(QStringLiteral("work"), QStringLiteral("wireguard"), configPath);
         work.interfaceName = QStringLiteral("wg0");

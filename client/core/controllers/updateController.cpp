@@ -162,8 +162,13 @@ namespace
         if (!ConvertSidToStringSidW(userSid, &sidText)) {
             return false;
         }
+        // The staging directory is an untrusted-to-trusted handoff boundary.
+        // Keep it owner-only: the elevated IFW process retains access through
+        // the same user SID, while inherited access for broad local groups is
+        // not needed and would permit another local principal to replace the
+        // payload between verification and CreateProcessW.
         const QString securityDescriptorText = QStringLiteral(
-                "D:P(A;OICI;FA;;;%1)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")
+                "D:P(A;OICI;FA;;;%1)")
                                                        .arg(QString::fromWCharArray(sidText));
         LocalFree(sidText);
 
@@ -223,15 +228,7 @@ namespace
 
         QByteArray tokenBuffer;
         PSID userSid = nullptr;
-        BYTE systemSidBuffer[SECURITY_MAX_SID_SIZE] {};
-        BYTE administratorsSidBuffer[SECURITY_MAX_SID_SIZE] {};
-        DWORD systemSidSize = sizeof(systemSidBuffer);
-        DWORD administratorsSidSize = sizeof(administratorsSidBuffer);
         const bool identitiesValid = currentWindowsUserSid(tokenBuffer, userSid)
-                && CreateWellKnownSid(WinLocalSystemSid, nullptr, systemSidBuffer,
-                                      &systemSidSize)
-                && CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr,
-                                      administratorsSidBuffer, &administratorsSidSize)
                 && EqualSid(ownerSid, userSid);
         SECURITY_DESCRIPTOR_CONTROL descriptorControl = 0;
         DWORD descriptorRevision = 0;
@@ -239,7 +236,7 @@ namespace
                 securityDescriptor, &descriptorControl, &descriptorRevision)
                 && (descriptorControl & SE_DACL_PROTECTED) != 0;
 
-        bool exactAcl = identitiesValid && protectedDacl && dacl->AceCount == 3;
+        bool exactAcl = identitiesValid && protectedDacl && dacl->AceCount == 1;
         bool userAcePresent = false;
         for (DWORD index = 0; exactAcl && index < dacl->AceCount; ++index) {
             void *rawAce = nullptr;
@@ -255,10 +252,7 @@ namespace
             const auto *allowedAce = static_cast<ACCESS_ALLOWED_ACE *>(rawAce);
             PSID aceSid = const_cast<DWORD *>(&allowedAce->SidStart);
             const bool isUser = EqualSid(aceSid, userSid);
-            const bool allowedIdentity = isUser
-                    || EqualSid(aceSid, systemSidBuffer)
-                    || EqualSid(aceSid, administratorsSidBuffer);
-            if (!allowedIdentity || allowedAce->Mask != FILE_ALL_ACCESS) {
+            if (!isUser || allowedAce->Mask != FILE_ALL_ACCESS) {
                 exactAcl = false;
                 break;
             }
@@ -315,6 +309,48 @@ namespace
         const DWORD findError = GetLastError();
         FindClose(findHandle);
         return exactContents && foundInstaller && findError == ERROR_NO_MORE_FILES;
+    }
+
+    bool reverifyWindowsInstallerHandle(HANDLE installerHandle,
+                                        qint64 expectedSize,
+                                        const QString &expectedSha256)
+    {
+        if (installerHandle == INVALID_HANDLE_VALUE || expectedSize < 0) {
+            return false;
+        }
+
+        LARGE_INTEGER origin {};
+        if (!SetFilePointerEx(installerHandle, origin, nullptr, FILE_BEGIN)) {
+            return false;
+        }
+
+        LARGE_INTEGER fileSize {};
+        if (!GetFileSizeEx(installerHandle, &fileSize)
+            || fileSize.QuadPart != expectedSize) {
+            return false;
+        }
+
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        QByteArray buffer(64 * 1024, '\0');
+        DWORD bytesRead = 0;
+        BOOL readSucceeded = TRUE;
+        while ((readSucceeded = ReadFile(installerHandle, buffer.data(),
+                                          static_cast<DWORD>(buffer.size()),
+                                          &bytesRead, nullptr))
+               && bytesRead > 0) {
+            hash.addData(buffer.constData(), bytesRead);
+        }
+        const bool verified = readSucceeded
+                && QString::fromLatin1(hash.result().toHex()).compare(
+                           normalizeSha256(expectedSha256), Qt::CaseInsensitive) == 0;
+
+        // Leave the pinned handle at a deterministic position for any future
+        // diagnostic read. CreateProcessW itself opens the already validated
+        // canonical path; the owner-only directory and this final recheck
+        // close the path/content race as far as the Windows process API allows.
+        LARGE_INTEGER resetPosition {};
+        (void) SetFilePointerEx(installerHandle, resetPosition, nullptr, FILE_BEGIN);
+        return verified;
     }
 #endif
 
@@ -4042,7 +4078,13 @@ void UpdateController::onAndroidApkInstallerStartFailed(const QString &fileName,
 void UpdateController::scheduleDesktopQuitAfterInstallerStart()
 {
 #if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS) && !defined(MACOS_NE)
-    QTimer::singleShot(kDesktopQuitAfterInstallerStartMs, this, []() {
+    if (m_desktopQuitScheduled) {
+        logger.info() << "Desktop quit after installer handoff is already scheduled";
+        return;
+    }
+    m_desktopQuitScheduled = true;
+    QTimer::singleShot(kDesktopQuitAfterInstallerStartMs, this, [this]() {
+        m_desktopQuitScheduled = false;
         if (amnApp) {
             logger.info() << "Quitting application after update installer handoff";
             amnApp->forceQuit();
@@ -4130,24 +4172,9 @@ int UpdateController::runWindowsInstaller(const QString &installerPath,
         return -1;
     }
 
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    QByteArray buffer(64 * 1024, '\0');
-    DWORD bytesRead = 0;
-    BOOL readSucceeded = TRUE;
-    while ((readSucceeded = ReadFile(installerHandle, buffer.data(),
-                                     static_cast<DWORD>(buffer.size()),
-                                     &bytesRead, nullptr))
-           && bytesRead > 0) {
-        hash.addData(buffer.constData(), bytesRead);
-    }
-    if (!readSucceeded) {
-        logger.error() << "Failed to read pinned Windows installer:" << GetLastError();
-        CloseHandle(directoryHandle);
-        CloseHandle(installerHandle);
-        return -1;
-    }
-    if (QString::fromLatin1(hash.result().toHex()) != normalizedExpectedSha256) {
-        logger.error() << "Windows installer changed after download verification";
+    if (!reverifyWindowsInstallerHandle(installerHandle, expectedSize,
+                                        normalizedExpectedSha256)) {
+        logger.error() << "Windows installer failed its pre-launch identity verification";
         CloseHandle(directoryHandle);
         CloseHandle(installerHandle);
         return -1;
@@ -4186,6 +4213,20 @@ int UpdateController::runWindowsInstaller(const QString &installerPath,
                 &directoryHandle, sizeof(directoryHandle), nullptr, nullptr)) {
         logger.error() << "Failed to restrict Windows installer handle inheritance:"
                        << GetLastError();
+        SetHandleInformation(directoryHandle, HANDLE_FLAG_INHERIT, 0);
+        CloseHandle(directoryHandle);
+        CloseHandle(installerHandle);
+        return -1;
+    }
+
+    // Re-read the pinned handle after all path/ACL/handle setup and directly
+    // before CreateProcessW. The application cannot execute from a handle, so
+    // this last size/hash check is the narrowest safe handoff available while
+    // retaining the owner-only staging boundary.
+    if (!reverifyWindowsInstallerHandle(installerHandle, expectedSize,
+                                        normalizedExpectedSha256)) {
+        logger.error() << "Windows installer changed during launch preparation";
+        DeleteProcThreadAttributeList(attributeList);
         SetHandleInformation(directoryHandle, HANDLE_FLAG_INHERIT, 0);
         CloseHandle(directoryHandle);
         CloseHandle(installerHandle);

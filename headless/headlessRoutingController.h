@@ -56,6 +56,8 @@ private:
             const std::optional<amnezia::ManagedRoutePolicyMetadata> &current);
     bool loadState();
     bool saveState() const;
+    bool restoreRoutingSnapshot(const QJsonObject &snapshot, QString *error = nullptr);
+    bool markRecoveryRequired(const QString &message);
 
     LinuxRouteReconciler m_reconciler;
     QString m_activeProfile;
@@ -63,6 +65,8 @@ private:
     QString m_policyRevision;
     QString m_policyContentHash;
     QString m_policySource;
+    QString m_policyEndpoint;
+    QJsonObject m_policyResolvedSites;
     bool m_hasPolicy = false;
     std::optional<amnezia::ManagedRoutePolicyMetadata> m_policyMetadata;
     QString m_statePath;

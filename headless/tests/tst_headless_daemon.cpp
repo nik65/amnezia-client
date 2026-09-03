@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QFile>
 #include <QLocalSocket>
 #include <QTemporaryDir>
@@ -24,7 +25,9 @@ public:
 
     bool isAvailable(const QString &program) const override
     {
-        return m_wireGuardAvailable && program == QStringLiteral("wg-quick");
+        return (m_wireGuardAvailable && program == QStringLiteral("wg-quick"))
+            || (m_wireGuardAvailable && program == QStringLiteral("wg"))
+            || program == QStringLiteral("ip");
     }
 
     QString resolveExecutable(const QStringList &candidates) const override
@@ -40,6 +43,13 @@ public:
     CommandResult run(const QString &program, const QStringList &arguments) override
     {
         calls.append({ QStringLiteral("run"), {}, program, arguments });
+        if (program == QStringLiteral("wg-quick")
+            && arguments.contains(QStringLiteral("up"))) {
+            m_interfacePresent = true;
+        } else if (program == QStringLiteral("wg-quick")
+                   && arguments.contains(QStringLiteral("down"))) {
+            m_interfacePresent = false;
+        }
         return { true, 0, {} };
     }
 
@@ -48,7 +58,14 @@ public:
     {
         if (program == QStringLiteral("ip")
             && arguments.contains(QStringLiteral("link"))) {
-            return { true, 0, {}, QStringLiteral("7: wg0: <POINTOPOINT>\n") };
+            return m_interfacePresent
+                ? CommandResult { true, 0, {}, QStringLiteral("7: wg0: <POINTOPOINT>\n") }
+                : CommandResult { false, 1, QStringLiteral("interface absent"), {} };
+        }
+        if (program == QStringLiteral("wg")
+            && arguments.contains(QStringLiteral("latest-handshakes"))) {
+            return { true, 0, {}, QStringLiteral("peer %1\n")
+                                      .arg(QDateTime::currentSecsSinceEpoch() - 1) };
         }
         return run(program, arguments);
     }
@@ -75,6 +92,7 @@ public:
     };
     QList<Call> calls;
     bool m_wireGuardAvailable = false;
+    bool m_interfacePresent = false;
 };
 
 QJsonDocument readResponse(QLocalSocket &client)

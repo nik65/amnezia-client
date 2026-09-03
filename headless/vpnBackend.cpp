@@ -11,6 +11,7 @@
 #include <QStandardPaths>
 #include <QElapsedTimer>
 #include <QThread>
+#include <QDateTime>
 
 #include <utility>
 
@@ -284,8 +285,13 @@ BackendResult VpnBackend::connect(const Profile &profile)
         interfaceName,
         longRunning ? SessionKind::LongRunning : SessionKind::OneShot,
     });
-    if (profile.routingMode == QStringLiteral("all-except")
-        && protocol == QStringLiteral("openvpn")) {
+    // Process start is not tunnel readiness.  All native backends must expose
+    // their kernel interface before the routing controller is allowed to
+    // mutate policy routes or the daemon reports connected.
+    const bool nativeInterfaceBackend = protocol == QStringLiteral("wireguard")
+        || protocol == QStringLiteral("amneziawg")
+        || protocol == QStringLiteral("openvpn");
+    if (nativeInterfaceBackend) {
         const QString ip = m_runner->resolveExecutable({ QStringLiteral("ip"),
                                                           QStringLiteral("/usr/sbin/ip"),
                                                           QStringLiteral("/sbin/ip") });
@@ -293,17 +299,23 @@ BackendResult VpnBackend::connect(const Profile &profile)
         timer.start();
         bool ready = false;
         while (!ip.isEmpty() && timer.elapsed() < 5000) {
-            ready = m_runner->runCaptured(ip, { QStringLiteral("link"), QStringLiteral("show"),
-                                                QStringLiteral("dev"), interfaceName }).ok;
+            // interfaceHealthy also verifies the native peer/session signal:
+            // WireGuard/AmneziaWG need a recent handshake and OpenVPN needs a
+            // configured non-loopback address, not merely a created link.
+            ready = interfaceHealthy(interfaceName);
             if (ready) break;
             QThread::msleep(100);
         }
         if (!ready) {
-            m_runner->stop(profile.id);
+            if (longRunning) {
+                m_runner->stop(profile.id);
+            } else {
+                m_runner->run(executable, { QStringLiteral("down"), effectiveConfigPath });
+            }
             if (!temporaryConfigDirectory.isEmpty()) QDir(temporaryConfigDirectory).removeRecursively();
             m_session.reset();
             return failure(QStringLiteral("backend_not_ready"),
-                           QStringLiteral("OpenVPN did not create its native interface in time"));
+                           QStringLiteral("VPN backend did not create its native interface in time"));
         }
     }
     return { true, {}, {} };
@@ -456,11 +468,17 @@ QString VpnBackend::activeProfile() const
     return m_session ? m_session->profileId : QString();
 }
 
+QString VpnBackend::activeInterface() const
+{
+    return m_session ? m_session->interfaceName : QString();
+}
+
 bool VpnBackend::sessionAlive() const
 {
     if (!m_session) return false;
     if (m_session->kind == SessionKind::LongRunning) {
-        return m_runner->isSessionAlive(m_session->profileId);
+        return m_runner->isSessionAlive(m_session->profileId)
+            && interfaceHealthy(m_session->interfaceName);
     }
     // One-shot WireGuard/AmneziaWG commands return after configuring the
     // interface; process liveness is therefore not a health signal.  Probe
@@ -471,14 +489,77 @@ bool VpnBackend::sessionAlive() const
 bool VpnBackend::interfaceHealthy(const QString &interfaceName) const
 {
     if (!m_session) return false;
-    if (interfaceName.trimmed().isEmpty()) return true;
+    const QString targetInterface = interfaceName.trimmed().isEmpty()
+            ? m_session->interfaceName : interfaceName.trimmed();
+    if (targetInterface.isEmpty()) return true;
     const QString ip = m_runner->resolveExecutable(
             { QStringLiteral("ip"), QStringLiteral("/usr/sbin/ip"), QStringLiteral("/sbin/ip") });
     if (ip.isEmpty()) return false;
     const CommandResult result = m_runner->runCaptured(
             ip, { QStringLiteral("link"), QStringLiteral("show"),
-                  QStringLiteral("dev"), interfaceName });
-    return result.ok && result.output.contains(interfaceName);
+                  QStringLiteral("dev"), targetInterface });
+    const QRegularExpression linkPattern(QStringLiteral(
+            "(?m)^\\s*\\d+:\\s*%1(?:[@:]|\\s)")
+            .arg(QRegularExpression::escape(targetInterface)));
+    if (!result.ok || !linkPattern.match(result.output).hasMatch()) return false;
+
+    if (m_session->protocol == QStringLiteral("openvpn")) {
+        const CommandResult addresses = m_runner->runCaptured(
+                ip, { QStringLiteral("-o"), QStringLiteral("addr"), QStringLiteral("show"),
+                      QStringLiteral("dev"), targetInterface });
+        // OpenVPN must have a real address before policy routes are installed.
+        return addresses.ok && QRegularExpression(QStringLiteral(
+                "\\binet\\s+(?!127\\.)(?:\\d{1,3}\\.){3}\\d{1,3}/\\d+\\b"))
+                .match(addresses.output).hasMatch();
+    }
+    if (m_session->protocol == QStringLiteral("wireguard")
+        || m_session->protocol == QStringLiteral("amneziawg")) {
+        const QString tool = m_runner->resolveExecutable(
+                m_session->protocol == QStringLiteral("amneziawg")
+                    ? QStringList { QStringLiteral("awg"), QStringLiteral("/usr/bin/awg"),
+                                     QStringLiteral("/usr/sbin/awg") }
+                    : QStringList { QStringLiteral("wg"), QStringLiteral("/usr/bin/wg"),
+                                     QStringLiteral("/usr/sbin/wg") });
+        if (tool.isEmpty()) return false;
+        const CommandResult handshake = m_runner->runCaptured(
+                tool, { QStringLiteral("show"), targetInterface,
+                        QStringLiteral("latest-handshakes") });
+        if (!handshake.ok) return false;
+        const QRegularExpression timestamp(QStringLiteral("(?:^|\\s)(\\d{9,})(?:\\s|$)"));
+        auto match = timestamp.globalMatch(handshake.output);
+        const qint64 now = QDateTime::currentSecsSinceEpoch();
+        while (match.hasNext()) {
+            bool ok = false;
+            const qint64 value = match.next().captured(1).toLongLong(&ok);
+            if (ok && value > 0 && value <= now && now - value <= 180) return true;
+        }
+        return false;
+    }
+    return true;
+}
+
+bool VpnBackend::configuredInterfacePresent(const Profile &profile) const
+{
+    const QString protocol = normalizeProtocol(profile.protocol);
+    QString interfaceName = profile.interfaceName.trimmed();
+    if (interfaceName.isEmpty()) {
+        if (protocol == QStringLiteral("wireguard")) interfaceName = QStringLiteral("wg0");
+        else if (protocol == QStringLiteral("amneziawg")) interfaceName = QStringLiteral("amn0");
+        else if (protocol == QStringLiteral("openvpn")) interfaceName = QStringLiteral("tun0");
+    }
+    if (interfaceName.isEmpty() || (protocol != QStringLiteral("wireguard")
+                                    && protocol != QStringLiteral("amneziawg")
+                                    && protocol != QStringLiteral("openvpn"))) {
+        return false;
+    }
+    const QString ip = m_runner->resolveExecutable(
+            { QStringLiteral("ip"), QStringLiteral("/usr/sbin/ip"), QStringLiteral("/sbin/ip") });
+    if (ip.isEmpty()) return true;
+    const CommandResult result = m_runner->runCaptured(
+            ip, { QStringLiteral("link"), QStringLiteral("show"), QStringLiteral("dev"), interfaceName });
+    return result.ok && QRegularExpression(QStringLiteral(
+            "(?m)^\\s*\\d+:\\s*%1(?:[@:]|\\s)")
+            .arg(QRegularExpression::escape(interfaceName))).match(result.output).hasMatch();
 }
 
 BackendResult VpnBackend::lastError() const

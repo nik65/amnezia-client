@@ -786,6 +786,9 @@ function Controller () {
 
         if (appInstalled()) {
             writeWindowsInstallerLog("existing-install-detected", "1");
+            // The verified self-hosted handoff suppresses only this legacy
+            // replacement question. It never suppresses per-machine UAC or
+            // the bounded service/process shutdown checks below.
             var automaticReplacement = isSelfHostedAutomaticUpdate();
             var replacementAccepted = automaticReplacement
                     || QMessageBox.Ok === QMessageBox.information("os.information", appName(),

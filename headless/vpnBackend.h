@@ -93,8 +93,10 @@ public:
     QJsonObject doctor() const;
 
     QString activeProfile() const;
+    QString activeInterface() const;
     bool sessionAlive() const;
     bool interfaceHealthy(const QString &interfaceName) const;
+    bool configuredInterfacePresent(const Profile &profile) const;
     BackendResult lastError() const;
 
 private:

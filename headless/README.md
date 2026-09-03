@@ -34,16 +34,31 @@ cmake --build build-headless --target amneziad amnezia-cli
 явным административным подтверждением.
 
 Для release-артефакта Ubuntu используется `deploy/headless/build_headless_release.sh`.
-Он создаёт tar.gz только с `amneziad` и `amnezia-cli`; затем
-`deploy/headless/make_headless_manifest.py` публикует подписанный
-`linux-headless-x64`-манифест. Обычный `linux-x64` GUI `.run` намеренно не считается
-подходящим headless-обновлением. Скрипт также создаёт отдельный provisioning bundle
-с unit-файлом, trust-anchor input, `runtime-dependencies.txt` и `SHA256SUMS`;
-`install_headless.sh` принимает путь и SHA-256 receipt trust anchor, проверяет команды,
-динамические библиотеки, целостность bundle, Ed25519 trust anchor, socket/health и только
-затем включает systemd unit: `sudo ./install_headless.sh /secure/update-public-key.pem <sha256>`.
+Он создаёт основной auto-update tar.gz ровно с `amneziad` и `amnezia-cli`; unit-файл
+намеренно не входит в этот архив. Отдельно создаётся provisioning bundle с unit-файлом,
+installer-скриптом, `runtime-dependencies.txt` и `SHA256SUMS`. Подписанный manifest
+ связывает оба артефакта, включая hash/size `package-manifest.json`, `SHA256SUMS`,
+ точную версию и список файлов provisioning-пакета. `deploy/headless/make_headless_manifest.py`
+ требует `--provisioning` и выполняет безопасный tar-аудит до подписи. Обычный `linux-x64` GUI `.run` намеренно не
+считается подходящим headless-обновлением.
+
+Автоматическое обновление headless заменяет только две собственные программы; оно не
+ устанавливает provisioning bundle, unit, trust anchor или зависимости. Эти изменения
+ выполняются оператором вручную. Сначала запускается verify-only helper:
+ `python3 deploy/headless/verify_provisioning_bundle.py --manifest manifest.json
+ --public-key /secure/update-public-key.pem --provisioning AmneziaHeadless_<version>_linux_x64_provisioning.tar.gz
+ --receipt-out verified-receipt.json`. Он не извлекает пакет и не запускает installer
+ без явного `--run-installer`. Затем installer запускается вручную:
+ `sudo ./install_headless.sh /secure/update-public-key.pem <key-sha256> [fresh|upgrade]
+ <package-manifest-sha256> <checksums-sha256> verified-receipt.json`. Installer принимает только
+полную identity-связку либо пустой fresh-host, отвергает partial/ambiguous host,
+поддерживает точный `/etc` или `/lib` путь unit, проверяет сохранение systemd-состояния,
+ ELF x86_64 через статический `readelf`, затем `ldd`, SHA-256 и health-check. Поддерживаются только Ubuntu 22.04/jammy и
+24.04/noble amd64 с runtime/backend-командами из строгих metadata пакета.
 В общий self-hosted manifest headless публикуется только при `--payload-schema 1`:
-schema 2 содержит `releasePolicy`, которую этот daemon пока не потребляет.
+schema 2 содержит `releasePolicy`, которую этот daemon пока не потребляет. В
+`deploy/selfhosted_updates/local_release.ps1` headless включён в полный release по
+умолчанию; при наличии headless artifact provisioning metadata также обязателен.
 
 В составе основного проекта target включается явно:
 
@@ -163,8 +178,9 @@ Windows-клиента. Пока отсутствуют и не должны с�
 - диагностика протокольных backend-ов и journald integration;
 - automatic update требует опубликованного артефакта `linux-headless-x64` и root-owned ключ
   строго `/etc/amnezia/update-public-key.pem`; HTTPS manifest обязателен, кроме буквального
-  private/VPN-internal IPv4 HTTP endpoint, содержащегося в `forwardRoutes`; поле ключа в профиле
-  сохраняется для совместимости, но не может выбрать другой trust anchor;
+  private/VPN-internal IPv4 HTTP endpoint, содержащегося в `forwardRoutes`; unit/provisioning
+  bundle никогда не устанавливаются автоматически; поле ключа в профиле сохраняется для
+  совместимости, но не может выбрать другой trust anchor;
 - HTTPS remote API;
 - автоматическая или zero-touch миграция AWG 2.0 → 3.1.
 

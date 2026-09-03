@@ -1099,6 +1099,26 @@ class ReleaseFreezeTests(unittest.TestCase):
 
 
 class SourceContractTests(unittest.TestCase):
+    def test_headless_base_url_is_private_http_or_https_with_port(self) -> None:
+        self.assertEqual(
+            make_manifest.validate_headless_base_url("http://172.29.172.252:17865/"),
+            "http://172.29.172.252:17865",
+        )
+        self.assertEqual(
+            make_manifest.validate_headless_base_url("https://172.29.172.252:443/"),
+            "https://172.29.172.252:443",
+        )
+        for invalid_base_url in (
+            "http://8.8.8.8:17865",
+            "http://updates.example.invalid:17865",
+            "https://updates.example.invalid:443",
+            "https://updates.example.invalid",
+            "https://updates.example.invalid:65536",
+        ):
+            with self.subTest(base_url=invalid_base_url):
+                with self.assertRaises(SystemExit):
+                    make_manifest.validate_headless_base_url(invalid_base_url)
+
     def test_manifest_url_validation_rejects_cidr_routes(self) -> None:
         self.assertEqual(make_manifest.validate_release_version("4.8.16.0"), "4.8.16.0")
         self.assertEqual(make_manifest.validate_release_version("4.8.16.0"), "4.8.16.0")
@@ -1188,6 +1208,12 @@ class SourceContractTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             make_manifest.validate_platform_vocabulary("headless-x64", "--external")
 
+    def test_headless_manifest_requires_provisioning_binding(self) -> None:
+        helper = (REPO_ROOT / "deploy/headless/make_headless_manifest.py").read_text(encoding="utf-8")
+        self.assertIn('parser.add_argument("--provisioning", type=Path, required=True', helper)
+        self.assertIn('payload["headlessProvisioning"]', helper)
+        self.assertIn("inspect_headless_provisioning", helper)
+
     def test_signed_headless_provisioning_metadata_is_shape_checked(self) -> None:
         metadata = {
             "url": "files/artifacts/" + "a" * 64 + "/bundle.tar.gz",
@@ -1195,8 +1221,46 @@ class SourceContractTests(unittest.TestCase):
             "size": 123,
             "format": make_manifest.HEADLESS_PROVISIONING_FORMAT,
             "version": "9.9.9.9",
+            "packageManifestSha256": "c" * 64,
+            "checksumsSha256": "d" * 64,
+            "packageVersion": "9.9.9.9",
+            "packageFiles": list(make_manifest.HEADLESS_PROVISIONING_FILES),
         }
         self.assertEqual(metadata["format"], "amnezia-headless-provisioning-tar-v1")
+        self.assertEqual(metadata["packageVersion"], metadata["version"])
+        self.assertEqual(metadata["packageFiles"], list(make_manifest.HEADLESS_PROVISIONING_FILES))
+
+    def test_headless_manifest_inner_receipt_is_signed_and_exact(self) -> None:
+        manifest_tool = (REPO_ROOT / "deploy/selfhosted_updates/make_manifest.py").read_text(encoding="utf-8")
+        bootstrapper = (REPO_ROOT / "client/core/controllers/selfhosted/selfHostedUpdateBootstrapper.cpp").read_text(encoding="utf-8")
+        self.assertIn("inspect_headless_provisioning", manifest_tool)
+        self.assertIn('"packageManifestSha256"', manifest_tool)
+        self.assertIn('"checksumsSha256"', manifest_tool)
+        self.assertIn('"packageFiles"', manifest_tool)
+        self.assertIn("hasHeadlessPlatform != !provisioningValue.isUndefined()", bootstrapper)
+        self.assertIn("provisioning.size() != 9", bootstrapper)
+
+    def test_provisioning_verifier_is_verify_only_by_default(self) -> None:
+        verifier = (REPO_ROOT / "deploy/headless/verify_provisioning_bundle.py").read_text(encoding="utf-8")
+        self.assertIn('"--run-installer", action="store_true"', verifier)
+        self.assertIn("if not args.run_installer:", verifier)
+        self.assertIn("inspect_headless_provisioning", verifier)
+        self.assertIn("extract_verified_bundle", verifier)
+        self.assertNotIn("tar.extractall", verifier)
+        self.assertIn("Python 3.10 safe", verifier)
+
+    def test_provisioning_installer_requires_authenticated_regular_package(self) -> None:
+        installer = (REPO_ROOT / "deploy/headless/install_headless.sh").read_text(encoding="utf-8")
+        builder = (REPO_ROOT / "deploy/headless/build_headless_release.sh").read_text(encoding="utf-8")
+        self.assertIn("VERIFIED_RECEIPT", installer)
+        self.assertIn("receipt is not trusted", installer)
+        self.assertIn("readelf -h", installer)
+        self.assertIn("--version", installer)
+        self.assertIn("GROUP_CREATED", installer)
+        self.assertIn('"backendModes"', builder)
+        self.assertIn('"groupdel"', builder)
+        self.assertNotIn("id command;", installer)
+        self.assertNotIn('"command"', builder)
 
     def test_manifest_tool_rejects_duplicate_platforms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2558,6 +2622,9 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("bundledArtifactRequestPath", bootstrapper_h)
         self.assertIn("bundledArtifactRequestPath(urlText)", bootstrapper)
         self.assertIn("headlessProvisioning", bootstrapper)
+        self.assertIn("packageManifestSha256", bootstrapper)
+        self.assertIn("checksumsSha256", bootstrapper)
+        self.assertIn("packageFiles", bootstrapper)
         self.assertIn("amnezia-headless-provisioning-tar-v1", bootstrapper)
         self.assertIn("linux-headless-provisioning", bootstrapper)
         self.assertIn("uploadLocalFileToHost(credentials, file.localPath, remotePath)", bootstrapper)
@@ -2889,8 +2956,11 @@ class SourceContractTests(unittest.TestCase):
     def test_headless_update_archive_has_two_managed_files_and_provisioning_is_separate(self) -> None:
         update_manager = (REPO_ROOT / "headless/headlessUpdateManager.cpp").read_text(encoding="utf-8")
         build_script = (REPO_ROOT / "deploy/headless/build_headless_release.sh").read_text(encoding="utf-8")
-        self.assertIn('QStringLiteral("amneziad"), QStringLiteral("amnezia-cli")', update_manager)
-        self.assertNotIn('QStringLiteral("amneziad.service")', update_manager)
+        managed_files_start = update_manager.index("const QStringList &managedPayloadFiles()")
+        managed_files_end = update_manager.index("QString utcNow()", managed_files_start)
+        managed_files = update_manager[managed_files_start:managed_files_end]
+        self.assertIn('QStringLiteral("amneziad"), QStringLiteral("amnezia-cli")', managed_files)
+        self.assertNotIn('QStringLiteral("amneziad.service")', managed_files)
         self.assertIn("amneziad amnezia-cli", build_script)
         archive_start = build_script.index('tar --create --gzip --file "$ARCHIVE"')
         archive_end = build_script.index('sha256sum "$ARCHIVE"', archive_start)
@@ -2898,6 +2968,29 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('sha256sum install_headless.sh', build_script)
         self.assertIn("headless-package", build_script)
         self.assertIn("amneziad.service", build_script)
+        self.assertIn('"schema":2', build_script)
+        self.assertIn('"codenames":["jammy"]', build_script)
+        self.assertIn('"codenames":["noble"]', build_script)
+        self.assertIn('"backendModes"', build_script)
+        local_release = (REPO_ROOT / "deploy/selfhosted_updates/local_release.ps1").read_text(encoding="utf-8")
+        self.assertIn('@("windows", "linux", "android", "headless")', local_release)
+        self.assertIn('PSBoundParameters.ContainsKey("BuildPlatform")', local_release)
+        self.assertIn('$headlessArtifactPresent', local_release)
+
+    def test_headless_installer_requires_strict_identity_and_transactional_restore(self) -> None:
+        installer = (REPO_ROOT / "deploy/headless/install_headless.sh").read_text(encoding="utf-8")
+        for marker in (
+            'SERVICE_PATH=""',
+            'service exists in both /etc and /lib',
+            'upgrade requires exactly one complete installation identity',
+            'ELF64',
+            'runtime dependency alternatives are not satisfied',
+            'readelf -h',
+            'receipt is not trusted',
+            'systemd enabled/active state was not preserved',
+            'headless-recovery-required',
+        ):
+            self.assertIn(marker, installer)
 
     def test_headless_route_cleanup_is_transactional_and_probes_orphans(self) -> None:
         reconciler = (REPO_ROOT / "headless/linuxRouteReconciler.cpp").read_text(encoding="utf-8")
@@ -6355,6 +6448,10 @@ class ManifestPublisherTests(unittest.TestCase):
                 "-Version",
                 version,
                 "-SkipBuild",
+                "-BuildPlatform",
+                "windows",
+                "linux",
+                "android",
                 "-NoBundleUpdatesInWindowsClient",
                 "-ArtifactDir",
                 str(self.root / "artifacts"),
