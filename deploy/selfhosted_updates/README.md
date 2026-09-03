@@ -238,11 +238,41 @@ destinations inside the tunnel, bypasses only the public VPN endpoint through
 the underlay, and fails closed for ambiguous internal CIDR overlap or IPv6
 underlay endpoints;
 self-hosted desktop handoff uses Qt Installer
-Framework's unattended command-line mode and passes an internal update marker;
+Framework's unattended command-line mode, accepting installer messages and
+licenses with `--accept-messages`, `--accept-licenses`, and
+`--confirm-command`, and passes an internal update marker;
 the Windows replacement confirmation is skipped only for this verified
 self-hosted flow. The application still exits briefly because Windows cannot
 replace its own mapped executable, and Windows UAC or platform-native Android
 and macOS authorization prompts remain controlled by the operating system.
+
+The Windows self-hosted handoff stages the verified installer in a protected
+per-user directory whose DACL gives the owner full control and gives only
+`BUILTIN\\Administrators` and `LocalSystem` minimal read/execute access. Broad
+user access is not inherited, and the client accepts the handoff only when
+that exact protected ACL is present. The final content hash is recomputed
+immediately before process creation. The installer file handle allows only
+read sharing and remains open through `CreateProcessW`, preventing path
+replacement after verification. The staging directory handle also allows only
+read sharing, is explicitly non-inheritable, remains held through
+`CreateProcessW`, and is closed immediately afterward.
+
+Before the QIF Windows product-update preflight changes the existing
+`AmneziaVPN-service` startup or recovery settings, it queries the SCM with
+`sc query`, `sc qc`, `sc qfailure`, and `sc qfailureflag`. Only the exact
+supported QIF configuration (`auto` or `delayed-auto` startup and three
+`restart/2000` recovery actions with a 100-second reset period) is accepted;
+a custom or unparseable configuration fails closed before update mutation.
+The original startup mode is retained in the snapshot: `AUTO_START` restores
+with `start= auto`, while `AUTO_START (DELAYED)` restores with
+`start= delayed-auto`. On a supported QIF cancellation or rollback while the
+old service still exists, `sc config` (the SCM `ChangeServiceConfig` path),
+`sc failure`, and `sc failureflag` restore that configuration and the result is
+verified again with `sc query`, `sc qc`, `sc qfailure`, and `sc qfailureflag`.
+Once SCM has proven the old service absent, the snapshot is discarded and is
+never applied to the newly installed service. Administrator UAC consent and
+the brief desktop shutdown remain unavoidable operating-system handoffs and
+are not bypassed.
 
 Release notes for `4.9.2.18`: the elevated Windows batch runner reads the
 installation-directory security descriptor through the .NET ACL API instead
@@ -741,3 +771,9 @@ app, checked by sha256, and then handed to Android Package Installer; if the
 unknown-app install permission is missing, the app opens the permission screen
 and resumes installation when the user returns. Android can still use an
 external store/browser URL when the manifest artifact has `openExternal=true`.
+
+Android clients older than the self-hosted updater bootstrap (for example
+`5.0.1.6`) cannot consume this channel. Install one signed bootstrap APK
+manually with `adb install -r` (or through the Android Package Installer) once;
+after that, automatic checks and the About-page “Check for updates” action use
+the signed self-hosted manifest and can hand the verified APK back to Android.

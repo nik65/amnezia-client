@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QSet>
 #include <QTemporaryDir>
 #include <QStandardPaths>
 #include <QElapsedTimer>
@@ -23,6 +24,52 @@ namespace amnezia::headless
 namespace
 {
 constexpr qint64 WireGuardHandshakeMaxAgeSeconds = 180;
+constexpr int LongRunningStartupGraceMs = 500;
+
+struct WireGuardConfigDetails
+{
+    bool hasInterface = false;
+    int peerCount = 0;
+    int allowedIpsCount = 0;
+    int allowedIpsLine = -1;
+    QSet<QString> peerPublicKeys;
+};
+
+WireGuardConfigDetails parseWireGuardConfig(const QString &content)
+{
+    WireGuardConfigDetails details;
+    const QRegularExpression sectionHeader(
+            QStringLiteral(R"(^\s*\[([^\]]+)\]\s*$)"));
+    const QRegularExpression allowedIps(
+            QStringLiteral(R"(^\s*AllowedIPs\s*=\s*[^\r\n]*$)"),
+            QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpression publicKey(
+            QStringLiteral(R"(^\s*PublicKey\s*=\s*([^\s#]+).*$)"),
+            QRegularExpression::CaseInsensitiveOption);
+    bool inPeer = false;
+    const QStringList lines = content.split(QLatin1Char('\n'), Qt::KeepEmptyParts);
+    for (int index = 0; index < lines.size(); ++index) {
+        const QString line = lines.at(index).trimmed();
+        const QRegularExpressionMatch section = sectionHeader.match(line);
+        if (section.hasMatch()) {
+            const QString sectionName = section.captured(1).trimmed();
+            inPeer = sectionName.compare(QStringLiteral("Peer"), Qt::CaseInsensitive) == 0;
+            if (sectionName.compare(QStringLiteral("Interface"), Qt::CaseInsensitive) == 0) {
+                details.hasInterface = true;
+            }
+            if (inPeer) ++details.peerCount;
+            continue;
+        }
+        if (!inPeer) continue;
+        if (allowedIps.match(line).hasMatch()) {
+            ++details.allowedIpsCount;
+            details.allowedIpsLine = index;
+        }
+        const QRegularExpressionMatch key = publicKey.match(line);
+        if (key.hasMatch()) details.peerPublicKeys.insert(key.captured(1));
+    }
+    return details;
+}
 
 bool waitForProcessFinished(QProcess &process, int timeoutMs)
 {
@@ -256,6 +303,14 @@ BackendResult VpnBackend::connect(const Profile &profile)
         m_lastError = configResult;
         return configResult;
     }
+    if (protocol == QStringLiteral("wireguard") || protocol == QStringLiteral("amneziawg")) {
+        QFile config(profile.configPath);
+        if (!config.open(QIODevice::ReadOnly) || config.size() > 1024 * 1024
+            || !parseWireGuardConfig(QString::fromUtf8(config.readAll())).hasInterface) {
+            return failure(QStringLiteral("config_invalid"),
+                           QStringLiteral("WireGuard configuration requires an [Interface] section"));
+        }
+    }
 
     const QString executable = m_runner->resolveExecutable(candidatesForProtocol(protocol));
     if (executable.isEmpty()) {
@@ -305,6 +360,27 @@ BackendResult VpnBackend::connect(const Profile &profile)
         interfaceName,
         longRunning ? SessionKind::LongRunning : SessionKind::OneShot,
     });
+    if (longRunning && (protocol == QStringLiteral("xray")
+                        || protocol == QStringLiteral("ssxray"))) {
+        // A successful fork/start is not proof that XRay accepted its config.
+        // Keep this bounded: an immediate exit must not be reported as a live
+        // proxy session, while a normal long-running process gets no traffic
+        // or network readiness requirement here.
+        QElapsedTimer startupTimer;
+        startupTimer.start();
+        bool alive = false;
+        while (startupTimer.elapsed() < LongRunningStartupGraceMs) {
+            alive = m_runner->isSessionAlive(profile.id);
+            if (!alive) break;
+            QThread::msleep(50);
+        }
+        if (!alive) {
+            m_runner->stop(profile.id);
+            m_session.reset();
+            return failure(QStringLiteral("backend_not_ready"),
+                           QStringLiteral("XRay backend exited during startup"));
+        }
+    }
     // Process start is not tunnel readiness.  All native backends must expose
     // their kernel interface before the routing controller is allowed to
     // mutate policy routes or the daemon reports connected.
@@ -396,17 +472,17 @@ bool VpnBackend::prepareFullTunnelConfig(const Profile &profile,
         return false;
     }
     const QString content = QString::fromUtf8(source.readAll());
-    const QRegularExpression allowedIpsLine(
-            QStringLiteral(R"(^\s*AllowedIPs\s*=\s*[^\r\n]*$)"),
-            QRegularExpression::MultilineOption);
-    if (!allowedIpsLine.match(content).hasMatch()) {
-        if (error) *error = QStringLiteral("WireGuard configuration has no AllowedIPs entry");
+    const WireGuardConfigDetails details = parseWireGuardConfig(content);
+    if (!details.hasInterface || details.peerCount != 1 || details.allowedIpsCount != 1
+        || details.allowedIpsLine < 0) {
+        if (error) *error = QStringLiteral(
+                "all-except requires exactly one peer with one AllowedIPs entry");
         return false;
     }
 
-    QString rewritten = content;
-    rewritten.replace(allowedIpsLine,
-                      QStringLiteral("AllowedIPs = 0.0.0.0/0, ::/0"));
+    QStringList lines = content.split(QLatin1Char('\n'), Qt::KeepEmptyParts);
+    lines[details.allowedIpsLine] = QStringLiteral("AllowedIPs = 0.0.0.0/0, ::/0");
+    QString rewritten = lines.join(QLatin1Char('\n'));
 
     // The native wg-quick policy-rules generator is not the transaction owner
     // for headless full-tunnel mode.  Disable it explicitly and let the
@@ -573,23 +649,37 @@ bool VpnBackend::interfaceHealthy(const QString &interfaceName,
                 tool, { QStringLiteral("show"), targetInterface,
                         QStringLiteral("latest-handshakes") });
         if (!handshakes.ok) return false;
+        QFile config(m_session->configPath);
+        if (!config.open(QIODevice::ReadOnly) || config.size() > 1024 * 1024) {
+            return false;
+        }
+        const WireGuardConfigDetails details = parseWireGuardConfig(
+                QString::fromUtf8(config.readAll()));
+        if (!details.hasInterface || details.peerCount == 0
+            || details.peerPublicKeys.size() != details.peerCount) return false;
         const qint64 now = QDateTime::currentSecsSinceEpoch();
         const QStringList lines = handshakes.output.split(
                 QRegularExpression(QStringLiteral("[\\r\\n]")), Qt::SkipEmptyParts);
+        bool configuredPeerHandshake = false;
         for (const QString &line : lines) {
             const QStringList fields = line.trimmed().split(
                     QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
-            if (fields.size() < 2) return false;
+            if (fields.size() < 2 || !details.peerPublicKeys.contains(fields.constFirst())) {
+                continue;
+            }
             bool timestampOk = false;
             const qint64 timestamp = fields.constLast().toLongLong(&timestampOk);
-            if (!timestampOk || timestamp <= 0 || timestamp > now + 5
-                || now - timestamp > WireGuardHandshakeMaxAgeSeconds) {
-                return false;
+            if (timestampOk && timestamp > 0 && timestamp <= now + 5
+                && now - timestamp <= WireGuardHandshakeMaxAgeSeconds) {
+                configuredPeerHandshake = true;
+                break;
             }
         }
-        // An empty latest-handshakes result means the interface has no peers;
-        // that is not a stale-peer failure.
-        return true;
+        if (configuredPeerHandshake) m_session->handshakeObserved = true;
+        // A peer only needs to prove that the configured tunnel has exchanged
+        // traffic once.  An otherwise healthy idle tunnel must not be torn
+        // down merely because its last handshake has aged out.
+        return m_session->handshakeObserved;
     }
     return true;
 }
@@ -613,7 +703,9 @@ bool VpnBackend::configuredInterfacePresent(const Profile &profile) const
     if (ip.isEmpty()) return true;
     const CommandResult result = m_runner->runCaptured(
             ip, { QStringLiteral("link"), QStringLiteral("show"), QStringLiteral("dev"), interfaceName });
-    if (!result.ok) return true;
+    // A normal ENODEV-style failed probe proves absence.  Only an unavailable
+    // probe tool above is treated as unknown/potential orphan state.
+    if (!result.ok) return false;
     return QRegularExpression(QStringLiteral(
             "(?m)^\\s*\\d+:\\s*%1(?:[@:]|\\s)")
             .arg(QRegularExpression::escape(interfaceName))).match(result.output).hasMatch();

@@ -4,6 +4,7 @@ var desktopAppProcessRunning = false;
 var appInstalledUninstallerPath;
 var appInstalledUninstallerPath_x86;
 var windowsMainServicePrepared = false;
+var windowsMainServiceConfigSnapshot = null;
 var windowsUpgradeAdminRightsAcquired = false;
 var windowsUpgradePrepareFailureReason = "";
 var windowsUpgradeReplacementRequested = false;
@@ -332,6 +333,194 @@ function releaseWindowsUpgradeAdminRights()
     windowsUpgradeAdminRightsAcquired = false;
 }
 
+function parseScOutputFields(output)
+{
+    var fields = {};
+    var activeField = "";
+    var lines = String(output || "").replace(/\r\n?/g, "\n").split("\n");
+    for (var i = 0; i < lines.length; ++i) {
+        var line = lines[i];
+        var fieldMatch = line.match(/^\s*([^:]+?)\s*:\s*(.*)$/);
+        if (fieldMatch) {
+            var fieldName = fieldMatch[1].replace(/\s+/g, " ").trim().toUpperCase();
+            if (Object.prototype.hasOwnProperty.call(fields, fieldName)) {
+                return null;
+            }
+            fields[fieldName] = fieldMatch[2].trim();
+            activeField = fieldName;
+        } else if (activeField !== "" && line.trim() !== "") {
+            fields[activeField] = fields[activeField] === ""
+                ? line.trim()
+                : fields[activeField] + " " + line.trim();
+        }
+    }
+    return fields;
+}
+
+function scFieldsHaveOnly(fields, allowedFields)
+{
+    if (fields === null) {
+        return false;
+    }
+    for (var fieldName in fields) {
+        if (Object.prototype.hasOwnProperty.call(fields, fieldName)
+                && allowedFields.indexOf(fieldName) < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function queryWindowsMainServiceConfig(serviceName)
+{
+    if (!runningOnWindows()) {
+        return null;
+    }
+
+    // SCM is authoritative for the service configuration. Only the exact
+    // configuration emitted by the supported QIF install is round-tripped;
+    // an unrecognised/custom configuration fails closed before any mutation.
+    var systemSc = "C:/Windows/System32/sc.exe";
+    var queryResult = installer.execute(systemSc, ["query", serviceName]);
+    var configResult = installer.execute(systemSc, ["qc", serviceName]);
+    var failureResult = installer.execute(systemSc, ["qfailure", serviceName]);
+    var failureFlagResult = installer.execute(systemSc, ["qfailureflag", serviceName]);
+    if (queryResult.length < 2 || Number(queryResult[1]) !== 0
+            || configResult.length < 2 || Number(configResult[1]) !== 0
+            || failureResult.length < 2 || Number(failureResult[1]) !== 0
+            || failureFlagResult.length < 2 || Number(failureFlagResult[1]) !== 0) {
+        return null;
+    }
+
+    var configOutput = String(configResult[0] || "").replace(/\s+/g, " ").toUpperCase();
+    // Preserve delayed automatic startup instead of silently normalizing it to
+    // plain auto; every other SCM start mode is rejected before mutation.
+    var startType = "";
+    if (/START_TYPE\s*:\s*2\s+AUTO_START\s+\(DELAYED\)/.test(configOutput)) {
+        startType = "delayed-auto";
+    } else if (/START_TYPE\s*:\s*2\s+AUTO_START\b/.test(configOutput)) {
+        startType = "auto";
+    }
+    var failureFields = parseScOutputFields(failureResult[0]);
+    var failureFlagFields = parseScOutputFields(failureFlagResult[0]);
+    var allowedFailureFields = [
+        "SERVICE_NAME",
+        "RESET_PERIOD (IN SECONDS)",
+        "REBOOT_MESSAGE",
+        "COMMAND_LINE",
+        "FAILURE_ACTIONS"
+    ];
+    var allowedFailureFlagFields = ["SERVICE_NAME", "FAILURE_ACTIONS_FLAG"];
+    var expectedFailureActions =
+        "RESTART -- DELAY = 2000 MILLISECONDS. RESTART -- DELAY = 2000 MILLISECONDS. "
+        + "RESTART -- DELAY = 2000 MILLISECONDS.";
+    var failureActions = failureFields === null ? ""
+        : String(failureFields["FAILURE_ACTIONS"] || "")
+              .replace(/\s+/g, " ").trim().toUpperCase();
+    var resetPeriod = failureFields === null ? ""
+        : String(failureFields["RESET_PERIOD (IN SECONDS)"] || "").trim().toUpperCase();
+    var rebootMessage = failureFields === null ? "not-empty"
+        : String(failureFields["REBOOT_MESSAGE"] || "");
+    var commandLine = failureFields === null ? "not-empty"
+        : String(failureFields["COMMAND_LINE"] || "");
+    var failureActionsFlag = failureFlagFields === null ? ""
+        : String(failureFlagFields["FAILURE_ACTIONS_FLAG"] || "").trim();
+    if (startType === ""
+            || !scFieldsHaveOnly(failureFields, allowedFailureFields)
+            || !scFieldsHaveOnly(failureFlagFields, allowedFailureFlagFields)
+            || !Object.prototype.hasOwnProperty.call(failureFields || {}, "RESET_PERIOD (IN SECONDS)")
+            || !Object.prototype.hasOwnProperty.call(failureFields || {}, "REBOOT_MESSAGE")
+            || !Object.prototype.hasOwnProperty.call(failureFields || {}, "COMMAND_LINE")
+            || !Object.prototype.hasOwnProperty.call(failureFields || {}, "FAILURE_ACTIONS")
+            || !Object.prototype.hasOwnProperty.call(failureFlagFields || {}, "FAILURE_ACTIONS_FLAG")
+            || resetPeriod !== "100"
+            || rebootMessage.trim() !== ""
+            || commandLine.trim() !== ""
+            || failureActions !== expectedFailureActions
+            || failureActionsFlag !== "0") {
+        return null;
+    }
+
+    return {
+        start: startType,
+        failureActions: "restart/2000/restart/2000/restart/2000",
+        failureActionsFlag: failureActionsFlag
+    };
+}
+
+function windowsMainServiceConfigMatches(left, right)
+{
+    return left !== null && right !== null
+        && left.start === right.start
+        && left.failureActions === right.failureActions
+        && left.failureActionsFlag === right.failureActionsFlag;
+}
+
+function restoreWindowsMainServiceAfterAbortedUpgrade()
+{
+    if (!windowsMainServicePrepared) {
+        return true;
+    }
+    if (windowsMainServiceConfigSnapshot === null) {
+        windowsUpgradePrepareFailureReason = "service-config-snapshot-unavailable";
+        return false;
+    }
+
+    var systemSc = "C:/Windows/System32/sc.exe";
+    var serviceName = "AmneziaVPN-service";
+    var queryResult = installer.execute(systemSc, ["query", serviceName]);
+    var queryExitCode = queryResult.length >= 2 ? Number(queryResult[1]) : -1;
+    if (queryExitCode === 1060) {
+        // The old service was removed; there is no configuration left for the
+        // cancellation path to restore. Never recreate a deleted service here.
+        windowsMainServicePrepared = false;
+        windowsMainServiceConfigSnapshot = null;
+        return true;
+    }
+    if (queryExitCode !== 0) {
+        console.log("Unable to verify the old AmneziaVPN service before restoring its configuration; sc.exe exit code: "
+                    + queryExitCode);
+        return false;
+    }
+    // Never race the legacy maintenance tool. Its elevated child may still be
+    // deleting the service or its files even after the bootstrap returned.
+    if (!appInstalled() || windowsLegacyMaintenanceToolProcessState() !== 0) {
+        console.log("Refusing to restore the old AmneziaVPN service while legacy cleanup is active or ambiguous");
+        return false;
+    }
+
+    // sc config calls the SCM ChangeServiceConfig path; sc failure calls the
+    // SCM recovery configuration path. Restore only the supported snapshot.
+    var failureResult = installer.execute(
+        systemSc,
+        ["failure", serviceName, "reset=", "100", "actions=",
+         windowsMainServiceConfigSnapshot.failureActions]);
+    var failureFlagResult = installer.execute(
+        systemSc,
+        ["failureflag", serviceName, windowsMainServiceConfigSnapshot.failureActionsFlag]);
+    var startResult = installer.execute(
+        systemSc,
+        ["config", serviceName, "start=", windowsMainServiceConfigSnapshot.start]);
+    var failureExitCode = failureResult.length >= 2 ? Number(failureResult[1]) : -1;
+    var failureFlagExitCode = failureFlagResult.length >= 2 ? Number(failureFlagResult[1]) : -1;
+    var startExitCode = startResult.length >= 2 ? Number(startResult[1]) : -1;
+    if (failureExitCode !== 0 || failureFlagExitCode !== 0 || startExitCode !== 0) {
+        console.log("Unable to restore the previous AmneziaVPN service configuration through SCM; "
+                    + "failure/failureflag/config exit codes: " + failureExitCode + "/"
+                    + failureFlagExitCode + "/" + startExitCode);
+        return false;
+    }
+
+    var restoredSnapshot = queryWindowsMainServiceConfig(serviceName);
+    if (!windowsMainServiceConfigMatches(windowsMainServiceConfigSnapshot, restoredSnapshot)) {
+        console.log("Previous AmneziaVPN service configuration did not verify after restoration");
+        return false;
+    }
+    windowsMainServicePrepared = false;
+    windowsMainServiceConfigSnapshot = null;
+    return true;
+}
+
 function windowsUpgradePrepareFailureMessage()
 {
     if (windowsUpgradePrepareFailureReason === "administrator-approval-required") {
@@ -355,6 +544,7 @@ function prepareWindowsMainServiceForUpgrade()
     var systemSc = "C:/Windows/System32/sc.exe";
     var serviceName = "AmneziaVPN-service";
     windowsMainServicePrepared = false;
+    windowsMainServiceConfigSnapshot = null;
     windowsUpgradePrepareFailureReason = "";
 
     var queryResult = installer.execute(systemSc, ["query", serviceName]);
@@ -406,56 +596,41 @@ function prepareWindowsMainServiceForUpgrade()
         return false;
     }
 
+    windowsMainServiceConfigSnapshot = queryWindowsMainServiceConfig(serviceName);
+    if (windowsMainServiceConfigSnapshot === null) {
+        windowsUpgradePrepareFailureReason = "service-config-snapshot-unavailable";
+        console.log("Unable to snapshot the previous AmneziaVPN service start/recovery configuration");
+        return false;
+    }
+    // Set this before the first mutation so every partial failure has an
+    // exact, verifiable rollback path.
+    windowsMainServicePrepared = true;
+
     var failureResult = installer.execute(
         systemSc,
         ["failure", serviceName, "reset=", "0", "actions=", ""]);
     var failureExitCode = Number(failureResult[1]);
     if (failureExitCode !== 0) {
-        windowsUpgradePrepareFailureReason = "recovery-disarm-failed-" + failureExitCode;
+        var recoveryRestored = restoreWindowsMainServiceAfterAbortedUpgrade();
+        windowsUpgradePrepareFailureReason = "recovery-disarm-failed-" + failureExitCode
+                + (recoveryRestored ? "" : "-restore-failed");
         console.log("Unable to disarm previous AmneziaVPN service recovery; sc.exe exit code: "
                     + failureExitCode);
         return false;
     }
-    windowsMainServicePrepared = true;
 
     var disableResult = installer.execute(
         systemSc,
         ["config", serviceName, "start=", "disabled"]);
     var disableExitCode = Number(disableResult[1]);
     if (disableExitCode !== 0) {
-        windowsUpgradePrepareFailureReason = "service-disable-failed-" + disableExitCode;
+        var startRestored = restoreWindowsMainServiceAfterAbortedUpgrade();
+        windowsUpgradePrepareFailureReason = "service-disable-failed-" + disableExitCode
+                + (startRestored ? "" : "-restore-failed");
         console.log("Unable to disable previous AmneziaVPN service; sc.exe exit code: "
                     + disableExitCode);
-        restoreWindowsMainServiceAfterAbortedUpgrade();
         return false;
     }
-    return true;
-}
-
-function restoreWindowsMainServiceAfterAbortedUpgrade()
-{
-    // If the legacy maintenance tool is cancelled or fails before removing
-    // the installed product, undo the outer preflight. Do not leave an
-    // otherwise usable installation without automatic startup or recovery.
-    var systemSc = "C:/Windows/System32/sc.exe";
-    var serviceName = "AmneziaVPN-service";
-    var failureResult = installer.execute(
-        systemSc,
-        ["failure", serviceName, "reset=", "100", "actions=",
-         "restart/2000/restart/2000/restart/2000"]);
-    var failureExitCode = Number(failureResult[1]);
-
-    var startResult = installer.execute(
-        systemSc,
-        ["config", serviceName, "start=", "auto"]);
-    var startExitCode = Number(startResult[1]);
-
-    if (failureExitCode !== 0 || startExitCode !== 0) {
-        console.log("Unable to restore the previous AmneziaVPN service after an aborted upgrade; "
-                    + "failure/config exit codes: " + failureExitCode + "/" + startExitCode);
-        return false;
-    }
-    windowsMainServicePrepared = false;
     return true;
 }
 
@@ -773,6 +948,11 @@ function Controller () {
             });
             installer.installationInterrupted.connect(function() {
                 writeWindowsInstallerLog("installation-interrupted", "1");
+                if (runningOnWindows() && windowsMainServicePrepared) {
+                    var restored = restoreWindowsMainServiceAfterAbortedUpgrade();
+                    writeWindowsInstallerLog("service-preflight-restore",
+                                             restored ? "complete" : "failed");
+                }
             });
         }
         installer.setDefaultPageVisible(QInstaller.ComponentSelection, false);
@@ -925,6 +1105,11 @@ function Controller () {
         // machines where the maintenance tool is already missing.
         if (runningOnWindows() && !windowsUpgradeCleanupIsComplete()) {
             writeWindowsInstallerLog("cleanup-verdict", "blocked");
+            if (windowsMainServicePrepared) {
+                var cleanupRestore = restoreWindowsMainServiceAfterAbortedUpgrade();
+                writeWindowsInstallerLog("service-preflight-restore",
+                                         cleanupRestore ? "complete" : "failed");
+            }
             releaseWindowsUpgradeAdminRights();
             QMessageBox.critical(
                 "windows.driver.cleanup.incomplete",
@@ -935,6 +1120,11 @@ function Controller () {
         }
         if (runningOnWindows()) {
             writeWindowsInstallerLog("cleanup-verdict", "complete");
+            // The old service is now proven absent. Do not retain its snapshot
+            // into the new product installation, where an interrupted later
+            // operation must never overwrite the new service configuration.
+            windowsMainServicePrepared = false;
+            windowsMainServiceConfigSnapshot = null;
             releaseWindowsUpgradeAdminRights();
             if (windowsUpgradeReplacementRequested) {
                 windowsUpgradeContinuationRequested = true;

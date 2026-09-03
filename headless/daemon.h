@@ -1,6 +1,7 @@
 #ifndef AMNEZIA_HEADLESS_DAEMON_H
 #define AMNEZIA_HEADLESS_DAEMON_H
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QLockFile>
 #include <QLocalServer>
@@ -44,6 +45,13 @@ public:
     int processedRequestCount() const;
 
 private:
+    enum class StartPhase
+    {
+        NotStarted,
+        LockOwned,
+        Listening,
+    };
+
     void acceptConnections();
     void readFromClient();
     void removeClient();
@@ -78,7 +86,10 @@ private:
     QTimer m_healthTimer;
     std::unique_ptr<QLockFile> m_instanceLock;
     int m_processedRequestCount = 0;
-    qint64 m_backendConnectedAtMs = 0;
+    QElapsedTimer m_backendConnectedTimer;
+    StartPhase m_startPhase = StartPhase::NotStarted;
+    bool m_backendOwned = false;
+    bool m_routingOwned = false;
     QString m_state = QStringLiteral("disconnected");
     QString m_activeProfile;
     std::optional<Profile> m_activeProfileData;

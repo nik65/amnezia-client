@@ -1,8 +1,10 @@
 #include <QtTest>
 
 #include <QCoreApplication>
-#include <QDateTime>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLocalSocket>
 #include <QTemporaryDir>
 
@@ -27,7 +29,8 @@ public:
     {
         return (m_wireGuardAvailable && program == QStringLiteral("wg-quick"))
             || (m_wireGuardAvailable && program == QStringLiteral("wg"))
-            || program == QStringLiteral("ip");
+            || program == QStringLiteral("ip")
+            || program == QStringLiteral("resolvectl");
     }
 
     QString resolveExecutable(const QStringList &candidates) const override
@@ -59,15 +62,26 @@ public:
         if (program == QStringLiteral("ip")
             && arguments.contains(QStringLiteral("link"))) {
             return m_interfacePresent
-                ? CommandResult { true, 0, {}, QStringLiteral("7: wg0: <POINTOPOINT>\n") }
+                ? CommandResult { true, 0, {}, QStringLiteral("7: %1: <POINTOPOINT>\n")
+                                      .arg(arguments.constLast()) }
                 : CommandResult { false, 1, QStringLiteral("interface absent"), {} };
         }
-        if (program == QStringLiteral("wg")
-            && arguments.contains(QStringLiteral("latest-handshakes"))) {
-            return { true, 0, {}, QStringLiteral("peer %1\n")
-                                      .arg(QDateTime::currentSecsSinceEpoch() - 1) };
+        if (program == QStringLiteral("ip")
+            && arguments.contains(QStringLiteral("addr"))) {
+            return m_interfacePresent
+                ? CommandResult { true, 0, {}, QStringLiteral("7: %1    inet 10.8.1.2/32\n")
+                                      .arg(arguments.constLast()) }
+                : CommandResult { false, 1, QStringLiteral("interface absent"), {} };
         }
-        return run(program, arguments);
+        if (program == QStringLiteral("resolvectl")
+            && arguments == QStringList { QStringLiteral("status") }) {
+            return { true, 0, {}, resolverStatusOutput };
+        }
+        if (program == QStringLiteral("wg")
+            && arguments.contains(QStringLiteral("showconf"))) {
+            return { true, 0, {}, {} };
+        }
+        return { true, 0, {}, {} };
     }
 
     CommandResult start(const QString &id, const QString &program,
@@ -93,6 +107,7 @@ public:
     QList<Call> calls;
     bool m_wireGuardAvailable = false;
     bool m_interfacePresent = false;
+    QString resolverStatusOutput;
 };
 
 QJsonDocument readResponse(QLocalSocket &client)
@@ -130,7 +145,8 @@ private slots:
         QVERIFY(temporaryDirectory.isValid());
         const QString socketPath = temporaryDirectory.filePath(QStringLiteral("amneziad.sock"));
 
-        Daemon daemon(socketPath);
+        auto runner = std::make_shared<FakeCommandRunner>();
+        Daemon daemon(socketPath, {}, runner);
         QString startError;
         QVERIFY2(daemon.start(&startError), qPrintable(startError));
         QVERIFY(daemon.isRunning());
@@ -164,8 +180,9 @@ private slots:
     {
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
         Daemon daemon(temporaryDirectory.filePath(QStringLiteral("amneziad.sock")),
-                      temporaryDirectory.filePath(QStringLiteral("profiles.json")));
+                      temporaryDirectory.filePath(QStringLiteral("profiles.json")), runner);
         QVERIFY(daemon.start());
 
         QLocalSocket client;
@@ -188,8 +205,9 @@ private slots:
     {
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
         Daemon daemon(temporaryDirectory.filePath(QStringLiteral("amneziad.sock")),
-                      temporaryDirectory.filePath(QStringLiteral("profiles.json")));
+                      temporaryDirectory.filePath(QStringLiteral("profiles.json")), runner);
         QVERIFY(daemon.start());
 
         QLocalSocket client;
@@ -215,8 +233,9 @@ private slots:
     {
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
         Daemon daemon(temporaryDirectory.filePath(QStringLiteral("amneziad.sock")),
-                      temporaryDirectory.filePath(QStringLiteral("profiles.json")));
+                      temporaryDirectory.filePath(QStringLiteral("profiles.json")), runner);
         QVERIFY(daemon.start());
         QLocalSocket client;
         client.connectToServer(daemon.socketPath(), QIODevice::ReadWrite);
@@ -241,7 +260,8 @@ private slots:
         staleSocket.write("stale");
         staleSocket.close();
 
-        Daemon daemon(socketPath, temporaryDirectory.filePath(QStringLiteral("profiles.json")));
+        auto runner = std::make_shared<FakeCommandRunner>();
+        Daemon daemon(socketPath, temporaryDirectory.filePath(QStringLiteral("profiles.json")), runner);
         QString error;
         QVERIFY2(daemon.start(&error), qPrintable(error));
         QVERIFY(daemon.isRunning());
@@ -274,6 +294,46 @@ private slots:
         for (const QJsonValue &backend : backends) {
             QCOMPARE(backend.toObject().value(QStringLiteral("available")).toBool(), false);
         }
+    }
+
+    void startupDetectsOrphanDnsOnConfiguredCustomInterface()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("work.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("[Interface]\n");
+        config.close();
+        const QString storePath = temporaryDirectory.filePath(QStringLiteral("profiles.json"));
+        QFile store(storePath);
+        QVERIFY(store.open(QIODevice::WriteOnly));
+        const QJsonObject storedProfile {
+            { QStringLiteral("id"), QStringLiteral("work") },
+            { QStringLiteral("name"), QStringLiteral("Work VPN") },
+            { QStringLiteral("protocol"), QStringLiteral("wireguard") },
+            { QStringLiteral("configPath"), configPath },
+            { QStringLiteral("interfaceName"), QStringLiteral("custom0") },
+            { QStringLiteral("dnsServers"), QJsonArray { QStringLiteral("10.0.0.53") } },
+            { QStringLiteral("dnsDomains"), QJsonArray { QStringLiteral("~.") } },
+        };
+        QVERIFY(store.write(QJsonDocument(QJsonObject {
+            { QStringLiteral("version"), 1 },
+            { QStringLiteral("profiles"), QJsonArray { storedProfile } },
+        }).toJson(QJsonDocument::Compact)) > 0);
+        store.close();
+
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->resolverStatusOutput = QStringLiteral(
+                "Global\nLink 77 (custom0)\n    DNS Servers: 10.0.0.53\n"
+                "    DNS Domain: ~.\n");
+        Daemon daemon(temporaryDirectory.filePath(QStringLiteral("amneziad.sock")),
+                      storePath, runner);
+        QString error;
+        QVERIFY(!daemon.start(&error));
+        QCOMPARE(daemon.isRunning(), false);
+        QVERIFY(error.contains(QStringLiteral("orphaned")));
+        QVERIFY(runner->calls.isEmpty());
     }
 
     void profileCanConnectAndDisconnectThroughDaemon()

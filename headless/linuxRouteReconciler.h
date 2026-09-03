@@ -24,7 +24,10 @@ class LinuxRouteReconciler final
 {
 public:
     explicit LinuxRouteReconciler(std::shared_ptr<CommandRunner> runner = {},
-                                  QString statePath = {});
+                                  QString statePath = {},
+                                  bool initializeState = true);
+
+    bool initializeState();
 
     RouteReconcileResult apply(const QString &interfaceName,
                                const QStringList &routes);
@@ -70,11 +73,17 @@ private:
     struct RuleSnapshot
     {
         QSet<int> occupied;
+        QSet<int> occupiedV4;
+        QSet<int> occupiedV6;
         QSet<int> ownedBypass;
+        QSet<int> ownedBypassV4;
+        QSet<int> ownedBypassV6;
         QSet<int> ownedFull;
         QSet<int> ownedFullV4;
         QSet<int> ownedFullV6;
         QStringList lines;
+        QStringList linesV4;
+        QStringList linesV6;
         QStringList tableLines;
         QStringList mainRouteLines;
         bool valid = false;
@@ -115,6 +124,7 @@ private:
     int m_bypassRulePriority = FullTunnelBypassRulePriority;
     int m_fullRulePriority = FullTunnelRulePriority;
     bool m_stateValid = true;
+    bool m_initialized = false;
     mutable QString m_lastError;
 };
 

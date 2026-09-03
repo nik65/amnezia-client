@@ -14,6 +14,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QTimer>
+#include <QVariant>
 #include <QUrl>
 
 #include <algorithm>
@@ -421,20 +422,31 @@ QStringList allExceptBypassRoutes(const Profile &profile,
 }
 
 HeadlessRoutingController::HeadlessRoutingController(
-        std::shared_ptr<CommandRunner> runner, QString routeStatePath)
+        std::shared_ptr<CommandRunner> runner, QString routeStatePath,
+        bool initializeStateNow)
     : m_reconciler(runner ? runner : std::make_shared<RealCommandRunner>(),
-                   routeStatePath),
+                   routeStatePath, initializeStateNow),
       m_statePath(routeStatePath.isEmpty() ? QString() : QDir(QFileInfo(routeStatePath).absolutePath())
                    .filePath(QStringLiteral("routing-controller.json")))
 {
-    m_stateValid = loadState();
-    if (!m_stateValid) m_lastError = QStringLiteral("routing controller state is invalid");
+    if (initializeStateNow) initializeState();
+}
+
+bool HeadlessRoutingController::initializeState()
+{
+    if (m_initialized) return m_stateValid;
+    m_initialized = true;
+    if (!m_reconciler.initializeState() || !loadState()) {
+        m_stateValid = false;
+        m_lastError = QStringLiteral("routing controller state is invalid");
+    }
+    return m_stateValid;
 }
 
 RoutingResult HeadlessRoutingController::connect(const Profile &profile)
 {
     m_lastError.clear();
-    if (!m_stateValid) {
+    if (!m_initialized || !m_stateValid) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("routing controller state is invalid; manual recovery is required"));
     }
@@ -470,6 +482,23 @@ RoutingResult HeadlessRoutingController::connect(const Profile &profile)
             return failure(QStringLiteral("recovery_required"),
                            QStringLiteral("managed route state is invalid; manual route recovery is required"));
         }
+        const QString dnsInterface = defaultInterfaceFor(profile);
+        const QString currentDnsInterface = m_reconciler.status()
+                .value(QStringLiteral("dnsInterface")).toString();
+        RouteReconcileResult dnsResult { true, {}, {} };
+        if (!profile.dnsServers.isEmpty() || !profile.dnsDomains.isEmpty()) {
+            if (dnsInterface.isEmpty()) {
+                return failure(QStringLiteral("invalid_interface"),
+                               QStringLiteral("a VPN interface is required for managed DNS"));
+            }
+            dnsResult = m_reconciler.configureDns(
+                    dnsInterface, profile.dnsServers, profile.dnsDomains);
+        } else if (!currentDnsInterface.isEmpty()) {
+            dnsResult = m_reconciler.clearDns(currentDnsInterface);
+        }
+        if (!dnsResult.ok) {
+            return failure(dnsResult.code, dnsResult.message);
+        }
         m_activeProfile = profile.id;
         m_activeInterface.clear();
         m_policyRevision.clear();
@@ -490,7 +519,7 @@ RoutingResult HeadlessRoutingController::connect(const Profile &profile)
 
 RoutingResult HeadlessRoutingController::refresh(const Profile &profile)
 {
-    if (!m_stateValid) {
+    if (!m_initialized || !m_stateValid) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("routing controller state is invalid; manual recovery is required"));
     }
@@ -505,7 +534,7 @@ RoutingResult HeadlessRoutingController::refresh(const Profile &profile)
 
 RoutingResult HeadlessRoutingController::disconnect()
 {
-    if (!m_stateValid) {
+    if (!m_initialized || !m_stateValid) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("routing controller state is invalid; manual recovery is required"));
     }
@@ -555,7 +584,7 @@ QJsonObject HeadlessRoutingController::status() const
     result.insert(QStringLiteral("policyLoaded"), m_hasPolicy);
     result.insert(QStringLiteral("policyMetadata"), m_policyMetadata.has_value()
                   ? QJsonValue(m_policyMetadata->toJson()) : QJsonValue(QJsonValue::Null));
-    result.insert(QStringLiteral("recoveryRequired"), !m_stateValid
+    result.insert(QStringLiteral("recoveryRequired"), !m_initialized || !m_stateValid
                   || result.value(QStringLiteral("recoveryRequired")).toBool());
     return result;
 }
@@ -993,7 +1022,7 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
     }
     const QString previousDnsInterface = previousRouting.value(QStringLiteral("dnsInterface")).toString();
     RouteReconcileResult dnsResult { true, {}, {} };
-    if (!profile.dnsServers.isEmpty()) {
+    if (!profile.dnsServers.isEmpty() || !profile.dnsDomains.isEmpty()) {
         dnsResult = m_reconciler.configureDns(interfaceName, profile.dnsServers, profile.dnsDomains);
     } else if (!previousDnsInterface.isEmpty()) {
         // A profile without DNS ownership must remove the previous profile's
@@ -1148,6 +1177,27 @@ ServerRoutingPolicyResult HeadlessRoutingController::fetchPolicy(
     timer.setSingleShot(true);
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     QObject::connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    QByteArray data;
+    bool tooLarge = false;
+    const QVariant contentLength = reply->header(QNetworkRequest::ContentLengthHeader);
+    bool contentLengthOk = false;
+    const qlonglong declaredLength = contentLength.toLongLong(&contentLengthOk);
+    if (contentLengthOk && declaredLength > MaximumPolicyBytes) {
+        tooLarge = true;
+        reply->abort();
+    }
+    const auto consumeReadyData = [&]() {
+        if (tooLarge) return;
+        const QByteArray chunk = reply->readAll();
+        if (chunk.isEmpty()) return;
+        if (data.size() > MaximumPolicyBytes - chunk.size()) {
+            tooLarge = true;
+            reply->abort();
+            return;
+        }
+        data.append(chunk);
+    };
+    QObject::connect(reply, &QNetworkReply::readyRead, &loop, consumeReadyData);
     timer.start(PolicyRequestTimeoutMs);
     loop.exec();
 
@@ -1157,7 +1207,12 @@ ServerRoutingPolicyResult HeadlessRoutingController::fetchPolicy(
         return { false, QStringLiteral("policy_timeout"),
                  QStringLiteral("server routing policy request timed out"), {} };
     }
-    const QByteArray data = reply->readAll();
+    consumeReadyData();
+    if (tooLarge) {
+        reply->deleteLater();
+        return { false, QStringLiteral("policy_too_large"),
+                 QStringLiteral("server routing policy exceeds the byte limit"), {} };
+    }
     const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const QString error = reply->error() == QNetworkReply::NoError
             ? QString() : reply->errorString();
@@ -1169,10 +1224,6 @@ ServerRoutingPolicyResult HeadlessRoutingController::fetchPolicy(
     if (statusCode < 200 || statusCode >= 300) {
         return { false, QStringLiteral("policy_http_error"),
                  QStringLiteral("server routing policy returned an unexpected HTTP status"), {} };
-    }
-    if (data.size() > MaximumPolicyBytes) {
-        return { false, QStringLiteral("policy_too_large"),
-                 QStringLiteral("server routing policy exceeds the byte limit"), {} };
     }
     return ServerRoutingPolicy::parse(data, current, url);
 }

@@ -24,6 +24,10 @@ PageType {
         function onManualUpdateCheckNoUpdates() {
             PageController.showNotificationMessage(qsTr("No updates available"))
         }
+
+        function onManualUpdateCheckFailed(error) {
+            PageController.showErrorMessage(qsTr("Unable to check for updates"))
+        }
     }
 
     BackButtonType {

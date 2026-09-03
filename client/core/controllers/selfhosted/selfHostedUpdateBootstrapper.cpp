@@ -528,13 +528,31 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
 
     for (auto iterator = platforms.constBegin(); iterator != platforms.constEnd(); ++iterator) {
         const QString platform = iterator.key();
+        if (platform.contains(QStringLiteral("headless"), Qt::CaseInsensitive)
+            && platform != QStringLiteral("linux-headless-x64")) {
+            logger.warning() << "Bundled update manifest uses a non-canonical Linux headless platform" << platform;
+            return false;
+        }
         const QJsonObject platformObject = iterator.value().toObject();
         if (platformObject.isEmpty()) {
             logger.warning() << "Bundled update manifest has invalid platform entry" << platform;
             return false;
         }
+        if (platform == QStringLiteral("linux-headless-x64")
+            && ((!platformObject.value(QStringLiteral("openExternal")).isUndefined()
+                 && !platformObject.value(QStringLiteral("openExternal")).isBool())
+                || platformObject.value(QStringLiteral("openExternal")).toBool())) {
+            logger.warning() << "Bundled update manifest cannot publish Linux headless as an external artifact";
+            return false;
+        }
         if (platformObject.value(QStringLiteral("openExternal")).toBool()) {
             continue;
+        }
+        if (platform == QStringLiteral("linux-headless-x64")
+            && platformObject.value(QStringLiteral("format")).toString()
+                    != QStringLiteral("amnezia-headless-tar-v1")) {
+            logger.warning() << "Bundled update manifest has an invalid Linux headless artifact format";
+            return false;
         }
         if (!appendLocalArtifact(platform, platformObject, false, QString(), QString())) {
             return false;
@@ -626,9 +644,22 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
             return false;
         }
         for (auto iterator = rollbackPlatforms.constBegin(); iterator != rollbackPlatforms.constEnd(); ++iterator) {
+            const QString rollbackPlatform = iterator.key();
+            if (rollbackPlatform.contains(QStringLiteral("headless"), Qt::CaseInsensitive)
+                && rollbackPlatform != QStringLiteral("linux-headless-x64")) {
+                logger.warning() << "Bundled rollback manifest uses a non-canonical Linux headless platform"
+                                 << rollbackPlatform;
+                return false;
+            }
             const QString platform = QStringLiteral("rollback:") + iterator.key();
             const QJsonObject platformObject = iterator.value().toObject();
-            if (platformObject.isEmpty() || platformObject.value(QStringLiteral("openExternal")).toBool()
+            if (platformObject.isEmpty()
+                || (!platformObject.value(QStringLiteral("openExternal")).isUndefined()
+                    && !platformObject.value(QStringLiteral("openExternal")).isBool())
+                || platformObject.value(QStringLiteral("openExternal")).toBool()
+                || (rollbackPlatform == QStringLiteral("linux-headless-x64")
+                    && platformObject.value(QStringLiteral("format")).toString()
+                           != QStringLiteral("amnezia-headless-tar-v1"))
                 || !appendLocalArtifact(platform, platformObject, true, rollbackGeneration, rollbackVersion)) {
                 logger.warning() << "Bundled update manifest has invalid rollback artifact" << platform;
                 return false;

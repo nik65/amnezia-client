@@ -38,7 +38,10 @@ class HeadlessRoutingController final
 {
 public:
     explicit HeadlessRoutingController(std::shared_ptr<CommandRunner> runner = {},
-                                       QString routeStatePath = {});
+                                       QString routeStatePath = {},
+                                       bool initializeState = true);
+
+    bool initializeState();
 
     RoutingResult connect(const Profile &profile);
     RoutingResult refresh(const Profile &profile);
@@ -71,6 +74,7 @@ private:
     std::optional<amnezia::ManagedRoutePolicyMetadata> m_policyMetadata;
     QString m_statePath;
     bool m_stateValid = true;
+    bool m_initialized = false;
     mutable QString m_lastError;
 };
 

@@ -1,12 +1,12 @@
 [CmdletBinding()]
 param(
     [string] $Version = "",
-    [ValidateSet("windows", "linux", "android", "headless")]
     [string[]] $BuildPlatform = @("windows", "linux", "android", "headless"),
     [string[]] $RequirePlatform = @(
         "windows-x64",
         "linux-x64",
-        "android-arm64-v8a"
+        "android-arm64-v8a",
+        "linux-headless-x64"
     ),
     [string] $ArtifactDir = "",
     [string] $OutDir = "",
@@ -45,8 +45,23 @@ param(
     [switch] $Preflight
 )
 
-if (-not $PSBoundParameters.ContainsKey("BuildPlatform") -and -not $PSBoundParameters.ContainsKey("RequirePlatform")) {
-    $RequirePlatform += "linux-headless-x64"
+if ($PSBoundParameters.ContainsKey("BuildPlatform") -and
+    -not $PSBoundParameters.ContainsKey("RequirePlatform")) {
+    if ($BuildPlatform.Count -eq 1 -and $BuildPlatform[0] -eq "headless") {
+        $RequirePlatform = @("linux-headless-x64")
+    } else {
+        $RequirePlatform = @(
+            foreach ($platform in $BuildPlatform) {
+                switch ($platform) {
+                    "windows" { "windows-x64"; break }
+                    "linux" { "linux-x64"; break }
+                    "android" { "android-arm64-v8a"; break }
+                    "headless" { "linux-headless-x64"; break }
+                }
+            }
+        )
+        $RequirePlatform = @($RequirePlatform | Select-Object -Unique)
+    }
 }
 
 Set-StrictMode -Version Latest
@@ -58,6 +73,21 @@ if ($RollbackArtifact.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:SE
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $RepoRoot = (Resolve-Path (Join-Path $ScriptRoot "..\..")).Path
+
+# PowerShell -File receives array parameters as one token on some hosts.  Be
+# explicit about comma-separated values so the release wrapper cannot silently
+# build only the first requested platform, while retaining strict vocabulary
+# validation after normalization.  The accepted vocabulary is the same as the
+# former declaration [ValidateSet("windows", "linux", "android", "headless")].
+$BuildPlatform = @($BuildPlatform | ForEach-Object { [string]$_ -split "," } |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+foreach ($platform in $BuildPlatform) {
+    if ($platform -notin @("windows", "linux", "android", "headless")) {
+        throw "Unsupported build platform: $platform"
+    }
+}
+$RequirePlatform = @($RequirePlatform | ForEach-Object { [string]$_ -split "," } |
+    ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
 
 function Resolve-RepoPath([string] $Path) {
     if ([System.IO.Path]::IsPathRooted($Path)) {
@@ -855,8 +885,15 @@ $requiredArtifactNames = @{
     "android-arm64-v8a" = "AmneziaVPN_${Version}_android9+_arm64-v8a.apk"
     "linux-headless-x64" = "AmneziaHeadless_${Version}_linux_x64.tar.gz"
 }
+$legacyHeadlessRequested = @(
+    $RequirePlatform | Where-Object { $_ -eq "linux-headless" }
+).Count -gt 0
+if ($legacyHeadlessRequested) {
+    throw "Unsupported local self-hosted release platform: linux-headless; use linux-headless-x64"
+}
 $headlessArtifactPresent = Test-Path -LiteralPath (Join-Path $ArtifactDir "AmneziaHeadless_${Version}_linux_x64.tar.gz") -PathType Leaf
-$headlessRequested = ($BuildPlatform -contains "headless") -or ($RequirePlatform -contains "linux-headless-x64") -or $headlessArtifactPresent
+# A stale artifact in ArtifactDir is not a request to build or require headless.
+$headlessRequested = ($BuildPlatform -contains "headless") -or ($RequirePlatform -contains "linux-headless-x64")
 if ($headlessRequested -and ($RequirePlatform -notcontains "linux-headless-x64")) {
     $RequirePlatform += "linux-headless-x64"
 }

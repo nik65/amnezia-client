@@ -38,14 +38,23 @@ from make_manifest import (  # noqa: E402
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
+def _require_regular_file(path: Path, name: str) -> os.stat_result:
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise SystemExit(f"{name} must be a regular file") from error
+    if not S_ISREG(metadata.st_mode):
+        raise SystemExit(f"{name} must be a regular file")
+    return metadata
+
+
 def verify_signature(
     public_key: Path,
     payload: bytes,
     signature_base64: str,
     expected_public_key_sha256: str,
 ) -> None:
-    if not public_key.is_file() or public_key.is_symlink():
-        raise SystemExit("public key must be a regular file")
+    _require_regular_file(public_key, "public key")
     if not SHA256_RE.fullmatch(expected_public_key_sha256):
         raise SystemExit("expected public-key fingerprint must be 64 hexadecimal characters")
     expected_public_key_sha256 = expected_public_key_sha256.lower()
@@ -89,8 +98,7 @@ def _verify_manifest_and_bundle_copy(
     archive: Path,
     expected_public_key_sha256: str,
 ) -> dict[str, object]:
-    if not manifest_path.is_file() or manifest_path.is_symlink():
-        raise SystemExit("manifest must be a regular file")
+    _require_regular_file(manifest_path, "manifest")
     manifest_data = manifest_path.read_bytes()
     payload, payload_bytes, signature = decode_manifest_envelope(manifest_data)
     verify_signature(public_key, payload_bytes, signature, expected_public_key_sha256)
@@ -166,21 +174,26 @@ def _copy_regular_file_to_private_temp(source_path: Path, destination: Path, nam
     a symlink at the argument boundary).  The fstat check also rejects a file
     that is replaced while it is being copied.
     """
-    if source_path.is_symlink() or not source_path.is_file():
-        raise SystemExit(f"{name} must be a regular file")
+    before = _require_regular_file(source_path, name)
     try:
-        before = source_path.stat()
-        if not S_ISREG(before.st_mode):
-            raise SystemExit(f"{name} must be a regular file")
         copied = destination / name
-        with source_path.open("rb") as source, copied.open("xb") as target:
+        open_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        source_fd = os.open(source_path, open_flags)
+        with os.fdopen(source_fd, "rb") as source, copied.open("xb") as target:
             opened = os.fstat(source.fileno())
             if not S_ISREG(opened.st_mode) or opened.st_size != before.st_size:
                 raise SystemExit(f"{name} changed while it was being copied")
-            shutil.copyfileobj(source, target, length=1024 * 1024)
+            source_digest = hashlib.sha256()
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                source_digest.update(chunk)
+                target.write(chunk)
             target.flush()
             os.fsync(target.fileno())
-        if copied.stat().st_size != opened.st_size:
+        copied_digest = sha256(copied)
+        if copied.stat().st_size != opened.st_size or copied_digest != source_digest.hexdigest():
             raise SystemExit(f"private {name} copy has an unexpected size")
     except OSError as error:
         raise SystemExit(f"unable to copy {name} to the private verification directory") from error
@@ -247,12 +260,13 @@ def extract_verified_bundle(archive: Path, destination: Path) -> Path:
     with tarfile.open(archive, "r:gz") as tar:
         members = tar.getmembers()
         for member in members:
-            if member.isdir() and member.name == "headless-package":
+            if member.isdir() and member.name in {"headless-package", "headless-package/"}:
                 continue
             path = PurePosixPath(member.name)
             if (not member.isreg() or path.is_absolute() or ".." in path.parts
                     or path.parts[:1] != ("headless-package",)
-                    or len(path.parts) != 2 or member.name != str(path)):
+                    or len(path.parts) != 2
+                    or member.name != str(path)):
                 raise SystemExit(f"verified provisioning bundle has unsafe member: {member.name!r}")
             target = package_root / path.parts[1]
             target.parent.mkdir(parents=True, exist_ok=True)

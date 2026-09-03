@@ -1,12 +1,15 @@
 #ifndef AMNEZIA_HEADLESS_UPDATE_MANAGER_H
 #define AMNEZIA_HEADLESS_UPDATE_MANAGER_H
 
+#include <QByteArray>
 #include <QJsonObject>
 #include <QMap>
 #include <QString>
+#include <QStringList>
 #include <QUrl>
 
 #include <memory>
+#include <mutex>
 
 #include "profileStore.h"
 #include "vpnBackend.h"
@@ -53,6 +56,7 @@ private:
                                        const QUrl &manifestUrl,
                                        const Profile &profile,
                                        const QString &publicKeyPath,
+                                       const QByteArray &pinnedPublicKey,
                                        const QString &currentVersion,
                                        Candidate &candidate) const;
     bool download(const Candidate &candidate, const QString &path,
@@ -69,7 +73,11 @@ private:
     bool writeJournal(const QJsonObject &journal, QString *error) const;
     bool writeRollbackReceipt(QString *error) const;
     bool loadRollbackReceipt();
-    bool verifyTrustedKey(const QString &configuredPath, QString *error) const;
+    bool verifyTrustedKey(const QString &configuredPath, QByteArray *keyBytes,
+                          QString *error) const;
+    bool ensureSecureDirectory(const QString &path, QString *error) const;
+    bool writeGcMarker(const QStringList &paths) const;
+    void collectGarbage() const;
     bool verifyInstallFile(const QString &path, QString *error) const;
     bool verifyManagedInstallFile(const QString &name, QString *error) const;
     bool verifyManagedInstalledFile(const QString &name, const QString &expectedSha256,
@@ -83,7 +91,7 @@ private:
     static QString trustedUpdatePublicKeyPath();
     static QString sha256ForFile(const QString &path);
     static bool verifyEnvelope(const QJsonObject &envelope,
-                               const QString &publicKeyPath,
+                               const QByteArray &publicKeyBytes,
                                QByteArray &payload);
     static bool decodeStrict(const QByteArray &encoded, bool urlSafe,
                              QByteArray &decoded);
@@ -114,10 +122,16 @@ private:
     QString m_candidatePlatform;
     QString m_journalPath;
     QString m_rollbackReceiptPath;
+    QString m_gcMarkerPath;
     QString m_currentRollbackDirectory;
     bool m_stateValid = true;
     bool m_updateInProgress = false;
     bool m_requireRootOwnedFiles = true;
+    // checkAndApply() and rollback() can be entered from different daemon
+    // callbacks (and both run nested Qt event loops while waiting for I/O).
+    // Keep the in-process transaction state serialized in addition to the
+    // inter-process QLockFile used for coordination with another daemon.
+    mutable std::mutex m_operationMutex;
 };
 
 } // namespace amnezia::headless

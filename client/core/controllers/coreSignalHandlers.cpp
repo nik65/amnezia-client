@@ -420,7 +420,7 @@ void CoreSignalHandlers::initIosSettingsHandler()
 
 void CoreSignalHandlers::initNotificationHandler()
 {
-#if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
+#if !defined(Q_OS_IOS)
     m_coreController->m_notificationHandler = NotificationHandler::create(m_coreController);
 
     connect(m_coreController->m_connectionController, &ConnectionController::connectionStateChanged, m_coreController->m_notificationHandler,

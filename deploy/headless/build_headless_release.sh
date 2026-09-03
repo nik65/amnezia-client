@@ -9,10 +9,26 @@ if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-
     echo "usage: $0 x.y.z.w [output-directory]" >&2
     exit 2
 fi
+fsync_output_directory() {
+    python3 - "$1" <<'PY'
+import os
+import sys
+fd = os.open(sys.argv[1], os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PY
+}
 
 BUILD_DIR="$ROOT_DIR/build-headless-release-$VERSION"
 STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/amnezia-headless-stage.XXXXXX")"
-trap 'rm -rf "$STAGE_DIR"' EXIT
+cleanup() {
+    if [[ -n "${ARCHIVE_TMP:-}" ]]; then rm -f -- "$ARCHIVE_TMP"; fi
+    if [[ -n "${PACKAGE_ARCHIVE_TMP:-}" ]]; then rm -f -- "$PACKAGE_ARCHIVE_TMP"; fi
+    rm -rf -- "$STAGE_DIR"
+}
+trap cleanup EXIT
 
 cmake_args=(
     -S "$ROOT_DIR/headless"
@@ -39,14 +55,18 @@ DESTDIR="$STAGE_DIR" cmake --install "$BUILD_DIR" --prefix /usr/local --strip
 mkdir -p "$OUT_DIR"
 ARCHIVE_MTIME="${SOURCE_DATE_EPOCH:-0}"
 ARCHIVE="$OUT_DIR/AmneziaHeadless_${VERSION}_linux_x64.tar.gz"
+ARCHIVE_TMP="$(mktemp "$OUT_DIR/.AmneziaHeadless_${VERSION}_linux_x64.tar.gz.XXXXXX")"
 UPDATE_DIR="$STAGE_DIR/headless-update"
 mkdir -p "$UPDATE_DIR"
 install -m 0755 "$STAGE_DIR/usr/local/bin/amneziad" "$UPDATE_DIR/amneziad"
 install -m 0755 "$STAGE_DIR/usr/local/bin/amnezia-cli" "$UPDATE_DIR/amnezia-cli"
-GZIP=-n tar --create --gzip --file "$ARCHIVE" --directory "$UPDATE_DIR" \
+GZIP=-n tar --create --gzip --file "$ARCHIVE_TMP" --directory "$UPDATE_DIR" \
     --owner=0 --group=0 --numeric-owner --sort=name \
     --mtime="@${ARCHIVE_MTIME}" \
     amneziad amnezia-cli
+mv -f -- "$ARCHIVE_TMP" "$ARCHIVE"
+chmod 0644 "$ARCHIVE"
+fsync_output_directory "$OUT_DIR"
 sha256sum "$ARCHIVE"
 echo "headless artifact: $ARCHIVE"
 
@@ -61,7 +81,7 @@ install -m 0755 "$STAGE_DIR/usr/local/bin/amneziad" "$PACKAGE_DIR/amneziad"
 install -m 0755 "$STAGE_DIR/usr/local/bin/amnezia-cli" "$PACKAGE_DIR/amnezia-cli"
 install -m 0644 "$STAGE_DIR/usr/local/lib/systemd/system/amneziad.service" "$PACKAGE_DIR/amneziad.service"
 cat > "$PACKAGE_DIR/package-manifest.json" <<EOF
-{"schema":2,"version":"$VERSION","platform":"linux-headless-x64","installModes":["fresh","upgrade"],"artifacts":["amneziad","amnezia-cli","amneziad.service"],"service":"amneziad.service","servicePaths":["/etc/systemd/system/amneziad.service","/lib/systemd/system/amneziad.service"],"trustAnchor":"external-ed25519-sha256-receipt","runtimeManifest":"runtime-dependencies.json","checksums":"SHA256SUMS","runtimeText":"runtime-dependencies.txt"}
+{"schema":2,"version":"$VERSION","platform":"linux-headless-x64","installModes":["fresh","upgrade"],"artifacts":["amneziad","amnezia-cli","amneziad.service"],"service":"amneziad.service","servicePaths":["/etc/systemd/system/amneziad.service","/run/systemd/system/amneziad.service","/usr/local/lib/systemd/system/amneziad.service","/usr/lib/systemd/system/amneziad.service","/lib/systemd/system/amneziad.service"],"trustAnchor":"external-ed25519-sha256-receipt","runtimeManifest":"runtime-dependencies.json","checksums":"SHA256SUMS","runtimeText":"runtime-dependencies.txt"}
 EOF
 cat > "$PACKAGE_DIR/runtime-dependencies.json" <<'EOF'
 {"schema":2,"distribution":"ubuntu","architectures":["amd64"],"releases":[
@@ -83,7 +103,7 @@ cat > "$PACKAGE_DIR/runtime-dependencies.json" <<'EOF'
   {"alternatives":["iproute2"],"minimum":"6.1","reason":"policy routing"},
   {"alternatives":["tar"],"minimum":"1.34","reason":"update extraction"}
  ]}
-] ,"commands":{"required":["systemctl","systemd-run","getent","ip","resolvectl","readlink","readelf","ldd","sha256sum","openssl","python3","dpkg-query","dpkg","groupadd","groupdel","install","chown","chmod","mktemp","grep","awk","cmp"],"backendModes":[{"mode":"native-tunnel","alternatives":["wg-quick","awg-quick","openvpn"]},{"mode":"proxy","alternatives":["xray"]}]}}
+] ,"commands":{"required":["systemctl","systemd-run","getent","ip","resolvectl","readlink","readelf","ldd","sha256sum","openssl","python3","dpkg-query","dpkg","groupadd","groupdel","install","chown","chmod","mktemp","grep","awk","cmp","flock"],"backendModes":[{"mode":"native-tunnel","alternatives":["wg-quick","awg-quick","openvpn"]},{"mode":"proxy","alternatives":["xray"]}]}}
 EOF
 cat > "$PACKAGE_DIR/runtime-dependencies.txt" <<'EOF'
 # Runtime requirements for dynamically linked headless binaries.
@@ -91,6 +111,7 @@ cat > "$PACKAGE_DIR/runtime-dependencies.txt" <<'EOF'
 Qt6 Core and Network runtime libraries
 OpenSSL libcrypto runtime compatible with the build
 systemd (systemctl, systemd-run)
+util-linux (flock)
 iproute2 (ip)
 tar (gzip support)
 WireGuard/AmneziaWG/OpenVPN/XRay backend binaries as used by imported profiles
@@ -99,8 +120,12 @@ EOF
 echo "headless package manifest sha256: $(sha256sum "$PACKAGE_DIR/package-manifest.json" | awk '{print $1}')"
 echo "headless package checksums sha256: $(sha256sum "$PACKAGE_DIR/SHA256SUMS" | awk '{print $1}')"
 PACKAGE_ARCHIVE="$OUT_DIR/AmneziaHeadless_${VERSION}_linux_x64_provisioning.tar.gz"
-GZIP=-n tar --create --gzip --file "$PACKAGE_ARCHIVE" --directory "$STAGE_DIR" \
+PACKAGE_ARCHIVE_TMP="$(mktemp "$OUT_DIR/.AmneziaHeadless_${VERSION}_linux_x64_provisioning.tar.gz.XXXXXX")"
+GZIP=-n tar --create --gzip --file "$PACKAGE_ARCHIVE_TMP" --directory "$STAGE_DIR" \
     --owner=0 --group=0 --numeric-owner --sort=name \
     --mtime="@${ARCHIVE_MTIME}" headless-package
+mv -f -- "$PACKAGE_ARCHIVE_TMP" "$PACKAGE_ARCHIVE"
+chmod 0644 "$PACKAGE_ARCHIVE"
+fsync_output_directory "$OUT_DIR"
 sha256sum "$PACKAGE_ARCHIVE"
 echo "headless provisioning bundle: $PACKAGE_ARCHIVE"

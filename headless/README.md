@@ -47,14 +47,31 @@ installer-скриптом, `runtime-dependencies.txt` и `SHA256SUMS`. Подп
  выполняются оператором вручную. Сначала запускается verify-only helper:
  `python3 deploy/headless/verify_provisioning_bundle.py --manifest manifest.json
  --public-key /secure/update-public-key.pem --provisioning AmneziaHeadless_<version>_linux_x64_provisioning.tar.gz
- --receipt-out verified-receipt.json`. Он не извлекает пакет и не запускает installer
+ --expected-public-key-sha256 <key-sha256> --receipt-out verified-receipt.json`. Он не извлекает пакет и не запускает installer
  без явного `--run-installer`. Затем installer запускается вручную:
  `sudo ./install_headless.sh /secure/update-public-key.pem <key-sha256> [fresh|upgrade]
- <package-manifest-sha256> <checksums-sha256> verified-receipt.json`. Installer принимает только
-полную identity-связку либо пустой fresh-host, отвергает partial/ambiguous host,
-поддерживает точный `/etc` или `/lib` путь unit, проверяет сохранение systemd-состояния,
+ <package-manifest-sha256> <checksums-sha256> <signed-manifest-sha256> verified-receipt.json`. Installer принимает только
+ полную identity-связку либо пустой fresh-host, отвергает partial/ambiguous host,
+ поддерживает точный systemd `FragmentPath` в `/etc`, `/run/systemd`, `/usr/local/lib/systemd`, `/usr/lib/systemd` или `/lib/systemd`, проверяет root-владельца/режим unit и сохранение systemd-состояния,
  ELF x86_64 через статический `readelf`, затем `ldd`, SHA-256 и health-check. Поддерживаются только Ubuntu 22.04/jammy и
-24.04/noble amd64 с runtime/backend-командами из строгих metadata пакета.
+ 24.04/noble amd64 с runtime/backend-командами из строгих metadata пакета.
+ На upgrade `/etc/amnezia`, `/etc/amnezia/profiles`, `/var/lib/amnezia` и `/run/amnezia`
+ вместе со всей цепочкой родителей, а также все существующие managed files,
+ должны быть root-owned и без group/world-write; штатный `/run/amnezia/amneziad.sock`
+ допускается только как точный `root:amnezia` socket `0660`; fresh дополнительно отказывается
+ принимать старые state/profile/recovery-каталоги, существующую группу `amnezia`
+ или её членство. После проверки receipt все package inputs копируются в закрытую
+ root-owned временную область, повторно хешируются и только эти immutable-копии
+ используются для проверки версии, установки и trust anchor. Для headless base URL используются только
+ IPv4 private/loopback-адреса; IPv6 и link-local адреса не поддерживаются.
+ Установка удерживает общий с daemon updater root-owned lock
+ `/var/lib/amnezia/updates/update.lock`, сохраняет backup и fsynced journal под
+ `/var/lib/amnezia/.headless-provisioning-transactions/`; для каждой транзакции journal
+ содержит hash/size/mode/owner каждого backup-файла. При неполном восстановлении
+ сохраняется hard-gate marker `.headless-provisioning-recovery-required`.
+ при незавершённой транзакции следующая команда сначала выполняет точное восстановление,
+ а `sudo ./install_headless.sh --recover` запускает только recovery. Новая upgrade-транзакция
+ при нерешённом journal отвергается.
 В общий self-hosted manifest headless публикуется только при `--payload-schema 1`:
 schema 2 содержит `releasePolicy`, которую этот daemon пока не потребляет. В
 `deploy/selfhosted_updates/local_release.ps1` headless включён в полный release по

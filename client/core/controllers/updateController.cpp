@@ -163,12 +163,14 @@ namespace
             return false;
         }
         // The staging directory is an untrusted-to-trusted handoff boundary.
-        // Keep it owner-only: the elevated IFW process retains access through
-        // the same user SID, while inherited access for broad local groups is
-        // not needed and would permit another local principal to replace the
-        // payload between verification and CreateProcessW.
+        // Keep it protected from broad users while allowing an alternate
+        // administrator token to read/execute the staged installer after UAC.
+        // The owner keeps full control; BA and SY receive only the minimal
+        // read/execute mask. The protected DACL contains exactly these three
+        // explicit ACEs; OICI only propagates their intended access to staged
+        // children.
         const QString securityDescriptorText = QStringLiteral(
-                "D:P(A;OICI;FA;;;%1)")
+                "D:P(A;OICI;FA;;;%1)(A;OICI;0x1200a9;;;BA)(A;OICI;0x1200a9;;;SY)")
                                                        .arg(QString::fromWCharArray(sidText));
         LocalFree(sidText);
 
@@ -228,38 +230,59 @@ namespace
 
         QByteArray tokenBuffer;
         PSID userSid = nullptr;
+        PSID administratorsSid = nullptr;
+        PSID systemSid = nullptr;
         const bool identitiesValid = currentWindowsUserSid(tokenBuffer, userSid)
-                && EqualSid(ownerSid, userSid);
+                && EqualSid(ownerSid, userSid)
+                && ConvertStringSidToSidW(L"S-1-5-32-544", &administratorsSid)
+                && ConvertStringSidToSidW(L"S-1-5-18", &systemSid);
         SECURITY_DESCRIPTOR_CONTROL descriptorControl = 0;
         DWORD descriptorRevision = 0;
         const bool protectedDacl = GetSecurityDescriptorControl(
                 securityDescriptor, &descriptorControl, &descriptorRevision)
                 && (descriptorControl & SE_DACL_PROTECTED) != 0;
 
-        bool exactAcl = identitiesValid && protectedDacl && dacl->AceCount == 1;
+        bool exactAcl = identitiesValid && protectedDacl && dacl->AceCount == 3;
         bool userAcePresent = false;
-        for (DWORD index = 0; exactAcl && index < dacl->AceCount; ++index) {
+        bool administratorsAcePresent = false;
+        bool systemAcePresent = false;
+        const auto acceptAce = [&](DWORD index, PSID expectedSid, ACCESS_MASK expectedMask,
+                                   bool *present) {
             void *rawAce = nullptr;
             if (!GetAce(dacl, index, &rawAce)) {
-                exactAcl = false;
-                break;
+                return false;
             }
             const auto *header = static_cast<ACE_HEADER *>(rawAce);
-            if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) {
-                exactAcl = false;
-                break;
+            if (header->AceType != ACCESS_ALLOWED_ACE_TYPE
+                || header->AceFlags != (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)) {
+                return false;
             }
             const auto *allowedAce = static_cast<ACCESS_ALLOWED_ACE *>(rawAce);
             PSID aceSid = const_cast<DWORD *>(&allowedAce->SidStart);
-            const bool isUser = EqualSid(aceSid, userSid);
-            if (!isUser || allowedAce->Mask != FILE_ALL_ACCESS) {
-                exactAcl = false;
-                break;
+            if (!EqualSid(aceSid, expectedSid) || allowedAce->Mask != expectedMask) {
+                return false;
             }
-            userAcePresent = userAcePresent || isUser;
+            *present = true;
+            return true;
+        };
+        for (DWORD index = 0; exactAcl && index < dacl->AceCount; ++index) {
+            bool matched = acceptAce(index, userSid, FILE_ALL_ACCESS, &userAcePresent)
+                    || acceptAce(index, administratorsSid,
+                                 FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                                 &administratorsAcePresent)
+                    || acceptAce(index, systemSid,
+                                 FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                                 &systemAcePresent);
+            exactAcl = matched;
         }
         LocalFree(securityDescriptor);
-        return exactAcl && userAcePresent;
+        if (administratorsSid) {
+            LocalFree(administratorsSid);
+        }
+        if (systemSid) {
+            LocalFree(systemSid);
+        }
+        return exactAcl && userAcePresent && administratorsAcePresent && systemAcePresent;
     }
 
     QString finalWindowsPathForHandle(HANDLE handle)
@@ -530,6 +553,15 @@ UpdateController::UpdateController(SecureAppSettingsRepository* appSettingsRepos
                                    QObject *parent)
     : QObject(parent), m_appSettingsRepository(appSettingsRepository), m_serversRepository(serversRepository)
 {
+    m_updateCheckTimeoutTimer = new QTimer(this);
+    m_updateCheckTimeoutTimer->setSingleShot(true);
+    m_updateCheckTimeoutTimer->setInterval(30000);
+    connect(m_updateCheckTimeoutTimer, &QTimer::timeout, this, [this]() {
+        if (m_updateCheckRunning) {
+            logger.warning() << "Update check timed out";
+            finishUpdateCheck(QStringLiteral("update_check_timeout"));
+        }
+    });
 #if defined(Q_OS_ANDROID)
     connect(AndroidController::instance(), &AndroidController::apkInstallerLaunchAuthorizationRequested,
             this, [this](const QString &fileName, const QString &packageName,
@@ -2597,6 +2629,9 @@ bool UpdateController::checkForUpdates()
     }
     m_updateCheckRunning = true;
     m_updateFoundDuringCheck = false;
+    if (m_updateCheckTimeoutTimer) {
+        m_updateCheckTimeoutTimer->start();
+    }
     clearInstallSelection();
     clearSelectedReleasePolicy();
     m_pendingAutoInstallAttemptId.clear();
@@ -2609,10 +2644,19 @@ bool UpdateController::checkForUpdates()
     return true;
 }
 
-void UpdateController::finishUpdateCheck()
+void UpdateController::finishUpdateCheck(const QString &error)
 {
+    if (!m_updateCheckRunning) {
+        return;
+    }
     const bool updateAvailable = m_updateFoundDuringCheck;
     m_updateCheckRunning = false;
+    if (m_updateCheckTimeoutTimer) {
+        m_updateCheckTimeoutTimer->stop();
+    }
+    if (!error.isEmpty()) {
+        emit updateCheckFailed(error.left(160));
+    }
     emit updateCheckFinished(updateAvailable);
 }
 
@@ -2641,7 +2685,7 @@ void UpdateController::fetchSelfHostedManifest()
 void UpdateController::fetchSelfHostedManifestFromUrls(const QList<QUrl> &manifestUrls, int urlIndex)
 {
     if (urlIndex < 0 || urlIndex >= manifestUrls.size()) {
-        finishUpdateCheck();
+        finishUpdateCheck(QStringLiteral("self_hosted_update_endpoint_unreachable"));
         return;
     }
 
@@ -2671,6 +2715,12 @@ void UpdateController::fetchSelfHostedManifestFromUrls(const QList<QUrl> &manife
     });
     QObject::connect(reply, &QNetworkReply::finished, this,
                      [this, reply, manifestData, manifestTooLarge, manifestUrls, urlIndex, manifestUrl]() {
+        if (!m_updateCheckRunning) {
+            reply->deleteLater();
+            delete manifestData;
+            delete manifestTooLarge;
+            return;
+        }
         const bool ok = (reply->error() == QNetworkReply::NoError);
         const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QString errorString = ok ? QString() : reply->errorString();
@@ -3011,10 +3061,6 @@ UpdateController::ManifestProcessResult UpdateController::processSelfHostedManif
         }
     }
 
-    if (!isNewVersionAvailable(version)) {
-        return ManifestProcessResult::NoUpdate;
-    }
-
     if (!payloadHasPlatformCandidate(payload)) {
         logger.info() << "Self-hosted update has no artifact for this platform";
         return ManifestProcessResult::NoUpdate;
@@ -3023,6 +3069,26 @@ UpdateController::ManifestProcessResult UpdateController::processSelfHostedManif
     if (!selectSelfHostedArtifact(manifestUrl, payload, artifact)) {
         return ManifestProcessResult::Invalid;
     }
+
+#if defined(Q_OS_ANDROID)
+    // Android's package installer compares versionCode, not versionName. A
+    // fork may keep the same semantic version while publishing a monotonic
+    // signed build code, so accept that case while rejecting APKs that the
+    // platform would refuse to install.
+    if (artifact.openExternally) {
+        if (!isNewVersionAvailable(version)) {
+            return ManifestProcessResult::NoUpdate;
+        }
+    } else if (artifact.androidVersionCode <= APP_ANDROID_VERSION_CODE) {
+        logger.info() << "Self-hosted Android artifact versionCode is not newer"
+                      << artifact.androidVersionCode << APP_ANDROID_VERSION_CODE;
+        return ManifestProcessResult::NoUpdate;
+    }
+#else
+    if (!isNewVersionAvailable(version)) {
+        return ManifestProcessResult::NoUpdate;
+    }
+#endif
 
     m_version = version;
     m_releaseDate = payload.value(QStringLiteral("releaseDate")).toString(
@@ -4132,6 +4198,13 @@ int UpdateController::runWindowsInstaller(const QString &installerPath,
         CloseHandle(installerHandle);
         return -1;
     }
+    if (!SetHandleInformation(directoryHandle, HANDLE_FLAG_INHERIT, 0)) {
+        logger.error() << "Failed to make protected Windows installer directory handle non-inheritable:"
+                       << GetLastError();
+        CloseHandle(directoryHandle);
+        CloseHandle(installerHandle);
+        return -1;
+    }
 
     FILE_ATTRIBUTE_TAG_INFO attributeInfo {};
     FILE_ATTRIBUTE_TAG_INFO directoryAttributeInfo {};
@@ -4192,66 +4265,37 @@ int UpdateController::runWindowsInstaller(const QString &installerPath,
             + QStringLiteral("\" --accept-messages --accept-licenses --confirm-command install AmneziaSelfHostedUpdate=true");
     QVector<wchar_t> commandLineBuffer(commandLine.size() + 1, L'\0');
     commandLine.toWCharArray(commandLineBuffer.data());
-    if (!SetHandleInformation(directoryHandle, HANDLE_FLAG_INHERIT,
-                              HANDLE_FLAG_INHERIT)) {
-        logger.error() << "Failed to make the Windows staging-directory pin inheritable:"
-                       << GetLastError();
-        CloseHandle(directoryHandle);
-        CloseHandle(installerHandle);
-        return -1;
-    }
-    SIZE_T attributeListSize = 0;
-    (void) InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeListSize);
-    QVector<BYTE> attributeStorage(static_cast<qsizetype>(attributeListSize));
-    auto *attributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(
-            attributeStorage.data());
-    if (attributeListSize == 0
-        || !InitializeProcThreadAttributeList(attributeList, 1, 0,
-                                              &attributeListSize)
-        || !UpdateProcThreadAttribute(
-                attributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                &directoryHandle, sizeof(directoryHandle), nullptr, nullptr)) {
-        logger.error() << "Failed to restrict Windows installer handle inheritance:"
-                       << GetLastError();
-        SetHandleInformation(directoryHandle, HANDLE_FLAG_INHERIT, 0);
-        CloseHandle(directoryHandle);
-        CloseHandle(installerHandle);
-        return -1;
-    }
-
     // Re-read the pinned handle after all path/ACL/handle setup and directly
     // before CreateProcessW. The application cannot execute from a handle, so
     // this last size/hash check is the narrowest safe handoff available while
-    // retaining the owner-only staging boundary.
+    // retaining the protected staging boundary. Keep the directory pin open
+    // through CreateProcessW, but explicitly non-inheritable so it cannot keep
+    // cleanup pending for the lifetime of the installer child.
     if (!reverifyWindowsInstallerHandle(installerHandle, expectedSize,
                                         normalizedExpectedSha256)) {
         logger.error() << "Windows installer changed during launch preparation";
-        DeleteProcThreadAttributeList(attributeList);
-        SetHandleInformation(directoryHandle, HANDLE_FLAG_INHERIT, 0);
         CloseHandle(directoryHandle);
         CloseHandle(installerHandle);
         return -1;
     }
 
-    STARTUPINFOEXW startupInfo {};
-    startupInfo.StartupInfo.cb = sizeof(startupInfo);
-    startupInfo.lpAttributeList = attributeList;
+    STARTUPINFOW startupInfo {};
+    startupInfo.cb = sizeof(startupInfo);
     PROCESS_INFORMATION processInfo {};
     const bool success = CreateProcessW(
             reinterpret_cast<LPCWSTR>(resolvedInstallerPath.utf16()),
-            commandLineBuffer.data(), nullptr, nullptr, TRUE,
-            CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS | EXTENDED_STARTUPINFO_PRESENT,
-            nullptr, nullptr, &startupInfo.StartupInfo, &processInfo);
+            commandLineBuffer.data(), nullptr, nullptr, FALSE,
+            CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
+            nullptr, nullptr, &startupInfo, &processInfo);
     const DWORD launchError = success ? ERROR_SUCCESS : GetLastError();
-    DeleteProcThreadAttributeList(attributeList);
-    SetHandleInformation(directoryHandle, HANDLE_FLAG_INHERIT, 0);
+    CloseHandle(directoryHandle);
+    directoryHandle = INVALID_HANDLE_VALUE;
     qint64 pid = 0;
     if (success) {
         pid = static_cast<qint64>(processInfo.dwProcessId);
         CloseHandle(processInfo.hThread);
         CloseHandle(processInfo.hProcess);
     }
-    CloseHandle(directoryHandle);
     CloseHandle(installerHandle);
 
     if (success) {

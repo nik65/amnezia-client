@@ -14,6 +14,7 @@ import shutil
 import shlex
 import subprocess
 import sys
+import tarfile
 import tempfile
 import textwrap
 import time
@@ -1099,6 +1100,25 @@ class ReleaseFreezeTests(unittest.TestCase):
 
 
 class SourceContractTests(unittest.TestCase):
+    @staticmethod
+    def function_body(signature: str, source: str) -> str:
+        start = source.find(signature)
+        if start < 0:
+            raise AssertionError(f"missing C++ function: {signature}")
+        opening_brace = source.find("{", start)
+        if opening_brace < 0:
+            raise AssertionError(f"missing C++ function body: {signature}")
+        depth = 0
+        for offset in range(opening_brace, len(source)):
+            character = source[offset]
+            if character == "{":
+                depth += 1
+            elif character == "}":
+                depth -= 1
+                if depth == 0:
+                    return source[opening_brace : offset + 1]
+        raise AssertionError(f"unterminated C++ function: {signature}")
+
     def test_headless_base_url_is_private_http_or_https_with_port(self) -> None:
         self.assertEqual(
             make_manifest.validate_headless_base_url("http://172.29.172.252:17865/"),
@@ -1293,10 +1313,10 @@ class SourceContractTests(unittest.TestCase):
 
     def test_headless_standalone_manifest_writes_through_private_staging(self) -> None:
         helper = (REPO_ROOT / "deploy/headless/make_headless_manifest.py").read_text(encoding="utf-8")
-        self.assertIn("def atomic_copy", helper)
-        self.assertIn("def atomic_write", helper)
-        self.assertIn("os.replace(staged_path, target)", helper)
-        self.assertIn("os.fsync(staged.fileno())", helper)
+        self.assertIn("atomic_copy_file", helper)
+        self.assertIn("atomic_write_bytes", helper)
+        self.assertIn("replace_output_tree(out_dir, requested_out_dir)", helper)
+        self.assertIn("fsync_directory", helper)
         self.assertIn("replace_output_tree(out_dir, requested_out_dir)", helper)
 
     def test_manifest_tool_rejects_duplicate_platforms(self) -> None:
@@ -1490,7 +1510,12 @@ class SourceContractTests(unittest.TestCase):
         self.assertNotIn('return QStringLiteral("http://%1:%2%3")', update_controller)
         self.assertNotIn("if (manifestUrls.isEmpty()) {\n        fetchGatewayUrl();", update_controller)
         self.assertIn("if (manifestUrls.isEmpty()) {\n        finishUpdateCheck();", update_controller)
-        self.assertIn("if (urlIndex < 0 || urlIndex >= manifestUrls.size()) {\n        finishUpdateCheck();", update_controller)
+        self.assertIn("if (urlIndex < 0 || urlIndex >= manifestUrls.size()) {\n        finishUpdateCheck(QStringLiteral(\"self_hosted_update_endpoint_unreachable\"));", update_controller)
+        self.assertIn("m_updateCheckTimeoutTimer->setInterval(30000);", update_controller)
+        self.assertIn("<domain includeSubdomains=\"false\">10.8.1.0</domain>",
+                      (REPO_ROOT / "client/android/res/xml/network_security_config.xml").read_text(encoding="utf-8"))
+        self.assertIn("<domain includeSubdomains=\"false\">172.29.172.252</domain>",
+                      (REPO_ROOT / "client/android/res/xml/network_security_config.xml").read_text(encoding="utf-8"))
         self.assertIn("scheduleDesktopQuitAfterInstallerStart();", update_controller)
         self.assertIn("amnApp->forceQuit();", update_controller)
         self.assertIn("kDesktopQuitAfterInstallerStartMs", update_controller)
@@ -1505,10 +1530,54 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("windowsDirectoryContainsOnlyInstaller(", update_controller)
         self.assertIn("finalWindowsPathForHandle(installerHandle)", update_controller)
         self.assertIn("finalWindowsPathForHandle(directoryHandle)", update_controller)
-        self.assertIn("PROC_THREAD_ATTRIBUTE_HANDLE_LIST", update_controller)
-        self.assertIn("startupInfo.lpAttributeList = attributeList;", update_controller)
+        self.assertIn("STARTUPINFOW startupInfo {}", update_controller)
+        self.assertIn("startupInfo.cb = sizeof(startupInfo);", update_controller)
+        self.assertIn("FILE_SHARE_READ,", update_controller)
+        self.assertNotIn("FILE_SHARE_READ | FILE_SHARE_DELETE,", update_controller)
+        self.assertIn("nullptr, nullptr, FALSE,", update_controller)
         self.assertIn("resolvedInstallerPath.utf16()", update_controller)
-        self.assertIn("EXTENDED_STARTUPINFO_PRESENT", update_controller)
+        update_controller = (
+            REPO_ROOT / "client/core/controllers/updateController.cpp"
+        ).read_text(encoding="utf-8")
+        launch_body = self.function_body(
+            "int UpdateController::runWindowsInstaller(", update_controller
+        )
+        self.assertIn(
+            "GENERIC_READ,\n            FILE_SHARE_READ,\n            nullptr,\n            OPEN_EXISTING",
+            launch_body,
+        )
+        self.assertIn(
+            "FILE_LIST_DIRECTORY | READ_CONTROL,\n            FILE_SHARE_READ,\n            nullptr,\n            OPEN_EXISTING",
+            launch_body,
+        )
+        self.assertLess(
+            launch_body.rfind("reverifyWindowsInstallerHandle("),
+            launch_body.find("CreateProcessW("),
+        )
+        self.assertGreater(
+            launch_body.rfind("CloseHandle(installerHandle)"),
+            launch_body.find("CreateProcessW("),
+        )
+        self.assertIn("SetHandleInformation(directoryHandle, HANDLE_FLAG_INHERIT, 0)", launch_body)
+        self.assertLess(
+            launch_body.find("SetHandleInformation(directoryHandle, HANDLE_FLAG_INHERIT, 0)"),
+            launch_body.find("CreateProcessW("),
+        )
+        self.assertGreater(
+            launch_body.rfind("CloseHandle(directoryHandle)"),
+            launch_body.find("CreateProcessW("),
+        )
+        self.assertGreater(
+            launch_body.find("finalWindowsPathForHandle(directoryHandle)"),
+            launch_body.find("CreateFileW("),
+        )
+        self.assertLess(
+            launch_body.find("finalWindowsPathForHandle(directoryHandle)"),
+            launch_body.find("windowsDirectoryContainsOnlyInstaller("),
+        )
+        self.assertNotIn("PROC_THREAD_ATTRIBUTE_HANDLE_LIST", update_controller)
+        self.assertNotIn("startupInfo.lpAttributeList", update_controller)
+        self.assertNotIn("EXTENDED_STARTUPINFO_PRESENT", update_controller)
         self.assertIn("::fexecve(installerFd, arguments, environ);", update_controller)
         self.assertIn("SYS_memfd_create", update_controller)
         self.assertIn("MFD_ALLOW_SEALING", update_controller)
@@ -5854,6 +5923,52 @@ class ManifestPublisherTests(unittest.TestCase):
             f"AmneziaHeadless_{version}_linux_x64.tar.gz",
             b"headless release archive",
         )
+        provisioning = self.root / f"AmneziaHeadless_{version}_linux_x64_provisioning.tar.gz"
+        package_files = {
+            name: f"fixture-{name}\n".encode("utf-8")
+            for name in make_manifest.HEADLESS_PROVISIONING_FILES
+            if name not in {"package-manifest.json", "SHA256SUMS"}
+        }
+        package_files["package-manifest.json"] = json.dumps(
+            {
+                "schema": 2,
+                "version": version,
+                "platform": "linux-headless-x64",
+                "installModes": ["fresh", "upgrade"],
+                "artifacts": ["amneziad", "amnezia-cli", "amneziad.service"],
+                "service": "amneziad.service",
+                "servicePaths": [
+                    "/etc/systemd/system/amneziad.service",
+                    "/run/systemd/system/amneziad.service",
+                    "/usr/local/lib/systemd/system/amneziad.service",
+                    "/usr/lib/systemd/system/amneziad.service",
+                    "/lib/systemd/system/amneziad.service",
+                ],
+                "trustAnchor": "external-ed25519-sha256-receipt",
+                "runtimeManifest": "runtime-dependencies.json",
+                "checksums": "SHA256SUMS",
+                "runtimeText": "runtime-dependencies.txt",
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        package_files["SHA256SUMS"] = (
+            "".join(
+                f"{hashlib.sha256(package_files[name]).hexdigest()}  {name}\n"
+                for name in make_manifest.HEADLESS_PROVISIONING_FILES
+                if name != "SHA256SUMS"
+            )
+        ).encode("utf-8")
+        with tarfile.open(provisioning, mode="w:gz") as archive:
+            root_member = tarfile.TarInfo("headless-package/")
+            root_member.type = tarfile.DIRTYPE
+            root_member.mode = 0o755
+            archive.addfile(root_member)
+            for name in make_manifest.HEADLESS_PROVISIONING_FILES:
+                payload = package_files[name]
+                member = tarfile.TarInfo(f"headless-package/{name}")
+                member.size = len(payload)
+                member.mode = 0o644
+                archive.addfile(member, io.BytesIO(payload))
         out_dir = self.root / "headless-format"
         subprocess.run(
             [
@@ -5867,6 +5982,8 @@ class ManifestPublisherTests(unittest.TestCase):
                 str(self.private_key),
                 "--out-dir",
                 str(out_dir),
+                "--headless-provisioning",
+                str(provisioning),
                 "--artifact",
                 f"linux-headless-x64={artifact}",
             ],
@@ -5877,6 +5994,15 @@ class ManifestPublisherTests(unittest.TestCase):
         )
         platform = manifest_payload(out_dir / "manifest.json")["platforms"]["linux-headless-x64"]
         self.assertEqual(platform["format"], make_manifest.HEADLESS_ARTIFACT_FORMAT)
+        manifest = manifest_payload(out_dir / "manifest.json")
+        self.assertEqual(
+            manifest["headlessProvisioning"]["format"],
+            make_manifest.HEADLESS_PROVISIONING_FORMAT,
+        )
+        self.assertEqual(
+            manifest["headlessProvisioning"]["packageFiles"],
+            list(make_manifest.HEADLESS_PROVISIONING_FILES),
+        )
         make_manifest.validate_local_artifact_metadata(
             "linux-headless-x64",
             platform,
@@ -5891,6 +6017,43 @@ class ManifestPublisherTests(unittest.TestCase):
                 without_format,
                 context="test manifest",
             )
+
+    def test_targeted_non_headless_manifest_does_not_require_provisioning(self) -> None:
+        out_dir = self.root / "targeted-non-headless"
+        self.build_test_manifest("targeted-non-headless", "9.9.9.9")
+        manifest = manifest_payload(out_dir / "manifest.json")
+        self.assertEqual(set(manifest["platforms"]), {"windows-x64"})
+        self.assertNotIn("headlessProvisioning", manifest)
+
+    def test_headless_manifest_requires_provisioning_bundle(self) -> None:
+        artifact = self.write_artifact(
+            "AmneziaHeadless_9.9.9.9_linux_x64.tar.gz",
+            b"headless release archive",
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT_DIR / "make_manifest.py"),
+                "--version",
+                "9.9.9.9",
+                "--base-url",
+                "https://192.0.2.10:17865",
+                "--private-key",
+                str(self.private_key),
+                "--out-dir",
+                str(self.root / "missing-provisioning"),
+                "--artifact",
+                f"linux-headless-x64={artifact}",
+            ],
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "Linux headless artifacts require --headless-provisioning",
+            result.stderr + result.stdout,
+        )
 
     def test_manifest_rejects_case_insensitive_artifact_basename_collisions(self) -> None:
         first_dir = self.root / "case-first"
@@ -6489,9 +6652,9 @@ class ManifestPublisherTests(unittest.TestCase):
                 version,
                 "-SkipBuild",
                 "-BuildPlatform",
-                "windows",
-                "linux",
-                "android",
+                "windows,linux,android",
+                "-RequirePlatform",
+                "windows-x64,linux-x64,android-arm64-v8a",
                 "-NoBundleUpdatesInWindowsClient",
                 "-ArtifactDir",
                 str(self.root / "artifacts"),
@@ -6499,6 +6662,10 @@ class ManifestPublisherTests(unittest.TestCase):
                 str(out_dir),
                 "-BaseUrl",
                 "http://172.29.172.252:17865",
+                "-SshTrustedHost",
+                self.env["SELFHOSTED_SSH_TRUSTED_HOST"],
+                "-SshTrustedHostKeySha256",
+                self.env["SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256"],
                 "-PrivateKey",
                 str(self.private_key),
                 "-PublicKeyBase64",
@@ -7992,6 +8159,12 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
             '["failure", serviceName, "reset=", "0", "actions=", ""]',
             prepare_legacy,
         )
+        snapshot = prepare_legacy.find(
+            "windowsMainServiceConfigSnapshot = queryWindowsMainServiceConfig(serviceName)"
+        )
+        self.assertGreaterEqual(snapshot, 0)
+        self.assertGreater(prepare_legacy.find("windowsMainServiceConfigSnapshot === null"), snapshot)
+        self.assertLess(snapshot, disarm_recovery)
         self.assertIn('["query", serviceName]', prepare_legacy)
         self.assertIn("queryExitCode === 1060", prepare_legacy)
         self.assertIn("queryExitCode !== 0", prepare_legacy)
@@ -8010,21 +8183,41 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
             "function restoreWindowsMainServiceAfterAbortedUpgrade",
             self.qif_control_script,
         )
+        query_service = self.function_body(
+            "function queryWindowsMainServiceConfig",
+            self.qif_control_script,
+        )
+        self.assertIn("parseScOutputFields", query_service)
+        self.assertIn('replace(/\\s+/g, " ")', query_service)
+        self.assertIn('startType = "delayed-auto"', query_service)
+        self.assertIn('start: startType', query_service)
+        self.assertIn("AUTO_START\\s+\\(DELAYED\\)", query_service)
+        self.assertIn('failureFields["FAILURE_ACTIONS"]', query_service)
+        self.assertIn('failureFields["RESET_PERIOD (IN SECONDS)"]', query_service)
+        self.assertIn('failureFields["REBOOT_MESSAGE"]', query_service)
+        self.assertIn('failureFields["COMMAND_LINE"]', query_service)
+        self.assertIn('failureFlagFields["FAILURE_ACTIONS_FLAG"]', query_service)
+        self.assertIn('failureActionsFlag !== "0"', query_service)
+        self.assertIn('installer.execute(systemSc, ["qfailureflag", serviceName])', query_service)
         self.assertIn(
             '["failure", serviceName, "reset=", "100", "actions=",',
             restore_legacy,
         )
         self.assertIn(
-            '"restart/2000/restart/2000/restart/2000"]',
+            'windowsMainServiceConfigSnapshot.failureActions]',
             restore_legacy,
         )
         self.assertIn(
-            '["config", serviceName, "start=", "auto"]',
+            '["config", serviceName, "start=", windowsMainServiceConfigSnapshot.start]',
             restore_legacy,
         )
+        self.assertIn("queryWindowsMainServiceConfig(serviceName)", restore_legacy)
+        self.assertIn("windowsMainServiceConfigMatches", restore_legacy)
         self.assertIn("failureExitCode !== 0", restore_legacy)
+        self.assertIn("failureFlagExitCode !== 0", restore_legacy)
         self.assertIn("startExitCode !== 0", restore_legacy)
-        self.assertNotIn("1060", restore_legacy)
+        self.assertIn("queryExitCode === 1060", restore_legacy)
+        self.assertNotIn("PowerShell", restore_legacy)
         self.assertIn("windowsMainServicePrepared = false", restore_legacy)
 
         controller = self.function_body(
@@ -8159,6 +8352,77 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertIn("windowsUpgradeCommitRequested = true", commit)
         self.assertIn("gui.isButtonEnabled(buttons.CommitButton)", commit)
         self.assertEqual(commit.count("gui.clickButton(buttons.CommitButton, 250)"), 1)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required")
+    def test_qif_windows_service_config_parser_accepts_standard_fields_in_any_order(self) -> None:
+        parser = "function parseScOutputFields(output)\n" + self.function_body(
+            "function parseScOutputFields", self.qif_control_script
+        )
+        field_guard = "function scFieldsHaveOnly(fields, allowedFields)\n" + self.function_body(
+            "function scFieldsHaveOnly", self.qif_control_script
+        )
+        query = self.function_body("function queryWindowsMainServiceConfig", self.qif_control_script)
+        standard_failure = """[SC] QueryServiceConfig2 SUCCESS
+
+SERVICE_NAME : AmneziaVPN-service
+FAILURE_ACTIONS :
+  RESTART -- Delay = 2000 milliseconds.
+  RESTART -- Delay = 2000 milliseconds.
+  RESTART -- Delay = 2000 milliseconds.
+COMMAND_LINE :
+RESET_PERIOD (in seconds) : 100
+REBOOT_MESSAGE :
+"""
+        nonstandard_failure = standard_failure.replace("2000", "5000", 1)
+        harness = f"""
+{parser}
+{field_guard}
+function queryWindowsMainServiceConfig(serviceName)
+{{
+{query}
+}}
+function runningOnWindows() {{ return true; }}
+var outputs = {{}};
+var installer = {{
+    execute: function(_path, args) {{
+        return [outputs[args[0]] || "", 0];
+    }}
+}};
+function evaluate(startOutput, failureOutput) {{
+    outputs = {{
+        query: "SERVICE_NAME : AmneziaVPN-service",
+        qc: startOutput,
+        qfailure: failureOutput,
+        qfailureflag: "FAILURE_ACTIONS_FLAG : 0"
+    }};
+    return queryWindowsMainServiceConfig("AmneziaVPN-service");
+}}
+process.stdout.write(JSON.stringify({{
+    standard: evaluate("START_TYPE : 2 AUTO_START", {json.dumps(standard_failure)}),
+    delayed: evaluate("START_TYPE : 2 AUTO_START (DELAYED)", {json.dumps(standard_failure)}),
+    unsupported: evaluate("START_TYPE : 3 DEMAND_START", {json.dumps(standard_failure)}),
+    nonstandard: evaluate("START_TYPE : 2 AUTO_START", {json.dumps(nonstandard_failure)})
+}}));
+"""
+        completed = subprocess.run(
+            [shutil.which("node"), "-e", harness],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(
+            result["standard"],
+            {
+                "start": "auto",
+                "failureActions": "restart/2000/restart/2000/restart/2000",
+                "failureActionsFlag": "0",
+            },
+        )
+        self.assertEqual(result["delayed"]["start"], "delayed-auto")
+        self.assertIsNone(result["unsupported"])
+        self.assertIsNone(result["nonstandard"])
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is required")
     def test_qif_windows_legacy_wait_requires_consecutive_combined_states(self) -> None:

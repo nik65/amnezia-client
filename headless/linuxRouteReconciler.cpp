@@ -91,21 +91,77 @@ bool parseManagedMainRouteLine(const QString &line, QString *prefix,
     if (interfaceName) *interfaceName = tokens.at(2);
     return true;
 }
+
+QStringList routeTokensWithoutMarkers(const QString &line)
+{
+    QStringList tokens = line.trimmed().split(QRegularExpression(QStringLiteral("\\s+")),
+                                              Qt::SkipEmptyParts);
+    for (int index = 0; index < tokens.size();) {
+        if (tokens.at(index) == QStringLiteral("proto")
+            || tokens.at(index) == QStringLiteral("table")) {
+            if (index + 1 >= tokens.size()) return {};
+            tokens.remove(index, 2);
+            continue;
+        }
+        ++index;
+    }
+    if (tokens.size() > 3) {
+        QStringList attributes = tokens.mid(3);
+        std::sort(attributes.begin(), attributes.end());
+        tokens = tokens.mid(0, 3);
+        tokens.append(attributes);
+    }
+    return tokens;
+}
+
+QStringList legacyRouteArguments(const QString &line, const QString &operation,
+                                 const QString &interfaceName, bool addProtocol)
+{
+    const QStringList tokens = line.trimmed().split(QRegularExpression(QStringLiteral("\\s+")),
+                                                     Qt::SkipEmptyParts);
+    if (tokens.size() < 3 || tokens.at(1) != QStringLiteral("dev")
+        || tokens.at(2) != interfaceName) return {};
+    for (int index = 3; index < tokens.size(); ++index) {
+        if (tokens.at(index) == QStringLiteral("proto")
+            || tokens.at(index) == QStringLiteral("table")
+            || tokens.at(index) == QStringLiteral("via")
+            || tokens.at(index) == QStringLiteral("onlink")) {
+            return {};
+        }
+    }
+    QStringList arguments { QStringLiteral("route"), operation };
+    arguments.append(tokens);
+    arguments << QStringLiteral("table") << QStringLiteral("51821");
+    if (addProtocol) {
+        arguments << QStringLiteral("proto") << QString::number(AmneziaRouteProtocol);
+    }
+    if (tokens.constFirst().contains(QLatin1Char(':'))) arguments.prepend(QStringLiteral("-6"));
+    return arguments;
+}
 }
 
 LinuxRouteReconciler::LinuxRouteReconciler(std::shared_ptr<CommandRunner> runner,
-                                           QString statePath)
+                                           QString statePath,
+                                           bool initializeStateNow)
     : m_runner(runner ? std::move(runner) : std::make_shared<RealCommandRunner>()),
       m_statePath(std::move(statePath))
 {
     if (!m_statePath.isEmpty()) {
         m_intentPath = m_statePath + QStringLiteral(".mutation-intent");
     }
+    if (initializeStateNow) initializeState();
+}
+
+bool LinuxRouteReconciler::initializeState()
+{
+    if (m_initialized) return m_stateValid;
+    m_initialized = true;
     m_stateValid = loadState();
     if (!m_stateValid) {
         m_mode = QStringLiteral("recovery_required");
         m_lastError = QStringLiteral("managed route state is invalid; refusing to mutate host routes");
     }
+    return m_stateValid;
 }
 
 QString LinuxRouteReconciler::transactionIntentPath() const
@@ -183,7 +239,7 @@ RouteReconcileResult LinuxRouteReconciler::apply(const QString &interfaceName,
                                                  const QStringList &routes)
 {
     m_lastError.clear();
-    if (!m_stateValid) {
+    if (!m_initialized || !m_stateValid) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("managed route state is invalid; manual route recovery is required"));
     }
@@ -209,32 +265,21 @@ RouteReconcileResult LinuxRouteReconciler::apply(const QString &interfaceName,
         return failure(QStringLiteral("route_mutation_in_progress"),
                        QStringLiteral("another routing transaction owns the managed route lock"));
     }
-    if (!beginMutation(QStringLiteral("only-forward"), interfaceName,
-                       boundedRoutes, {})) {
-        return failure(QStringLiteral("recovery_required"),
-                       QStringLiteral("managed route mutation intent could not be persisted"));
-    }
     const bool previousFullTunnel = m_mode == QStringLiteral("all-except");
     const QString previousInterface = m_interfaceName;
     const QStringList previousRoutes = m_routes;
     const QStringList previousBypassRoutes = m_bypassRoutes;
-    if (previousFullTunnel) {
-        const RouteReconcileResult cleared = clearFullTunnel();
-        if (!cleared.ok) {
-            return finishTransaction(cleared);
-        }
-    }
-
     const QString executable = ipExecutable();
     if (executable.isEmpty()) {
-        return finishTransaction(failure(QStringLiteral("route_backend_unavailable"),
-                                         QStringLiteral("the Linux ip command is not installed")));
+        return failure(QStringLiteral("route_backend_unavailable"),
+                       QStringLiteral("the Linux ip command is not installed"));
     }
-
+    // Probe and reject foreign target routes before clearing a current full
+    // tunnel. A target preflight failure must not disturb the LKG tunnel.
     const RuleSnapshot routeSnapshot = readRuleSnapshot();
     if (!routeSnapshot.valid) {
-        return finishTransaction(failure(QStringLiteral("route_probe_failed"),
-                                         QStringLiteral("could not inspect the main routing table safely")));
+        return failure(QStringLiteral("route_probe_failed"),
+                       QStringLiteral("could not inspect the main routing table safely"));
     }
     for (const QString &route : boundedRoutes) {
         const QRegularExpression prefixPattern(
@@ -245,9 +290,20 @@ RouteReconcileResult LinuxRouteReconciler::apply(const QString &interfaceName,
             const bool ownedByPrevious = !previousInterface.isEmpty()
                     && managedMainRouteLineMatches(line, route, previousInterface);
             if (!ownedByTarget && !ownedByPrevious) {
-                return finishTransaction(failure(QStringLiteral("only_forward_route_conflict"),
-                                                 QStringLiteral("a main-table route is occupied by a foreign or ambiguous owner")));
+                return failure(QStringLiteral("only_forward_route_conflict"),
+                               QStringLiteral("a main-table route is occupied by a foreign or ambiguous owner"));
             }
+        }
+    }
+    if (!beginMutation(QStringLiteral("only-forward"), interfaceName,
+                       boundedRoutes, {})) {
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("managed route mutation intent could not be persisted"));
+    }
+    if (previousFullTunnel) {
+        const RouteReconcileResult cleared = clearFullTunnel();
+        if (!cleared.ok) {
+            return finishTransaction(cleared);
         }
     }
 
@@ -340,7 +396,10 @@ RouteReconcileResult LinuxRouteReconciler::apply(const QString &interfaceName,
                        QStringLiteral("managed routes applied but state was not persisted"));
     }
     if (!finishMutation()) {
-        markRecoveryRequired(QStringLiteral("managed route mutation intent could not be retired"));
+        const bool restored = restorePrevious();
+        markRecoveryRequired(restored
+                                 ? QStringLiteral("managed route mutation intent could not be retired after rollback")
+                                 : QStringLiteral("managed route mutation intent and rollback could not be completed"));
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("managed routes committed but mutation intent remains"));
     }
@@ -351,7 +410,7 @@ RouteReconcileResult LinuxRouteReconciler::applyAllExcept(
         const QString &interfaceName, const QStringList &bypassRoutes)
 {
     m_lastError.clear();
-    if (!m_stateValid) {
+    if (!m_initialized || !m_stateValid) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("managed route state is invalid; manual route recovery is required"));
     }
@@ -1083,6 +1142,7 @@ RouteReconcileResult LinuxRouteReconciler::clearFullTunnel()
         return failure(QStringLiteral("full_tunnel_ownership_ambiguous"),
                        QStringLiteral("full-tunnel ownership receipt has no positively-owned route"));
     }
+    QSet<QString> seenFullTunnelPrefixes;
     if (snapshot.tableLines.isEmpty()) {
         // A crash may leave only the durable receipt after the kernel has
         // already removed the table.  With no owned rule either, there is no
@@ -1109,6 +1169,13 @@ RouteReconcileResult LinuxRouteReconciler::clearFullTunnel()
             return failure(QStringLiteral("full_tunnel_ownership_ambiguous"),
                            QStringLiteral("route table 51821 contains a foreign or unmarked route"));
         }
+        const QString prefix = line.trimmed().split(
+                QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts).value(0);
+        if (seenFullTunnelPrefixes.contains(prefix)) {
+            return failure(QStringLiteral("full_tunnel_ownership_ambiguous"),
+                           QStringLiteral("route table 51821 contains duplicate managed prefixes"));
+        }
+        seenFullTunnelPrefixes.insert(prefix);
     }
     // A route marker alone does not prove that policy rules at the persisted
     // priorities belong to this daemon.  Refuse to delete or take over a
@@ -1274,7 +1341,7 @@ RouteReconcileResult LinuxRouteReconciler::configureDns(const QString &interface
                                                          const QStringList &dnsServers,
                                                          const QStringList &dnsDomains)
 {
-    if (!m_stateValid || m_mode == QStringLiteral("recovery_required")) {
+    if (!m_initialized || !m_stateValid || m_mode == QStringLiteral("recovery_required")) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("managed DNS state is invalid; manual recovery is required"));
     }
@@ -1381,11 +1448,11 @@ RouteReconcileResult LinuxRouteReconciler::configureDns(const QString &interface
 
 RouteReconcileResult LinuxRouteReconciler::clearDns(const QString &interfaceName)
 {
-    if (!m_stateValid) {
+    if (!m_initialized || !m_stateValid) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("managed route state is invalid; refusing DNS cleanup mutation"));
     }
-    if (!m_stateValid || m_mode == QStringLiteral("recovery_required")) {
+    if (!m_initialized || !m_stateValid || m_mode == QStringLiteral("recovery_required")) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("managed DNS state is invalid; refusing to mutate resolver state"));
     }
@@ -1472,7 +1539,7 @@ RouteReconcileResult LinuxRouteReconciler::clearDns(const QString &interfaceName
 RouteReconcileResult LinuxRouteReconciler::clear()
 {
     m_lastError.clear();
-    if (!m_stateValid) {
+    if (!m_initialized || !m_stateValid) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("managed route state is invalid; manual route recovery is required"));
     }
@@ -1572,7 +1639,7 @@ QJsonObject LinuxRouteReconciler::status() const
         { QStringLiteral("bypassRulePriority"), m_bypassRulePriority },
         { QStringLiteral("fullRulePriority"), m_fullRulePriority },
         { QStringLiteral("statePath"), m_statePath },
-        { QStringLiteral("recoveryRequired"), !m_stateValid
+        { QStringLiteral("recoveryRequired"), !m_initialized || !m_stateValid
                                                  || m_mode == QStringLiteral("recovery_required") },
         { QStringLiteral("dnsInterface"), m_dnsInterface },
         { QStringLiteral("dnsServers"), QJsonArray::fromStringList(m_dnsServers) },
@@ -1653,8 +1720,12 @@ bool LinuxRouteReconciler::loadState()
         if (resolver.isEmpty()) return false;
         return m_runner->runCaptured(resolver, { QStringLiteral("status") }).ok;
     };
+    const auto resolverRequired = [this]() {
+        return !m_dnsInterface.isEmpty() || !m_dnsServers.isEmpty()
+            || !m_dnsDomains.isEmpty();
+    };
     if (m_statePath.isEmpty()) {
-        return resolverProbeHealthy();
+        return true;
     }
     const QFileInfo stateInfo(m_statePath);
     if (QFileInfo::exists(m_statePath + QStringLiteral(".recovery-required"))) {
@@ -1712,7 +1783,10 @@ bool LinuxRouteReconciler::loadState()
         // Do not infer ownership from resolver text or an interface-name
         // regex.  With no DNS receipt or mutation intent there is no durable
         // identity tying a custom link's resolver state to this daemon.
-        return resolverProbeHealthy();
+        // There is no persisted DNS owner in the missing-receipt case.  The
+        // daemon's profile-aware startup gate is responsible for checking
+        // configured/custom interfaces when a profile declares DNS.
+        return true;
     }
     if (stateInfo.isSymLink() || !stateInfo.isFile()) {
         return false;
@@ -1868,25 +1942,31 @@ bool LinuxRouteReconciler::loadState()
         if (!snapshot.valid) return false;
         // 5.0.1.11 wrote v2 receipts but did not attach a route protocol
         // marker.  Permit exactly one migration shape: all four split-default
-        // routes, one interface matching the old receipt, no `proto` token and
-        // no extra route attributes.  Any partial/ambiguous table remains a
-        // manual-recovery condition.
+        // routes, one interface matching the old receipt, no `proto` token,
+        // and only direct-route attributes that can be replayed verbatim. Any
+        // partial/ambiguous table remains a manual-recovery condition.
         if (mode == QStringLiteral("all-except") && snapshot.tableLines.size() == 4) {
-            const QRegularExpression legacyRoute(
-                    QStringLiteral("^\\s*(0\\.0\\.0\\.0/1|128\\.0\\.0\\.0/1|::/1|8000::/1)"
-                                   "\\s+dev\\s+%1(?:\\s+(?:scope\\s+\\S+|metric\\s+1))*\\s*$")
-                        .arg(QRegularExpression::escape(interfaceName)));
+            const QSet<QString> expectedLegacyPrefixes {
+                    QStringLiteral("0.0.0.0/1"), QStringLiteral("128.0.0.0/1"),
+                    QStringLiteral("::/1"), QStringLiteral("8000::/1") };
             QSet<QString> legacyPrefixes;
             bool legacyExact = true;
             for (const QString &line : snapshot.tableLines) {
-                const auto match = legacyRoute.match(line);
-                if (!match.hasMatch() || line.contains(QStringLiteral("proto"))) {
+                const QStringList tokens = line.trimmed().split(
+                        QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+                const QString prefix = tokens.value(0);
+                if (!expectedLegacyPrefixes.contains(prefix)
+                    || legacyRouteArguments(line, QStringLiteral("replace"),
+                                             interfaceName, false).isEmpty()) {
                     legacyExact = false;
                     break;
                 }
-                legacyPrefixes.insert(match.captured(1));
+                legacyPrefixes.insert(prefix);
             }
             if (legacyExact && legacyPrefixes.size() == 4) {
+                const QStringList originalLegacyLines = snapshot.tableLines;
+                const auto routeLock = acquireRouteLock(m_statePath);
+                if (!m_statePath.isEmpty() && !routeLock) return false;
                 const QString executable = ipExecutable();
                 const QStringList prefixes {
                     QStringLiteral("0.0.0.0/1"), QStringLiteral("128.0.0.0/1"),
@@ -1899,43 +1979,80 @@ bool LinuxRouteReconciler::loadState()
                     })) {
                     return false;
                 }
-                QStringList attemptedPrefixes;
                 const auto restoreLegacy = [&]() {
                     bool restored = true;
-                    for (const QString &prefix : attemptedPrefixes) {
-                        QStringList command;
-                        if (prefix.contains(QLatin1Char(':'))) command << QStringLiteral("-6");
-                        command << QStringLiteral("route") << QStringLiteral("replace") << prefix
-                                << QStringLiteral("dev") << interfaceName
-                                << QStringLiteral("table") << QString::number(FullTunnelRouteTable);
-                        restored = m_runner->run(executable, command).ok && restored;
+                    for (const QString &line : originalLegacyLines) {
+                        const QStringList command = legacyRouteArguments(
+                                line, QStringLiteral("replace"), interfaceName, false);
+                        restored = !command.isEmpty()
+                                && m_runner->run(executable, command).ok && restored;
                     }
-                    return restored;
+                    RuleSnapshot restoredSnapshot = readRuleSnapshot();
+                    QStringList expected;
+                    for (const QString &line : originalLegacyLines) {
+                        expected.append(routeTokensWithoutMarkers(line).join(QLatin1Char(' ')));
+                    }
+                    QStringList actual;
+                    if (restoredSnapshot.valid) {
+                        for (const QString &line : restoredSnapshot.tableLines) {
+                            actual.append(routeTokensWithoutMarkers(line).join(QLatin1Char(' ')));
+                        }
+                    } else {
+                        restored = false;
+                    }
+                    std::sort(expected.begin(), expected.end());
+                    std::sort(actual.begin(), actual.end());
+                    return restored && expected == actual;
                 };
                 bool migrated = true;
                 for (const QString &prefix : prefixes) {
-                    QStringList command;
-                    if (prefix.contains(QLatin1Char(':'))) command << QStringLiteral("-6");
-                    command << QStringLiteral("route") << QStringLiteral("replace") << prefix
-                            << QStringLiteral("dev") << interfaceName << QStringLiteral("table")
-                            << QString::number(FullTunnelRouteTable) << QStringLiteral("proto")
-                            << QString::number(AmneziaRouteProtocol);
-                    attemptedPrefixes.append(prefix);
-                    if (!m_runner->run(executable, command).ok) {
+                    const auto lineIt = std::find_if(snapshot.tableLines.cbegin(),
+                                                     snapshot.tableLines.cend(),
+                                                     [&prefix](const QString &line) {
+                        return line.trimmed().startsWith(prefix + QStringLiteral(" "));
+                    });
+                    if (lineIt == snapshot.tableLines.cend()) {
+                        migrated = false;
+                        break;
+                    }
+                    const QStringList command = legacyRouteArguments(
+                            *lineIt, QStringLiteral("replace"), interfaceName, true);
+                    if (command.isEmpty() || !m_runner->run(executable, command).ok) {
                         migrated = false;
                         break;
                     }
                 }
                 if (migrated) {
                     snapshot = readRuleSnapshot();
-                    const QRegularExpression migratedRoute(
-                            QStringLiteral("^\\s*(0\\.0\\.0\\.0/1|128\\.0\\.0\\.0/1|::/1|8000::/1)"
-                                           "\\s+dev\\s+%1\\s+proto\\s+%2(?:\\s|$)")
-                                .arg(QRegularExpression::escape(interfaceName))
-                                .arg(AmneziaRouteProtocol));
                     migrated = snapshot.valid && snapshot.tableLines.size() == 4;
+                    QSet<QString> migratedPrefixes;
                     for (const QString &line : snapshot.tableLines) {
-                        migrated = migrated && migratedRoute.match(line).hasMatch();
+                        const QStringList tokens = line.trimmed().split(
+                                QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+                        migrated = migrated && tokens.size() >= 5
+                                && tokens.at(1) == QStringLiteral("dev")
+                                && tokens.at(2) == interfaceName
+                                && tokens.contains(QStringLiteral("proto"))
+                                && tokens.value(tokens.indexOf(QStringLiteral("proto")) + 1)
+                                    == QString::number(AmneziaRouteProtocol);
+                        if (!tokens.isEmpty()) migratedPrefixes.insert(tokens.constFirst());
+                    }
+                    const QSet<QString> expectedPrefixes {
+                            QStringLiteral("0.0.0.0/1"), QStringLiteral("128.0.0.0/1"),
+                            QStringLiteral("::/1"), QStringLiteral("8000::/1") };
+                    migrated = migrated && migratedPrefixes == expectedPrefixes;
+                    if (migrated) {
+                        QStringList expected;
+                        for (const QString &line : originalLegacyLines) {
+                            expected.append(routeTokensWithoutMarkers(line).join(QLatin1Char(' ')));
+                        }
+                        QStringList actual;
+                        for (const QString &line : snapshot.tableLines) {
+                            actual.append(routeTokensWithoutMarkers(line).join(QLatin1Char(' ')));
+                        }
+                        std::sort(expected.begin(), expected.end());
+                        std::sort(actual.begin(), actual.end());
+                        migrated = expected == actual;
                     }
                 }
                 if (!migrated) {
@@ -1995,8 +2112,13 @@ bool LinuxRouteReconciler::loadState()
                     QStringLiteral("^\\s*(0\\.0\\.0\\.0/1|128\\.0\\.0\\.0/1|::/1|8000::/1)\\s+dev\\s+%1\\s+proto\\s+%2(?:\\s|$)")
                         .arg(QRegularExpression::escape(interfaceName))
                         .arg(AmneziaRouteProtocol));
+            QSet<QString> tablePrefixes;
             for (const QString &line : snapshot.tableLines) {
                 if (!ownedTableRoute.match(line).hasMatch()) return false;
+                const QString prefix = line.trimmed().split(
+                        QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts).value(0);
+                if (tablePrefixes.contains(prefix)) return false;
+                tablePrefixes.insert(prefix);
             }
             if (snapshot.tableLines.size() != 4
                 || !snapshot.ownedFullV4.contains(storedFullPriority)
@@ -2041,11 +2163,11 @@ bool LinuxRouteReconciler::loadState()
             }
         }
     }
-    // DNS bindings are independent from the route receipt.  When no DNS
-    // owner is recorded, a native VPN link with resolver state is orphan
-    // evidence; when a DNS owner is recorded, an unavailable resolver probe is
-    // itself unsafe because cleanup could not be verified.
-    return resolverProbeHealthy();
+    // DNS bindings are independent from the route receipt.  A persisted DNS
+    // owner requires a resolver probe because cleanup cannot be verified
+    // without resolvectl.  Profile-aware startup separately checks configured
+    // and custom interfaces for orphan DNS bindings.
+    return !resolverRequired() || resolverProbeHealthy();
 }
 
 bool LinuxRouteReconciler::saveState() const

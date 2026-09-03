@@ -9,8 +9,12 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QLocalSocket>
+#include <QHostInfo>
+#include <QLockFile>
 
 #if defined(Q_OS_LINUX)
+#include <errno.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -21,6 +25,42 @@
 
 namespace amnezia::headless
 {
+
+namespace
+{
+constexpr qint64 InstanceLockStaleAgeMs = 5000;
+
+std::unique_ptr<QLockFile> acquireInstanceLock(const QString &socketPath)
+{
+    auto lock = std::make_unique<QLockFile>(socketPath + QStringLiteral(".lock"));
+    lock->setStaleLockTime(static_cast<int>(InstanceLockStaleAgeMs));
+    if (lock->tryLock(0)) return lock;
+
+    qint64 pid = 0;
+    QString host;
+    QString application;
+    if (!lock->getLockInfo(&pid, &host, &application)
+        || pid <= 0 || host != QHostInfo::localHostName()) {
+        return {};
+    }
+    const QFileInfo lockInfo(lock->fileName());
+    if (!lockInfo.exists()
+        || lockInfo.lastModified().msecsTo(QDateTime::currentDateTime())
+            < InstanceLockStaleAgeMs) {
+        return {};
+    }
+#if defined(Q_OS_LINUX)
+    errno = 0;
+    if (::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM) return {};
+    if (errno != ESRCH) return {};
+#else
+    // Without a portable PID probe, never retire a lock automatically.
+    return {};
+#endif
+    if (!lock->removeStaleLockFile() || !lock->tryLock(0)) return {};
+    return lock;
+}
+}
 
 Daemon::Daemon(QString socketPath, QString profileStorePath,
                std::shared_ptr<CommandRunner> runner,
@@ -33,7 +73,7 @@ Daemon::Daemon(QString socketPath, QString profileStorePath,
       m_profileStore(std::move(profileStorePath)),
       m_vpnBackend(runner, std::move(configRoot), requireRootOwnedConfig,
                    std::move(stagingRoot)),
-      m_routingController(runner, routeStatePathForStore(m_profileStore.path())),
+      m_routingController(runner, routeStatePathForStore(m_profileStore.path()), false),
       m_updateManager(runner, updateStatePathForStore(m_profileStore.path()))
 {
     connect(&m_server, &QLocalServer::newConnection,
@@ -61,8 +101,32 @@ bool Daemon::start(QString *error)
         return true;
     }
 
+    // This must be the first operation that can precede a host-state probe.
+    // The routing controller is deliberately lazy-constructed above so its
+    // constructor cannot inspect or migrate kernel state before this lock.
+    m_instanceLock = acquireInstanceLock(m_socketPath);
+    if (!m_instanceLock) {
+        setError(error, QStringLiteral("another headless daemon owns the control socket"));
+        return false;
+    }
+    m_startPhase = StartPhase::LockOwned;
+    const auto failStart = [this, error](const QString &message) {
+        m_instanceLock->unlock();
+        m_instanceLock.reset();
+        m_startPhase = StartPhase::NotStarted;
+        m_state = QStringLiteral("recovery_required");
+        setError(error, message);
+        return false;
+    };
+
+    if (!m_routingController.initializeState()) {
+        return failStart(QStringLiteral("managed routing state requires manual recovery"));
+    }
     if (!m_profileStore.load()) {
         setError(error, m_profileStore.lastError());
+        m_instanceLock->unlock();
+        m_instanceLock.reset();
+        m_startPhase = StartPhase::NotStarted;
         return false;
     }
 
@@ -83,39 +147,24 @@ bool Daemon::start(QString *error)
         if (!isNativeProtocol(profile.protocol)) continue;
         if (m_vpnBackend.configuredInterfacePresent(profile)
             || m_vpnBackend.configuredDnsBindingPresent(profile)) {
-            m_state = QStringLiteral("recovery_required");
-            setError(error, QStringLiteral("a configured VPN interface or DNS binding may be orphaned; manual recovery is required"));
-            return false;
+            return failStart(QStringLiteral("a configured VPN interface or DNS binding may be orphaned; manual recovery is required"));
         }
     }
 
-    // A crashed daemon cannot run its normal shutdown cleanup.  If persisted
-    // policy routes exist while no backend session is alive, reconcile them
-    // before accepting clients or reconnecting an automatic profile.
+    // A crashed daemon cannot prove that persisted host state belongs to this
+    // process.  Detect it and stop; never clean up state without ownership.
     const QJsonObject routingReceipt = m_routingController.status();
     const bool persistedRoutingState =
-            routingReceipt.value(QStringLiteral("mode")).toString()
+            !routingReceipt.value(QStringLiteral("activeProfile")).toString().isEmpty()
+            || !routingReceipt.value(QStringLiteral("activeInterface")).toString().isEmpty()
+            || routingReceipt.value(QStringLiteral("policyLoaded")).toBool()
+            || routingReceipt.value(QStringLiteral("mode")).toString()
                 == QStringLiteral("all-except")
             || !routingReceipt.value(QStringLiteral("routes")).toArray().isEmpty()
             || !routingReceipt.value(QStringLiteral("dnsInterface")).toString().isEmpty()
             || routingReceipt.value(QStringLiteral("recoveryRequired")).toBool();
-    if (persistedRoutingState
-        && !m_vpnBackend.sessionAlive()) {
-        const RoutingResult recovered = m_routingController.disconnect();
-        if (!recovered.ok) {
-            m_state = QStringLiteral("recovery_required");
-            setError(error, QStringLiteral("orphaned VPN routes require manual recovery"));
-            return false;
-        }
-    }
-    // Re-check both the controller receipt and the reconciler receipt after
-    // orphan cleanup.  A failed cleanup must never leave a listening daemon
-    // that can accept connect/auto-connect requests.
-    const QJsonObject postCleanupRouting = m_routingController.status();
-    if (postCleanupRouting.value(QStringLiteral("recoveryRequired")).toBool()) {
-        m_state = QStringLiteral("recovery_required");
-        setError(error, QStringLiteral("managed routing state requires manual recovery"));
-        return false;
+    if (persistedRoutingState) {
+        return failStart(QStringLiteral("orphaned VPN routes, DNS, or recovery markers require manual recovery"));
     }
 
     const QFileInfo socketInfo(m_socketPath);
@@ -123,6 +172,9 @@ bool Daemon::start(QString *error)
     if (!parentPath.isEmpty() && parentPath != QStringLiteral(".")) {
         if (!QDir().mkpath(parentPath)) {
             setError(error, QStringLiteral("unable to create socket directory"));
+            m_instanceLock->unlock();
+            m_instanceLock.reset();
+            m_startPhase = StartPhase::NotStarted;
             return false;
         }
     }
@@ -131,14 +183,6 @@ bool Daemon::start(QString *error)
     // cannot distinguish a slow live daemon from a stale endpoint, and
     // removing the endpoint after a short timeout could create two daemons
     // racing over VPN routes and update receipts.
-    m_instanceLock = std::make_unique<QLockFile>(m_socketPath + QStringLiteral(".lock"));
-    m_instanceLock->setStaleLockTime(0);
-    if (!m_instanceLock->tryLock(0)) {
-        m_instanceLock.reset();
-        setError(error, QStringLiteral("another headless daemon owns the control socket"));
-        return false;
-    }
-
     if (!m_server.listen(m_socketPath)) {
         // A previous daemon may have left a stale local-server endpoint. Never
         // remove an endpoint that answers: that is an active daemon owned by
@@ -148,6 +192,7 @@ bool Daemon::start(QString *error)
         if (probe.waitForConnected(100)) {
             m_instanceLock->unlock();
             m_instanceLock.reset();
+            m_startPhase = StartPhase::NotStarted;
             setError(error, m_server.errorString());
             return false;
         }
@@ -170,6 +215,7 @@ bool Daemon::start(QString *error)
 #endif
 
     setError(error, {});
+    m_startPhase = StartPhase::Listening;
     m_updateTimer.start();
     m_healthTimer.start();
     QTimer::singleShot(1000, this, &Daemon::connectAutomaticProfile);
@@ -185,18 +231,23 @@ void Daemon::stop()
     m_routingRefreshTimer.stop();
     m_updateTimer.stop();
     m_healthTimer.stop();
-    const BackendResult backendResult = m_vpnBackend.disconnect();
+    BackendResult backendResult { true, {}, {} };
+    if (m_backendOwned) backendResult = m_vpnBackend.disconnect();
     // Keep policy routes in place until the tunnel process has stopped.  This
     // avoids a window in which traffic can fall back to the underlay.
-    const RoutingResult routingResult = backendResult.ok
-            ? m_routingController.disconnect()
-            : RoutingResult { false, QStringLiteral("backend_stop_failed"),
-                              QStringLiteral("VPN backend did not stop; routing teardown was withheld") };
+    const RoutingResult routingResult = !backendResult.ok
+            ? RoutingResult { false, QStringLiteral("backend_stop_failed"),
+                              QStringLiteral("VPN backend did not stop; routing teardown was withheld") }
+            : m_routingOwned ? m_routingController.disconnect()
+                             : RoutingResult { true, {}, {} };
+    if (backendResult.ok) m_backendOwned = false;
+    if (routingResult.ok) m_routingOwned = false;
     m_state = (!routingResult.ok || !backendResult.ok)
             ? QStringLiteral("cleanup_failed") : QStringLiteral("disconnected");
-    m_backendConnectedAtMs = 0;
+    m_backendConnectedTimer.invalidate();
     m_activeProfile.clear();
     m_activeProfileData.reset();
+    m_startPhase = StartPhase::NotStarted;
 
     const auto clients = m_clientBuffers.keys();
     for (QLocalSocket *client : clients) {
@@ -386,18 +437,16 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
         if (!result.ok) {
             return encodeError(request.requestId, result.code, result.message);
         }
+        m_backendOwned = true;
         const RoutingResult routingResult = m_routingController.connect(storedProfile);
         if (!routingResult.ok) {
-            // Routing setup may already have installed a bootstrap route used
-            // to reach the server policy endpoint.  Always roll it back when
-            // connection setup fails, before tearing down the VPN backend.
+            // The reconciler owns rollback of its own transaction.  This
+            // daemon did not acquire routing ownership on a failed connect,
+            // so do not issue an extra cleanup mutation here.
             const BackendResult backendCleanup = m_vpnBackend.disconnect();
-            const RoutingResult routeCleanup = backendCleanup.ok
-                    ? m_routingController.disconnect()
-                    : RoutingResult { false, QStringLiteral("backend_stop_failed"),
-                                      QStringLiteral("VPN backend did not stop; routing cleanup was withheld") };
+            if (backendCleanup.ok) m_backendOwned = false;
             m_routingRefreshTimer.stop();
-            if (!routeCleanup.ok || !backendCleanup.ok) {
+            if (!backendCleanup.ok) {
                 m_state = QStringLiteral("cleanup_failed");
                 m_activeProfile = storedProfile.id;
                 m_activeProfileData = storedProfile;
@@ -405,13 +454,14 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
                                    QStringLiteral("connection failed and cleanup requires recovery"));
             }
             m_state = QStringLiteral("disconnected");
-            m_backendConnectedAtMs = 0;
+            m_backendConnectedTimer.invalidate();
             m_activeProfile.clear();
             m_activeProfileData.reset();
             return encodeError(request.requestId, routingResult.code, routingResult.message);
         }
+        m_routingOwned = true;
         m_state = QStringLiteral("connected");
-        m_backendConnectedAtMs = QDateTime::currentMSecsSinceEpoch();
+        m_backendConnectedTimer.start();
         m_activeProfile = storedProfile.id;
         m_activeProfileData = storedProfile;
         if (!storedProfile.serverRulesUrl.isEmpty()) {
@@ -422,11 +472,15 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
         return statusResponse(request.requestId);
     }
     case Command::Disconnect: {
-        const BackendResult result = m_vpnBackend.disconnect();
-        const RoutingResult routingResult = result.ok
-                ? m_routingController.disconnect()
-                : RoutingResult { false, QStringLiteral("backend_stop_failed"),
-                                  QStringLiteral("VPN backend did not stop; routing cleanup was withheld") };
+        const BackendResult result = m_backendOwned
+                ? m_vpnBackend.disconnect() : BackendResult { true, {}, {} };
+        if (result.ok) m_backendOwned = false;
+        const RoutingResult routingResult = !result.ok
+                ? RoutingResult { false, QStringLiteral("backend_stop_failed"),
+                                  QStringLiteral("VPN backend did not stop; routing cleanup was withheld") }
+                : m_routingOwned ? m_routingController.disconnect()
+                                 : RoutingResult { true, {}, {} };
+        if (routingResult.ok) m_routingOwned = false;
         m_routingRefreshTimer.stop();
         if (!result.ok || !routingResult.ok) {
             m_state = QStringLiteral("cleanup_failed");
@@ -436,7 +490,7 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
                                ? QStringLiteral("cleanup_failed") : code, message);
         }
         m_state = QStringLiteral("disconnected");
-        m_backendConnectedAtMs = 0;
+        m_backendConnectedTimer.invalidate();
         m_activeProfile.clear();
         m_activeProfileData.reset();
         return statusResponse(request.requestId);
@@ -568,25 +622,29 @@ void Daemon::ensureBackendHealthy()
     // The backend owns the session interface.  The routing receipt may be
     // intentionally empty for a native only-forward profile, so using it as
     // the health target would make a dead tun/wg session look healthy.
-    const bool handshakeGraceElapsed = m_backendConnectedAtMs > 0
-        && QDateTime::currentMSecsSinceEpoch() - m_backendConnectedAtMs >= 30'000;
+    const bool handshakeGraceElapsed = m_backendConnectedTimer.isValid()
+        && m_backendConnectedTimer.elapsed() >= 30'000;
     if (m_state != QStringLiteral("connected")
         || (m_vpnBackend.sessionAlive()
             && (!handshakeGraceElapsed || m_vpnBackend.sessionHealthyAfterRouting()))) {
         return;
     }
     m_routingRefreshTimer.stop();
-    const BackendResult backend = m_vpnBackend.disconnect();
+    const BackendResult backend = m_backendOwned
+            ? m_vpnBackend.disconnect() : BackendResult { true, {}, {} };
+    if (backend.ok) m_backendOwned = false;
     const RoutingResult routing = backend.ok
-            ? m_routingController.disconnect()
+            ? m_routingOwned ? m_routingController.disconnect()
+                             : RoutingResult { true, {}, {} }
             : RoutingResult { false, QStringLiteral("backend_stop_failed"),
                               QStringLiteral("VPN backend did not stop; routing cleanup was withheld") };
+    if (routing.ok) m_routingOwned = false;
     if (!routing.ok || !backend.ok) {
         m_state = QStringLiteral("cleanup_failed");
         return;
     }
     m_state = QStringLiteral("disconnected");
-    m_backendConnectedAtMs = 0;
+    m_backendConnectedTimer.invalidate();
     m_activeProfile.clear();
     m_activeProfileData.reset();
 }
@@ -632,15 +690,13 @@ void Daemon::connectAutomaticProfile()
             qWarning() << "Headless automatic VPN connection failed:" << backend.code;
             return;
         }
+        m_backendOwned = true;
         const RoutingResult routing = m_routingController.connect(profile);
         if (!routing.ok) {
             const BackendResult backendCleanup = m_vpnBackend.disconnect();
-            const RoutingResult routeCleanup = backendCleanup.ok
-                    ? m_routingController.disconnect()
-                    : RoutingResult { false, QStringLiteral("backend_stop_failed"),
-                                      QStringLiteral("VPN backend did not stop; routing cleanup was withheld") };
+            if (backendCleanup.ok) m_backendOwned = false;
             m_routingRefreshTimer.stop();
-            if (!routeCleanup.ok || !backendCleanup.ok) {
+            if (!backendCleanup.ok) {
                 m_state = QStringLiteral("cleanup_failed");
                 m_activeProfile = profile.id;
                 m_activeProfileData = profile;
@@ -650,7 +706,8 @@ void Daemon::connectAutomaticProfile()
         }
 
         m_state = QStringLiteral("connected");
-        m_backendConnectedAtMs = QDateTime::currentMSecsSinceEpoch();
+        m_routingOwned = true;
+        m_backendConnectedTimer.start();
         m_activeProfile = profile.id;
         m_activeProfileData = profile;
         if (!profile.serverRulesUrl.isEmpty()) {

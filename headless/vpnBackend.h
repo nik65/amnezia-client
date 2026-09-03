@@ -2,6 +2,7 @@
 #define AMNEZIA_HEADLESS_VPN_BACKEND_H
 
 #include <QJsonObject>
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
 
@@ -96,7 +97,9 @@ public:
     QString activeInterface() const;
     bool sessionAlive() const;
     bool interfaceHealthy(const QString &interfaceName) const;
+    bool sessionHealthyAfterRouting() const;
     bool configuredInterfacePresent(const Profile &profile) const;
+    bool configuredDnsBindingPresent(const Profile &profile) const;
     BackendResult lastError() const;
 
 private:
@@ -115,6 +118,7 @@ private:
         QString program;
         QString interfaceName;
         SessionKind kind = SessionKind::OneShot;
+        bool handshakeObserved = false;
     };
 
     BackendResult failure(const QString &code, const QString &message);
@@ -130,6 +134,8 @@ private:
                                  QString &temporaryDirectory,
                                  QString *error) const;
     bool configIsUsable(const Profile &profile, BackendResult &result) const;
+    bool interfaceHealthy(const QString &interfaceName,
+                          bool requireRecentHandshake) const;
 
     std::shared_ptr<CommandRunner> m_runner;
     QString m_configRoot;

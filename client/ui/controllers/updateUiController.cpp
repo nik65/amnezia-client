@@ -7,6 +7,8 @@ UpdateUiController::UpdateUiController(UpdateController* updateController, QObje
         connect(m_updateController, &UpdateController::updateFound, this, &UpdateUiController::updateFound);
         connect(m_updateController, &UpdateController::updateCheckFinished,
                 this, &UpdateUiController::onUpdateCheckFinished);
+        connect(m_updateController, &UpdateController::updateCheckFailed,
+                this, &UpdateUiController::onUpdateCheckFailed);
         connect(m_updateController, &UpdateController::releasePolicyChanged,
                 this, &UpdateUiController::releasePolicyChanged);
         connect(m_updateController, &UpdateController::updateHealthReceiptChanged,
@@ -131,6 +133,7 @@ void UpdateUiController::checkForUpdates()
 
     const bool wasUpdateCheckRunning = m_updateController->isUpdateCheckRunning();
     m_manualCheckRunning = true;
+    m_manualCheckFailed = false;
     m_isChecking = true;
     emit checkingChanged();
     emit manualUpdateCheckStarted();
@@ -162,7 +165,16 @@ void UpdateUiController::onUpdateCheckFinished(bool updateAvailable)
     m_isChecking = false;
     emit checkingChanged();
 
-    if (!updateAvailable) {
+    if (!updateAvailable && !m_manualCheckFailed) {
         emit manualUpdateCheckNoUpdates();
     }
+}
+
+void UpdateUiController::onUpdateCheckFailed(const QString &error)
+{
+    if (!m_manualCheckRunning) {
+        return;
+    }
+    m_manualCheckFailed = true;
+    emit manualUpdateCheckFailed(error);
 }

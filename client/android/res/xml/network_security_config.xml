@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
+        <!-- Only the pinned private self-hosted update endpoints may use HTTP. -->
+        <domain includeSubdomains="false">10.8.1.0</domain>
+        <domain includeSubdomains="false">172.29.172.252</domain>
+        <!-- Existing self-hosted client-log service. -->
         <domain includeSubdomains="false">172.29.172.251</domain>
     </domain-config>
 </network-security-config>

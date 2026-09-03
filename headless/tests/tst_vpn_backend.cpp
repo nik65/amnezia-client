@@ -50,8 +50,20 @@ public:
     {
         if ((program == QStringLiteral("wg") || program == QStringLiteral("awg"))
             && arguments.contains(QStringLiteral("latest-handshakes"))) {
-            return { true, 0, {}, QStringLiteral("peer %1\n")
-                                      .arg(QDateTime::currentSecsSinceEpoch() - 1) };
+            handshakeRequested = true;
+            return { true, 0, {}, handshakeOutput.isEmpty()
+                ? QStringLiteral("peer %1\n").arg(QDateTime::currentSecsSinceEpoch() - 1)
+                : handshakeOutput };
+        }
+        if ((program == QStringLiteral("wg") || program == QStringLiteral("awg"))
+            && arguments.contains(QStringLiteral("showconf"))) {
+            configProbeRequested = true;
+            return { true, 0, {}, {} };
+        }
+        if (program == QStringLiteral("ip")
+            && arguments.contains(QStringLiteral("addr"))) {
+            return { true, 0, {}, QStringLiteral("7: %1    inet 10.8.1.2/32 scope global\n")
+                                      .arg(arguments.constLast()) };
         }
         if (program == QStringLiteral("ip")
             && arguments.contains(QStringLiteral("link"))) {
@@ -74,8 +86,17 @@ public:
         return stopResult;
     }
 
+    bool isSessionAlive(const QString &) const override
+    {
+        return sessionAlive;
+    }
+
     QSet<QString> availablePrograms;
     QList<Call> calls;
+    bool configProbeRequested = false;
+    bool handshakeRequested = false;
+    QString handshakeOutput;
+    bool sessionAlive = true;
     CommandResult runResult { true, {}, {} };
     CommandResult startResult { true, {}, {} };
     CommandResult stopResult { true, {}, {} };
@@ -100,7 +121,7 @@ private slots:
         const QString configPath = temporaryDirectory.filePath(QStringLiteral("work.conf"));
         QFile config(configPath);
         QVERIFY(config.open(QIODevice::WriteOnly));
-        config.write("[Interface]\n");
+        config.write("[Interface]\n[Peer]\nPublicKey = peer\n");
         config.close();
 
         auto runner = std::make_shared<FakeCommandRunner>();
@@ -111,6 +132,11 @@ private slots:
 
         const Profile work = profile(QStringLiteral("work"), QStringLiteral("wireguard"), configPath);
         QVERIFY2(backend.connect(work).ok, qPrintable(backend.lastError().message));
+        QVERIFY(backend.interfaceHealthy(QStringLiteral("wg0")));
+        QVERIFY(runner->configProbeRequested);
+        QVERIFY(!runner->handshakeRequested);
+        QVERIFY(backend.sessionHealthyAfterRouting());
+        QVERIFY(runner->handshakeRequested);
         QCOMPARE(runner->calls.size(), 1);
         QCOMPARE(runner->calls.constFirst().operation, QStringLiteral("run"));
         QCOMPARE(runner->calls.constFirst().program, QStringLiteral("wg-quick"));
@@ -250,7 +276,8 @@ private slots:
         const QString configPath = temporaryDirectory.filePath(QStringLiteral("source.conf"));
         QFile config(configPath);
         QVERIFY(config.open(QIODevice::WriteOnly));
-        config.write("[Interface]\nPrivateKey = test\n[Peer]\nAllowedIPs = 10.8.1.0/24\n");
+        config.write("[Interface]\nPrivateKey = test\n[Peer]\nPublicKey = peer\n"
+                     "AllowedIPs = 10.8.1.0/24\n");
         config.close();
 
         auto runner = std::make_shared<FakeCommandRunner>();
@@ -279,6 +306,108 @@ private slots:
         QCOMPARE(runner->calls.constLast().arguments.at(0), QStringLiteral("down"));
         QCOMPARE(runner->calls.constLast().arguments.at(1), stagedPath);
         QVERIFY(!QFileInfo(QFileInfo(stagedPath).absolutePath()).exists());
+    }
+
+    void allExceptRejectsAmbiguousMultiPeerConfigBeforeStartingBackend()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("source.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("[Interface]\nPrivateKey = test\n"
+                     "[Peer]\nPublicKey = peer-a\nAllowedIPs = 10.8.1.0/24\n"
+                     "[Peer]\nPublicKey = peer-b\nAllowedIPs = 10.8.2.0/24\n");
+        config.close();
+
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->availablePrograms.insert(QStringLiteral("wg-quick"));
+        runner->availablePrograms.insert(QStringLiteral("wg"));
+        runner->availablePrograms.insert(QStringLiteral("ip"));
+        VpnBackend backend(runner);
+        Profile work = profile(QStringLiteral("work"), QStringLiteral("wireguard"), configPath);
+        work.routingMode = QStringLiteral("all-except");
+
+        const BackendResult result = backend.connect(work);
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("config_invalid"));
+        QVERIFY(result.message.contains(QStringLiteral("exactly one peer")));
+        QVERIFY(runner->calls.isEmpty());
+        QVERIFY(backend.activeProfile().isEmpty());
+    }
+
+    void healthKeepsIdlePreviouslyHandshakenPeerAlive()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("source.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("[Interface]\n"
+                     "[Peer]\nPublicKey = peer-a\n"
+                     "[Peer]\nPublicKey = peer-b\n");
+        config.close();
+
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->availablePrograms.insert(QStringLiteral("wg-quick"));
+        runner->availablePrograms.insert(QStringLiteral("wg"));
+        runner->availablePrograms.insert(QStringLiteral("ip"));
+        VpnBackend backend(runner);
+        QVERIFY2(backend.connect(profile(QStringLiteral("work"), QStringLiteral("wireguard"), configPath)).ok,
+                 qPrintable(backend.lastError().message));
+
+        runner->handshakeOutput = QStringLiteral("peer-a 1\n");
+        QVERIFY(!backend.sessionHealthyAfterRouting());
+        runner->handshakeOutput = QStringLiteral("foreign-peer %1\n")
+                .arg(QDateTime::currentSecsSinceEpoch() - 1);
+        QVERIFY(!backend.sessionHealthyAfterRouting());
+        runner->handshakeOutput = QStringLiteral("peer-a 1\npeer-b %1\n")
+                .arg(QDateTime::currentSecsSinceEpoch() - 1);
+        QVERIFY(backend.sessionHealthyAfterRouting());
+        runner->handshakeOutput = QStringLiteral("peer-a 1\npeer-b 1\n");
+        QVERIFY(backend.sessionHealthyAfterRouting());
+    }
+
+    void xrayImmediateExitIsNotReportedAsConnected()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("xray.json"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("{}\n");
+        config.close();
+
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->availablePrograms.insert(QStringLiteral("xray"));
+        runner->sessionAlive = false;
+        VpnBackend backend(runner);
+        const BackendResult result = backend.connect(
+                profile(QStringLiteral("proxy"), QStringLiteral("xray"), configPath));
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("backend_not_ready"));
+        QVERIFY(backend.activeProfile().isEmpty());
+        QCOMPARE(runner->calls.size(), 2);
+        QCOMPARE(runner->calls.constLast().operation, QStringLiteral("stop"));
+    }
+
+    void healthRejectsEmptyConfiguredPeerSet()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("source.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("[Interface]\n");
+        config.close();
+
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->availablePrograms.insert(QStringLiteral("wg-quick"));
+        runner->availablePrograms.insert(QStringLiteral("wg"));
+        runner->availablePrograms.insert(QStringLiteral("ip"));
+        VpnBackend backend(runner);
+        QVERIFY(backend.connect(profile(QStringLiteral("work"), QStringLiteral("wireguard"), configPath)).ok);
+        QVERIFY(!backend.sessionHealthyAfterRouting());
     }
 
     void allExceptReportsUnwritableStagingRootWithoutStartingBackend()

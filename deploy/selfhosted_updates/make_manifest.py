@@ -114,8 +114,8 @@ def inspect_headless_provisioning(
             files: dict[str, bytes] = {}
             for member in members:
                 name = member.name
-                path = PurePosixPath(name)
-                if name == "headless-package" and member.isdir():
+                path = PurePosixPath(name.rstrip("/"))
+                if name in {"headless-package", "headless-package/"} and member.isdir():
                     continue
                 if (
                     path.is_absolute()
@@ -128,7 +128,7 @@ def inspect_headless_provisioning(
                     or member.name in names
                 ):
                     raise SystemExit(f"unsafe headless provisioning tar member: {name!r}")
-                names.append(name)
+                names.append(f"headless-package/{path.parts[1]}")
                 extracted = tar.extractfile(member)
                 if extracted is None:
                     raise SystemExit(f"headless provisioning member is unreadable: {name!r}")
@@ -159,6 +159,9 @@ def inspect_headless_provisioning(
         or package_manifest.get("service") != "amneziad.service"
         or package_manifest.get("servicePaths") != [
             "/etc/systemd/system/amneziad.service",
+            "/run/systemd/system/amneziad.service",
+            "/usr/local/lib/systemd/system/amneziad.service",
+            "/usr/lib/systemd/system/amneziad.service",
             "/lib/systemd/system/amneziad.service",
         ]
         or package_manifest.get("trustAnchor") != "external-ed25519-sha256-receipt"
@@ -207,11 +210,63 @@ def verify_content_address(target: Path, expected_digest: str) -> None:
         )
 
 
+def fsync_directory(directory: Path) -> None:
+    """Make a completed directory entry durable where the platform supports it."""
+
+    if os.name == "nt":
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(directory, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def atomic_copy_file(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=target.parent, prefix=f".{target.name}.", delete=False
+        ) as staged:
+            staged_path = Path(staged.name)
+            with source.open("rb") as input_file:
+                shutil.copyfileobj(input_file, staged, length=1024 * 1024)
+            os.fchmod(staged.fileno(), stat.S_IMODE(source.stat().st_mode))
+            staged.flush()
+            os.fsync(staged.fileno())
+        os.replace(staged_path, target)
+        fsync_directory(target.parent)
+    finally:
+        if staged_path is not None:
+            staged_path.unlink(missing_ok=True)
+
+
+def atomic_write_bytes(target: Path, contents: bytes) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=target.parent, prefix=f".{target.name}.", delete=False
+        ) as staged:
+            staged_path = Path(staged.name)
+            staged.write(contents)
+            existing_mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o644
+            os.fchmod(staged.fileno(), existing_mode)
+            staged.flush()
+            os.fsync(staged.fileno())
+        os.replace(staged_path, target)
+        fsync_directory(target.parent)
+    finally:
+        if staged_path is not None:
+            staged_path.unlink(missing_ok=True)
+
+
 def copy_content_addressed_artifact(source: Path, files_dir: Path) -> tuple[Path, str]:
     digest = sha256(source)
     target = files_dir / "artifacts" / digest / source.name
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    atomic_copy_file(source, target)
     verify_content_address(target, digest)
     return target, digest
 
@@ -223,8 +278,7 @@ def write_content_addressed_artifact(
 ) -> tuple[Path, str]:
     digest = hashlib.sha256(contents).hexdigest()
     target = files_dir / "artifacts" / digest / filename
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(contents)
+    atomic_write_bytes(target, contents)
     verify_content_address(target, digest)
     return target, digest
 
@@ -301,13 +355,11 @@ def validate_headless_base_url(value: str) -> str:
         address = ipaddress.ip_address(hostname)
     except ValueError:
         address = None
-    if address is None:
-        raise SystemExit("Linux headless publication requires a literal IP compatible with runtime pinning")
-    if parsed.scheme == "http" and not (
-        address.is_private or address.is_loopback or address.is_link_local
+    if not isinstance(address, ipaddress.IPv4Address) or address.is_link_local or not (
+        address.is_private or address.is_loopback
     ):
         raise SystemExit(
-            "Linux headless HTTP publication requires a private, loopback, or link-local literal IP"
+            "Linux headless publication requires an IPv4 private or loopback literal IP; IPv6 and link-local addresses are unsupported"
         )
     return normalized
 
@@ -342,7 +394,7 @@ def is_android_platform(platform: object) -> bool:
 
 
 def is_headless_platform(platform: object) -> bool:
-    return isinstance(platform, str) and platform in {"linux-headless", "linux-headless-x64"}
+    return platform == "linux-headless-x64"
 
 
 def validate_platform_vocabulary(platform: object, context: str) -> None:
@@ -497,6 +549,8 @@ def validate_local_artifact_metadata(
 
 
 def reject_unsupported_rollback_platforms(platforms: set[str]) -> None:
+    for platform in sorted(platforms):
+        validate_platform_vocabulary(platform, "rollback")
     unsupported_android_platforms = sorted(
         platform for platform in platforms if is_android_platform(platform)
     )
@@ -1173,19 +1227,24 @@ def remove_replaced_output_backup(backup_path: Path) -> None:
 
 
 def replace_output_tree(staged_out_dir: Path, out_dir: Path) -> None:
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
     backup_dir: Path | None = None
     if out_dir.exists():
         backup_dir = Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.previous-", dir=out_dir.parent))
         backup_dir.rmdir()
         os.replace(out_dir, backup_dir)
+        fsync_directory(out_dir.parent)
     try:
         os.replace(staged_out_dir, out_dir)
+        fsync_directory(out_dir.parent)
     except Exception:
         if backup_dir is not None and backup_dir.exists() and not out_dir.exists():
             os.replace(backup_dir, out_dir)
+            fsync_directory(out_dir.parent)
         raise
     if backup_dir is not None:
         remove_replaced_output_backup(backup_dir)
+        fsync_directory(out_dir.parent)
 
 
 def ios_plist_bytes(ipa_url: str, bundle_id: str, bundle_version: str, title: str) -> bytes:
@@ -1398,6 +1457,7 @@ def main() -> int:
 
     requested_out_dir = args.out_dir.resolve()
     requested_out_dir.parent.mkdir(parents=True, exist_ok=True)
+    fsync_directory(requested_out_dir.parent)
     staging_directory = tempfile.TemporaryDirectory(
         prefix=f".{requested_out_dir.name}.manifest-",
         dir=requested_out_dir.parent,
@@ -1446,6 +1506,7 @@ def main() -> int:
         rollback_dir = files_dir / "rollback" / str(generation) / previous_version
         rollback_dir.mkdir(parents=True, exist_ok=True)
         for platform, artifact_path in parse_artifact(args.rollback_artifact).items():
+            validate_platform_vocabulary(platform, "--rollback-artifact")
             reservation_key = artifact_path.name.casefold()
             existing = rollback_file_names.get(reservation_key)
             if existing is not None:
@@ -1456,8 +1517,8 @@ def main() -> int:
                 )
             rollback_file_names[reservation_key] = (artifact_path.name, platform)
             target = rollback_dir / artifact_path.name
-            shutil.copy2(artifact_path, target)
-            rollback_digest = sha256(artifact_path)
+            atomic_copy_file(artifact_path, target)
+            rollback_digest = sha256(target)
             if sha256(target) != rollback_digest:
                 raise SystemExit(
                     f"rollback artifact changed while it was copied: {artifact_path}"
@@ -1541,7 +1602,7 @@ def main() -> int:
         provisioning_target, provisioning_digest = copy_content_addressed_artifact(
             provisioning_path, files_dir
         )
-        package_receipt = inspect_headless_provisioning(provisioning_path, version)
+        package_receipt = inspect_headless_provisioning(provisioning_target, version)
         headless_provisioning = {
             "url": relative_artifact_file_url(provisioning_digest, provisioning_target.name),
             "sha256": provisioning_digest,
@@ -1621,7 +1682,7 @@ def main() -> int:
             f"({len(manifest_bytes)} bytes > {MAX_MANIFEST_RESPONSE_BYTES})"
         )
     manifest_path = out_dir / "manifest.json"
-    manifest_path.write_bytes(manifest_bytes)
+    atomic_write_bytes(manifest_path, manifest_bytes)
     if (args.public_key_base64 or args.require_platform) and args.payload_schema == 1:
         if args.public_key_base64:
             verify_public_key_matches_private(args.public_key_base64, private_key)

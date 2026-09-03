@@ -13,13 +13,21 @@ import base64
 import hashlib
 import ipaddress
 import json
-import shutil
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import quote, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "selfhosted_updates"))
-from make_manifest import MAX_VERSION_COMPONENT, inspect_headless_provisioning, sign_payload
+from make_manifest import (  # noqa: E402
+    MAX_VERSION_COMPONENT,
+    atomic_copy_file,
+    atomic_write_bytes,
+    fsync_directory,
+    inspect_headless_provisioning,
+    replace_output_tree,
+    sign_payload,
+)
 
 
 def version(value: str) -> str:
@@ -51,11 +59,12 @@ def base_url(value: str) -> str:
         raise argparse.ArgumentTypeError(
             "headless base URL must use a literal IP compatible with the runtime pinning policy"
         )
-    if parsed.scheme == "http":
-        if not (address.is_private or address.is_loopback or address.is_link_local):
-            raise argparse.ArgumentTypeError(
-                "headless HTTP base URL must use a private, loopback, or link-local literal IP"
-            )
+    if not isinstance(address, ipaddress.IPv4Address) or address.is_link_local or not (
+        address.is_private or address.is_loopback
+    ):
+        raise argparse.ArgumentTypeError(
+            "headless base URL must use an IPv4 private or loopback literal IP; IPv6 and link-local addresses are unsupported"
+        )
     return value.rstrip("/")
 
 
@@ -82,11 +91,20 @@ def main() -> int:
         parser.error(f"provisioning bundle does not exist: {provisioning}")
 
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-    out_dir = args.out_dir.expanduser().resolve()
+    requested_out_dir = args.out_dir.expanduser().resolve()
+    requested_out_dir.parent.mkdir(parents=True, exist_ok=True)
+    fsync_directory(requested_out_dir.parent)
+    staging_directory = tempfile.TemporaryDirectory(
+        prefix=f".{requested_out_dir.name}.headless-manifest-",
+        dir=requested_out_dir.parent,
+    )
+    # This standalone helper deliberately assembles a local-only release tree
+    # and publishes it with one directory replacement after every file is ready.
+    out_dir = Path(staging_directory.name) / "release"
     files_dir = out_dir / "files" / "artifacts" / digest
     files_dir.mkdir(parents=True, exist_ok=True)
     target = files_dir / artifact.name
-    shutil.copy2(artifact, target)
+    atomic_copy_file(artifact, target)
     if hashlib.sha256(target.read_bytes()).hexdigest() != digest:
         raise SystemExit("artifact changed while it was copied")
 
@@ -106,11 +124,13 @@ def main() -> int:
         "schema": 1,
         "version": args.version,
     }
-    provisioning_receipt = inspect_headless_provisioning(provisioning, args.version)
     provisioning_digest = hashlib.sha256(provisioning.read_bytes()).hexdigest()
     provisioning_target = out_dir / "files" / "artifacts" / provisioning_digest / provisioning.name
     provisioning_target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(provisioning, provisioning_target)
+    atomic_copy_file(provisioning, provisioning_target)
+    if hashlib.sha256(provisioning_target.read_bytes()).hexdigest() != provisioning_digest:
+        raise SystemExit("provisioning bundle changed while it was copied")
+    provisioning_receipt = inspect_headless_provisioning(provisioning_target, args.version)
     payload["headlessProvisioning"] = {
         "format": "amnezia-headless-provisioning-tar-v1",
         "sha256": provisioning_digest,
@@ -130,9 +150,13 @@ def main() -> int:
         "payload": base64.urlsafe_b64encode(payload_bytes).decode().rstrip("="),
         "signature": base64.b64encode(signature).decode(),
     }
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    print(f"manifest: {out_dir / 'manifest.json'}")
+    atomic_write_bytes(
+        out_dir / "manifest.json",
+        (json.dumps(manifest, indent=2) + "\n").encode("utf-8"),
+    )
+    replace_output_tree(out_dir, requested_out_dir)
+    staging_directory.cleanup()
+    print(f"manifest: {requested_out_dir / 'manifest.json'}")
     print(f"artifact-sha256: {digest}")
     print(f"provisioning-package-manifest-sha256: {provisioning_receipt['packageManifestSha256']}")
     print(f"provisioning-checksums-sha256: {provisioning_receipt['checksumsSha256']}")

@@ -56,6 +56,7 @@ public slots:
 signals:
     void updateFound();
     void updateCheckFinished(bool updateAvailable);
+    void updateCheckFailed(const QString &error);
     void releasePolicyChanged();
     void updateHealthReceiptChanged();
     void rollbackAvailabilityChanged();
@@ -143,7 +144,7 @@ private:
         PendingPermission
     };
 
-    void finishUpdateCheck();
+    void finishUpdateCheck(const QString &error = QString());
     void fetchSelfHostedManifest();
     void fetchSelfHostedManifestFromUrls(const QList<QUrl> &manifestUrls, int urlIndex);
     void fetchGatewayUrl();
@@ -249,6 +250,7 @@ private:
     bool m_useSelfHostedArtifact = false;
     bool m_updateCheckRunning = false;
     bool m_updateFoundDuringCheck = false;
+    QTimer *m_updateCheckTimeoutTimer = nullptr;
     bool m_selfHostedInstallInProgress = false;
     bool m_androidApkInstallPermissionPending = false;
     bool m_rollbackInstallAttempt = false;

@@ -375,8 +375,8 @@ bool ProfileStore::validate(const Profile &profile, bool checkDuplicate) const
             return fail(QStringLiteral("DNS routing domain is invalid"));
         }
     }
-    if (!profile.dnsServers.isEmpty() && profile.dnsDomains.isEmpty()) {
-        return fail(QStringLiteral("DNS servers require at least one routing domain"));
+    if (profile.dnsServers.isEmpty() != profile.dnsDomains.isEmpty()) {
+        return fail(QStringLiteral("DNS servers and routing domains must be configured together"));
     }
     const auto validUrl = [](const QString &value) {
         if (value.isEmpty()) {

@@ -444,14 +444,50 @@ namespace {
         }
         return sanitized.toJson(QJsonDocument::Compact);
     }
+
+#if defined(Q_OS_ANDROID)
+    QString androidSettingsFilePath()
+    {
+        QString directory = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+        if (directory.isEmpty()) {
+            directory = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        }
+        if (directory.isEmpty() || !QDir().mkpath(directory)) {
+            return {};
+        }
+        return QDir(directory).filePath(QStringLiteral("settings.ini"));
+    }
+#endif
 }
 
 SecureQSettings::SecureQSettings(const QString &organization, const QString &application, QObject *parent,
                                  AccessMode accessMode)
-    : QObject { parent }, m_settings(organization, application, parent),
+    : QObject { parent },
+#if defined(Q_OS_ANDROID)
+      // Qt's Android NativeFormat backend can report AccessError for durable
+      // writes on some Qt/device combinations. Keep the same encrypted-value
+      // layer, but put the QSettings file explicitly in app-private storage.
+      m_settings(androidSettingsFilePath(), QSettings::IniFormat, parent),
+#else
+      m_settings(organization, application, parent),
+#endif
       encryptedKeys({ "Servers/serversList", "Conf/remoteLogTokens" }),
       m_accessMode(accessMode)
 {
+#if defined(Q_OS_ANDROID)
+    // Preserve values from an older APK when the new private file has not
+    // been created yet. A failed legacy read is ignored; new writes remain
+    // fail-closed through the normal sync/status check below.
+    if (m_settings.allKeys().isEmpty()) {
+        QSettings legacy(organization, application, parent);
+        if (legacy.status() == QSettings::NoError) {
+            for (const QString &key : legacy.allKeys()) {
+                m_settings.setValue(key, legacy.value(key));
+            }
+            m_settings.sync();
+        }
+    }
+#endif
     // Operator-mode processes are strictly read-only observers. In particular,
     // they must never migrate settings or create replacement keychain material:
     // doing so could race the authoritative process and make encrypted settings

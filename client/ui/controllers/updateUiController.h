@@ -47,6 +47,7 @@ signals:
     void updateFound();
     void manualUpdateCheckStarted();
     void manualUpdateCheckNoUpdates();
+    void manualUpdateCheckFailed(const QString &error);
     void checkingChanged();
     void releasePolicyChanged();
     void updateHealthReceiptChanged();
@@ -54,10 +55,12 @@ signals:
 
 private:
     void onUpdateCheckFinished(bool updateAvailable);
+    void onUpdateCheckFailed(const QString &error);
 
     UpdateController* m_updateController;
     bool m_manualCheckRunning = false;
     bool m_isChecking = false;
+    bool m_manualCheckFailed = false;
 };
 
 #endif // UPDATEUICONTROLLER_H
