@@ -1119,6 +1119,16 @@ def main() -> int:
     artifact_platforms = parse_artifact(args.artifact)
     for platform in artifact_platforms:
         validate_platform_vocabulary(platform, "--artifact")
+    if any(is_headless_platform(platform) for platform in artifact_platforms):
+        base = urlparse(base_url)
+        try:
+            ipaddress.ip_address(base.hostname or "")
+            if base.port is not None and not 1 <= base.port <= 65535:
+                raise ValueError
+        except ValueError as error:
+            raise SystemExit(
+                "Linux headless publication requires a literal IP base URL with a valid port"
+            ) from error
     if args.payload_schema == 2 and any(
         isinstance(platform, str) and "headless" in platform.lower()
         for platform in artifact_platforms

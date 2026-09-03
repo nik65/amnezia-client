@@ -66,6 +66,8 @@ private:
     bool loadState();
     bool saveState() const;
     bool writeJournal(const QJsonObject &journal, QString *error) const;
+    bool writeRollbackReceipt(QString *error) const;
+    bool loadRollbackReceipt();
     bool verifyTrustedKey(const QString &configuredPath, QString *error) const;
     bool verifyInstallFile(const QString &path, QString *error) const;
     bool verifyRollbackFile(const QString &path, const QString &expectedSha256,
@@ -104,6 +106,7 @@ private:
     QMap<QString, QString> m_rollbackHashes;
     QString m_candidatePlatform;
     QString m_journalPath;
+    QString m_rollbackReceiptPath;
     QString m_currentRollbackDirectory;
     bool m_stateValid = true;
     bool m_updateInProgress = false;

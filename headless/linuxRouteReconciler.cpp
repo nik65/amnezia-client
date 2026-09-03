@@ -258,10 +258,10 @@ LinuxRouteReconciler::RuleSnapshot LinuxRouteReconciler::readRuleSnapshot() cons
             const int priority = match.captured(1).toInt();
             snapshot.occupied.insert(priority);
             snapshot.lines.append(line);
-            // Linux policy rules have no RTPROTO/protocol selector (unlike
-            // routes).  Ownership therefore uses the exact rule grammar and
-            // the persisted priority; ambiguous same-priority rules fail
-            // closed below rather than emitting an invalid `ip rule` syntax.
+            // ip-rule(8) has no installer protocol field (only ipproto,
+            // which filters packet traffic).  Do not emit the invalid
+            // `ip rule ... protocol 186` form; route protocol 186 plus exact
+            // rule grammar and priority ownership is the safe marker.
             if (QRegularExpression(QStringLiteral("^\\s*\\d+:\\s+from\\s+all\\s+lookup\\s+51821\\s*$")).match(line).hasMatch()) {
                 snapshot.ownedFull.insert(priority);
                 (family == 0 ? snapshot.ownedFullV4 : snapshot.ownedFullV6).insert(priority);
@@ -385,6 +385,8 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
                        QStringLiteral("could not find safe policy-rule priorities"));
     }
     QSet<QString> tableRoutes;
+    const bool hadFullTunnel = m_mode == QStringLiteral("all-except");
+    const QString previousInterface = m_interfaceName;
     const QRegularExpression ownedTableRoute(
             QStringLiteral("^\\s*(0\\.0\\.0\\.0/1|128\\.0\\.0\\.0/1|::/1|8000::/1)\\s+dev\\s+(\\S+)\\s+proto\\s+%1(?:\\s|$)")
                 .arg(AmneziaRouteProtocol));
@@ -407,9 +409,16 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
         return failure(QStringLiteral("full_tunnel_table_conflict"),
                        QStringLiteral("route table 51821 contains too many routes"));
     }
+    if (!markedInterface.isEmpty() && markedInterface != interfaceName) {
+        return failure(QStringLiteral("full_tunnel_table_conflict"),
+                       QStringLiteral("route table 51821 is owned by another VPN interface"));
+    }
+    if (!markedInterface.isEmpty()
+        && (!hadFullTunnel || (!previousInterface.isEmpty() && markedInterface != previousInterface))) {
+        return failure(QStringLiteral("full_tunnel_ownership_ambiguous"),
+                       QStringLiteral("kernel full-tunnel table does not match the persisted interface receipt"));
+    }
 
-    const bool hadFullTunnel = m_mode == QStringLiteral("all-except");
-    const QString previousInterface = m_interfaceName;
     const QStringList previousBypassRoutes = m_bypassRoutes;
     const int previousBypassPriority = m_bypassRulePriority;
     const auto fullRoutePrefix = [](const QStringList &arguments) {
@@ -495,6 +504,11 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     QStringList addedBypassRoutes;
     bool addedFullV4 = false;
     bool addedFullV6 = false;
+    const auto markRecoveryRequired = [this]() {
+        m_stateValid = false;
+        m_mode = QStringLiteral("recovery_required");
+        saveState();
+    };
     auto rollback = [&]() {
         bool ok = true;
         for (const QString &route : addedBypassRoutes) {
@@ -508,6 +522,7 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
         }
         if (!hadFullTunnel) {
             for (const QStringList &route : fullRoutes) {
+                if (tableRoutes.contains(fullRoutePrefix(route))) continue;
                 QStringList deletion { route };
                 deletion.replace(deletion.indexOf(QStringLiteral("replace")),
                                  QStringLiteral("del"));
@@ -532,6 +547,17 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     };
 
     for (const QString &route : bypassRoutes) {
+        if (ruleSnapshot.occupied.contains(bypassPriority)) {
+            const bool exactOwned = std::any_of(ruleSnapshot.lines.cbegin(), ruleSnapshot.lines.cend(),
+                                                [bypassPriority, &route](const QString &line) {
+                return ruleLineMatches(line, bypassPriority,
+                                       QStringLiteral("to %1 ").arg(route));
+            });
+            if (!exactOwned) {
+                return failure(QStringLiteral("full_tunnel_rule_conflict"),
+                               QStringLiteral("the bypass-rule priority is occupied by an ambiguous rule"));
+            }
+        }
         bool owned = false;
         for (const QString &line : ruleSnapshot.lines) {
             if (ruleLineMatches(line, bypassPriority,
@@ -545,6 +571,7 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
         }
         if (!addFullTunnelRule(bypassRuleArguments(QStringLiteral("add"), bypassPriority, route))) {
             if (!rollback()) {
+                markRecoveryRequired();
                 return failure(QStringLiteral("full_tunnel_rollback_failed"),
                                QStringLiteral("full-tunnel route transaction rollback failed"));
             }
@@ -558,6 +585,7 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     if (!fullV4Present) {
         if (!addFullTunnelRule(fullRuleArguments(QStringLiteral("add"), fullPriority, false))) {
             if (!rollback()) {
+                markRecoveryRequired();
                 return failure(QStringLiteral("full_tunnel_rollback_failed"),
                                QStringLiteral("full-tunnel rule transaction rollback failed"));
             }
@@ -570,6 +598,7 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     if (!fullV6Present) {
         if (!addFullTunnelRule(fullRuleArguments(QStringLiteral("add"), fullPriority, true))) {
             if (!rollback()) {
+                markRecoveryRequired();
                 return failure(QStringLiteral("full_tunnel_rollback_failed"),
                                QStringLiteral("full-tunnel rule transaction rollback failed"));
             }
@@ -602,6 +631,7 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
                     }
                 }
                 if (!rollbackOk || !retiredRestoreOk) {
+                    markRecoveryRequired();
                     return failure(QStringLiteral("full_tunnel_rollback_failed"),
                                    QStringLiteral("full-tunnel cleanup rollback failed"));
                 }

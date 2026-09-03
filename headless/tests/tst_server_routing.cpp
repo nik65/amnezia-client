@@ -474,6 +474,38 @@ private slots:
         QVERIFY(runner->calls.isEmpty());
     }
 
+    void markedKernelInterfaceMustMatchReceipt()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        QFile state(statePath);
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        QVERIFY(state.write(QJsonDocument(QJsonObject {
+            { QStringLiteral("version"), 2 },
+            { QStringLiteral("mode"), QStringLiteral("all-except") },
+            { QStringLiteral("interface"), QStringLiteral("wg0") },
+            { QStringLiteral("routes"), QJsonArray() },
+            { QStringLiteral("bypassRoutes"), QJsonArray { QStringLiteral("10.8.1.4") } },
+            { QStringLiteral("bypassRulePriority"), 1000 },
+            { QStringLiteral("fullRulePriority"), 1100 },
+        }).toJson(QJsonDocument::Compact)) > 0);
+        state.close();
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->capturedOutputs = {
+            QStringLiteral("1000: to 10.8.1.4 lookup main protocol 186\n1100: from all lookup 51821 protocol 186\n"),
+            QStringLiteral("1000: to 10.8.1.4 lookup main protocol 186\n1100: from all lookup 51821 protocol 186\n"),
+            QStringLiteral("0.0.0.0/1 dev wg1 proto 186\n128.0.0.0/1 dev wg1 proto 186\n"),
+            QStringLiteral("::/1 dev wg1 proto 186\n8000::/1 dev wg1 proto 186\n")
+        };
+        LinuxRouteReconciler reconciler(runner, statePath);
+        const RouteReconcileResult result = reconciler.applyAllExcept(
+                QStringLiteral("wg0"), { QStringLiteral("10.8.1.4") });
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("full_tunnel_ownership_ambiguous"));
+        QVERIFY(runner->calls.isEmpty());
+    }
+
     void foreignFullTunnelRouteIsNeverDeleted()
     {
         QTemporaryDir temporaryDirectory;

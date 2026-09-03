@@ -143,6 +143,7 @@ private slots:
         QVERIFY(result.ok);
         QCOMPARE(result.code, QStringLiteral("disabled"));
         QVERIFY(!QFileInfo::exists(QDir(updates).filePath(QStringLiteral("transaction.json"))));
+        QVERIFY(QFileInfo::exists(QDir(updates).filePath(QStringLiteral("rollback-receipt.json"))));
         QCOMPARE(manager.status().value(QStringLiteral("state")).toString(),
                  QStringLiteral("disabled"));
         HeadlessUpdateManager reloaded({}, statePath, temporaryDirectory.path(), false);
