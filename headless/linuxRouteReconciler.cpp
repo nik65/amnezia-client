@@ -7,9 +7,11 @@
 #include <QJsonDocument>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QLockFile>
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <utility>
 
 #include "../client/core/utils/managedRoutePolicy.h"
@@ -19,6 +21,16 @@ namespace amnezia::headless
 
 namespace
 {
+std::unique_ptr<QLockFile> acquireRouteLock(const QString &statePath)
+{
+    if (statePath.trimmed().isEmpty()) return {};
+    auto lock = std::make_unique<QLockFile>(statePath + QStringLiteral(".lock"));
+    // Never guess that a live daemon is stale.  A lock is retired only by
+    // the owning process, so probe/intent/kernel/state remain one transaction.
+    lock->setStaleLockTime(0);
+    if (!lock->tryLock(0)) return nullptr;
+    return lock;
+}
 // Reserved protocol number used as a durable ownership marker for the
 // split-default routes.  A route in table 51821 without this marker is not
 // ours and is treated as a conflict rather than being deleted.
@@ -192,6 +204,11 @@ RouteReconcileResult LinuxRouteReconciler::apply(const QString &interfaceName,
     if (boundedRoutes.isEmpty()) {
         return clear();
     }
+    const auto routeLock = acquireRouteLock(m_statePath);
+    if (!m_statePath.isEmpty() && !routeLock) {
+        return failure(QStringLiteral("route_mutation_in_progress"),
+                       QStringLiteral("another routing transaction owns the managed route lock"));
+    }
     if (!beginMutation(QStringLiteral("only-forward"), interfaceName,
                        boundedRoutes, {})) {
         return failure(QStringLiteral("recovery_required"),
@@ -352,6 +369,11 @@ RouteReconcileResult LinuxRouteReconciler::applyAllExcept(
     }
     boundedRoutes.removeDuplicates();
     boundedRoutes.sort();
+    const auto routeLock = acquireRouteLock(m_statePath);
+    if (!m_statePath.isEmpty() && !routeLock) {
+        return failure(QStringLiteral("route_mutation_in_progress"),
+                       QStringLiteral("another routing transaction owns the managed route lock"));
+    }
     if (!beginMutation(QStringLiteral("all-except"), interfaceName, {}, boundedRoutes)) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("full-tunnel mutation intent could not be persisted"));
@@ -398,7 +420,7 @@ bool LinuxRouteReconciler::removeFullTunnelRule(const QStringList &arguments)
     if (arguments.contains(QStringLiteral("to"))) {
         const int toIndex = arguments.indexOf(QStringLiteral("to"));
         if (toIndex + 1 >= arguments.size()) return false;
-        return !std::any_of(snapshot.lines.cbegin(), snapshot.lines.cend(),
+        return !std::any_of(snapshot.linesV4.cbegin(), snapshot.linesV4.cend(),
                             [priority, &arguments, toIndex](const QString &line) {
             return ruleLineMatches(line, priority,
                                    QStringLiteral("to %1 ").arg(arguments.at(toIndex + 1)));
@@ -467,13 +489,20 @@ LinuxRouteReconciler::RuleSnapshot LinuxRouteReconciler::readRuleSnapshot() cons
             const int priority = match.captured(1).toInt();
             snapshot.occupied.insert(priority);
             snapshot.lines.append(line);
+            QSet<int> &familyOccupied = family == 0
+                    ? snapshot.occupiedV4 : snapshot.occupiedV6;
+            QStringList &familyLines = family == 0
+                    ? snapshot.linesV4 : snapshot.linesV6;
+            familyOccupied.insert(priority);
+            familyLines.append(line);
             // ip-rule(8) has no installer protocol field (only ipproto,
             // which filters packet traffic).  Do not emit the invalid
             // `ip rule ... protocol 186` form; route protocol 186 plus exact
             // rule grammar and priority ownership is the safe marker.
             int managedPriority = 0;
             ManagedRuleKind managedKind = ManagedRuleKind::None;
-            if (parseManagedRuleLine(line, &managedPriority, &managedKind)
+            QString destination;
+            if (parseManagedRuleLine(line, &managedPriority, &managedKind, &destination)
                 && managedPriority == priority && managedKind == ManagedRuleKind::FullTunnel) {
                 const QString key = QStringLiteral("%1|full|%2").arg(family).arg(priority);
                 if (seenManagedRules.contains(key)) return snapshot;
@@ -487,6 +516,7 @@ LinuxRouteReconciler::RuleSnapshot LinuxRouteReconciler::readRuleSnapshot() cons
                 if (seenManagedRules.contains(key)) return snapshot;
                 seenManagedRules.insert(key);
                 snapshot.ownedBypass.insert(priority);
+                (family == 0 ? snapshot.ownedBypassV4 : snapshot.ownedBypassV6).insert(priority);
             }
         }
     }
@@ -518,30 +548,31 @@ LinuxRouteReconciler::RuleSnapshot LinuxRouteReconciler::readRuleSnapshot() cons
 }
 
 bool LinuxRouteReconciler::selectRulePriorities(const RuleSnapshot &snapshot,
-                                                int *bypassPriority,
-                                                int *fullPriority) const
+                                                 int *bypassPriority,
+                                                 int *fullPriority) const
 {
     if (!snapshot.valid || !bypassPriority || !fullPriority) {
         return false;
     }
     auto hasOwnedBypassPriority = [this, &snapshot](int priority) {
-        return std::any_of(m_bypassRoutes.cbegin(), m_bypassRoutes.cend(),
-                           [&snapshot, priority](const QString &route) {
-            return std::any_of(snapshot.lines.cbegin(), snapshot.lines.cend(),
+        return snapshot.ownedBypassV4.contains(priority)
+                && std::any_of(m_bypassRoutes.cbegin(), m_bypassRoutes.cend(),
+                               [&snapshot, priority](const QString &route) {
+            return std::any_of(snapshot.linesV4.cbegin(), snapshot.linesV4.cend(),
                                [priority, &route](const QString &line) {
                 return ruleLineMatches(line, priority,
                                        QStringLiteral("to %1 ").arg(route));
             });
         });
     };
-    auto select = [&snapshot](int preferred, int first, int last, bool preferredOwned,
-                              int *selected) {
+    auto select = [](int preferred, int first, int last, bool preferredOwned,
+                     const std::function<bool(int)> &isOccupied, int *selected) {
         if (preferred >= first && preferred <= last && preferredOwned) {
             *selected = preferred;
             return true;
         }
         for (int candidate = first; candidate <= last; ++candidate) {
-            if (!snapshot.occupied.contains(candidate)) {
+            if (!isOccupied(candidate)) {
                 *selected = candidate;
                 return true;
             }
@@ -549,9 +580,20 @@ bool LinuxRouteReconciler::selectRulePriorities(const RuleSnapshot &snapshot,
         return false;
     };
     return select(m_bypassRulePriority, FullTunnelBypassRulePriority, 1099,
-                  hasOwnedBypassPriority(m_bypassRulePriority), bypassPriority)
+                  hasOwnedBypassPriority(m_bypassRulePriority),
+                  [&snapshot](int priority) { return snapshot.occupiedV4.contains(priority); },
+                  bypassPriority)
         && select(m_fullRulePriority, FullTunnelRulePriority, FullTunnelPriorityLimit,
-                  snapshot.ownedFull.contains(m_fullRulePriority), fullPriority);
+                  snapshot.ownedFull.contains(m_fullRulePriority)
+                      && !(snapshot.occupiedV4.contains(m_fullRulePriority)
+                           && !snapshot.ownedFullV4.contains(m_fullRulePriority))
+                      && !(snapshot.occupiedV6.contains(m_fullRulePriority)
+                           && !snapshot.ownedFullV6.contains(m_fullRulePriority)),
+                  [&snapshot](int priority) {
+                      return snapshot.occupiedV4.contains(priority)
+                          || snapshot.occupiedV6.contains(priority);
+                  },
+                  fullPriority);
 }
 
 bool LinuxRouteReconciler::ruleLineMatches(const QString &line, int priority,
@@ -612,89 +654,68 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
         return failure(QStringLiteral("full_tunnel_rule_probe_failed"),
                        QStringLiteral("could not inspect policy rules safely"));
     }
-    // IPv4 and IPv6 policy rules live in separate namespaces, but the
-    // receipt has one priority identity.  Do not silently adopt a split
-    // installation (for example v4 at 1100 and v6 at 1101): it cannot be
-    // represented durably and would make the next restart ambiguous.
-    if (!ruleSnapshot.ownedFullV4.isEmpty() && !ruleSnapshot.ownedFullV6.isEmpty()
-        && ruleSnapshot.ownedFullV4 != ruleSnapshot.ownedFullV6) {
+    // IPv4 and IPv6 policy rules live in separate namespaces.  Every family
+    // must be checked independently: a foreign rule in one family cannot be
+    // hidden by an owned rule at the same numeric priority in the other.
+    const auto hasForeign = [](const QSet<int> &occupied,
+                               const QSet<int> &owned, int priority) {
+        return occupied.contains(priority) && !owned.contains(priority);
+    };
+    if (hasForeign(ruleSnapshot.occupiedV4, ruleSnapshot.ownedFullV4,
+                   m_fullRulePriority)
+        || hasForeign(ruleSnapshot.occupiedV6, ruleSnapshot.ownedFullV6,
+                      m_fullRulePriority)
+        || hasForeign(ruleSnapshot.occupiedV4, ruleSnapshot.ownedBypassV4,
+                      m_bypassRulePriority)) {
         return failure(QStringLiteral("full_tunnel_rule_conflict"),
-                       QStringLiteral("IPv4 and IPv6 full-tunnel rules use different priorities"));
+                       QStringLiteral("a persisted full-tunnel priority is occupied by a foreign rule"));
     }
-    // A set cannot represent duplicate exact kernel objects.  Count the raw
-    // snapshot lines so a foreign duplicate at a reserved priority is never
-    // silently adopted or removed as if it belonged to this daemon.
-    {
-        int exactCount = 0;
-        for (const QString &line : ruleSnapshot.lines) {
+    const bool hadFullTunnel = m_mode == QStringLiteral("all-except");
+    QSet<QString> allowedBypassRoutes;
+    if (hadFullTunnel) {
+        for (const QString &route : m_bypassRoutes) allowedBypassRoutes.insert(route);
+    }
+    const auto validateReservedRules = [this, &allowedBypassRoutes](
+            const QStringList &lines, bool ipv6) {
+        QSet<QString> seenBypassRoutes;
+        QSet<int> seenFullPriorities;
+        for (const QString &line : lines) {
+            const QRegularExpressionMatch priorityMatch =
+                    QRegularExpression(QStringLiteral("^\\s*(\\d+):")).match(line);
+            if (!priorityMatch.hasMatch()) continue;
+            const int priority = priorityMatch.captured(1).toInt();
+            if (priority != m_bypassRulePriority && priority != m_fullRulePriority) continue;
             int parsedPriority = 0;
             ManagedRuleKind kind = ManagedRuleKind::None;
             QString destination;
             if (!parseManagedRuleLine(line, &parsedPriority, &kind, &destination)
-                || parsedPriority != m_fullRulePriority) {
-                continue;
+                || parsedPriority != priority) {
+                return false;
             }
-            if (parsedPriority == m_fullRulePriority && kind == ManagedRuleKind::FullTunnel) {
-                ++exactCount;
+            if (priority == m_fullRulePriority) {
+                if (kind != ManagedRuleKind::FullTunnel
+                    || seenFullPriorities.contains(priority)) return false;
+                seenFullPriorities.insert(priority);
+            } else {
+                if (ipv6 || kind != ManagedRuleKind::Bypass
+                    || !allowedBypassRoutes.contains(destination)
+                    || seenBypassRoutes.contains(destination)) return false;
+                seenBypassRoutes.insert(destination);
             }
         }
-        if (exactCount > 1) {
-            return failure(QStringLiteral("full_tunnel_rule_conflict"),
-                           QStringLiteral("reserved policy-rule priority contains duplicate exact rules"));
-        }
+        return true;
+    };
+    if (!validateReservedRules(ruleSnapshot.linesV4, false)
+        || !validateReservedRules(ruleSnapshot.linesV6, true)) {
+        return failure(QStringLiteral("full_tunnel_rule_conflict"),
+                       QStringLiteral("a reserved policy-rule priority contains an extra or unparseable rule"));
     }
-    for (const QString &route : bypassRoutes) {
-        int exactCount = 0;
-        for (const QString &line : ruleSnapshot.lines) {
-            int parsedPriority = 0;
-            ManagedRuleKind kind = ManagedRuleKind::None;
-            QString destination;
-            if (parseManagedRuleLine(line, &parsedPriority, &kind, &destination)
-                && parsedPriority == m_bypassRulePriority
-                && kind == ManagedRuleKind::Bypass && destination == route) {
-                ++exactCount;
-            }
-        }
-        if (exactCount > 1) {
-            return failure(QStringLiteral("full_tunnel_rule_conflict"),
-                           QStringLiteral("reserved bypass route has duplicate exact rules"));
-        }
-    }
-    const bool hadFullTunnel = m_mode == QStringLiteral("all-except");
-    if ((!hadFullTunnel && (ruleSnapshot.occupied.contains(m_bypassRulePriority)
-                            || ruleSnapshot.occupied.contains(m_fullRulePriority)))
-        || (ruleSnapshot.occupied.contains(m_bypassRulePriority)
-         && !ruleSnapshot.ownedBypass.contains(m_bypassRulePriority))
-        || (ruleSnapshot.occupied.contains(m_fullRulePriority)
-            && !ruleSnapshot.ownedFull.contains(m_fullRulePriority))) {
+    if (!hadFullTunnel
+        && (ruleSnapshot.occupiedV4.contains(m_bypassRulePriority)
+            || ruleSnapshot.occupiedV4.contains(m_fullRulePriority)
+            || ruleSnapshot.occupiedV6.contains(m_fullRulePriority))) {
         return failure(QStringLiteral("full_tunnel_rule_conflict"),
                        QStringLiteral("a persisted full-tunnel priority is occupied by a foreign rule"));
-    }
-    if (hadFullTunnel) {
-        for (const QString &line : ruleSnapshot.lines) {
-            int priority = 0;
-            ManagedRuleKind kind = ManagedRuleKind::None;
-            QString destination;
-            const auto priorityMatch = QRegularExpression(QStringLiteral("^\\s*(\\d+):")).match(line);
-            if (!priorityMatch.hasMatch()) continue;
-            priority = priorityMatch.captured(1).toInt();
-            if (!parseManagedRuleLine(line, &priority, &kind, &destination)) {
-                if (priority == m_bypassRulePriority || priority == m_fullRulePriority) {
-                    return failure(QStringLiteral("full_tunnel_rule_conflict"),
-                                   QStringLiteral("a persisted priority contains an unparseable rule"));
-                }
-                continue;
-            }
-            if (priority == m_bypassRulePriority
-                && (kind != ManagedRuleKind::Bypass || !m_bypassRoutes.contains(destination))) {
-                return failure(QStringLiteral("full_tunnel_rule_conflict"),
-                               QStringLiteral("the persisted bypass priority contains an ambiguous rule"));
-            }
-            if (priority == m_fullRulePriority && kind != ManagedRuleKind::FullTunnel) {
-                return failure(QStringLiteral("full_tunnel_rule_conflict"),
-                               QStringLiteral("the persisted full-tunnel priority contains an ambiguous rule"));
-            }
-        }
     }
     int bypassPriority = FullTunnelBypassRulePriority;
     int fullPriority = FullTunnelRulePriority;
@@ -730,6 +751,13 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
         return failure(QStringLiteral("full_tunnel_table_conflict"),
                        QStringLiteral("route table 51821 contains too many routes"));
     }
+    const QSet<QString> completeFullTunnelPrefixes {
+        QStringLiteral("0.0.0.0/1"), QStringLiteral("128.0.0.0/1"),
+        QStringLiteral("::/1"), QStringLiteral("8000::/1") };
+    const bool exactPreviousInterfaceTable = hadFullTunnel
+        && !previousInterface.isEmpty()
+        && markedInterface == previousInterface
+        && tableRoutes == completeFullTunnelPrefixes;
     // During a legitimate reconnect the target interface can change.  The
     // kernel marker must still match the persisted owner; accepting a marked
     // table whose owner differs from the receipt would take over foreign
@@ -737,14 +765,15 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     // interface migration.  The route transaction below replaces the exact
     // prefixes and restores the previous subset if any step fails.
     if (!markedInterface.isEmpty()
-        && (!hadFullTunnel || previousInterface.isEmpty() || markedInterface != previousInterface)) {
+        && (!hadFullTunnel || previousInterface.isEmpty()
+            || (markedInterface != previousInterface && !exactPreviousInterfaceTable))) {
         return failure(QStringLiteral("full_tunnel_ownership_ambiguous"),
                        QStringLiteral("kernel full-tunnel table does not match the persisted interface receipt"));
     }
-    if (hadFullTunnel && markedInterface == previousInterface
-        && previousInterface != interfaceName && tableRoutes.size() != 4) {
+    if (hadFullTunnel && previousInterface != interfaceName
+        && !exactPreviousInterfaceTable) {
         return failure(QStringLiteral("full_tunnel_ownership_ambiguous"),
-                       QStringLiteral("interface migration requires the complete persisted full-tunnel route set"));
+                       QStringLiteral("interface migration requires an exact persisted full-tunnel route identity"));
     }
     if (!hadFullTunnel && !tableRoutes.isEmpty()) {
         return failure(QStringLiteral("full_tunnel_ownership_ambiguous"),
@@ -809,8 +838,9 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
                 for (const QStringList &route : fullRoutes) {
                     if (!tableRoutes.contains(fullRoutePrefix(route))) continue;
                     QStringList restore = route;
-                    const int interfaceIndex = restore.indexOf(interfaceName);
-                    if (interfaceIndex < 0) {
+                    const int devIndex = restore.indexOf(QStringLiteral("dev"));
+                    const int interfaceIndex = devIndex + 1;
+                    if (devIndex < 0 || interfaceIndex >= restore.size()) {
                         rollbackOk = false;
                         continue;
                     }
@@ -872,7 +902,12 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
                     continue;
                 }
                 QStringList restore = route;
-                restore.replace(restore.indexOf(interfaceName), previousInterface);
+                const int devIndex = restore.indexOf(QStringLiteral("dev"));
+                if (devIndex < 0 || devIndex + 1 >= restore.size()) {
+                    ok = false;
+                    continue;
+                }
+                restore.replace(devIndex + 1, previousInterface);
                 ok = addFullTunnelRoute(restore) && ok;
             }
         }
@@ -880,13 +915,13 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     };
 
     for (const QString &route : bypassRoutes) {
-        if (ruleSnapshot.occupied.contains(bypassPriority)) {
-            const bool exactOwned = std::any_of(ruleSnapshot.lines.cbegin(), ruleSnapshot.lines.cend(),
+        if (ruleSnapshot.occupiedV4.contains(bypassPriority)) {
+            const bool exactOwned = std::any_of(ruleSnapshot.linesV4.cbegin(), ruleSnapshot.linesV4.cend(),
                                                 [bypassPriority, &route](const QString &line) {
                 return ruleLineMatches(line, bypassPriority,
                                        QStringLiteral("to %1 ").arg(route));
             });
-            const bool ambiguous = std::any_of(ruleSnapshot.lines.cbegin(), ruleSnapshot.lines.cend(),
+            const bool ambiguous = std::any_of(ruleSnapshot.linesV4.cbegin(), ruleSnapshot.linesV4.cend(),
                                                [bypassPriority, &bypassRoutes](const QString &line) {
                 return QRegularExpression(QStringLiteral("^\\s*%1:").arg(bypassPriority)).match(line).hasMatch()
                     && !std::any_of(bypassRoutes.cbegin(), bypassRoutes.cend(),
@@ -901,7 +936,7 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
             }
         }
         bool owned = false;
-        for (const QString &line : ruleSnapshot.lines) {
+        for (const QString &line : ruleSnapshot.linesV4) {
             if (ruleLineMatches(line, bypassPriority,
                                 QStringLiteral("to %1 ").arg(route))) {
                 owned = true;
@@ -958,7 +993,7 @@ RouteReconcileResult LinuxRouteReconciler::applyFullTunnel(
     if (hadFullTunnel) {
         for (const QString &route : previousBypassRoutes) {
             bool owned = false;
-            for (const QString &line : ruleSnapshot.lines) {
+            for (const QString &line : ruleSnapshot.linesV4) {
                 if (ruleLineMatches(line, previousBypassPriority,
                                     QStringLiteral("to %1 ").arg(route))) {
                     owned = true;
@@ -1078,10 +1113,14 @@ RouteReconcileResult LinuxRouteReconciler::clearFullTunnel()
     // A route marker alone does not prove that policy rules at the persisted
     // priorities belong to this daemon.  Refuse to delete or take over a
     // same-priority foreign rule; only an exact protocol-marked rule is ours.
-    if ((snapshot.occupied.contains(m_fullRulePriority)
-         && !snapshot.ownedFull.contains(m_fullRulePriority))
-        || (snapshot.occupied.contains(m_bypassRulePriority)
-            && !snapshot.ownedBypass.contains(m_bypassRulePriority))) {
+    const auto foreignAt = [](const QSet<int> &occupied,
+                              const QSet<int> &owned, int priority) {
+        return occupied.contains(priority) && !owned.contains(priority);
+    };
+    if (foreignAt(snapshot.occupiedV4, snapshot.ownedFullV4, m_fullRulePriority)
+        || foreignAt(snapshot.occupiedV6, snapshot.ownedFullV6, m_fullRulePriority)
+        || foreignAt(snapshot.occupiedV4, snapshot.ownedBypassV4, m_bypassRulePriority)
+        || foreignAt(snapshot.occupiedV6, snapshot.ownedBypassV6, m_bypassRulePriority)) {
         return failure(QStringLiteral("full_tunnel_ownership_ambiguous"),
                        QStringLiteral("a policy rule priority is occupied by a foreign rule"));
     }
@@ -1106,7 +1145,7 @@ RouteReconcileResult LinuxRouteReconciler::clearFullTunnel()
     };
     for (const QString &route : m_bypassRoutes) {
         bool owned = false;
-        for (const QString &line : snapshot.lines) {
+        for (const QString &line : snapshot.linesV4) {
             if (ruleLineMatches(line, m_bypassRulePriority,
                                 QStringLiteral("to %1 ").arg(route))) {
                 owned = true;
@@ -1248,6 +1287,11 @@ RouteReconcileResult LinuxRouteReconciler::configureDns(const QString &interface
         return failure(QStringLiteral("dns_backend_unavailable"),
                        QStringLiteral("systemd-resolved resolvectl is not installed"));
     }
+    const auto routeLock = acquireRouteLock(m_statePath);
+    if (!m_statePath.isEmpty() && !routeLock) {
+        return failure(QStringLiteral("route_mutation_in_progress"),
+                       QStringLiteral("another routing transaction owns the managed route lock"));
+    }
     if (!beginMutation(QStringLiteral("dns-configure"), interfaceName, {}, {})) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("DNS mutation intent could not be persisted"));
@@ -1354,6 +1398,11 @@ RouteReconcileResult LinuxRouteReconciler::clearDns(const QString &interfaceName
         return failure(QStringLiteral("dns_interface_mismatch"),
                        QStringLiteral("DNS cleanup interface does not match the persisted receipt"));
     }
+    const auto routeLock = acquireRouteLock(m_statePath);
+    if (!m_statePath.isEmpty() && !routeLock) {
+        return failure(QStringLiteral("route_mutation_in_progress"),
+                       QStringLiteral("another routing transaction owns the managed route lock"));
+    }
     if (targetInterface.isEmpty()) {
         if (!m_dnsInterface.isEmpty()) {
             return failure(QStringLiteral("dns_interface_required"),
@@ -1426,6 +1475,11 @@ RouteReconcileResult LinuxRouteReconciler::clear()
     if (!m_stateValid) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("managed route state is invalid; manual route recovery is required"));
+    }
+    const auto routeLock = acquireRouteLock(m_statePath);
+    if (!m_statePath.isEmpty() && !routeLock) {
+        return failure(QStringLiteral("route_mutation_in_progress"),
+                       QStringLiteral("another routing transaction owns the managed route lock"));
     }
     if (m_mode == QStringLiteral("all-except")) {
         if (!beginMutation(QStringLiteral("all-except-clear"), m_interfaceName,
@@ -1588,8 +1642,19 @@ bool LinuxRouteReconciler::loadState()
     m_dnsDomains.clear();
     m_bypassRulePriority = FullTunnelBypassRulePriority;
     m_fullRulePriority = FullTunnelRulePriority;
+    // A clean-looking receipt is not enough to prove that the host is clean.
+    // Without `ip` there is no safe way to inspect or reconcile kernel state,
+    // including when this instance has no durable receipt yet.
+    if (ipExecutable().isEmpty()) {
+        return false;
+    }
+    const auto resolverProbeHealthy = [this]() {
+        const QString resolver = resolvectlExecutable();
+        if (resolver.isEmpty()) return false;
+        return m_runner->runCaptured(resolver, { QStringLiteral("status") }).ok;
+    };
     if (m_statePath.isEmpty()) {
-        return true;
+        return resolverProbeHealthy();
     }
     const QFileInfo stateInfo(m_statePath);
     if (QFileInfo::exists(m_statePath + QStringLiteral(".recovery-required"))) {
@@ -1617,12 +1682,24 @@ bool LinuxRouteReconciler::loadState()
         // There is no safe way to prove that the kernel is clean without the
         // probe tool.  A missing receipt must therefore fail closed instead of
         // treating an unavailable `ip` as an empty routing table.
-        if (ipExecutable().isEmpty()) return false;
         const RuleSnapshot snapshot = readRuleSnapshot();
         if (!snapshot.valid) return false;
+        const auto hasReservedRule = [](const QStringList &lines) {
+            for (const QString &line : lines) {
+                const QRegularExpressionMatch match =
+                        QRegularExpression(QStringLiteral("^\\s*(\\d+):")).match(line);
+                if (!match.hasMatch()) continue;
+                const int priority = match.captured(1).toInt();
+                if (priority == FullTunnelBypassRulePriority
+                    || priority == FullTunnelRulePriority) return true;
+            }
+            return false;
+        };
         if (!snapshot.tableLines.isEmpty()
             || !snapshot.ownedFull.isEmpty()
-            || !snapshot.ownedBypass.isEmpty()) {
+            || !snapshot.ownedBypass.isEmpty()
+            || hasReservedRule(snapshot.linesV4)
+            || hasReservedRule(snapshot.linesV6)) {
             return false;
         }
         for (const QString &line : snapshot.mainRouteLines) {
@@ -1632,23 +1709,10 @@ bool LinuxRouteReconciler::loadState()
                 return false;
             }
         }
-        const QString resolver = resolvectlExecutable();
-        if (!resolver.isEmpty()) {
-            const CommandResult resolverStatus = m_runner->runCaptured(
-                    resolver, { QStringLiteral("status") });
-            if (!resolverStatus.ok) return false;
-            // A resolver link for a native VPN interface is durable orphan
-            // evidence even when the managed-routes receipt disappeared.
-            const QRegularExpression nativeLink(QStringLiteral(
-                    "(?ims)^\\s*Link\\s+\\d+\\s+\\((?:wg|amn|tun)[^)]*\\)(.*?)(?=^\\s*Link\\s+\\d+\\s+\\(|\\z)"));
-            auto link = nativeLink.globalMatch(resolverStatus.output);
-            while (link.hasNext()) {
-                const QString block = link.next().captured(1);
-                if (block.contains(QStringLiteral("DNS Servers:"))
-                    || block.contains(QStringLiteral("DNS Domain:"))) return false;
-            }
-        }
-        return true;
+        // Do not infer ownership from resolver text or an interface-name
+        // regex.  With no DNS receipt or mutation intent there is no durable
+        // identity tying a custom link's resolver state to this daemon.
+        return resolverProbeHealthy();
     }
     if (stateInfo.isSymLink() || !stateInfo.isFile()) {
         return false;
@@ -1827,6 +1891,27 @@ bool LinuxRouteReconciler::loadState()
                 const QStringList prefixes {
                     QStringLiteral("0.0.0.0/1"), QStringLiteral("128.0.0.0/1"),
                     QStringLiteral("::/1"), QStringLiteral("8000::/1") };
+                if (!saveTransactionIntent(QStringLiteral("legacy-proto-migration"), QJsonObject {
+                        { QStringLiteral("interface"), interfaceName },
+                        { QStringLiteral("prefixes"), QJsonArray::fromStringList(prefixes) },
+                        { QStringLiteral("fromProtocol"), 0 },
+                        { QStringLiteral("toProtocol"), AmneziaRouteProtocol },
+                    })) {
+                    return false;
+                }
+                QStringList attemptedPrefixes;
+                const auto restoreLegacy = [&]() {
+                    bool restored = true;
+                    for (const QString &prefix : attemptedPrefixes) {
+                        QStringList command;
+                        if (prefix.contains(QLatin1Char(':'))) command << QStringLiteral("-6");
+                        command << QStringLiteral("route") << QStringLiteral("replace") << prefix
+                                << QStringLiteral("dev") << interfaceName
+                                << QStringLiteral("table") << QString::number(FullTunnelRouteTable);
+                        restored = m_runner->run(executable, command).ok && restored;
+                    }
+                    return restored;
+                };
                 bool migrated = true;
                 for (const QString &prefix : prefixes) {
                     QStringList command;
@@ -1835,17 +1920,45 @@ bool LinuxRouteReconciler::loadState()
                             << QStringLiteral("dev") << interfaceName << QStringLiteral("table")
                             << QString::number(FullTunnelRouteTable) << QStringLiteral("proto")
                             << QString::number(AmneziaRouteProtocol);
-                    migrated = m_runner->run(executable, command).ok && migrated;
+                    attemptedPrefixes.append(prefix);
+                    if (!m_runner->run(executable, command).ok) {
+                        migrated = false;
+                        break;
+                    }
                 }
-                if (!migrated) return false;
-                snapshot = readRuleSnapshot();
-                if (!snapshot.valid) return false;
+                if (migrated) {
+                    snapshot = readRuleSnapshot();
+                    const QRegularExpression migratedRoute(
+                            QStringLiteral("^\\s*(0\\.0\\.0\\.0/1|128\\.0\\.0\\.0/1|::/1|8000::/1)"
+                                           "\\s+dev\\s+%1\\s+proto\\s+%2(?:\\s|$)")
+                                .arg(QRegularExpression::escape(interfaceName))
+                                .arg(AmneziaRouteProtocol));
+                    migrated = snapshot.valid && snapshot.tableLines.size() == 4;
+                    for (const QString &line : snapshot.tableLines) {
+                        migrated = migrated && migratedRoute.match(line).hasMatch();
+                    }
+                }
+                if (!migrated) {
+                    const bool restored = restoreLegacy();
+                    if (!restored) {
+                        markRecoveryRequired(QStringLiteral("legacy route protocol migration rollback failed"));
+                    }
+                    return false;
+                }
+                if (!clearTransactionIntent()) {
+                    markRecoveryRequired(QStringLiteral("legacy route protocol migration intent could not be retired"));
+                    return false;
+                }
             }
         }
         if (mode == QStringLiteral("only-forward")
             && (!snapshot.tableLines.isEmpty()
-                || !snapshot.ownedFull.isEmpty()
-                || !snapshot.ownedBypass.isEmpty())) {
+                || !snapshot.occupiedV4.isEmpty() &&
+                    (snapshot.occupiedV4.contains(storedBypassPriority)
+                     || snapshot.occupiedV4.contains(storedFullPriority))
+                || !snapshot.occupiedV6.isEmpty() &&
+                    (snapshot.occupiedV6.contains(storedBypassPriority)
+                     || snapshot.occupiedV6.contains(storedFullPriority)))) {
             return false;
         }
         if (mode == QStringLiteral("only-forward")) {
@@ -1890,10 +2003,40 @@ bool LinuxRouteReconciler::loadState()
                 || !snapshot.ownedFullV6.contains(storedFullPriority)) {
                 return false;
             }
-            if ((snapshot.occupied.contains(storedBypassPriority)
-                 && !snapshot.ownedBypass.contains(storedBypassPriority))
-                || (snapshot.occupied.contains(storedFullPriority)
-                    && !snapshot.ownedFull.contains(storedFullPriority))) {
+            const auto validReservedRules = [this, storedBypassPriority, storedFullPriority](
+                    const QStringList &lines, bool ipv6, bool requireBypassRoutes) {
+                QSet<QString> bypasses;
+                int fullRules = 0;
+                for (const QString &line : lines) {
+                    const QRegularExpressionMatch priorityMatch =
+                            QRegularExpression(QStringLiteral("^\\s*(\\d+):")).match(line);
+                    if (!priorityMatch.hasMatch()) continue;
+                    const int priority = priorityMatch.captured(1).toInt();
+                    if (priority != storedBypassPriority && priority != storedFullPriority) continue;
+                    int parsedPriority = 0;
+                    ManagedRuleKind kind = ManagedRuleKind::None;
+                    QString destination;
+                    if (!parseManagedRuleLine(line, &parsedPriority, &kind, &destination)
+                        || parsedPriority != priority) return false;
+                    if (priority == storedFullPriority) {
+                        if (kind != ManagedRuleKind::FullTunnel || ++fullRules > 1) return false;
+                    } else {
+                        if (ipv6 || kind != ManagedRuleKind::Bypass
+                            || !m_bypassRoutes.contains(destination)
+                            || bypasses.contains(destination)) return false;
+                        bypasses.insert(destination);
+                    }
+                }
+                if (fullRules != 1) return false;
+                if (requireBypassRoutes) {
+                    for (const QString &route : m_bypassRoutes) {
+                        if (!bypasses.contains(route)) return false;
+                    }
+                }
+                return true;
+            };
+            if (!validReservedRules(snapshot.linesV4, false, true)
+                || !validReservedRules(snapshot.linesV6, true, false)) {
                 return false;
             }
         }
@@ -1902,24 +2045,7 @@ bool LinuxRouteReconciler::loadState()
     // owner is recorded, a native VPN link with resolver state is orphan
     // evidence; when a DNS owner is recorded, an unavailable resolver probe is
     // itself unsafe because cleanup could not be verified.
-    const QString resolver = resolvectlExecutable();
-    if (!m_dnsInterface.isEmpty() && resolver.isEmpty()) return false;
-    if (!resolver.isEmpty()) {
-        const CommandResult resolverStatus = m_runner->runCaptured(
-                resolver, { QStringLiteral("status") });
-        if (!resolverStatus.ok) return false;
-        if (m_dnsInterface.isEmpty()) {
-            const QRegularExpression nativeLink(QStringLiteral(
-                    "(?ims)^\\s*Link\\s+\\d+\\s+\\((?:wg|amn|tun)[^)]*\\)(.*?)(?=^\\s*Link\\s+\\d+\\s+\\(|\\z)"));
-            auto link = nativeLink.globalMatch(resolverStatus.output);
-            while (link.hasNext()) {
-                const QString block = link.next().captured(1);
-                if (block.contains(QStringLiteral("DNS Servers:"))
-                    || block.contains(QStringLiteral("DNS Domain:"))) return false;
-            }
-        }
-    }
-    return true;
+    return resolverProbeHealthy();
 }
 
 bool LinuxRouteReconciler::saveState() const

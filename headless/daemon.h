@@ -2,12 +2,14 @@
 #define AMNEZIA_HEADLESS_DAEMON_H
 
 #include <QHash>
+#include <QLockFile>
 #include <QLocalServer>
 #include <QPointer>
 #include <QString>
 #include <QTimer>
 
 #include <optional>
+#include <memory>
 
 #include "headlessProtocol.h"
 #include "headlessRoutingController.h"
@@ -74,7 +76,9 @@ private:
     QTimer m_routingRefreshTimer;
     QTimer m_updateTimer;
     QTimer m_healthTimer;
+    std::unique_ptr<QLockFile> m_instanceLock;
     int m_processedRequestCount = 0;
+    qint64 m_backendConnectedAtMs = 0;
     QString m_state = QStringLiteral("disconnected");
     QString m_activeProfile;
     std::optional<Profile> m_activeProfileData;

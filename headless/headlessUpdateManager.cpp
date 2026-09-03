@@ -22,6 +22,7 @@
 #include <QUrl>
 #include <QVersionNumber>
 #include <QHostAddress>
+#include <QLockFile>
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -34,6 +35,8 @@
 #include <algorithm>
 
 #ifndef Q_OS_WIN
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -49,6 +52,7 @@ constexpr int ArchiveTimeoutMs = 60'000;
 constexpr auto HeadlessArtifactFormat = "amnezia-headless-tar-v1";
 constexpr auto UpdateServiceName = "amneziad.service";
 constexpr auto TrustedUpdateKeyPath = "/etc/amnezia/update-public-key.pem";
+constexpr auto GcMarkerFileName = "garbage-collection.json";
 
 const QStringList &managedPayloadFiles()
 {
@@ -205,10 +209,11 @@ bool hasUnsupportedThreeFileReceipt(const QJsonObject &object)
 
 bool hasExactManagedHashMap(const QMap<QString, QString> &hashes)
 {
-    if (hashes.size() != managedPayloadFiles().size()) {
+    const QStringList files = managedPayloadFiles();
+    if (hashes.size() != files.size()) {
         return false;
     }
-    return std::all_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+    return std::all_of(files.cbegin(), files.cend(),
                        [&hashes](const QString &name) { return hashes.contains(name); });
 }
 
@@ -231,6 +236,68 @@ bool hasExactHeadlessProvisioningFiles(const QJsonValue &value)
     return true;
 }
 
+#ifndef Q_OS_WIN
+bool directorySyncUnsupported(int errorCode)
+{
+    return errorCode == EINVAL
+#ifdef ENOTSUP
+        || errorCode == ENOTSUP
+#endif
+#ifdef EOPNOTSUPP
+        || errorCode == EOPNOTSUPP
+#endif
+        ;
+}
+#endif
+
+bool durableSyncFileAndDirectory(const QString &path)
+{
+#ifndef Q_OS_WIN
+    const QFileInfo fileInfo(path);
+    const QByteArray filePath = fileInfo.absoluteFilePath().toLocal8Bit();
+    const int fileFlags = O_RDONLY
+#ifdef O_CLOEXEC
+        | O_CLOEXEC
+#endif
+        ;
+    const int fileDescriptor = ::open(filePath.constData(), fileFlags);
+    if (fileDescriptor < 0) {
+        return false;
+    }
+    const int fileSyncResult = ::fsync(fileDescriptor);
+    ::close(fileDescriptor);
+    if (fileSyncResult != 0) {
+        return false;
+    }
+
+    // QSaveFile has already committed the file.  Syncing its parent makes the
+    // rename visible after a power loss on filesystems that support directory
+    // fsync.  Some Unix filesystems reject directory fsync; the file fsync
+    // above remains the portable durable fallback in that case.
+    const QByteArray directoryPath = fileInfo.absolutePath().toLocal8Bit();
+    const int directoryDescriptor = ::open(directoryPath.constData(), fileFlags);
+    if (directoryDescriptor < 0) {
+        return directorySyncUnsupported(errno);
+    }
+    struct stat directoryStatus {};
+    const bool isDirectory = ::fstat(directoryDescriptor, &directoryStatus) == 0
+        && S_ISDIR(directoryStatus.st_mode);
+    if (!isDirectory) {
+        ::close(directoryDescriptor);
+        return false;
+    }
+    const int directorySyncResult = ::fsync(directoryDescriptor);
+    const int directorySyncError = errno;
+    ::close(directoryDescriptor);
+    return directorySyncResult == 0 || directorySyncUnsupported(directorySyncError);
+#else
+    // QSaveFile::commit() uses the native platform commit path on Windows;
+    // there is no POSIX descriptor/dirsync fallback in this translation unit.
+    Q_UNUSED(path);
+    return true;
+#endif
+}
+
 } // namespace
 
 HeadlessUpdateManager::HeadlessUpdateManager(std::shared_ptr<CommandRunner> runner,
@@ -249,23 +316,173 @@ HeadlessUpdateManager::HeadlessUpdateManager(std::shared_ptr<CommandRunner> runn
         m_updateRoot = QDir(m_updateRoot).filePath(QStringLiteral("updates"));
         m_journalPath = QDir(m_updateRoot).filePath(QStringLiteral("transaction.json"));
         m_rollbackReceiptPath = QDir(m_updateRoot).filePath(QStringLiteral("rollback-receipt.json"));
+        m_gcMarkerPath = QDir(m_updateRoot).filePath(QString::fromLatin1(GcMarkerFileName));
         // The update root is part of the state identity.  Create it before
         // reading/writing receipts so canonical paths are stable even when
         // automatic updates are disabled on first start.
-        QDir().mkpath(m_updateRoot);
+        QString directoryError;
+        if (!ensureSecureDirectory(m_updateRoot, &directoryError)) {
+            m_stateValid = false;
+            m_lastState = QStringLiteral("recovery_required");
+            m_lastError = directoryError;
+        }
     }
     loadState();
-    if (m_stateValid && m_lastState != QStringLiteral("unsupported_payload_contract")
-        && !loadRollbackReceipt()) {
-        m_stateValid = false;
+    collectGarbage();
+    if (!m_stateValid && m_lastError.isEmpty()) {
         m_lastState = QStringLiteral("recovery_required");
-        m_lastError = QStringLiteral("headless rollback receipt is invalid");
+        m_lastError = QStringLiteral("headless update storage is not secure");
+    }
+    if (m_stateValid && m_lastState != QStringLiteral("unsupported_payload_contract")) {
+        if (!m_rollbackDirectory.isEmpty() && !loadRollbackReceipt()) {
+            m_stateValid = false;
+            m_lastState = QStringLiteral("recovery_required");
+            m_lastError = QStringLiteral("headless rollback receipt is invalid");
+        } else if (m_rollbackDirectory.isEmpty() && !m_rollbackReceiptPath.isEmpty()
+                   && QFileInfo::exists(m_rollbackReceiptPath)) {
+            // Once the stable state has cleared rollback identity, a sidecar
+            // left by an interrupted cleanup is disposable evidence.  It must
+            // not become an independent recovery authority or poison startup.
+            // Removal is best-effort so cleanup remains idempotent if another
+            // process has already retired the sidecar.
+            QFile::remove(m_rollbackReceiptPath);
+        }
+    }
+}
+
+bool HeadlessUpdateManager::ensureSecureDirectory(const QString &path, QString *error) const
+{
+    if (path.trimmed().isEmpty() || !QDir().mkpath(path)) {
+        if (error) *error = QStringLiteral("headless update directory cannot be created");
+        return false;
+    }
+    const QFileInfo directory(path);
+    const QFileInfo parent(directory.absolutePath());
+    if (!directory.isDir() || directory.isSymLink()
+        || !parent.isDir() || parent.isSymLink()) {
+        if (error) *error = QStringLiteral("headless update directory is not a safe directory");
+        return false;
+    }
+#ifndef Q_OS_WIN
+    if (!QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                      | QFileDevice::ExeOwner)) {
+        if (error) *error = QStringLiteral("headless update directory permissions cannot be restricted");
+        return false;
+    }
+    const QFileInfo secured(path);
+    const QFileInfo securedParent(parent.absoluteFilePath());
+    const auto unsafe = [this](const QFileInfo &info) {
+        return !info.isDir() || info.isSymLink()
+            || (m_requireRootOwnedFiles && info.ownerId() != 0)
+            || (info.permissions() & (QFileDevice::WriteGroup | QFileDevice::WriteOther)) != 0;
+    };
+    if (unsafe(secured) || (m_requireRootOwnedFiles && unsafe(securedParent))) {
+        if (error) *error = QStringLiteral("headless update directory chain must be root-owned and not group/world writable");
+        return false;
+    }
+#endif
+    return true;
+}
+
+bool HeadlessUpdateManager::writeGcMarker(const QStringList &paths) const
+{
+    if (m_gcMarkerPath.isEmpty() || paths.isEmpty()) return false;
+    if (!ensureSecureDirectory(QFileInfo(m_gcMarkerPath).absolutePath(), nullptr)) return false;
+    QSet<QString> entries;
+    QFile existing(m_gcMarkerPath);
+    if (existing.open(QIODevice::ReadOnly)) {
+        QJsonParseError parseError;
+        qint64 existingVersion = 0;
+        const QJsonDocument document = QJsonDocument::fromJson(existing.readAll(), &parseError);
+        if (parseError.error == QJsonParseError::NoError && document.isObject()
+            && jsonInteger(document.object().value(QStringLiteral("version")), 1, 1,
+                            existingVersion)) {
+            const QJsonValue value = document.object().value(QStringLiteral("paths"));
+            if (value.isArray()) {
+                for (const QJsonValue &entry : value.toArray()) {
+                    if (entry.isString() && !entry.toString().trimmed().isEmpty()) {
+                        entries.insert(entry.toString());
+                    }
+                }
+            }
+        }
+    }
+    for (const QString &path : paths) {
+        if (!path.trimmed().isEmpty()) entries.insert(path);
+    }
+    QJsonArray pathsJson;
+    for (const QString &path : std::as_const(entries)) pathsJson.append(path);
+    QSaveFile marker(m_gcMarkerPath);
+    if (!marker.open(QIODevice::WriteOnly)
+        || marker.write(QJsonDocument(QJsonObject {
+                { QStringLiteral("version"), 1 },
+                { QStringLiteral("paths"), pathsJson }
+            }).toJson(QJsonDocument::Compact)) < 0
+        || !marker.commit()) {
+        return false;
+    }
+#ifndef Q_OS_WIN
+    QFile::setPermissions(m_gcMarkerPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+#endif
+    return durableSyncFileAndDirectory(m_gcMarkerPath);
+}
+
+void HeadlessUpdateManager::collectGarbage() const
+{
+    if (m_gcMarkerPath.isEmpty() || !QFileInfo::exists(m_gcMarkerPath)) return;
+    QFile marker(m_gcMarkerPath);
+    if (!marker.open(QIODevice::ReadOnly)) return;
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(marker.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) return;
+    qint64 version = 0;
+    const QJsonValue pathValue = document.object().value(QStringLiteral("paths"));
+    if (!jsonInteger(document.object().value(QStringLiteral("version")), 1, 1, version)
+        || !pathValue.isArray()) return;
+
+    const QString root = QFileInfo(m_updateRoot).canonicalFilePath();
+    if (root.isEmpty()) return;
+    bool complete = true;
+    for (const QJsonValue &entry : pathValue.toArray()) {
+        if (!entry.isString()) {
+            complete = false;
+            continue;
+        }
+        const QString rawPath = entry.toString();
+        const QFileInfo rawInfo(rawPath);
+        if (!rawInfo.exists()) continue;
+        const QString canonical = rawInfo.canonicalFilePath();
+        const QString name = QFileInfo(canonical).fileName();
+        const bool safeName = name == QString::fromLatin1("transaction.json")
+            || name == QString::fromLatin1("rollback-receipt.json")
+            || name.startsWith(QStringLiteral("transaction-"))
+            || name.startsWith(QStringLiteral("rollback-"))
+            || name.startsWith(QStringLiteral("rollback-current-"))
+            || name.startsWith(QStringLiteral("recovery-receipt-"));
+        if (rawInfo.isSymLink() || canonical.isEmpty()
+            || (canonical != root && !canonical.startsWith(root + QDir::separator()))
+            || !safeName) {
+            complete = false;
+            continue;
+        }
+        const bool removed = rawInfo.isDir()
+            ? QDir(canonical).removeRecursively() : QFile::remove(canonical);
+        if (!removed && QFileInfo::exists(canonical)) complete = false;
+    }
+    if (complete && QFile::remove(m_gcMarkerPath)) {
+        durableSyncFileAndDirectory(root);
     }
 }
 
 HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile,
                                                           const QString &currentVersion)
 {
+    QLockFile processLock(QDir(m_updateRoot).filePath(QStringLiteral("update.lock")));
+    processLock.setStaleLockTime(0);
+    if (!m_updateRoot.isEmpty() && !processLock.tryLock(0)) {
+        return { false, QStringLiteral("update_in_progress"),
+                 QStringLiteral("another headless update operation owns the transaction lock") };
+    }
     if (m_updateInProgress) {
         return failure(QStringLiteral("update_in_progress"),
                        QStringLiteral("a headless update transaction is already in progress"));
@@ -467,7 +684,8 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
     }
 
     QString trustError;
-    if (!verifyTrustedKey(profile.updatePublicKeyPath, &trustError)) {
+    QByteArray pinnedPublicKey;
+    if (!verifyTrustedKey(profile.updatePublicKeyPath, &pinnedPublicKey, &trustError)) {
         return failure(QStringLiteral("update_trust_invalid"), trustError);
     }
     const QUrl manifestUrl(profile.updateManifestUrl, QUrl::StrictMode);
@@ -529,7 +747,7 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
     Candidate candidate;
     const HeadlessUpdateResult parsed = parseManifest(
             manifest, manifestUrl, profile, profile.updatePublicKeyPath,
-            currentVersion, candidate);
+            pinnedPublicKey, currentVersion, candidate);
     if (!parsed.ok || parsed.code == QStringLiteral("no_update")
         || parsed.code == QStringLiteral("no_headless_artifact")) {
         m_lastState = parsed.code;
@@ -553,30 +771,37 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
                  QStringLiteral("a signed headless update is available") };
     }
 
-    if (m_updateRoot.isEmpty() || !QDir().mkpath(m_updateRoot)) {
+    QString storageError;
+    if (m_updateRoot.isEmpty() || !ensureSecureDirectory(m_updateRoot, &storageError)) {
         return failure(QStringLiteral("update_storage_unavailable"),
-                       QStringLiteral("headless update storage is unavailable"));
+                       storageError.isEmpty() ? QStringLiteral("headless update storage is unavailable")
+                                              : storageError);
     }
     const QString transaction = QDir(m_updateRoot).filePath(
             QStringLiteral("transaction-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
     const QString payloadDirectory = QDir(transaction).filePath(QStringLiteral("payload"));
     const QString archivePath = QDir(transaction).filePath(QStringLiteral("artifact.tar.gz"));
-    if (!QDir().mkpath(payloadDirectory)) {
-        return failure(QStringLiteral("update_storage_unavailable"),
-                       QStringLiteral("headless update staging directory cannot be created"));
-    }
-
     QString error;
+    if (!ensureSecureDirectory(transaction, &error)
+        || !ensureSecureDirectory(payloadDirectory, &error)) {
+        return failure(QStringLiteral("update_storage_unavailable"),
+                       error.isEmpty() ? QStringLiteral("headless update staging directory cannot be created")
+                                       : error);
+    }
+    error.clear();
     if (!download(candidate, archivePath, &error)
         || !extract(candidate, archivePath, payloadDirectory, &error)
         || !install(candidate, payloadDirectory, currentVersion, &error)) {
         // Keep the transaction journal and any rollback evidence for recovery;
         // only a failed download/extraction without a journal is disposable.
         if (!QFileInfo::exists(m_journalPath)) {
-            if (!QDir(transaction).removeRecursively()) {
-                return failure(QStringLiteral("recovery_required"),
-                               QStringLiteral("headless failed transaction evidence could not be retired"));
+            // Queue disposable evidence before deletion so a crash or a
+            // transient filesystem failure cannot strand an orphan tree or
+            // poison an otherwise stable updater state.
+            if (!writeGcMarker({ transaction })) {
+                QDir(transaction).removeRecursively();
             }
+            collectGarbage();
         }
         return failure(m_lastState == QStringLiteral("recovery_required")
                            ? QStringLiteral("recovery_required") : QStringLiteral("update_install_failed"),
@@ -597,6 +822,12 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
 
 HeadlessUpdateResult HeadlessUpdateManager::rollback()
 {
+    QLockFile processLock(QDir(m_updateRoot).filePath(QStringLiteral("update.lock")));
+    processLock.setStaleLockTime(0);
+    if (!m_updateRoot.isEmpty() && !processLock.tryLock(0)) {
+        return { false, QStringLiteral("update_in_progress"),
+                 QStringLiteral("another headless update operation owns the transaction lock") };
+    }
     if (m_updateInProgress) {
         return failure(QStringLiteral("update_in_progress"),
                        QStringLiteral("a headless update transaction is already in progress"));
@@ -630,11 +861,12 @@ HeadlessUpdateResult HeadlessUpdateManager::rollback()
     // itself is marked invalid, but only if the independently verified backup
     // pair is still present.  restoreRollback() performs the journal identity
     // and transaction checks before replacing anything.
+    const QStringList managedFiles = managedPayloadFiles();
     if ((!m_stateValid || m_lastState == QStringLiteral("recovery_required"))
         && (m_rollbackDirectory.isEmpty()
             || !validVersion(m_rollbackVersion)
-            || m_rollbackHashes.size() != managedPayloadFiles().size()
-            || std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+            || m_rollbackHashes.size() != managedFiles.size()
+            || std::any_of(managedFiles.cbegin(), managedFiles.cend(),
                            [this](const QString &name) { return !m_rollbackHashes.contains(name); })) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("headless update state is invalid; manual recovery is required"));
@@ -772,7 +1004,8 @@ HeadlessUpdateResult HeadlessUpdateManager::failure(const QString &code,
 
 HeadlessUpdateResult HeadlessUpdateManager::parseManifest(
         const QByteArray &manifest, const QUrl &manifestUrl, const Profile &profile,
-        const QString &publicKeyPath, const QString &currentVersion,
+        const QString &publicKeyPath, const QByteArray &pinnedPublicKey,
+        const QString &currentVersion,
         Candidate &candidate) const
 {
     QJsonParseError parseError;
@@ -791,8 +1024,20 @@ HeadlessUpdateResult HeadlessUpdateManager::parseManifest(
         return { false, QStringLiteral("invalid_manifest"), QStringLiteral("headless update manifest envelope is invalid") };
     }
 
+    // Re-check the fixed trust anchor immediately before manifest
+    // verification.  The first read is retained in private memory and the
+    // second read is used only to prove that owner, mode, and key bytes did
+    // not change while the network request was in flight.
+    QByteArray currentPublicKey;
+    QString trustError;
+    if (!verifyTrustedKey(publicKeyPath, &currentPublicKey, &trustError)
+        || QCryptographicHash::hash(currentPublicKey, QCryptographicHash::Sha256)
+               != QCryptographicHash::hash(pinnedPublicKey, QCryptographicHash::Sha256)) {
+        return { false, QStringLiteral("signature_invalid"),
+                 QStringLiteral("headless update trust anchor changed during manifest verification") };
+    }
     QByteArray payloadBytes;
-    if (!verifyEnvelope(envelope, publicKeyPath, payloadBytes)
+    if (!verifyEnvelope(envelope, pinnedPublicKey, payloadBytes)
         || payloadBytes.size() > MaximumManifestBytes) {
         return { false, QStringLiteral("signature_invalid"), QStringLiteral("headless update manifest signature is invalid") };
     }
@@ -968,12 +1213,14 @@ bool HeadlessUpdateManager::download(const Candidate &candidate, const QString &
         }
     }
     file.close();
+    const bool durable = !writeFailed && durableSyncFileAndDirectory(path);
     const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool ok = reply->isFinished() && !writeFailed
             && samePinnedUrl(candidate.url, reply->url())
             && reply->error() == QNetworkReply::NoError
             && statusCode >= 200 && statusCode < 300
             && received == candidate.size
+            && durable
             && QString::fromLatin1(hash.result().toHex()) == candidate.sha256;
     reply->deleteLater();
     if (!ok) {
@@ -986,7 +1233,38 @@ bool HeadlessUpdateManager::download(const Candidate &candidate, const QString &
 bool HeadlessUpdateManager::extract(const Candidate &candidate, const QString &archivePath,
                                     const QString &directory, QString *error) const
 {
-    Q_UNUSED(candidate);
+    const QFileInfo archiveInfo(archivePath);
+    if (!archiveInfo.isFile() || archiveInfo.isSymLink()
+        || archiveInfo.size() != candidate.size
+        || sha256ForFile(archivePath) != candidate.sha256) {
+        if (error) *error = QStringLiteral("headless update archive failed expected hash or size verification");
+        return false;
+    }
+    // The download path is mutable staging evidence.  Copy the verified
+    // bytes into a private read-only file and use that same inode for both tar
+    // passes, so verification cannot be separated from extraction by a path
+    // replacement.
+    const QString verifiedArchivePath = QDir(QFileInfo(directory).absolutePath()).filePath(
+            QStringLiteral(".verified-artifact-%1.tar.gz")
+                .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+    if (!QFile::copy(archivePath, verifiedArchivePath)) {
+        if (error) *error = QStringLiteral("headless update archive cannot be privately staged");
+        return false;
+    }
+    if (!QFile::setPermissions(verifiedArchivePath, QFileDevice::ReadOwner)
+        || !durableSyncFileAndDirectory(verifiedArchivePath)) {
+        QFile::remove(verifiedArchivePath);
+        if (error) *error = QStringLiteral("headless verified archive cannot be durably staged");
+        return false;
+    }
+    const QFileInfo verifiedInfo(verifiedArchivePath);
+    if (!verifiedInfo.isFile() || verifiedInfo.isSymLink()
+        || verifiedInfo.size() != candidate.size
+        || sha256ForFile(verifiedArchivePath) != candidate.sha256) {
+        QFile::remove(verifiedArchivePath);
+        if (error) *error = QStringLiteral("headless private archive failed expected hash or size verification");
+        return false;
+    }
     const QString tar = m_runner->resolveExecutable({ QStringLiteral("tar"), QStringLiteral("/usr/bin/tar") });
     if (tar.isEmpty()) {
         if (error) *error = QStringLiteral("tar is not installed for headless update extraction");
@@ -994,7 +1272,7 @@ bool HeadlessUpdateManager::extract(const Candidate &candidate, const QString &a
     }
     QString listing;
     if (!runProcess(tar, { QStringLiteral("--list"), QStringLiteral("--gzip"),
-                           QStringLiteral("--file"), archivePath },
+                           QStringLiteral("--file"), verifiedArchivePath },
                     ArchiveTimeoutMs, &listing, error)) {
         return false;
     }
@@ -1024,17 +1302,30 @@ bool HeadlessUpdateManager::extract(const Candidate &candidate, const QString &a
         if (error) *error = QStringLiteral("headless update archive has an unexpected file set");
         return false;
     }
+    // Re-check the immutable copy immediately before extraction as an
+    // additional integrity assertion for filesystems without immutable
+    // inode flags.
+    if (QFileInfo(verifiedArchivePath).size() != candidate.size
+        || sha256ForFile(verifiedArchivePath) != candidate.sha256) {
+        if (error) *error = QStringLiteral("headless private archive changed before extraction");
+        return false;
+    }
     if (!runProcess(tar, { QStringLiteral("--extract"), QStringLiteral("--gzip"),
-                           QStringLiteral("--file"), archivePath,
+                           QStringLiteral("--file"), verifiedArchivePath,
                            QStringLiteral("--directory"), directory,
                            QStringLiteral("--no-same-owner"), QStringLiteral("--no-same-permissions") },
                     ArchiveTimeoutMs, nullptr, error)) {
         return false;
     }
-    for (const QString &name : managedPayloadFiles()) {
+    const QStringList files = managedPayloadFiles();
+    for (const QString &name : files) {
         const QFileInfo info(QDir(directory).filePath(name));
         if (!info.exists() || !info.isFile() || info.isSymLink()) {
             if (error) *error = QStringLiteral("headless update archive contains a non-regular binary");
+            return false;
+        }
+        if (!durableSyncFileAndDirectory(info.absoluteFilePath())) {
+            if (error) *error = QStringLiteral("headless extracted binary cannot be durably staged");
             return false;
         }
     }
@@ -1046,6 +1337,10 @@ bool HeadlessUpdateManager::extract(const Candidate &candidate, const QString &a
             return false;
         }
         unpackedSize += size;
+    }
+    if (!durableSyncFileAndDirectory(directory)) {
+        if (error) *error = QStringLiteral("headless payload directory cannot be durably staged");
+        return false;
     }
     return true;
 }
@@ -1063,7 +1358,7 @@ bool HeadlessUpdateManager::install(const Candidate &candidate,
     }
     const QString rollbackDirectory = QDir(m_updateRoot).filePath(
             QStringLiteral("rollback-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
-    if (!QDir().mkpath(rollbackDirectory)) {
+    if (!ensureSecureDirectory(rollbackDirectory, error)) {
         if (error) *error = QStringLiteral("headless rollback directory cannot be created");
         return false;
     }
@@ -1093,8 +1388,10 @@ bool HeadlessUpdateManager::install(const Candidate &candidate,
         candidateHashes.insert(name, candidateDigest);
         candidateSizes.insert(name, QJsonValue(sourceInfo.size()));
         const QString destination = managedInstallPath(name);
+        const QString backup = QDir(rollbackDirectory).filePath(name);
         if (!verifyManagedInstallFile(name, error)
-            || !QFile::copy(destination, QDir(rollbackDirectory).filePath(name))) {
+            || !QFile::copy(destination, backup)
+            || !durableSyncFileAndDirectory(backup)) {
             QDir(rollbackDirectory).removeRecursively();
             if (error) *error = QStringLiteral("existing headless binary cannot be backed up");
             return false;
@@ -1107,6 +1404,11 @@ bool HeadlessUpdateManager::install(const Candidate &candidate,
         }
         newRollbackHashes.insert(name, digest);
         rollbackHashes.insert(name, digest);
+    }
+    if (!durableSyncFileAndDirectory(rollbackDirectory)) {
+        QDir(rollbackDirectory).removeRecursively();
+        if (error) *error = QStringLiteral("rollback directory cannot be durably staged");
+        return false;
     }
     journal.insert(QStringLiteral("rollbackHashes"), rollbackHashes);
     journal.insert(QStringLiteral("candidateHashes"), candidateHashes);
@@ -1319,21 +1621,28 @@ bool HeadlessUpdateManager::retireAcknowledgedJournal(QString *error)
     // the loader must not turn an inability to delete disposable evidence
     // into recovery_required.  A later invocation may retry this garbage
     // collection, but it must never reopen the completed transaction.
+    QStringList garbage;
     if (QFileInfo::exists(m_journalPath) && !QFile::remove(m_journalPath)) {
-        if (error) *error = QStringLiteral("headless acknowledgement journal could not be retired");
-        return false;
+        garbage.append(m_journalPath);
     }
+    durableSyncFileAndDirectory(rootPath);
     const QString receiptPath = m_rollbackReceiptPath;
     if (rollbackAcknowledged && !receiptPath.isEmpty() && QFileInfo::exists(receiptPath)) {
-        QFile::remove(receiptPath);
+        if (!QFile::remove(receiptPath)) garbage.append(receiptPath);
     }
     QSet<QString> retired;
     for (const QString &path : evidence) {
         if (path.trimmed().isEmpty()) continue;
         const QString canonical = QFileInfo(path).canonicalFilePath();
         if (canonical.isEmpty() || retired.contains(canonical)) continue;
-        if (QFileInfo::exists(canonical)) QDir(canonical).removeRecursively();
+        if (QFileInfo::exists(canonical) && !QDir(canonical).removeRecursively()) {
+            garbage.append(canonical);
+        }
         retired.insert(canonical);
+    }
+    if (!garbage.isEmpty()) {
+        writeGcMarker(garbage);
+        collectGarbage();
     }
     return true;
 }
@@ -1408,7 +1717,7 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
         const QString recoveryTransaction = QDir(m_updateRoot).filePath(
                 QStringLiteral("recovery-receipt-%1").arg(
                     QUuid::createUuid().toString(QUuid::WithoutBraces)));
-        if (!QDir().mkpath(recoveryTransaction)) {
+        if (!ensureSecureDirectory(recoveryTransaction, error)) {
             if (error) *error = QStringLiteral("rollback recovery receipt directory cannot be created");
             return false;
         }
@@ -1447,7 +1756,7 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
             && journalPhase != QStringLiteral("acknowledged"))
         || journalInstall != canonicalInstall
         || journalRollback != canonicalRollback
-         || std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+         || std::any_of(files.cbegin(), files.cend(),
                         [&journalRollbackHashes, this](const QString &name) {
              return journalRollbackHashes.value(name).toString() != m_rollbackHashes.value(name);
          })
@@ -1484,7 +1793,7 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
     } else {
         currentDirectory = QDir(m_updateRoot).filePath(
                 QStringLiteral("rollback-current-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
-        if (!QDir().mkpath(currentDirectory)) {
+        if (!ensureSecureDirectory(currentDirectory, error)) {
             if (error) *error = QStringLiteral("current headless binary pair cannot be staged for rollback recovery");
             return false;
         }
@@ -1492,14 +1801,20 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
         QJsonObject previousSizes;
         for (const QString &name : files) {
             const QString current = managedInstallPath(name);
+            const QString backup = QDir(currentDirectory).filePath(name);
             if (!verifyInstallFile(current, error)
-                || !QFile::copy(current, QDir(currentDirectory).filePath(name))) {
+                || !QFile::copy(current, backup)
+                || !durableSyncFileAndDirectory(backup)) {
                 QDir(currentDirectory).removeRecursively();
                 if (error && error->isEmpty()) *error = QStringLiteral("current headless binary pair cannot be backed up");
                 return false;
             }
             previousHashes.insert(name, sha256ForFile(QDir(currentDirectory).filePath(name)));
             previousSizes.insert(name, QJsonValue(QFileInfo(QDir(currentDirectory).filePath(name)).size()));
+        }
+        if (!durableSyncFileAndDirectory(currentDirectory)) {
+            if (error) *error = QStringLiteral("current headless binary pair cannot be durably staged");
+            return false;
         }
         journalObject.insert(QStringLiteral("previousHashes"), previousHashes);
         journalObject.insert(QStringLiteral("previousSizes"), previousSizes);
@@ -1558,7 +1873,8 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
             const QString staged = QDir(currentDirectory).filePath(
                     QStringLiteral(".%1.restore-%2").arg(name,
                         QUuid::createUuid().toString(QUuid::WithoutBraces)));
-            if (!QFile::copy(QDir(currentDirectory).filePath(name), staged)) {
+            if (!QFile::copy(QDir(currentDirectory).filePath(name), staged)
+                || !durableSyncFileAndDirectory(staged)) {
                 ok = false;
                 continue;
             }
@@ -1580,6 +1896,7 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
         bool destinationRemoved = false;
         if (!verifyRollbackFile(backup, m_rollbackHashes.value(name), error)
             || !QFile::copy(backup, staged)
+            || !durableSyncFileAndDirectory(staged)
             || !atomicReplace(staged, managedInstallPath(name), error,
                               &destinationRemoved,
                               m_rollbackHashes.value(name), QFileInfo(backup).size())) {
@@ -1650,6 +1967,7 @@ bool HeadlessUpdateManager::restoreCurrentPair(QString *error)
         const QString expected = sha256ForFile(backup);
         if (!verifyRollbackFile(backup, expected, error)
             || !QFile::copy(backup, staged)
+            || !durableSyncFileAndDirectory(staged)
             || sha256ForFile(staged) != expected) {
             ok = false;
             continue;
@@ -1666,6 +1984,7 @@ bool HeadlessUpdateManager::restoreCurrentPair(QString *error)
 
 bool HeadlessUpdateManager::loadState()
 {
+    const QStringList managedFiles = managedPayloadFiles();
     if (m_statePath.isEmpty()) {
         return true;
     }
@@ -1897,7 +2216,8 @@ bool HeadlessUpdateManager::loadState()
         m_lastError = QStringLiteral("headless update receipt contains an invalid applied version");
         return false;
     }
-    if ((m_lastState == QStringLiteral("updated")
+    if ((m_lastState == QStringLiteral("applied")
+         || m_lastState == QStringLiteral("updated")
          || m_lastState == QStringLiteral("rolled_back"))
         && m_lastAppliedVersion.isEmpty()) {
         m_stateValid = false;
@@ -2100,7 +2420,8 @@ bool HeadlessUpdateManager::loadState()
         Q_UNUSED(journalVersion);
         const bool adoptingJournalRollback = m_rollbackDirectory.isEmpty();
         if (adoptingJournalRollback
-            && phase != QStringLiteral("rollback_restart_pending")) {
+            && phase != QStringLiteral("rollback_restart_pending")
+            && phase != QStringLiteral("replaced")) {
             // A journal without a state receipt is usable only when its
             // recorded installed pair is still present.  This prevents an
             // old, otherwise valid rollback directory from being replayed as
@@ -2108,6 +2429,11 @@ bool HeadlessUpdateManager::loadState()
             const QJsonObject installedHashes = phase == QStringLiteral("prepared")
                     ? journalRollbackHashes : candidateHashes;
             for (const QString &name : managedPayloadFiles()) {
+                // A prepared transaction has not replaced the installed pair
+                // yet, so it must still match the recorded current identity.
+                // Once replacement has begun, however, a crash can leave a
+                // mixed pair.  The journal rollback pair is authoritative and
+                // explicit rollback below is the deterministic recovery path.
                 if (!verifyManagedInstalledFile(name, installedHashes.value(name).toString(),
                                                 -1, nullptr)) {
                     m_stateValid = false;
@@ -2139,7 +2465,7 @@ bool HeadlessUpdateManager::loadState()
         const QString stateRollbackCanonical = QFileInfo(m_rollbackDirectory).canonicalFilePath();
         const QJsonObject journalRollbackHashes = journalObject.value(QStringLiteral("rollbackHashes")).toObject();
         if (!hasExactManagedFileSet(journalRollbackHashes)
-            || std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+            || std::any_of(managedFiles.cbegin(), managedFiles.cend(),
                            [&journalRollbackHashes](const QString &name) {
                 return !journalRollbackHashes.value(name).isString()
                     || !validSha256(journalRollbackHashes.value(name).toString());
@@ -2152,7 +2478,7 @@ bool HeadlessUpdateManager::loadState()
         if (!m_rollbackDirectory.isEmpty()
             && (journalRollbackCanonical.isEmpty() || stateRollbackCanonical != journalRollbackCanonical
              || m_rollbackVersion != journalCurrent
-             || std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+             || std::any_of(managedFiles.cbegin(), managedFiles.cend(),
                             [&journalRollbackHashes, this](const QString &name) {
                  return journalRollbackHashes.value(name).toString() != m_rollbackHashes.value(name);
              })) {
@@ -2191,7 +2517,7 @@ bool HeadlessUpdateManager::loadState()
             if (canonicalPrevious.isEmpty()
                 || !canonicalPrevious.startsWith(canonicalUpdateRoot + QDir::separator())
                 || !QFileInfo(canonicalPrevious).isDir()
-                 || std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+                 || std::any_of(managedFiles.cbegin(), managedFiles.cend(),
                                 [this, &canonicalPrevious, &journalObject](const QString &name) {
                      return !verifyRollbackFile(QDir(canonicalPrevious).filePath(name),
                                                 journalObject.value(QStringLiteral("previousHashes"))
@@ -2208,7 +2534,7 @@ bool HeadlessUpdateManager::loadState()
              || phase == QStringLiteral("rollback_restart_pending")
              || phase == QStringLiteral("rollback_acknowledged")
              || phase == QStringLiteral("acknowledged"))
-             && std::any_of(managedPayloadFiles().cbegin(), managedPayloadFiles().cend(),
+             && std::any_of(managedFiles.cbegin(), managedFiles.cend(),
                             [this](const QString &name) {
                  return !verifyRollbackFile(QDir(m_rollbackDirectory).filePath(name),
                                             m_rollbackHashes.value(name), nullptr);
@@ -2307,7 +2633,8 @@ bool HeadlessUpdateManager::saveState() const
         return true;
     }
     const QFileInfo info(m_statePath);
-    if (!QDir().mkpath(info.absolutePath())) {
+    QString directoryError;
+    if (!ensureSecureDirectory(info.absolutePath(), &directoryError)) {
         return false;
     }
     QSaveFile file(m_statePath);
@@ -2337,7 +2664,7 @@ bool HeadlessUpdateManager::saveState() const
 #ifndef Q_OS_WIN
     QFile::setPermissions(m_statePath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 #endif
-    return true;
+    return durableSyncFileAndDirectory(m_statePath);
 }
 
 bool HeadlessUpdateManager::writeJournal(const QJsonObject &journal, QString *error) const
@@ -2347,7 +2674,8 @@ bool HeadlessUpdateManager::writeJournal(const QJsonObject &journal, QString *er
         return false;
     }
     const QFileInfo info(m_journalPath);
-    if (!QDir().mkpath(info.absolutePath())) {
+    QString directoryError;
+    if (!ensureSecureDirectory(info.absolutePath(), &directoryError)) {
         if (error) *error = QStringLiteral("headless update journal directory cannot be created");
         return false;
     }
@@ -2361,7 +2689,7 @@ bool HeadlessUpdateManager::writeJournal(const QJsonObject &journal, QString *er
 #ifndef Q_OS_WIN
     QFile::setPermissions(m_journalPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 #endif
-    return true;
+    return durableSyncFileAndDirectory(m_journalPath);
 }
 
 bool HeadlessUpdateManager::writeRollbackReceipt(QString *error) const
@@ -2370,6 +2698,12 @@ bool HeadlessUpdateManager::writeRollbackReceipt(QString *error) const
     if (m_rollbackDirectory.isEmpty() || !validVersion(m_rollbackVersion)
         || !hasExactManagedHashMap(m_rollbackHashes)) {
         if (error) *error = QStringLiteral("rollback receipt is incomplete");
+        return false;
+    }
+    QString directoryError;
+    if (!ensureSecureDirectory(QFileInfo(m_rollbackReceiptPath).absolutePath(), &directoryError)) {
+        if (error) *error = directoryError.isEmpty()
+                ? QStringLiteral("rollback receipt directory cannot be secured") : directoryError;
         return false;
     }
     QJsonObject hashes;
@@ -2397,7 +2731,7 @@ bool HeadlessUpdateManager::writeRollbackReceipt(QString *error) const
 #ifndef Q_OS_WIN
     QFile::setPermissions(m_rollbackReceiptPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 #endif
-    return true;
+    return durableSyncFileAndDirectory(m_rollbackReceiptPath);
 }
 
 bool HeadlessUpdateManager::loadRollbackReceipt()
@@ -2405,12 +2739,11 @@ bool HeadlessUpdateManager::loadRollbackReceipt()
     if (m_rollbackReceiptPath.isEmpty() || !QFileInfo::exists(m_rollbackReceiptPath)) {
         return true;
     }
-    // A sidecar receipt is never an independent source of rollback
-    // authority.  It must be paired with the state receipt; otherwise a
-    // copied old receipt could replay an unrelated in-root backup.
-    if (m_rollbackDirectory.isEmpty()) {
-        return false;
-    }
+    // A sidecar receipt is never an independent source of rollback authority.
+    // With no rollback identity in stable state it is stale disposable
+    // evidence; otherwise it must be paired with the state receipt so a
+    // copied old receipt cannot replay an unrelated in-root backup.
+    if (m_rollbackDirectory.isEmpty()) return true;
     const QFileInfo receiptInfo(m_rollbackReceiptPath);
     if (!receiptInfo.isFile() || receiptInfo.isSymLink()) return false;
 #ifndef Q_OS_WIN
@@ -2483,7 +2816,9 @@ QString HeadlessUpdateManager::trustedUpdatePublicKeyPath()
     return QString::fromLatin1(TrustedUpdateKeyPath);
 }
 
-bool HeadlessUpdateManager::verifyTrustedKey(const QString &configuredPath, QString *error) const
+bool HeadlessUpdateManager::verifyTrustedKey(const QString &configuredPath,
+                                             QByteArray *keyBytes,
+                                             QString *error) const
 {
     const QString trusted = trustedUpdatePublicKeyPath();
     const QFileInfo configured(configuredPath);
@@ -2500,6 +2835,22 @@ bool HeadlessUpdateManager::verifyTrustedKey(const QString &configuredPath, QStr
         return false;
     }
 #endif
+    QFile keyFile(configuredPath);
+    if (!keyFile.open(QIODevice::ReadOnly) || keyFile.size() <= 0
+        || keyFile.size() > 16 * 1024) {
+        if (error) *error = QStringLiteral("update trust anchor cannot be read safely");
+        return false;
+    }
+    const QByteArray bytes = keyFile.readAll();
+    if (bytes.size() != keyFile.size()) {
+        if (error) *error = QStringLiteral("update trust anchor could not be read completely");
+        return false;
+    }
+    if (keyBytes) {
+        // Force a detached, immutable-in-practice memory copy.  Manifest
+        // verification never hands the pathname back to OpenSSL.
+        *keyBytes = QByteArray(bytes.constData(), bytes.size());
+    }
     return true;
 }
 
@@ -2618,7 +2969,7 @@ bool HeadlessUpdateManager::verifyRollbackFile(const QString &path,
 }
 
 bool HeadlessUpdateManager::verifyEnvelope(const QJsonObject &envelope,
-                                           const QString &publicKeyPath,
+                                           const QByteArray &publicKeyBytes,
                                            QByteArray &payload)
 {
     if (!envelope.value(QStringLiteral("payload")).isString()
@@ -2631,12 +2982,10 @@ bool HeadlessUpdateManager::verifyEnvelope(const QJsonObject &envelope,
         || payload.isEmpty() || signature.size() != 64) {
         return false;
     }
-    QFile keyFile(publicKeyPath);
-    if (!keyFile.open(QIODevice::ReadOnly) || keyFile.size() > 16 * 1024) {
+    if (publicKeyBytes.isEmpty() || publicKeyBytes.size() > 16 * 1024) {
         return false;
     }
-    const QByteArray pem = keyFile.readAll();
-    BIO *bio = BIO_new_mem_buf(pem.constData(), pem.size());
+    BIO *bio = BIO_new_mem_buf(publicKeyBytes.constData(), publicKeyBytes.size());
     if (!bio) {
         return false;
     }
@@ -2830,14 +3179,29 @@ bool HeadlessUpdateManager::atomicReplace(const QString &source,
         if (error) *error = QStringLiteral("headless update private staging file failed expected hash or size verification");
         return false;
     }
+    if (!durableSyncFileAndDirectory(temporary)
+        || !durableSyncFileAndDirectory(sourceCanonical)
+        || !durableSyncFileAndDirectory(sourceParent)) {
+        QFile::remove(temporary);
+        if (error) *error = QStringLiteral("headless update staging copy cannot be durably synced");
+        return false;
+    }
 #ifndef Q_OS_WIN
-    QFile::setPermissions(temporary, QFileDevice::ReadOwner | QFileDevice::WriteOwner
-                              | QFileDevice::ExeOwner | QFileDevice::ReadGroup
-                              | QFileDevice::ExeGroup | QFileDevice::ReadOther
-                              | QFileDevice::ExeOther);
+    const bool hadDestination = QFileInfo::exists(destination);
+    if (!QFile::setPermissions(temporary, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                      | QFileDevice::ExeOwner)) {
+        QFile::remove(temporary);
+        if (error) *error = QStringLiteral("headless update temporary permissions cannot be restricted");
+        return false;
+    }
     if (::rename(temporary.toLocal8Bit().constData(), destination.toLocal8Bit().constData()) != 0) {
         QFile::remove(temporary);
         if (error) *error = QStringLiteral("headless update binary cannot be atomically replaced");
+        return false;
+    }
+    if (destinationRemoved) *destinationRemoved = hadDestination;
+    if (!durableSyncFileAndDirectory(destination)) {
+        if (error) *error = QStringLiteral("headless update destination cannot be durably synced");
         return false;
     }
 #else
@@ -2860,6 +3224,10 @@ bool HeadlessUpdateManager::atomicReplace(const QString &source,
         return false;
     }
     if (destinationRemoved) *destinationRemoved = false;
+    if (!durableSyncFileAndDirectory(destination)) {
+        if (error) *error = QStringLiteral("headless update destination cannot be durably synced");
+        return false;
+    }
 #endif
     return true;
 }
