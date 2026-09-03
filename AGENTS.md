@@ -35,20 +35,25 @@ metadata, but must not write code or execute build, test, install, network, or
 other executable commands. Delegate practical implementation, diagnostics,
 builds, tests, and live checks to Luna/high subagents whenever available.
 
-## Permanent multi-agent audit policy
+## Batched multi-agent audit policy
 
-Before every substantial code change, complete 10 independent read-only
-audits by `gpt-5.6-luna` agents at `high` reasoning effort. Each audit must
-cover a distinct area and must finish before the code change begins.
+Before a consolidated implementation phase, complete one batch of 10
+independent read-only audits by `gpt-5.6-luna` agents at `high` reasoning
+effort. Each audit must cover a distinct area and must finish before the
+consolidated code change begins.
 
-After every code change, complete another 10 independent read-only reviews by
-`gpt-5.6-luna` agents at `high` reasoning effort against the current diff,
-before any build, release, or live deployment. If a review identifies a
-blocking finding that requires code, repeat the post-change 10-review cycle
-after the next code change until a complete cycle has no blocking findings.
+Implement the agreed fixes as one consolidated change set. After the
+consolidated release candidate is frozen, complete one final batch of 10
+independent read-only reviews by `gpt-5.6-luna` agents at `high` reasoning
+effort against that release candidate, before any build, release, or live
+deployment.
 
-When runtime concurrency is lower than 10, run the audits in waves until
-exactly 10 agents have completed. Do not count queued, failed, interrupted,
-or duplicate reviews. The root agent only orchestrates this process; practical
-auditing, implementation, review, builds, tests, and live checks belong to
-the delegated Luna/high subagents.
+Findings from the final batch are triaged and fixed together, followed by
+focused verification proportional to the changes. Do not automatically start
+another 10-agent cycle for every minor edit unless the user explicitly
+requests another full batch. Batching must respect actual runtime
+concurrency; when concurrency is lower than 10, run the batch in waves until
+exactly 10 independent agents have completed. Do not count queued, failed,
+interrupted, or duplicate reviews. The root agent only orchestrates this
+process; practical auditing, implementation, review, builds, tests, and live
+checks belong to the delegated Luna/high subagents.
