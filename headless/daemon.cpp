@@ -22,6 +22,8 @@
 
 #include <utility>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace amnezia::headless
 {
@@ -514,12 +516,24 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
 
 QByteArray Daemon::profileListResponse(const Request &request) const
 {
+    auto readInt = [](const QJsonValue &value, int defaultValue, bool &ok) {
+        if (value.isUndefined()) return defaultValue;
+        if (!value.isDouble()) {
+            ok = false;
+            return 0;
+        }
+        const double raw = value.toDouble();
+        if (!std::isfinite(raw) || std::floor(raw) != raw
+            || raw < 0.0 || raw > static_cast<double>((std::numeric_limits<int>::max)())) {
+            ok = false;
+            return 0;
+        }
+        return static_cast<int>(raw);
+    };
     bool offsetOk = true;
     bool limitOk = true;
-    const int offset = request.parameters.value(QStringLiteral("offset")).isUndefined()
-            ? 0 : request.parameters.value(QStringLiteral("offset")).toInt(&offsetOk);
-    const int limit = request.parameters.value(QStringLiteral("limit")).isUndefined()
-            ? 32 : request.parameters.value(QStringLiteral("limit")).toInt(&limitOk);
+    const int offset = readInt(request.parameters.value(QStringLiteral("offset")), 0, offsetOk);
+    const int limit = readInt(request.parameters.value(QStringLiteral("limit")), 32, limitOk);
     const QList<Profile> allProfiles = m_profileStore.profiles();
     if (!offsetOk || !limitOk || offset < 0 || offset > allProfiles.size()
         || limit < 1 || limit > 64) {

@@ -4,8 +4,7 @@
         <!-- Only the pinned private self-hosted update endpoints may use HTTP. -->
         <domain includeSubdomains="false">@_amnezia_selfhosted_update_sync_host@</domain>
         <!-- Legacy release channels kept for already-published manifests. -->
-        <domain includeSubdomains="false">10.8.1.0</domain>
-        <domain includeSubdomains="false">172.29.172.252</domain>
+@_amnezia_legacy_update_domains@
         <!-- Existing self-hosted client-log service. -->
         <domain includeSubdomains="false">172.29.172.251</domain>
     </domain-config>

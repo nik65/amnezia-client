@@ -747,12 +747,14 @@ private slots:
         QVERIFY(!result.ok);
         QCOMPARE(result.code, QStringLiteral("dns_configure_failed"));
         QVERIFY(runner->calls.size() >= 7);
-        QCOMPARE(runner->calls.at(5).arguments,
-                 QStringList { QStringLiteral("dns"), QStringLiteral("wg0"),
-                               QStringLiteral("10.8.1.53") });
-        QCOMPARE(runner->calls.at(6).arguments,
-                 QStringList { QStringLiteral("domain"), QStringLiteral("wg0"),
-                               QStringLiteral("~.") });
+        const QStringList previousDnsArgs {
+            QStringLiteral("dns"), QStringLiteral("wg0"), QStringLiteral("10.8.1.53")
+        };
+        const QStringList previousDomainArgs {
+            QStringLiteral("domain"), QStringLiteral("wg0"), QStringLiteral("~.")
+        };
+        QCOMPARE(runner->calls.at(5).arguments, previousDnsArgs);
+        QCOMPARE(runner->calls.at(6).arguments, previousDomainArgs);
     }
 
     void firstDnsDomainFailureRevertsCurrentInterface()
@@ -770,8 +772,10 @@ private slots:
         QVERIFY(!result.ok);
         QCOMPARE(result.code, QStringLiteral("dns_configure_failed"));
         QVERIFY(runner->calls.size() >= 3);
-        QCOMPARE(runner->calls.at(2).arguments,
-                 QStringList { QStringLiteral("revert"), QStringLiteral("custom0") });
+        const QStringList revertArgs {
+            QStringLiteral("revert"), QStringLiteral("custom0")
+        };
+        QCOMPARE(runner->calls.at(2).arguments, revertArgs);
     }
 
     void dnsOnlyConnectConfiguresResolver()

@@ -951,7 +951,7 @@ HeadlessUpdateResult HeadlessUpdateManager::rollback()
             || !validVersion(m_rollbackVersion)
             || m_rollbackHashes.size() != managedFiles.size()
             || std::any_of(managedFiles.cbegin(), managedFiles.cend(),
-                           [this](const QString &name) { return !m_rollbackHashes.contains(name); })) {
+                           [this](const QString &name) { return !m_rollbackHashes.contains(name); }))) {
         return failure(QStringLiteral("recovery_required"),
                        QStringLiteral("headless update state is invalid; manual recovery is required"));
     }
@@ -2006,8 +2006,8 @@ bool HeadlessUpdateManager::restoreRollback(QString *error)
     QJsonObject previousHashes = journalObject.value(QStringLiteral("previousHashes")).toObject();
     QJsonObject previousSizes = journalObject.value(QStringLiteral("previousSizes")).toObject();
     if (!hasExactManagedFileSet(previousHashes)) {
-        previousHashes.clear();
-        previousSizes.clear();
+        previousHashes = {};
+        previousSizes = {};
         for (const QString &name : files) {
             const QString current = QDir(currentDirectory).filePath(name);
             const QString digest = sha256ForFile(current);
@@ -2655,7 +2655,7 @@ bool HeadlessUpdateManager::loadState()
              || std::any_of(managedFiles.cbegin(), managedFiles.cend(),
                             [&journalRollbackHashes, this](const QString &name) {
                  return journalRollbackHashes.value(name).toString() != m_rollbackHashes.value(name);
-             })) {
+             }))) {
             m_stateValid = false;
             m_lastState = QStringLiteral("recovery_required");
             m_lastError = QStringLiteral("headless rollback receipt is not bound to its transaction journal");

@@ -103,7 +103,7 @@ private:
                                  QUrl &resolved);
     static bool runProcess(const QString &program, const QStringList &arguments,
                            int timeoutMs, QString *output, QString *error);
-    static bool atomicReplace(const QString &source, const QString &destination,
+    bool atomicReplace(const QString &source, const QString &destination,
                               QString *error, bool *destinationRemoved = nullptr,
                               const QString &expectedSha256 = {},
                               qint64 expectedSize = -1);

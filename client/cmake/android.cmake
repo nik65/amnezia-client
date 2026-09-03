@@ -107,11 +107,32 @@ endif()
 # and only private IPv4 literals are permitted. HTTPS/hostname deployments must
 # provide a different transport contract instead of silently broadening
 # cleartext trust.
-if(NOT _amnezia_selfhosted_update_sync_host MATCHES
-       "^(10\\.|127\\.|169\\.254\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.)[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$")
+set(_amnezia_private_ipv4 FALSE)
+string(STRIP "${_amnezia_selfhosted_update_sync_host}" _amnezia_selfhosted_update_sync_host)
+if(_amnezia_selfhosted_update_sync_host MATCHES
+       "^10\\.[0-9]+\\.[0-9]+\\.[0-9]+$"
+   OR _amnezia_selfhosted_update_sync_host MATCHES
+       "^127\\.[0-9]+\\.[0-9]+\\.[0-9]+$"
+   OR _amnezia_selfhosted_update_sync_host MATCHES
+       "^169\\.254\\.[0-9]+\\.[0-9]+$"
+   OR _amnezia_selfhosted_update_sync_host MATCHES
+       "^192\\.168\\.[0-9]+\\.[0-9]+$"
+   OR _amnezia_selfhosted_update_sync_host MATCHES
+       "^172\\.(1[6-9]|2[0-9]|3[0-1])\\.[0-9]+\\.[0-9]+$")
+    set(_amnezia_private_ipv4 TRUE)
+endif()
+if(NOT _amnezia_private_ipv4)
     message(FATAL_ERROR
         "SELFHOSTED_UPDATE_SYNC_HOST must be a private IPv4 literal for Android HTTP updates: ${_amnezia_selfhosted_update_sync_host}")
 endif()
+
+set(_amnezia_legacy_update_domains "")
+foreach(_amnezia_legacy_host IN ITEMS "10.8.1.0" "172.29.172.252")
+    if(NOT _amnezia_selfhosted_update_sync_host STREQUAL _amnezia_legacy_host)
+        string(APPEND _amnezia_legacy_update_domains
+               "        <domain includeSubdomains=\"false\">${_amnezia_legacy_host}</domain>\n")
+    endif()
+endforeach()
 
 # Always package a generated Android resource.  Using the source tree directly
 # leaves the resource stale when a release workstation changes the compiled

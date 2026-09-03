@@ -606,7 +606,7 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
         const QJsonValue sizeValue = provisioning.value(QStringLiteral("size"));
         const double rawSize = sizeValue.isDouble() ? sizeValue.toDouble(-1.0) : -1.0;
         if (!std::isfinite(rawSize) || rawSize <= 0.0 || std::floor(rawSize) != rawSize
-            || rawSize > static_cast<double>(std::numeric_limits<qint64>::max())) {
+            || rawSize > static_cast<double>((std::numeric_limits<qint64>::max)())) {
             logger.warning() << "Bundled update manifest has invalid headless provisioning size";
             return false;
         }
