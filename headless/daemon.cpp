@@ -30,6 +30,35 @@ namespace amnezia::headless
 
 namespace
 {
+class MutationScope final
+{
+public:
+    MutationScope(bool &active, bool requested)
+        : m_active(active), m_acquired(requested && !active)
+    {
+        if (m_acquired) m_active = true;
+    }
+    ~MutationScope()
+    {
+        if (m_acquired) m_active = false;
+    }
+    Q_DISABLE_COPY(MutationScope)
+    bool acquired() const { return m_acquired; }
+
+private:
+    bool &m_active;
+    bool m_acquired = false;
+};
+
+bool isMutatingCommand(Command command)
+{
+    return command == Command::Connect || command == Command::Disconnect
+        || command == Command::Import || command == Command::UpdateRollback;
+}
+} // namespace
+
+namespace
+{
 constexpr qint64 InstanceLockStaleAgeMs = 5000;
 
 std::unique_ptr<QLockFile> acquireInstanceLock(const QString &socketPath)
@@ -74,8 +103,9 @@ Daemon::Daemon(QString socketPath, QString profileStorePath,
       m_socketPath(socketPath.trimmed().isEmpty() ? defaultSocketPath() : std::move(socketPath)),
       m_profileStore(std::move(profileStorePath)),
       m_vpnBackend(runner, std::move(configRoot), requireRootOwnedConfig,
-                   std::move(stagingRoot)),
-      m_routingController(runner, routeStatePathForStore(m_profileStore.path()), false),
+                   stagingRoot),
+      m_routingController(runner ? runner : std::make_shared<RealCommandRunner>(stagingRoot),
+                          routeStatePathForStore(m_profileStore.path()), false),
       m_updateManager(runner, updateStatePathForStore(m_profileStore.path()))
 {
     connect(&m_server, &QLocalServer::newConnection,
@@ -88,7 +118,7 @@ Daemon::Daemon(QString socketPath, QString profileStorePath,
             this, &Daemon::checkAutomaticUpdates);
     m_healthTimer.setInterval(30'000);
     connect(&m_healthTimer, &QTimer::timeout,
-            this, &Daemon::ensureBackendHealthy);
+            this, [this]() { ensureBackendHealthy(); });
 }
 
 Daemon::~Daemon()
@@ -156,6 +186,18 @@ bool Daemon::start(QString *error)
     // A crashed daemon cannot prove that persisted host state belongs to this
     // process.  Detect it and stop; never clean up state without ownership.
     const QJsonObject routingReceipt = m_routingController.status();
+    // A narrowly validated all-except receipt may intentionally describe an
+    // offline reconnect window: the native interface/table vanished during
+    // restart, while the exact receipt-bound v4/v6 rules remain.  The routing
+    // controller has already proven this shape (including absence/down state,
+    // empty table, DNS and foreign-object checks), so retain the receipt and
+    // let the automatic profile reconnect rebuild it.
+    const bool reconnectableOffline =
+            routingReceipt.value(QStringLiteral("needsReapply")).toBool()
+            && routingReceipt.value(QStringLiteral("interfaceOffline")).toBool()
+            && routingReceipt.value(QStringLiteral("mode")).toString()
+                == QStringLiteral("all-except")
+            && !routingReceipt.value(QStringLiteral("recoveryRequired")).toBool();
     const bool persistedRoutingState =
             !routingReceipt.value(QStringLiteral("activeProfile")).toString().isEmpty()
             || !routingReceipt.value(QStringLiteral("activeInterface")).toString().isEmpty()
@@ -165,7 +207,7 @@ bool Daemon::start(QString *error)
             || !routingReceipt.value(QStringLiteral("routes")).toArray().isEmpty()
             || !routingReceipt.value(QStringLiteral("dnsInterface")).toString().isEmpty()
             || routingReceipt.value(QStringLiteral("recoveryRequired")).toBool();
-    if (persistedRoutingState) {
+    if (persistedRoutingState && !reconnectableOffline) {
         return failStart(QStringLiteral("orphaned VPN routes, DNS, or recovery markers require manual recovery"));
     }
 
@@ -403,7 +445,16 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
         return encodeError(request.requestId, QStringLiteral("permission_denied"),
                            QStringLiteral("this daemon operation requires a root-owned local peer"));
     }
-    ensureBackendHealthy();
+    // Reject re-entrant mutations before entering any nested event loop.  A
+    // status/doctor request is still allowed to inspect the in-flight state,
+    // but must not trigger health cleanup while the owner is mid-transaction.
+    const bool mutating = isMutatingCommand(request.command);
+    if (mutating && m_mutationInFlight) {
+        return encodeError(request.requestId, QStringLiteral("operation_in_progress"),
+                           QStringLiteral("another daemon mutation is already in progress"));
+    }
+    MutationScope mutationScope(m_mutationInFlight, mutating);
+    ensureBackendHealthy(mutating);
     switch (request.command) {
     case Command::Status:
         return statusResponse(request.requestId);
@@ -442,6 +493,26 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
         m_backendOwned = true;
         const RoutingResult routingResult = m_routingController.connect(storedProfile);
         if (!routingResult.ok) {
+            // all-except has an explicit availability-preserving fallback:
+            // the controller may have committed healthy only-forward routes
+            // while retaining the connected VPN session.  Do not tear down
+            // that session merely because the requested policy was degraded.
+            if (routingResult.code == QStringLiteral("routing_degraded")
+                && !m_routingController.status().value(QStringLiteral("recoveryRequired")).toBool()) {
+                m_routingOwned = true;
+                m_state = QStringLiteral("connected");
+                m_backendConnectedTimer.start();
+                m_activeProfile = storedProfile.id;
+                m_activeProfileData = storedProfile;
+                if (!storedProfile.serverRulesUrl.isEmpty()) {
+                    // Keep retrying the bounded policy fetch while the
+                    // verified only-forward fallback keeps the session usable.
+                    m_routingRefreshTimer.start();
+                } else {
+                    m_routingRefreshTimer.stop();
+                }
+                return encodeError(request.requestId, routingResult.code, routingResult.message);
+            }
             // The reconciler owns rollback of its own transaction.  This
             // daemon did not acquire routing ownership on a failed connect,
             // so do not issue an extra cleanup mutation here.
@@ -623,19 +694,32 @@ QByteArray Daemon::exportProfileResponse(const Request &request) const
 QByteArray Daemon::statusResponse(const QString &requestId)
 {
     ensureBackendHealthy();
+    const QJsonObject routing = m_routingController.status();
     return encodeResponse(requestId, QJsonObject {
         { QStringLiteral("state"), m_state },
         { QStringLiteral("activeProfile"), m_activeProfile },
-        { QStringLiteral("routing"), m_routingController.status() },
+        { QStringLiteral("routing"), routing },
+        { QStringLiteral("needsReapply"), routing.value(QStringLiteral("needsReapply")).toBool() },
+        { QStringLiteral("routingOffline"), routing.value(QStringLiteral("interfaceOffline")).toBool() },
         { QStringLiteral("updates"), m_updateManager.status() },
     });
 }
 
-void Daemon::ensureBackendHealthy()
+void Daemon::ensureBackendHealthy(bool allowMutation)
 {
     // The backend owns the session interface.  The routing receipt may be
     // intentionally empty for a native only-forward profile, so using it as
     // the health target would make a dead tun/wg session look healthy.
+    // A read-only status/doctor request may be delivered while another
+    // request is inside QProcess' nested wait.  Never let that observer start
+    // a competing disconnect/route cleanup.
+    std::unique_ptr<MutationScope> healthScope;
+    if (!allowMutation) {
+        healthScope = std::make_unique<MutationScope>(m_mutationInFlight, true);
+        if (!healthScope->acquired()) return;
+    } else if (m_mutationInFlight) {
+        // The caller owns the outer scope for this transaction.
+    }
     const bool handshakeGraceElapsed = m_backendConnectedTimer.isValid()
         && m_backendConnectedTimer.elapsed() >= 30'000;
     if (m_state != QStringLiteral("connected")
@@ -665,7 +749,9 @@ void Daemon::ensureBackendHealthy()
 
 void Daemon::refreshManagedRoutes()
 {
-    ensureBackendHealthy();
+    MutationScope mutationScope(m_mutationInFlight, true);
+    if (!mutationScope.acquired()) return;
+    ensureBackendHealthy(true);
     if (m_state != QStringLiteral("connected") || !m_activeProfileData.has_value()) {
         m_routingRefreshTimer.stop();
         return;
@@ -685,6 +771,8 @@ void Daemon::refreshManagedRoutes()
 
 void Daemon::connectAutomaticProfile()
 {
+    MutationScope mutationScope(m_mutationInFlight, true);
+    if (!mutationScope.acquired()) return;
     if (m_state != QStringLiteral("disconnected")) {
         return;
     }
@@ -707,6 +795,23 @@ void Daemon::connectAutomaticProfile()
         m_backendOwned = true;
         const RoutingResult routing = m_routingController.connect(profile);
         if (!routing.ok) {
+            if (routing.code == QStringLiteral("routing_degraded")
+                && !m_routingController.status().value(QStringLiteral("recoveryRequired")).toBool()) {
+                // all-except has a verified availability-preserving fallback;
+                // do not tear down the healthy backend or strand its receipt.
+                m_state = QStringLiteral("connected");
+                m_routingOwned = true;
+                m_backendConnectedTimer.start();
+                m_activeProfile = profile.id;
+                m_activeProfileData = profile;
+                if (!profile.serverRulesUrl.isEmpty()) {
+                    m_routingRefreshTimer.start();
+                } else {
+                    m_routingRefreshTimer.stop();
+                }
+                qWarning() << "Headless automatic route setup degraded; retaining only-forward fallback";
+                return;
+            }
             const BackendResult backendCleanup = m_vpnBackend.disconnect();
             if (backendCleanup.ok) m_backendOwned = false;
             m_routingRefreshTimer.stop();
@@ -733,6 +838,8 @@ void Daemon::connectAutomaticProfile()
 
 void Daemon::checkAutomaticUpdates()
 {
+    MutationScope mutationScope(m_mutationInFlight, true);
+    if (!mutationScope.acquired()) return;
     for (const Profile &profile : m_profileStore.profiles()) {
         if (!profile.autoUpdate) {
             continue;

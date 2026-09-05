@@ -8,6 +8,9 @@
 #include <QLocalSocket>
 #include <QTemporaryDir>
 
+#include <functional>
+#include <algorithm>
+
 #include "daemon.h"
 #include "headlessProtocol.h"
 #include "vpnBackend.h"
@@ -52,6 +55,10 @@ public:
         } else if (program == QStringLiteral("wg-quick")
                    && arguments.contains(QStringLiteral("down"))) {
             m_interfacePresent = false;
+        }
+        if (reentrantHook) {
+            auto hook = std::move(reentrantHook);
+            hook();
         }
         return { true, 0, {} };
     }
@@ -108,6 +115,7 @@ public:
     bool m_wireGuardAvailable = false;
     bool m_interfacePresent = false;
     QString resolverStatusOutput;
+    std::function<void()> reentrantHook;
 };
 
 QJsonDocument readResponse(QLocalSocket &client)
@@ -395,6 +403,131 @@ private slots:
         const QStringList expectedDownArguments { QStringLiteral("down"), configPath };
         QCOMPARE(runner->calls.constFirst().arguments, expectedUpArguments);
         QCOMPARE(runner->calls.constLast().arguments, expectedDownArguments);
+    }
+
+    void reentrantMutatingRequestIsRejectedButStatusRemainsReadable()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString socketPath = temporaryDirectory.filePath(QStringLiteral("amneziad.sock"));
+        const QString storePath = temporaryDirectory.filePath(QStringLiteral("profiles.json"));
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("work.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        QVERIFY(config.write(QByteArrayLiteral(
+            "[Interface]\nPrivateKey = test\n[Peer]\nPublicKey = peer\n"
+            "AllowedIPs = 10.8.1.0/24\n")) > 0);
+        config.close();
+
+        ProfileStore store(storePath);
+        QVERIFY(store.load());
+        Profile work;
+        QVERIFY(store.fromJson(QJsonObject {
+            { QStringLiteral("id"), QStringLiteral("work") },
+            { QStringLiteral("name"), QStringLiteral("Work VPN") },
+            { QStringLiteral("protocol"), QStringLiteral("wireguard") },
+            { QStringLiteral("configPath"), configPath },
+        }, work));
+        QVERIFY(store.add(work));
+
+        auto runner = std::make_shared<FakeCommandRunner>(true);
+        Daemon daemon(socketPath, storePath, runner);
+        QVERIFY(daemon.start());
+        QLocalSocket outer;
+        QLocalSocket nested;
+        outer.connectToServer(socketPath, QIODevice::ReadWrite);
+        nested.connectToServer(socketPath, QIODevice::ReadWrite);
+        QVERIFY(outer.waitForConnected(1000));
+        QVERIFY(nested.waitForConnected(1000));
+
+        bool nestedResponseRead = false;
+        runner->reentrantHook = [&]() {
+            sendRequest(nested, Request { Command::Disconnect, QStringLiteral("nested-disconnect"), {} });
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            nestedResponseRead = true;
+        };
+        sendRequest(outer, Request {
+            Command::Connect, QStringLiteral("outer-connect"),
+            QJsonObject { { QStringLiteral("profile"), QStringLiteral("work") } },
+        });
+        const QJsonObject outerResponse = readResponse(outer).object();
+        QVERIFY(outerResponse.value(QStringLiteral("ok")).toBool());
+        QVERIFY(nestedResponseRead);
+        const QJsonObject nestedResponse = readResponse(nested).object();
+        QCOMPARE(nestedResponse.value(QStringLiteral("ok")).toBool(), false);
+        QCOMPARE(nestedResponse.value(QStringLiteral("error")).toObject()
+                     .value(QStringLiteral("code")).toString(),
+                 QStringLiteral("operation_in_progress"));
+
+        sendRequest(nested, Request { Command::Status, QStringLiteral("status-connected"), {} });
+        const QJsonObject connected = readResponse(nested).object()
+                                          .value(QStringLiteral("result")).toObject();
+        QCOMPARE(connected.value(QStringLiteral("state")).toString(), QStringLiteral("connected"));
+        QCOMPARE(connected.value(QStringLiteral("activeProfile")).toString(), QStringLiteral("work"));
+        QVERIFY(std::none_of(runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.arguments == QStringList { QStringLiteral("down"), QStringLiteral("work.conf") };
+        }));
+
+        sendRequest(nested, Request { Command::Disconnect, QStringLiteral("outer-disconnect"), {} });
+        const QJsonObject disconnectResponse = readResponse(nested).object();
+        QVERIFY(disconnectResponse.value(QStringLiteral("ok")).toBool());
+        const QStringList expectedDown { QStringLiteral("down"), configPath };
+        QCOMPARE(runner->calls.constLast().arguments, expectedDown);
+        outer.disconnectFromServer();
+        nested.disconnectFromServer();
+        daemon.stop();
+    }
+
+    void automaticDegradedRoutingRetainsBackendAndSchedulesRetry()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString socketPath = temporaryDirectory.filePath(QStringLiteral("amneziad.sock"));
+        const QString storePath = temporaryDirectory.filePath(QStringLiteral("profiles.json"));
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("work.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        QVERIFY(config.write(QByteArrayLiteral(
+            "[Interface]\nPrivateKey = test\n[Peer]\nPublicKey = peer\n"
+            "AllowedIPs = 10.8.1.0/24\n")) > 0);
+        config.close();
+        ProfileStore store(storePath);
+        QVERIFY(store.load());
+        Profile work;
+        QVERIFY(store.fromJson(QJsonObject {
+            { QStringLiteral("id"), QStringLiteral("auto-work") },
+            { QStringLiteral("name"), QStringLiteral("Auto Work") },
+            { QStringLiteral("protocol"), QStringLiteral("wireguard") },
+            { QStringLiteral("configPath"), configPath },
+            { QStringLiteral("interfaceName"), QStringLiteral("wg0") },
+            { QStringLiteral("routingMode"), QStringLiteral("all-except") },
+            { QStringLiteral("serverRulesUrl"), QStringLiteral("https://127.0.0.1:1/rules.json") },
+            { QStringLiteral("autoConnect"), true },
+        }, work));
+        QVERIFY(store.add(work));
+
+        auto runner = std::make_shared<FakeCommandRunner>(true);
+        Daemon daemon(socketPath, storePath, runner);
+        QVERIFY(daemon.start());
+        QTest::qWait(2500);
+        QLocalSocket client;
+        client.connectToServer(socketPath, QIODevice::ReadWrite);
+        QVERIFY(client.waitForConnected(1000));
+        sendRequest(client, Request { Command::Status, QStringLiteral("auto-status"), {} });
+        const QJsonObject status = readResponse(client).object()
+                                       .value(QStringLiteral("result")).toObject();
+        QCOMPARE(status.value(QStringLiteral("state")).toString(), QStringLiteral("connected"));
+        QCOMPARE(status.value(QStringLiteral("activeProfile")).toString(), QStringLiteral("auto-work"));
+        const QJsonObject routing = status.value(QStringLiteral("routing")).toObject();
+        QVERIFY(routing.value(QStringLiteral("routingDegraded")).toBool());
+        QCOMPARE(routing.value(QStringLiteral("mode")).toString(), QStringLiteral("only-forward"));
+        QVERIFY(runner->calls.size() >= 1);
+        QCOMPARE(runner->calls.constFirst().arguments.at(0), QStringLiteral("up"));
+        QVERIFY(std::none_of(runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.arguments.value(0) == QStringLiteral("down");
+        }));
+        client.disconnectFromServer();
+        daemon.stop();
     }
 };
 

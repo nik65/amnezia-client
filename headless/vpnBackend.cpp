@@ -9,12 +9,18 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QTemporaryDir>
+#include <QTemporaryFile>
 #include <QStandardPaths>
 #include <QElapsedTimer>
 #include <QThread>
 #include <QEventLoop>
 #include <QTimer>
 #include <QDateTime>
+
+#if defined(Q_OS_UNIX)
+#include <unistd.h>
+#include <sys/stat.h>
+#endif
 
 #include <utility>
 
@@ -25,6 +31,12 @@ namespace
 {
 constexpr qint64 WireGuardHandshakeMaxAgeSeconds = 180;
 constexpr int LongRunningStartupGraceMs = 500;
+// Kernel probes can contain one line per managed policy destination plus the
+// host's ordinary rules/routes.  Keep this allowance separate from the small
+// control/diagnostic limits used by run(), runBatch(), and stderr capture.
+constexpr qsizetype MaxCapturedProbeStdout = 1024 * 1024;
+constexpr qsizetype MaxCapturedProbeStderr = 4096;
+constexpr qsizetype ProbeReadChunkSize = 64 * 1024;
 
 struct WireGuardConfigDetails
 {
@@ -34,6 +46,112 @@ struct WireGuardConfigDetails
     int allowedIpsLine = -1;
     QSet<QString> peerPublicKeys;
 };
+
+struct BatchRoot
+{
+    QString path;
+    QString category;
+};
+
+bool isSecureWritableDirectory(const QString &path)
+{
+    const QFileInfo info(path);
+    if (!info.exists() || !info.isDir() || info.isSymLink()) return false;
+    const QFileDevice::Permissions permissions = info.permissions();
+    if (!(permissions & QFileDevice::WriteOwner)
+        || (permissions & (QFileDevice::WriteGroup | QFileDevice::WriteOther))) {
+        return false;
+    }
+#if defined(Q_OS_UNIX)
+    const uint effectiveUid = static_cast<uint>(::geteuid());
+    if (info.ownerId() != 0 && info.ownerId() != effectiveUid) return false;
+#endif
+    return info.isWritable();
+}
+
+bool safeDirectoryAncestors(const QString &path)
+{
+    QDir current(QFileInfo(path).absoluteFilePath());
+    while (true) {
+        const QFileInfo info(current.absolutePath());
+        if (!info.exists() || !info.isDir() || info.isSymLink()) return false;
+#if defined(Q_OS_UNIX)
+        struct stat st {};
+        if (::stat(info.absoluteFilePath().toLocal8Bit().constData(), &st) != 0) return false;
+        const mode_t writableByOther = S_IWGRP | S_IWOTH;
+        if ((st.st_mode & writableByOther) != 0
+            && !((st.st_mode & S_IWOTH) != 0 && (st.st_mode & S_ISVTX) != 0)) {
+            return false;
+        }
+#endif
+        const QString parent = info.absolutePath();
+        if (parent == info.filePath() || parent == current.absolutePath()) break;
+        current.setPath(parent);
+        if (current.absolutePath() == QDir::rootPath()) {
+            const QFileInfo root(current.absolutePath());
+#if defined(Q_OS_UNIX)
+            struct stat rootStat {};
+            if (::stat(root.absoluteFilePath().toLocal8Bit().constData(), &rootStat) != 0
+                || (rootStat.st_mode & (S_IWGRP | S_IWOTH)) != 0) return false;
+#endif
+            break;
+        }
+    }
+    return true;
+}
+
+bool isUsableTemporaryDirectory(const QString &path)
+{
+    const QFileInfo info(path);
+    if (!info.exists() || !info.isDir() || info.isSymLink() || !info.isWritable()
+        || !safeDirectoryAncestors(path)) return false;
+#if defined(Q_OS_UNIX)
+    struct stat st {};
+    if (::stat(info.absoluteFilePath().toLocal8Bit().constData(), &st) != 0) return false;
+    const uint effectiveUid = static_cast<uint>(::geteuid());
+    if (st.st_uid != 0 && st.st_uid != effectiveUid) return false;
+    // A world-writable temporary root is acceptable only with sticky-bit
+    // semantics.  The conventional private temporary root is 1777: its
+    // group-write bit is inseparable from world-write, and the sticky bit
+    // provides the ownership isolation.  Reject group-writable roots that do
+    // not have those sticky world-temporary semantics.
+    if ((st.st_mode & S_IWGRP) != 0
+        && !((st.st_mode & S_IWOTH) != 0 && (st.st_mode & S_ISVTX) != 0)) {
+        return false;
+    }
+    if ((st.st_mode & S_IWOTH) != 0 && (st.st_mode & S_ISVTX) == 0) return false;
+#endif
+    return true;
+}
+
+BatchRoot selectBatchRoot(const QString &configuredRoot)
+{
+    const QString configured = configuredRoot.trimmed();
+    if (!configured.isEmpty()) {
+        if (QDir::isAbsolutePath(configured) && isSecureWritableDirectory(configured)
+            && safeDirectoryAncestors(configured)) {
+            return { configured, QStringLiteral("configured-runtime") };
+        }
+        // An explicit service root is a security contract.  Never silently
+        // bypass it with an ambient temporary directory.
+        return {};
+    }
+#if defined(Q_OS_LINUX)
+    const QString systemRuntime = QStringLiteral("/run/amnezia");
+    if (isSecureWritableDirectory(systemRuntime)) {
+        return { systemRuntime, QStringLiteral("system-runtime") };
+    }
+#endif
+    const QString temporaryRoot = QDir::tempPath();
+    // The fallback is intentionally limited to Qt's ordinary temporary
+    // directory.  QTemporaryFile provides the owner-only, unpredictable file
+    // name protection needed here; this path is never used when the service
+    // supplies an explicit runtime root.
+    if (isUsableTemporaryDirectory(temporaryRoot)) {
+        return { temporaryRoot, QStringLiteral("temporary") };
+    }
+    return {};
+}
 
 WireGuardConfigDetails parseWireGuardConfig(const QString &content)
 {
@@ -90,8 +208,9 @@ struct RealCommandRunner::RunningProcess
     QHash<QString, QProcess *> processes;
 };
 
-RealCommandRunner::RealCommandRunner()
-    : m_processes(std::make_unique<RunningProcess>())
+RealCommandRunner::RealCommandRunner(QString stagingRoot)
+    : m_processes(std::make_unique<RunningProcess>()),
+      m_stagingRoot(std::move(stagingRoot))
 {
 }
 
@@ -176,12 +295,166 @@ CommandResult RealCommandRunner::run(const QString &program, const QStringList &
     return { true, process.exitCode(), {} };
 }
 
+CommandResult RealCommandRunner::runBatch(const QString &program,
+                                          const QList<QStringList> &commands)
+{
+    if (commands.isEmpty()) return { true, 0, {} };
+    // `ip -batch` consumes one argv-style command per line.  The reconciler
+    // supplies only validated canonical route tokens and interface names;
+    // reject whitespace/control characters here as a second boundary so a
+    // future caller cannot turn the batch file into an ambiguous command.
+    const BatchRoot batchRoot = selectBatchRoot(m_stagingRoot);
+    if (batchRoot.path.isEmpty()) {
+        return { false, -1,
+                 m_stagingRoot.trimmed().isEmpty()
+                     ? QStringLiteral("unable to select secure ip batch root (temporary root unavailable)")
+                     : QStringLiteral("unable to select secure ip batch root (configured runtime rejected)") };
+    }
+    QTemporaryFile batchFile(QDir(batchRoot.path).filePath(
+            QStringLiteral("amnezia-ip-batch-XXXXXX")));
+    batchFile.setAutoRemove(true);
+    if (!batchFile.open()) {
+        return { false, -1, QStringLiteral(
+                         "unable to create a private ip batch file (batch root category: %1)")
+                         .arg(batchRoot.category) };
+    }
+    if (!batchFile.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+        return { false, -1, QStringLiteral(
+                         "unable to secure private ip batch file (batch root category: %1)")
+                         .arg(batchRoot.category) };
+    }
+    for (const QStringList &command : commands) {
+        if (command.isEmpty()) {
+            return { false, -1, QStringLiteral("empty ip batch command") };
+        }
+        for (const QString &argument : command) {
+            for (const QChar ch : argument) {
+                if (ch.isSpace() || ch.unicode() < 0x20 || ch == QLatin1Char(0x7f)) {
+                    return { false, -1, QStringLiteral("unsafe ip batch argument") };
+                }
+            }
+        }
+        const QByteArray line = command.join(QLatin1Char(' ')).toUtf8() + QByteArrayLiteral("\n");
+        if (batchFile.write(line) != line.size()) {
+            return { false, -1, QStringLiteral(
+                             "unable to write private ip batch file (batch root category: %1)")
+                             .arg(batchRoot.category) };
+        }
+    }
+    if (!batchFile.flush()) {
+        return { false, -1, QStringLiteral(
+                         "unable to flush private ip batch file (batch root category: %1)")
+                         .arg(batchRoot.category) };
+    }
+    batchFile.close();
+
+    QProcess process;
+    process.setProgram(program);
+    process.setArguments({ QStringLiteral("-batch"), batchFile.fileName() });
+    process.setStandardOutputFile(QProcess::nullDevice());
+    // Keep stderr connected: ip reports the exact failing batch command and
+    // errno there.  It is consumed below with a strict bound, while stdout
+    // remains suppressed because it is never part of the control protocol.
+    QByteArray stderrBuffer;
+    QObject::connect(&process, &QProcess::readyReadStandardError, [&process, &stderrBuffer]() {
+        constexpr qsizetype MaxCapturedStderr = 4096;
+        const QByteArray chunk = process.readAllStandardError();
+        if (stderrBuffer.size() < MaxCapturedStderr) {
+            stderrBuffer.append(chunk.left(MaxCapturedStderr - stderrBuffer.size()));
+        }
+    });
+    process.start();
+    if (!process.waitForStarted(3000)) {
+        return { false, -1, QStringLiteral(
+                         "unable to start ip batch helper (batch root category: %1)")
+                         .arg(batchRoot.category) };
+    }
+    // Keep each kernel batch bounded independently of the ordinary backend
+    // watchdog.  iproute2 may spend several seconds in RTNL while the host is
+    // busy; five seconds was short enough to abort a healthy allow-list
+    // expansion.  The reconciler also applies an aggregate deadline across
+    // all batches, so this larger per-batch allowance cannot hang forever.
+    if (!waitForProcessFinished(process, 15'000)) {
+        process.kill();
+        waitForProcessFinished(process, 2000);
+        return { false, -1, QStringLiteral(
+                         "ip batch helper timed out (batch root category: %1)")
+                         .arg(batchRoot.category) };
+    }
+    // Keep diagnostics bounded and local to the result.  Do not expose the
+    // batch file or stdout (which could contain caller-controlled data) in
+    // the daemon protocol; ip's stderr is useful for a concise operator
+    // failure reason.
+    // Drain the final signal-delivery window as well; the buffer itself never
+    // grows beyond the hard cap above.
+    const QByteArray tail = process.readAllStandardError();
+    if (stderrBuffer.size() < 4096) {
+        stderrBuffer.append(tail.left(4096 - stderrBuffer.size()));
+    }
+    const QString diagnostic = QString::fromLocal8Bit(stderrBuffer).trimmed().left(2048);
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        return { false, process.exitCode(), diagnostic.isEmpty()
+                     ? QStringLiteral("ip batch helper failed (batch root category: %1)")
+                           .arg(batchRoot.category)
+                     : QStringLiteral("ip batch helper failed: %1 (batch root category: %2)")
+                           .arg(diagnostic, batchRoot.category) };
+    }
+    return { true, process.exitCode(), {} };
+}
+
 CommandResult RealCommandRunner::runCaptured(const QString &program,
                                              const QStringList &arguments)
 {
     QProcess process;
     process.setProgram(program);
     process.setArguments(arguments);
+
+    QByteArray output;
+    QByteArray error;
+    bool outputExceeded = false;
+
+    // Drain both channels while the process is running.  Waiting first and
+    // then calling readAll() can leave a large (but valid) kernel snapshot in
+    // QProcess's unbounded internal buffer, while an output-producing helper
+    // can otherwise block on a full pipe.  Once the explicit probe limit is
+    // crossed, discard the partial snapshot and stop the helper; callers must
+    // never receive a truncated kernel state as if it were complete.
+    const auto drainOutput = [&]() {
+        process.setReadChannel(QProcess::StandardOutput);
+        while (process.bytesAvailable() > 0) {
+            const QByteArray chunk = process.read(ProbeReadChunkSize);
+            if (chunk.isEmpty()) {
+                break;
+            }
+            if (outputExceeded) {
+                continue;
+            }
+            const qsizetype remaining = MaxCapturedProbeStdout - output.size();
+            if (chunk.size() > remaining) {
+                output.clear();
+                outputExceeded = true;
+                process.kill();
+                continue;
+            }
+            output.append(chunk);
+        }
+    };
+    const auto drainError = [&]() {
+        process.setReadChannel(QProcess::StandardError);
+        while (process.bytesAvailable() > 0) {
+            const QByteArray chunk = process.read(ProbeReadChunkSize);
+            if (chunk.isEmpty()) {
+                break;
+            }
+            if (error.size() < MaxCapturedProbeStderr) {
+                error.append(chunk.left(MaxCapturedProbeStderr - error.size()));
+            }
+        }
+    };
+    QObject::connect(&process, &QProcess::readyReadStandardOutput,
+                     &process, drainOutput);
+    QObject::connect(&process, &QProcess::readyReadStandardError,
+                     &process, drainError);
     process.start();
     if (!process.waitForStarted(3000)) {
         return { false, -1, QStringLiteral("unable to start backend executable"), {} };
@@ -191,12 +464,25 @@ CommandResult RealCommandRunner::runCaptured(const QString &program,
         waitForProcessFinished(process, 2000);
         return { false, -1, QStringLiteral("backend executable timed out"), {} };
     }
-    const QString output = QString::fromUtf8(process.readAllStandardOutput());
+    drainOutput();
+    drainError();
+    if (outputExceeded) {
+        return { false, process.exitCode(),
+                 QStringLiteral("probe output exceeded safe limit"), {} };
+    }
+    // Probes are read-only, but their output is still bounded before it can
+    // enter a result or diagnostic.  Preserve a small stderr tail so callers
+    // can distinguish a vanished link from resolver/backend failure.
+    const QString outputText = QString::fromUtf8(output);
+    const QString errorText = QString::fromLocal8Bit(error).trimmed();
     if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
         return { false, process.exitCode(),
-                 QStringLiteral("backend executable failed"), output };
+                 errorText.isEmpty() ? QStringLiteral("backend executable failed")
+                                     : QStringLiteral("backend executable failed: %1")
+                                           .arg(errorText.left(2048)),
+                 outputText };
     }
-    return { true, process.exitCode(), {}, output };
+    return { true, process.exitCode(), {}, outputText };
 }
 
 CommandResult RealCommandRunner::startDetached(const QString &program,
@@ -268,7 +554,7 @@ VpnBackend::VpnBackend(std::shared_ptr<CommandRunner> runner,
                        QString configRoot,
                        bool requireRootOwnedConfig,
                        QString stagingRoot)
-    : m_runner(runner ? std::move(runner) : std::make_shared<RealCommandRunner>()),
+    : m_runner(runner ? std::move(runner) : std::make_shared<RealCommandRunner>(stagingRoot)),
       m_configRoot(std::move(configRoot)),
       m_requireRootOwnedConfig(requireRootOwnedConfig),
       m_stagingRoot(std::move(stagingRoot))
@@ -508,16 +794,33 @@ bool VpnBackend::prepareFullTunnelConfig(const Profile &profile,
         interfaceName = protocol == QStringLiteral("amneziawg")
                 ? QStringLiteral("amn0") : QStringLiteral("wg0");
     }
-    const QString stagingRoot = m_stagingRoot.trimmed().isEmpty()
-            ? QDir::tempPath() : m_stagingRoot.trimmed();
-    QTemporaryDir temporary(QDir(stagingRoot).filePath(
+    const BatchRoot trustedRoot = selectBatchRoot(m_stagingRoot);
+    if (trustedRoot.path.isEmpty()) {
+        if (error) *error = QStringLiteral("full-tunnel staging root is not trusted");
+        return false;
+    }
+    QTemporaryDir temporary(QDir(trustedRoot.path).filePath(
             QStringLiteral("amnezia-headless-full-tunnel-XXXXXX")));
     if (!temporary.isValid()) {
         if (error) *error = QStringLiteral("full-tunnel staging root is not writable");
         return false;
     }
     temporary.setAutoRemove(false);
+    const QFileInfo temporaryInfo(temporary.path());
+    if (!temporaryInfo.exists() || !temporaryInfo.isDir() || temporaryInfo.isSymLink()
+        || !safeDirectoryAncestors(temporary.path())
+        || !QFile::setPermissions(temporary.path(), QFileDevice::ReadOwner
+                                   | QFileDevice::WriteOwner | QFileDevice::ExeOwner)) {
+        if (error) *error = QStringLiteral("temporary full-tunnel directory is not secure");
+        QDir(temporary.path()).removeRecursively();
+        return false;
+    }
     const QString stagedPath = QDir(temporary.path()).filePath(interfaceName + QStringLiteral(".conf"));
+    if (QFileInfo::exists(stagedPath) && QFileInfo(stagedPath).isSymLink()) {
+        if (error) *error = QStringLiteral("temporary full-tunnel configuration path is a symlink");
+        QDir(temporary.path()).removeRecursively();
+        return false;
+    }
     QFile staged(stagedPath);
     if (!staged.open(QIODevice::WriteOnly | QIODevice::Truncate)
         || staged.write(rewritten.toUtf8()) != rewritten.toUtf8().size()
@@ -528,8 +831,21 @@ bool VpnBackend::prepareFullTunnelConfig(const Profile &profile,
     }
     staged.close();
 #ifndef Q_OS_WIN
-    QFile::setPermissions(stagedPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    if (!QFile::setPermissions(stagedPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+        if (error) *error = QStringLiteral("temporary full-tunnel configuration permissions failed");
+        QDir(temporary.path()).removeRecursively();
+        return false;
+    }
 #endif
+    const QFileInfo stagedInfo(stagedPath);
+    if (!stagedInfo.exists() || !stagedInfo.isFile() || stagedInfo.isSymLink()
+        || (stagedInfo.permissions() & (QFileDevice::ReadGroup | QFileDevice::WriteGroup
+                                         | QFileDevice::ExeGroup | QFileDevice::ReadOther
+                                         | QFileDevice::WriteOther | QFileDevice::ExeOther))) {
+        if (error) *error = QStringLiteral("temporary full-tunnel configuration is not secure");
+        QDir(temporary.path()).removeRecursively();
+        return false;
+    }
     configPath = stagedPath;
     temporaryDirectory = temporary.path();
     return true;

@@ -27,7 +27,8 @@ struct RoutingResult
 // endpoint bootstrap routes use the main/underlay table.
 QStringList allExceptBypassRoutes(const Profile &profile,
                                   const QStringList &serverRoutes,
-                                  bool *valid = nullptr);
+                                  bool *valid = nullptr,
+                                  QStringList *criticalRoutes = nullptr);
 
 // Validate policy transport before any network request. HTTP is accepted only
 // for a literal VPN-internal address covered by profile.forwardRoutes.
@@ -52,7 +53,8 @@ private:
     RoutingResult failure(const QString &code, const QString &message) const;
     RoutingResult fetchAndApply(const Profile &profile);
     RoutingResult applyRoutes(const Profile &profile,
-                              const QStringList &serverRoutes);
+                              const QStringList &serverRoutes,
+                              bool preserveOfflineLkg = false);
     static QString defaultInterfaceFor(const Profile &profile);
     static ServerRoutingPolicyResult fetchPolicy(
             const Profile &profile,
@@ -61,6 +63,8 @@ private:
     bool saveState() const;
     bool restoreRoutingSnapshot(const QJsonObject &snapshot, QString *error = nullptr);
     bool markRecoveryRequired(const QString &message);
+    RoutingResult fallbackToOnlyForward(const Profile &profile,
+                                        const QString &reason);
 
     LinuxRouteReconciler m_reconciler;
     QString m_activeProfile;
@@ -71,6 +75,9 @@ private:
     QString m_policyEndpoint;
     QJsonObject m_policyResolvedSites;
     bool m_hasPolicy = false;
+    bool m_routingDegraded = false;
+    QString m_routingError;
+    bool m_needsReapply = false;
     std::optional<amnezia::ManagedRoutePolicyMetadata> m_policyMetadata;
     QString m_statePath;
     bool m_stateValid = true;

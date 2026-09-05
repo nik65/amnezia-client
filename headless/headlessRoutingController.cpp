@@ -2,6 +2,7 @@
 
 #include <QFile>
 #include <QDir>
+#include <QDebug>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -12,6 +13,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QSet>
 #include <QSaveFile>
 #include <QTimer>
 #include <QVariant>
@@ -365,10 +367,15 @@ QStringList protectedRoutesForProfile(const Profile &profile, bool *valid)
 
 QStringList allExceptBypassRoutes(const Profile &profile,
                                   const QStringList &serverRoutes,
-                                  bool *valid)
+                                  bool *valid,
+                                  QStringList *criticalRoutes)
 {
     bool routesValid = true;
     QStringList routes;
+    bool protectedValid = true;
+    const QStringList endpointRoutes = protectedRoutesForProfile(profile, &protectedValid);
+    routes.append(endpointRoutes);
+    if (criticalRoutes) *criticalRoutes = endpointRoutes;
     for (const QString &serverRoute : serverRoutes) {
         bool overlapsInternal = false;
         for (const QString &forwardRoute : profile.forwardRoutes) {
@@ -407,14 +414,42 @@ QStringList allExceptBypassRoutes(const Profile &profile,
             break;
         }
     }
-    bool protectedValid = true;
-    routes.append(protectedRoutesForProfile(profile, &protectedValid));
+    // A VPN endpoint already contained by a profile forward route is reached
+    // through the tunnel and must not be promoted to a main-table bypass.
+    // This is common for the documented ServerX 10.8.1.0/24 endpoint.
+    QStringList underlayEndpoints;
+    for (const QString &route : routes) {
+        quint32 address = 0;
+        int prefix = 32;
+        if (!parseIpv4Route(route, &address, &prefix)) continue;
+        const QHostAddress endpoint(address);
+        const bool internal = std::any_of(profile.forwardRoutes.cbegin(),
+                                          profile.forwardRoutes.cend(),
+                                          [&endpoint](const QString &forwardRoute) {
+            return ipv4ContainedByRoute(endpoint, forwardRoute);
+        });
+        if (!internal) underlayEndpoints.append(route);
+    }
+    routes = underlayEndpoints;
+    if (criticalRoutes) {
+        QSet<QString> endpointSet;
+        for (const QString &route : endpointRoutes) endpointSet.insert(route);
+        criticalRoutes->clear();
+        for (const QString &route : underlayEndpoints) {
+            if (endpointSet.contains(route)) criticalRoutes->append(route);
+        }
+    }
     routesValid = routesValid && protectedValid;
     bool validated = false;
     routes = amnezia::managedRoutePolicy::validatedManagedRoutes(routes, &validated);
     routesValid = routesValid && validated;
     routes.removeDuplicates();
-    routes.sort();
+    if (criticalRoutes) {
+        criticalRoutes->removeDuplicates();
+        criticalRoutes->removeIf([&routes](const QString &route) {
+            return !routes.contains(route);
+        });
+    }
     if (valid) {
         *valid = routesValid;
     }
@@ -436,9 +471,20 @@ bool HeadlessRoutingController::initializeState()
 {
     if (m_initialized) return m_stateValid;
     m_initialized = true;
-    if (!m_reconciler.initializeState() || !loadState()) {
+    if (!m_reconciler.initializeState()) {
         m_stateValid = false;
-        m_lastError = QStringLiteral("routing controller state is invalid");
+        m_lastError = QStringLiteral("LinuxRouteReconciler initialize failed");
+        qWarning().noquote() << QStringLiteral(
+                "HeadlessRoutingController initialize failed stage=reconciler code=recovery_required message=%1")
+                .arg(m_reconciler.status().value(QStringLiteral("lastError")).toString().left(512));
+        return false;
+    }
+    if (!loadState()) {
+        m_stateValid = false;
+        m_lastError = QStringLiteral("routing controller receipt load failed");
+        qWarning().noquote() << QStringLiteral(
+                "HeadlessRoutingController initialize failed stage=controller_receipt code=recovery_required message=%1")
+                .arg(m_lastError);
     }
     return m_stateValid;
 }
@@ -500,13 +546,22 @@ RoutingResult HeadlessRoutingController::connect(const Profile &profile)
             return failure(dnsResult.code, dnsResult.message);
         }
         m_activeProfile = profile.id;
-        m_activeInterface.clear();
+        // An all-except profile without a server policy is still a valid full
+        // tunnel receipt.  Retain the reconciler's interface identity so a
+        // restart can bind the kernel table to the controller owner even when
+        // the bypass list is intentionally empty.
+        m_activeInterface = profile.routingMode == QStringLiteral("all-except")
+                ? m_reconciler.status().value(QStringLiteral("interface")).toString()
+                : QString();
         m_policyRevision.clear();
         m_policyContentHash.clear();
         m_policySource.clear();
         m_policyEndpoint.clear();
         m_policyResolvedSites = {};
         m_hasPolicy = false;
+        m_routingDegraded = false;
+        m_routingError.clear();
+        m_needsReapply = false;
         if (!saveState()) {
             markRecoveryRequired(QStringLiteral("routing controller receipt could not be saved"));
             return failure(QStringLiteral("recovery_required"),
@@ -565,6 +620,9 @@ RoutingResult HeadlessRoutingController::disconnect()
     m_policyResolvedSites = {};
     m_hasPolicy = false;
     m_policyMetadata.reset();
+    m_routingDegraded = false;
+    m_routingError.clear();
+    m_needsReapply = false;
     if (!saveState()) {
         markRecoveryRequired(QStringLiteral("routing controller state could not be cleared"));
         return failure(QStringLiteral("recovery_required"),
@@ -582,6 +640,9 @@ QJsonObject HeadlessRoutingController::status() const
     result.insert(QStringLiteral("policySource"), m_policySource);
     result.insert(QStringLiteral("policyEndpoint"), m_policyEndpoint);
     result.insert(QStringLiteral("policyLoaded"), m_hasPolicy);
+    result.insert(QStringLiteral("routingDegraded"), m_routingDegraded);
+    result.insert(QStringLiteral("routingError"), m_routingError);
+    result.insert(QStringLiteral("needsReapply"), m_needsReapply);
     result.insert(QStringLiteral("policyMetadata"), m_policyMetadata.has_value()
                   ? QJsonValue(m_policyMetadata->toJson()) : QJsonValue(QJsonValue::Null));
     result.insert(QStringLiteral("recoveryRequired"), !m_initialized || !m_stateValid
@@ -593,7 +654,74 @@ RoutingResult HeadlessRoutingController::failure(const QString &code,
                                                   const QString &message) const
 {
     m_lastError = message;
+    qWarning().noquote() << QStringLiteral(
+            "HeadlessRoutingController apply failure code=%1 message=%2")
+            .arg(code, message.left(512));
     return { false, code, message };
+}
+
+RoutingResult HeadlessRoutingController::fallbackToOnlyForward(const Profile &profile,
+                                                               const QString &reason)
+{
+    // Availability-preserving fallback contract: retain the VPN-internal
+    // forward routes and send ordinary internet traffic over the underlay.
+    // The reconciler's receipt-bound bypass ownership leaves foreign narrow
+    // underlay rules untouched while rebuilding this state.
+    const QString interfaceName = defaultInterfaceFor(profile);
+    if (interfaceName.isEmpty()) {
+        markRecoveryRequired(QStringLiteral("all-except failed and fallback has no VPN interface"));
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("all-except failed and only-forward fallback is unavailable"));
+    }
+    const RouteReconcileResult routes = m_reconciler.apply(interfaceName, profile.forwardRoutes);
+    if (!routes.ok || m_reconciler.status().value(QStringLiteral("recoveryRequired")).toBool()) {
+        markRecoveryRequired(QStringLiteral("all-except failed and only-forward fallback route apply failed"));
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("all-except failed and only-forward fallback could not be installed"));
+    }
+    const QJsonObject beforeDns = m_reconciler.status();
+    RouteReconcileResult dns { true, {}, {} };
+    if (!profile.dnsServers.isEmpty() || !profile.dnsDomains.isEmpty()) {
+        dns = m_reconciler.configureDns(interfaceName, profile.dnsServers, profile.dnsDomains);
+    } else if (!beforeDns.value(QStringLiteral("dnsInterface")).toString().isEmpty()) {
+        dns = m_reconciler.clearDns(beforeDns.value(QStringLiteral("dnsInterface")).toString());
+    }
+    if (!dns.ok) {
+        markRecoveryRequired(QStringLiteral("all-except failed and only-forward fallback DNS apply failed"));
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("all-except failed and only-forward fallback DNS could not be installed"));
+    }
+    const QJsonObject after = m_reconciler.status();
+    if (after.value(QStringLiteral("recoveryRequired")).toBool()
+        || after.value(QStringLiteral("mode")).toString() != QStringLiteral("only-forward")
+        || ((!profile.forwardRoutes.isEmpty()
+             && after.value(QStringLiteral("interface")).toString() != interfaceName)
+            || (profile.forwardRoutes.isEmpty()
+                && !after.value(QStringLiteral("interface")).toString().isEmpty()))) {
+        markRecoveryRequired(QStringLiteral("only-forward fallback readback did not match"));
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("all-except failed and fallback readback could not be verified"));
+    }
+    m_activeProfile = profile.id;
+    m_activeInterface = interfaceName;
+    m_policyRevision.clear();
+    m_policyContentHash.clear();
+    m_policySource.clear();
+    m_policyEndpoint.clear();
+    m_policyResolvedSites = {};
+    m_hasPolicy = false;
+    m_policyMetadata.reset();
+    m_routingDegraded = true;
+    m_routingError = reason;
+    m_needsReapply = false;
+    if (!saveState()) {
+        markRecoveryRequired(QStringLiteral("only-forward fallback receipt could not be saved"));
+        return failure(QStringLiteral("recovery_required"),
+                       QStringLiteral("all-except failed and fallback receipt could not be saved"));
+    }
+    return failure(QStringLiteral("routing_degraded"),
+                   QStringLiteral("all-except routing failed; profile remains connected in only-forward mode: %1")
+                           .arg(reason));
 }
 
 bool HeadlessRoutingController::markRecoveryRequired(const QString &message)
@@ -631,7 +759,8 @@ bool HeadlessRoutingController::loadState()
          QStringLiteral("policyContentHash"), QStringLiteral("policySource"),
          QStringLiteral("policyEndpoint"),
          QStringLiteral("policyResolvedSites"), QStringLiteral("policyLoaded"),
-         QStringLiteral("policyMetadata"),
+         QStringLiteral("policyMetadata"), QStringLiteral("routingDegraded"),
+         QStringLiteral("routingError"), QStringLiteral("needsReapply"),
          QStringLiteral("recoveryRequired")
     };
     for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
@@ -648,6 +777,12 @@ bool HeadlessRoutingController::loadState()
         || !object.value(QStringLiteral("policyLoaded")).isBool()
         || (object.contains(QStringLiteral("policyEndpoint"))
             && !object.value(QStringLiteral("policyEndpoint")).isString())) return false;
+    if (object.contains(QStringLiteral("routingDegraded"))
+        && !object.value(QStringLiteral("routingDegraded")).isBool()) return false;
+    if (object.contains(QStringLiteral("routingError"))
+        && !object.value(QStringLiteral("routingError")).isString()) return false;
+    if (object.contains(QStringLiteral("needsReapply"))
+        && !object.value(QStringLiteral("needsReapply")).isBool()) return false;
     if (object.contains(QStringLiteral("recoveryRequired"))
         && (!object.value(QStringLiteral("recoveryRequired")).isBool()
             || object.value(QStringLiteral("recoveryRequired")).toBool())) return false;
@@ -658,6 +793,19 @@ bool HeadlessRoutingController::loadState()
     m_policySource = object.value(QStringLiteral("policySource")).toString();
     m_policyEndpoint = object.value(QStringLiteral("policyEndpoint")).toString();
     m_hasPolicy = object.value(QStringLiteral("policyLoaded")).toBool();
+    m_routingDegraded = object.value(QStringLiteral("routingDegraded")).toBool();
+    m_routingError = object.value(QStringLiteral("routingError")).toString();
+    const bool hasNeedsReapplyField = object.contains(QStringLiteral("needsReapply"));
+    const bool persistedNeedsReapply = object.value(QStringLiteral("needsReapply")).toBool();
+    m_needsReapply = persistedNeedsReapply;
+    if (!m_routingDegraded && !m_routingError.isEmpty()) return false;
+    if (m_routingDegraded
+        && (m_activeProfile.isEmpty() || m_activeInterface.isEmpty()
+            || m_routingError.trimmed().isEmpty()
+            || !QRegularExpression(QStringLiteral("^[A-Za-z0-9_.-]{1,15}$"))
+                    .match(m_activeInterface).hasMatch())) {
+        return false;
+    }
     m_policyMetadata.reset();
     if (object.contains(QStringLiteral("policyMetadata"))) {
         if (!object.value(QStringLiteral("policyMetadata")).isNull()
@@ -730,14 +878,30 @@ bool HeadlessRoutingController::loadState()
                 return false;
             }
         }
-    } else if (!m_activeInterface.isEmpty()
-               || !m_policyRevision.isEmpty() || !m_policyContentHash.isEmpty()
+    } else if (!m_policyRevision.isEmpty() || !m_policyContentHash.isEmpty()
                || !m_policySource.isEmpty() || !m_policyResolvedSites.isEmpty()
                || m_policyMetadata.has_value() || !m_policyEndpoint.isEmpty()) {
         return false;
     }
     const QJsonObject routing = m_reconciler.status();
     if (routing.value(QStringLiteral("recoveryRequired")).toBool()) return false;
+    const bool routingNeedsReapply = routing.value(QStringLiteral("needsReapply")).toBool();
+    // The reconciler derives this startup-only marker from exact kernel state;
+    // the controller receipt is merely a cache.  Adopt that evidence in both
+    // directions so stale true/false values cannot block a legitimate restart
+    // transition.  The value is persisted below after all controller checks.
+    m_needsReapply = routingNeedsReapply;
+    if (m_needsReapply) {
+        if (m_routingDegraded || m_activeProfile.isEmpty() || m_activeInterface.isEmpty()
+            || routing.value(QStringLiteral("mode")).toString() != QStringLiteral("all-except")
+            || !routing.value(QStringLiteral("needsReapply")).toBool()
+            || !routing.value(QStringLiteral("interfaceOffline")).toBool()
+            || routing.value(QStringLiteral("interface")).toString() != m_activeInterface
+            || routing.value(QStringLiteral("routeTable")).toInt() != 51821
+            || !routing.value(QStringLiteral("routes")).toArray().isEmpty()) {
+            return false;
+        }
+    }
     if (m_hasPolicy) {
         const QString routeInterface = routing.value(QStringLiteral("interface")).toString();
         const QString routeMode = routing.value(QStringLiteral("mode")).toString();
@@ -746,15 +910,38 @@ bool HeadlessRoutingController::loadState()
                 && routeMode != QStringLiteral("all-except"))) {
             return false;
         }
-        if (routeMode == QStringLiteral("all-except")
-            && routing.value(QStringLiteral("bypassRoutes")).toArray().isEmpty()) {
+        // An empty server policy is valid: the full-tunnel rule and its
+        // receipt still provide the all-except invariant, while there are no
+        // main-table destinations that need a bypass selector.
+    } else if (m_routingDegraded) {
+        const QString routeInterface = routing.value(QStringLiteral("interface")).toString();
+        const bool routeIdentityValid = routing.value(QStringLiteral("routes")).toArray().isEmpty()
+                ? routeInterface.isEmpty()
+                : routeInterface == m_activeInterface;
+        if (routing.value(QStringLiteral("mode")).toString() != QStringLiteral("only-forward")
+            || routing.value(QStringLiteral("routeTable")).toInt() != 0
+            || !routing.value(QStringLiteral("bypassRoutes")).toArray().isEmpty()
+            || !routing.value(QStringLiteral("criticalBypassRoutes")).toArray().isEmpty()
+            || !routeIdentityValid
+            || (!routeInterface.isEmpty() && routeInterface != m_activeInterface)) return false;
+    } else if (routing.value(QStringLiteral("mode")).toString() == QStringLiteral("all-except")) {
+        // A policy-less all-except profile is valid when the full-tunnel
+        // table/rules are intact; an empty bypass set means the server policy
+        // simply has no main-table exceptions.
+        if (m_activeProfile.isEmpty() || m_activeInterface.isEmpty()
+            || routing.value(QStringLiteral("interface")).toString() != m_activeInterface
+            || routing.value(QStringLiteral("routeTable")).toInt() != 51821
+            || routing.value(QStringLiteral("routes")).toArray().size() != 0) {
             return false;
         }
-    } else if (!routing.value(QStringLiteral("interface")).toString().isEmpty()
+    } else if (!m_activeInterface.isEmpty()
+               || !routing.value(QStringLiteral("interface")).toString().isEmpty()
                || !routing.value(QStringLiteral("routes")).toArray().isEmpty()
                || routing.value(QStringLiteral("mode")).toString() == QStringLiteral("all-except")) {
         return false;
     }
+    if ((!hasNeedsReapplyField || persistedNeedsReapply != m_needsReapply)
+        && !saveState()) return false;
     return true;
 }
 
@@ -777,6 +964,9 @@ bool HeadlessRoutingController::saveState() const
         { QStringLiteral("policyLoaded"), m_hasPolicy },
         { QStringLiteral("policyMetadata"), m_policyMetadata.has_value()
               ? QJsonValue(m_policyMetadata->toJson()) : QJsonValue(QJsonValue::Null) },
+        { QStringLiteral("routingDegraded"), m_routingDegraded },
+        { QStringLiteral("routingError"), m_routingError },
+        { QStringLiteral("needsReapply"), m_needsReapply },
         { QStringLiteral("recoveryRequired"), !m_stateValid },
     };
     const bool committed = file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) >= 0
@@ -808,10 +998,18 @@ bool HeadlessRoutingController::restoreRoutingSnapshot(const QJsonObject &snapsh
         }
         bypassRoutes.append(value.toString());
     }
+    QStringList criticalBypassRoutes;
+    for (const QJsonValue &value : snapshot.value(QStringLiteral("criticalBypassRoutes")).toArray()) {
+        if (!value.isString()) {
+            if (error) *error = QStringLiteral("previous critical bypass receipt is malformed");
+            return false;
+        }
+        criticalBypassRoutes.append(value.toString());
+    }
     RouteReconcileResult routing;
     if (mode == QStringLiteral("all-except")) {
         if (interfaceName.isEmpty()) return false;
-        routing = m_reconciler.applyAllExcept(interfaceName, bypassRoutes);
+        routing = m_reconciler.applyAllExcept(interfaceName, bypassRoutes, criticalBypassRoutes);
     } else if (mode == QStringLiteral("only-forward") && !interfaceName.isEmpty()) {
         routing = m_reconciler.apply(interfaceName, routes);
     } else if (mode == QStringLiteral("only-forward")) {
@@ -870,7 +1068,9 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
                     == profile.routingMode
                 && persistedRouting.value(QStringLiteral("interface")).toString()
                     == interfaceName;
-        const bool bootstrapRequired = m_activeProfile != profile.id || !persistedSameRouting;
+        const bool bootstrapRequired = m_needsReapply
+                || m_activeProfile != profile.id || !persistedSameRouting;
+        const bool reconnectingOffline = m_needsReapply;
         const QJsonObject previousController {
             { QStringLiteral("activeProfile"), m_activeProfile },
             { QStringLiteral("activeInterface"), m_activeInterface },
@@ -880,6 +1080,7 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
             { QStringLiteral("policyEndpoint"), m_policyEndpoint },
             { QStringLiteral("policyResolvedSites"), m_policyResolvedSites },
             { QStringLiteral("policyLoaded"), m_hasPolicy },
+            { QStringLiteral("needsReapply"), m_needsReapply },
         };
         const std::optional<amnezia::ManagedRoutePolicyMetadata> previousMetadata = m_policyMetadata;
         const auto restoreBootstrap = [&]() {
@@ -893,6 +1094,7 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
             m_policyEndpoint = previousController.value(QStringLiteral("policyEndpoint")).toString();
             m_policyResolvedSites = previousController.value(QStringLiteral("policyResolvedSites")).toObject();
             m_hasPolicy = previousController.value(QStringLiteral("policyLoaded")).toBool();
+            m_needsReapply = previousController.value(QStringLiteral("needsReapply")).toBool();
             m_policyMetadata = previousMetadata;
             if (!routesRestored || !saveState()) {
                 if (!markRecoveryRequired(restoreError.isEmpty()
@@ -903,20 +1105,56 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
             }
             return true;
         };
+        const auto failAllExcept = [&](const QString &reason) {
+            if (profile.routingMode == QStringLiteral("all-except")
+                && !m_reconciler.status().value(QStringLiteral("recoveryRequired")).toBool()) {
+                return fallbackToOnlyForward(profile, reason);
+            }
+            return failure(QStringLiteral("recovery_required"), reason);
+        };
         if (bootstrapRequired) {
-            const RoutingResult bootstrap = applyRoutes(profile, {});
+            // An offline all-except receipt is the last known-good allow-list.
+            // Reconnect must restore that complete set before the policy
+            // endpoint is queried; rebuilding from the profile's current
+            // critical selectors would otherwise delete the retained policy
+            // rules while the VPN interface is still coming back.
+            const RoutingResult bootstrap = applyRoutes(
+                    profile, {}, reconnectingOffline
+                        && profile.routingMode == QStringLiteral("all-except"));
             if (!bootstrap.ok) {
+                if (profile.routingMode == QStringLiteral("all-except")
+                    && bootstrap.code != QStringLiteral("recovery_required")
+                    && bootstrap.code != QStringLiteral("routing_degraded")) {
+                    return failAllExcept(bootstrap.message);
+                }
                 if (!restoreBootstrap()) {
                     return failure(QStringLiteral("recovery_required"),
                                    QStringLiteral("policy bootstrap failed and previous state could not be restored"));
                 }
                 return bootstrap;
             }
+            if (reconnectingOffline) {
+                // applyRoutes is also used for the bootstrap transaction and
+                // normally retires needsReapply after its own table/DNS
+                // postcondition.  Keep the explicit marker through policy
+                // fetch and the final critical/server route apply so a crash
+                // in this window reconnects safely on the next start.
+                m_needsReapply = true;
+                if (!saveState()) {
+                    markRecoveryRequired(QStringLiteral(
+                            "offline routing reapply marker could not be retained"));
+                    return failure(QStringLiteral("recovery_required"),
+                                   QStringLiteral("offline routing reapply state could not be saved"));
+                }
+            }
         }
         const std::optional<amnezia::ManagedRoutePolicyMetadata> current = m_policyMetadata;
 
         QString policyUrlError;
         if (!isSafePolicyEndpoint(profile, profile.serverRulesUrl, &policyUrlError)) {
+            if (profile.routingMode == QStringLiteral("all-except")) {
+                return failAllExcept(policyUrlError);
+            }
             if (bootstrapRequired && !restoreBootstrap()) {
                 return failure(QStringLiteral("recovery_required"),
                                QStringLiteral("policy endpoint was rejected and bootstrap state could not be restored"));
@@ -925,6 +1163,9 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
         }
         const ServerRoutingPolicyResult fetched = fetchPolicy(profile, current);
         if (!fetched.ok) {
+            if (profile.routingMode == QStringLiteral("all-except")) {
+                return failAllExcept(fetched.message);
+            }
             if (bootstrapRequired && !restoreBootstrap()) {
                 return failure(QStringLiteral("recovery_required"),
                                QStringLiteral("policy fetch failed and bootstrap state could not be restored"));
@@ -936,6 +1177,9 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
         const ServerRoutingPolicyResult resolved = ServerRoutingPolicy::resolve(
                 fetched.policy, 4000, previousResolvedSites);
         if (!resolved.ok) {
+            if (profile.routingMode == QStringLiteral("all-except")) {
+                return failAllExcept(resolved.message);
+            }
             if (bootstrapRequired && !restoreBootstrap()) {
                 return failure(QStringLiteral("recovery_required"),
                                QStringLiteral("policy resolution failed and bootstrap state could not be restored"));
@@ -945,6 +1189,14 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
         serverRoutes = resolved.policy.routes;
         const RoutingResult applied = applyRoutes(profile, serverRoutes);
         if (!applied.ok) {
+            if (profile.routingMode == QStringLiteral("all-except")
+                && applied.code != QStringLiteral("recovery_required")
+                && applied.code != QStringLiteral("routing_degraded")) {
+                return failAllExcept(applied.message);
+            }
+            if (applied.code == QStringLiteral("routing_degraded")) {
+                return applied;
+            }
             if (bootstrapRequired && !restoreBootstrap()) {
                 return failure(QStringLiteral("recovery_required"),
                                QStringLiteral("policy apply failed and bootstrap state could not be restored"));
@@ -991,7 +1243,8 @@ RoutingResult HeadlessRoutingController::fetchAndApply(const Profile &profile)
 }
 
 RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
-                                                     const QStringList &serverRoutes)
+                                                     const QStringList &serverRoutes,
+                                                     bool preserveOfflineLkg)
 {
     const bool allExcept = profile.routingMode == QStringLiteral("all-except");
     bool routesValid = false;
@@ -1008,16 +1261,131 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
         // subnet) and must not become main-table bypasses.  The policy URL is
         // likewise intentionally fetched through the tunnel.  Only resolved
         // server allow-list, DNS, and public endpoint routes are bypassed.
-        routes = allExceptBypassRoutes(profile, serverRoutes, &routesValid);
-        if (!routesValid) {
-            return failure(QStringLiteral("invalid_routes"),
-                           QStringLiteral("full-tunnel bypass routes exceed the safety boundary"));
+        QStringList criticalRoutes;
+        QStringList underlayRoutes;
+        if (preserveOfflineLkg) {
+            const bool receiptShape = previousRouting.value(QStringLiteral("mode")).toString()
+                    == QStringLiteral("all-except")
+                && previousRouting.value(QStringLiteral("interface")).toString()
+                    == interfaceName
+                && previousRouting.value(QStringLiteral("routes")).toArray().isEmpty()
+                && previousRouting.value(QStringLiteral("needsReapply")).toBool()
+                && previousRouting.value(QStringLiteral("interfaceOffline")).toBool()
+                && previousRouting.value(QStringLiteral("routeTable")).toInt() == 51821;
+            if (!receiptShape) {
+                return failure(QStringLiteral("offline_lkg_invalid"),
+                               QStringLiteral("offline all-except receipt is not reconnectable"));
+            }
+            // This branch intentionally replaces the generic profile/server
+            // merge with the persisted all-except LKG. Keep forwardRoutes on
+            // the VPN side; never turn them into underlay bypass selectors
+            // during reconnect.
+            routes.clear();
+            for (const QJsonValue &value : previousRouting
+                     .value(QStringLiteral("bypassRoutes")).toArray()) {
+                if (!value.isString()) {
+                    return failure(QStringLiteral("offline_lkg_invalid"),
+                                   QStringLiteral("offline all-except bypass receipt is malformed"));
+                }
+                routes.append(value.toString());
+            }
+            for (const QJsonValue &value : previousRouting
+                     .value(QStringLiteral("criticalBypassRoutes")).toArray()) {
+                if (!value.isString()) {
+                    return failure(QStringLiteral("offline_lkg_invalid"),
+                                   QStringLiteral("offline all-except critical receipt is malformed"));
+                }
+                criticalRoutes.append(value.toString());
+            }
+            bool lkgValid = false;
+            const QStringList boundedLkg = amnezia::managedRoutePolicy::validatedManagedRoutes(
+                    routes, &lkgValid);
+            bool criticalValid = false;
+            const QStringList boundedCritical = amnezia::managedRoutePolicy::validatedManagedRoutes(
+                    criticalRoutes, &criticalValid);
+            if (!lkgValid || boundedLkg.size() != routes.size()
+                || !criticalValid || boundedCritical.size() != criticalRoutes.size()
+                || !std::all_of(criticalRoutes.cbegin(), criticalRoutes.cend(),
+                                [&routes](const QString &route) { return routes.contains(route); })) {
+                return failure(QStringLiteral("offline_lkg_invalid"),
+                               QStringLiteral("offline all-except receipt contains invalid routes"));
+            }
+            // Keep the persisted route order byte-for-byte.  Add only new
+            // endpoint/underlay selectors discovered for the reconnect, and
+            // classify them as critical so they are installed first.
+            bool currentValid = false;
+            QStringList currentCritical;
+            allExceptBypassRoutes(profile, {}, &currentValid, &currentCritical);
+            if (!currentValid) {
+                return failure(QStringLiteral("invalid_routes"),
+                               QStringLiteral("full-tunnel endpoint bootstrap routes are invalid"));
+            }
+            QString underlayError;
+            underlayRoutes = m_reconciler.activeUnderlayProtectedRoutes(
+                    interfaceName, profile.forwardRoutes, &underlayError);
+            if (!underlayError.isEmpty()) {
+                return failure(QStringLiteral("full_tunnel_underlay_probe_failed"), underlayError);
+            }
+            currentCritical.append(underlayRoutes);
+            currentCritical.removeDuplicates();
+            for (const QString &route : currentCritical) {
+                if (!routes.contains(route)) routes.append(route);
+                if (!criticalRoutes.contains(route)) criticalRoutes.append(route);
+            }
+            routesValid = true;
+        } else {
+            routes = allExceptBypassRoutes(profile, serverRoutes, &routesValid, &criticalRoutes);
+            if (!routesValid) {
+                return failure(QStringLiteral("invalid_routes"),
+                               QStringLiteral("full-tunnel bypass routes exceed the safety boundary"));
+            }
         }
-        result = m_reconciler.applyAllExcept(interfaceName, routes);
+        if (!preserveOfflineLkg) {
+            QString underlayError;
+            underlayRoutes = m_reconciler.activeUnderlayProtectedRoutes(
+                    interfaceName, profile.forwardRoutes, &underlayError);
+            if (!underlayError.isEmpty()) {
+                return failure(QStringLiteral("full_tunnel_underlay_probe_failed"), underlayError);
+            }
+        }
+        // Keep endpoint and directly-connected underlay selectors at the head
+        // of the target list.  Their order is the safety contract: critical
+        // routes are installed before any server policy batch.
+        QStringList orderedRoutes;
+        if (preserveOfflineLkg) {
+            orderedRoutes = routes;
+        } else {
+            orderedRoutes = criticalRoutes;
+            orderedRoutes.append(underlayRoutes);
+            QSet<QString> orderedSeen;
+            for (const QString &route : std::as_const(orderedRoutes)) orderedSeen.insert(route);
+            for (const QString &route : routes) {
+                if (!orderedSeen.contains(route)) {
+                    orderedRoutes.append(route);
+                    orderedSeen.insert(route);
+                }
+            }
+        }
+        bool orderedValid = false;
+        orderedRoutes = amnezia::managedRoutePolicy::validatedManagedRoutes(
+                orderedRoutes, &orderedValid);
+        if (!orderedValid) {
+            return failure(QStringLiteral("invalid_routes"),
+                           QStringLiteral("full-tunnel underlay routes exceed the safety boundary"));
+        }
+        criticalRoutes.append(underlayRoutes);
+        criticalRoutes.removeDuplicates();
+        result = m_reconciler.applyAllExcept(interfaceName, orderedRoutes, criticalRoutes);
     } else {
         result = m_reconciler.apply(interfaceName, routes);
     }
     if (!result.ok) {
+        qWarning().noquote() << QStringLiteral(
+                "HeadlessRoutingController apply failed code=%1 message=%2")
+                .arg(result.code, result.message.left(512));
+        if (allExcept && result.code == QStringLiteral("full_tunnel_postcondition_failed")) {
+            return fallbackToOnlyForward(profile, result.message);
+        }
         return failure(result.code, result.message);
     }
     const QString previousDnsInterface = previousRouting.value(QStringLiteral("dnsInterface")).toString();
@@ -1052,8 +1420,14 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
             RouteReconcileResult routeRestore;
             if (previousRouting.value(QStringLiteral("mode")).toString()
                     == QStringLiteral("all-except")) {
+                QStringList oldCriticalBypass;
+                for (const QJsonValue &value : previousRouting
+                         .value(QStringLiteral("criticalBypassRoutes")).toArray()) {
+                    if (value.isString()) oldCriticalBypass.append(value.toString());
+                }
                 routeRestore = m_reconciler.applyAllExcept(
-                        previousRouting.value(QStringLiteral("interface")).toString(), oldBypass);
+                        previousRouting.value(QStringLiteral("interface")).toString(), oldBypass,
+                        oldCriticalBypass);
             } else if (!oldRoutes.isEmpty()) {
                 routeRestore = m_reconciler.apply(
                         previousRouting.value(QStringLiteral("interface")).toString(), oldRoutes);
@@ -1084,6 +1458,11 @@ RoutingResult HeadlessRoutingController::applyRoutes(const Profile &profile,
     }
     m_activeProfile = profile.id;
     m_activeInterface = interfaceName;
+    m_routingDegraded = false;
+    m_routingError.clear();
+    // applyAllExcept/apply and the DNS readback above are the postcondition
+    // gate.  Do not clear the offline marker before both have succeeded.
+    m_needsReapply = false;
     if (!saveState()) {
         markRecoveryRequired(QStringLiteral("routing controller receipt could not be saved"));
         return failure(QStringLiteral("recovery_required"),

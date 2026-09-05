@@ -71,7 +71,7 @@ private:
     void checkAutomaticUpdates();
     bool peerIsRoot(QLocalSocket *client) const;
     bool authorizePrivilegedCommand(QLocalSocket *client, const Request &request) const;
-    void ensureBackendHealthy();
+    void ensureBackendHealthy(bool allowMutation = false);
 
     QLocalServer m_server;
     QString m_socketPath;
@@ -90,6 +90,11 @@ private:
     StartPhase m_startPhase = StartPhase::NotStarted;
     bool m_backendOwned = false;
     bool m_routingOwned = false;
+    // Mutating requests can re-enter the Qt event loop while a backend or
+    // resolver command is synchronously waiting.  Keep the whole operation
+    // serialized so a nested Connect/Disconnect cannot observe a half-built
+    // session and mutate it underneath the owner.
+    bool m_mutationInFlight = false;
     QString m_state = QStringLiteral("disconnected");
     QString m_activeProfile;
     std::optional<Profile> m_activeProfileData;

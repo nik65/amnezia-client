@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QDateTime>
 #include <QFile>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 
 #include "profileStore.h"
@@ -114,6 +115,130 @@ class VpnBackendTest : public QObject
     Q_OBJECT
 
 private slots:
+    void runBatchReturnsBoundedStderrAndExitCode()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString helperPath = temporaryDirectory.filePath(QStringLiteral("batch-helper"));
+        QFile helper(helperPath);
+        QVERIFY(helper.open(QIODevice::WriteOnly));
+        QVERIFY(helper.write("#!/bin/sh\nprintf 'batch-contract-error\\n' >&2\nexit 17\n") > 0);
+        helper.close();
+        QVERIFY(QFile::setPermissions(helperPath, QFileDevice::ReadOwner
+                                      | QFileDevice::WriteOwner
+                                      | QFileDevice::ExeOwner));
+
+        RealCommandRunner runner;
+        const CommandResult result = runner.runBatch(helperPath,
+                                                     { { QStringLiteral("noop") } });
+        QVERIFY(!result.ok);
+        QCOMPARE(result.exitCode, 17);
+        QVERIFY(result.message.contains(QStringLiteral("batch-contract-error")));
+        QVERIFY(result.message.size() <= 2200);
+    }
+
+    void runBatchUsesConfiguredRuntimeAndRemovesOwnerOnlyFile()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString markerPath = temporaryDirectory.filePath(QStringLiteral("batch-marker"));
+        const QString helperPath = temporaryDirectory.filePath(QStringLiteral("batch-helper"));
+        QFile helper(helperPath);
+        QVERIFY(helper.open(QIODevice::WriteOnly));
+        QVERIFY(helper.write("#!/bin/sh\nprintf '%s\\n' \"$2\" > \"") > 0);
+        QVERIFY(helper.write(markerPath.toUtf8()) > 0);
+        QVERIFY(helper.write("\"\nstat -c '%a' \"$2\" >> \"") > 0);
+        QVERIFY(helper.write(markerPath.toUtf8()) > 0);
+        QVERIFY(helper.write("\"\nexit 0\n") > 0);
+        helper.close();
+        QVERIFY(QFile::setPermissions(helperPath, QFileDevice::ReadOwner
+                                      | QFileDevice::WriteOwner
+                                      | QFileDevice::ExeOwner));
+
+        RealCommandRunner runner(temporaryDirectory.path());
+        const CommandResult result = runner.runBatch(helperPath,
+                                                     { { QStringLiteral("noop") } });
+        QVERIFY2(result.ok, qPrintable(result.message));
+        QFile marker(markerPath);
+        QVERIFY(marker.open(QIODevice::ReadOnly));
+        const QStringList receipt = QString::fromUtf8(marker.readAll())
+                .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        QCOMPARE(receipt.size(), 2);
+        QVERIFY(receipt.constFirst().startsWith(temporaryDirectory.path()));
+        QCOMPARE(receipt.constLast(), QStringLiteral("600"));
+        QVERIFY(!QFileInfo::exists(receipt.constFirst()));
+    }
+
+    void runBatchRejectsInsecureConfiguredRuntime()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        QVERIFY(QFile::setPermissions(temporaryDirectory.path(),
+                                      QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                      | QFileDevice::ExeOwner | QFileDevice::WriteGroup));
+        RealCommandRunner runner(temporaryDirectory.path());
+        const CommandResult result = runner.runBatch(QStringLiteral("/bin/false"),
+                                                     { { QStringLiteral("noop") } });
+        QVERIFY(!result.ok);
+        QVERIFY(result.message.contains(QStringLiteral("configured runtime rejected")));
+    }
+
+    void runCapturedReturnsCompleteLargeKernelProbe()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString helperPath = temporaryDirectory.filePath(QStringLiteral("probe-helper"));
+        QFile helper(helperPath);
+        QVERIFY(helper.open(QIODevice::WriteOnly));
+        QVERIFY(helper.write(
+                "#!/bin/sh\n"
+                "i=1\n"
+                "while [ \"$i\" -le 1212 ]; do\n"
+                "  priority=$((1000 + i))\n"
+                "  printf '%s: from all to 10.8.1.4/32 lookup main\\n' \"$priority\"\n"
+                "  i=$((i + 1))\n"
+                "done\n") > 0);
+        helper.close();
+        QVERIFY(QFile::setPermissions(helperPath, QFileDevice::ReadOwner
+                                      | QFileDevice::WriteOwner
+                                      | QFileDevice::ExeOwner));
+
+        RealCommandRunner runner;
+        const CommandResult result = runner.runCaptured(helperPath, {});
+        QVERIFY2(result.ok, qPrintable(result.message));
+        QVERIFY(result.output.size() > 8192);
+        const QStringList lines = result.output.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        QCOMPARE(lines.size(), 1212);
+        const QRegularExpression rulePattern(
+                QStringLiteral(R"(^\d+: from all to 10\.8\.1\.4/32 lookup main$)"));
+        for (const QString &line : lines) {
+            QVERIFY2(rulePattern.match(line).hasMatch(), qPrintable(line));
+        }
+        QVERIFY(lines.constLast().startsWith(QStringLiteral("2212:")));
+    }
+
+    void runCapturedRejectsProbeOutputOverSafeLimit()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString helperPath = temporaryDirectory.filePath(QStringLiteral("oversized-probe-helper"));
+        QFile helper(helperPath);
+        QVERIFY(helper.open(QIODevice::WriteOnly));
+        QVERIFY(helper.write(
+                "#!/bin/sh\n"
+                "dd if=/dev/zero bs=1048577 count=1 2>/dev/null\n") > 0);
+        helper.close();
+        QVERIFY(QFile::setPermissions(helperPath, QFileDevice::ReadOwner
+                                      | QFileDevice::WriteOwner
+                                      | QFileDevice::ExeOwner));
+
+        RealCommandRunner runner;
+        const CommandResult result = runner.runCaptured(helperPath, {});
+        QVERIFY(!result.ok);
+        QCOMPARE(result.message, QStringLiteral("probe output exceeded safe limit"));
+        QVERIFY(result.output.isEmpty());
+    }
+
     void wireGuardUsesWgQuickAndDisconnects()
     {
         QTemporaryDir temporaryDirectory;

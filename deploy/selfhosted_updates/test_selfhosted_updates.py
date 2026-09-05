@@ -3033,12 +3033,18 @@ class SourceContractTests(unittest.TestCase):
 
     def test_selfhosted_release_documents_own_monotonic_versioning(self) -> None:
         cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        headless_cmake = (REPO_ROOT / "headless/CMakeLists.txt").read_text(encoding="utf-8")
         readme = (REPO_ROOT / "deploy/selfhosted_updates/README.md").read_text(encoding="utf-8")
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.1.17)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2165)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.1.37)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2185)", cmake)
+        self.assertIn('set(HEADLESS_BUILD_VERSION "5.0.1.37")', headless_cmake)
+        self.assertIn("current self-hosted release line is `5.0.1.37`", readme)
+        self.assertIn("`versionCode` `2185`", readme)
+        self.assertIn("routing_degraded", readme)
+        self.assertIn("`10.8.1.0/24` remains", readme)
         self.assertIn("own monotonically increasing app version", readme)
         self.assertIn("never update backward to an older fork release", readme)
         product_version = (
@@ -3058,6 +3064,7 @@ class SourceContractTests(unittest.TestCase):
             'QStringLiteral("systemd-run")',
             update_manager,
         )
+
         self.assertIn('startDetached', update_manager)
         self.assertIn('QStringLiteral("--collect")', update_manager)
         self.assertIn('QStringLiteral("--no-block")', update_manager)
@@ -3068,6 +3075,28 @@ class SourceContractTests(unittest.TestCase):
             '{ QStringLiteral("restart"), QString::fromLatin1(UpdateServiceName) }',
             update_manager,
         )
+
+    def test_headless_batch_staging_uses_validated_runtime_root(self) -> None:
+        runner = (REPO_ROOT / "headless/vpnBackend.cpp").read_text(encoding="utf-8")
+        runner_header = (REPO_ROOT / "headless/vpnBackend.h").read_text(encoding="utf-8")
+        daemon = (REPO_ROOT / "headless/daemon.cpp").read_text(encoding="utf-8")
+        service = (REPO_ROOT / "headless/amneziad.service.in").read_text(encoding="utf-8")
+        self.assertIn('QStringLiteral("/run/amnezia")', runner)
+        self.assertIn("isSecureWritableDirectory", runner)
+        self.assertIn("isSymLink", runner)
+        self.assertIn("geteuid", runner)
+        self.assertIn("WriteGroup", runner)
+        self.assertIn("WriteOther", runner)
+        self.assertIn("setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)", runner)
+        self.assertIn('QStringLiteral("temporary")', runner)
+        self.assertIn("MaxCapturedProbeStdout = 1024 * 1024", runner)
+        self.assertIn("MaxCapturedProbeStderr = 4096", runner)
+        self.assertIn('QStringLiteral("probe output exceeded safe limit")', runner)
+        self.assertNotIn("readAllStandardOutput().left(8192)", runner)
+        self.assertIn("RealCommandRunner(QString stagingRoot", runner_header)
+        self.assertIn("std::make_shared<RealCommandRunner>(stagingRoot)", daemon)
+        self.assertIn("--staging-root /run/amnezia", service)
+        self.assertIn("ReadWritePaths=/run/amnezia", service)
 
     def test_headless_update_archive_has_two_managed_files_and_provisioning_is_separate(self) -> None:
         update_manager = (REPO_ROOT / "headless/headlessUpdateManager.cpp").read_text(encoding="utf-8")
@@ -3119,9 +3148,31 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("readRuleSnapshot()", reconciler)
         self.assertIn("Retire stale allow-list rules before reusing priority 1000", reconciler)
         self.assertIn("restoreRemovedPreviousBypassRoutes", reconciler)
-        self.assertIn("priorityWasFreedForReplacement", reconciler)
+        self.assertNotIn("priorityWasFreedForReplacement", reconciler)
+        self.assertIn("runBatch", reconciler)
+        self.assertIn("FullTunnelRuleBatchSize", reconciler)
+        self.assertIn("FullTunnelBypassPreferredPriority", reconciler)
+        self.assertIn("only-forward receipt", reconciler)
+        self.assertIn("selectedRulesValid", reconciler)
+        self.assertIn("postcondition snapshot", reconciler)
+        self.assertIn("from\\\\s+all", reconciler)
+        controller = (REPO_ROOT / "headless/headlessRoutingController.cpp").read_text(encoding="utf-8")
+        self.assertIn("fallbackToOnlyForward", controller)
+        self.assertIn('QStringLiteral("routing_degraded")', controller)
+        self.assertIn("routingDegraded", controller)
         self.assertIn("stale full-tunnel allow-list rule removal failed", reconciler)
-        self.assertIn("CAP_NET_ADMIN", (REPO_ROOT / "headless/README.md").read_text(encoding="utf-8"))
+        headless_readme = (REPO_ROOT / "headless/README.md").read_text(encoding="utf-8")
+        self.assertIn("безопасный `only-forward` fallback", headless_readme)
+        self.assertIn("`10.8.1.0/24`", headless_readme)
+        self.assertIn("обычный интернет", headless_readme)
+        self.assertIn("`routing_degraded`", headless_readme)
+        self.assertIn("`proto 2`", headless_readme)
+        self.assertIn("`scope 253`", headless_readme)
+        self.assertIn("`docker0`, `br-*`", headless_readme)
+        self.assertIn("`187` или `isis`", headless_readme)
+        self.assertIn("`186`, который может отображаться как `186` или `bgp`", headless_readme)
+        self.assertIn("rejected-protocol diagnostics", headless_readme)
+        self.assertIn("CAP_NET_ADMIN", headless_readme)
 
     def test_managed_routing_transaction_runs_in_one_remote_shell(self) -> None:
         install_controller = (

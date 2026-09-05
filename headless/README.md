@@ -86,6 +86,24 @@ cmake --build build --target amneziad amnezia-cli
 
 На Windows, macOS, Android и iOS этот target намеренно не включается: Ubuntu headless-режим требует native Linux build.
 
+Read-only kernel snapshots (including large all-except policy-rule sets) are
+drained completely up to a dedicated 1 MiB stdout bound; an oversized probe
+fails closed without returning a partial snapshot. Stderr and control
+diagnostics retain their smaller independent limits.
+
+Для numeric main-route snapshots (`ip -N`) parser принимает kernel protocol как
+`proto 2` или `proto kernel`, а scope — только как `scope 253` или `scope link`.
+Прямые private/link-local prefixes физического LAN и Docker bridge-интерфейсов
+(`docker0`, `br-*`) входят в critical bypass; VPN-интерфейсы, loopback,
+gateway и public routes исключаются.
+
+Для ownership readback managed split routes используют только протокол `187`;
+iproute2 может отобразить его как `187` или `isis`. Managed full-tunnel routes
+используют только `186`, который может отображаться как `186` или `bgp`.
+Другие protocol names/numbers, включая `static` и `kernel`, считаются
+foreign/ambiguous и никогда не удаляются; rejected-protocol diagnostics
+ограничены по длине.
+
 ## Запуск
 
 По умолчанию daemon использует `$XDG_RUNTIME_DIR/amneziad.sock` и профильное хранилище в
@@ -225,12 +243,30 @@ containment, отсутствие symlink, root ownership и запрет group/
 `10.8.1.253:17864` при `10.8.1.0/24`). Внешний/plain HTTP, reserved hostnames и unsafe
 private endpoint отвергаются до сетевого запроса; redirects запрещены. Full-tunnel staging
   добавляет `Table = off`, чтобы только reconciler владел таблицей `51821` и его правилами.
-  Таблица `51821`, route protocol `186` и диапазон приоритетов `1000..1999` являются
-  зарезервированным namespace этого reconciler-а. Другой процесс с `root` или
+  Таблица `51821`, route protocol `186`, bypass-приоритеты `1001..1099` и
+  full-tunnel-приоритеты `1100..1999` являются зарезервированным namespace
+  этого reconciler-а; `1000` сохраняется как legacy-совместимый приоритет
+  только для явно receipt-bound активного `all-except`. Другой процесс с `root` или
   `CAP_NET_ADMIN` может создать неотличимые kernel objects; поэтому marker без
   валидного receipt не удаляется и не перенимается, а daemon останавливается с
   `recovery_required`. Это граница доверия host/network namespace, а не изоляция
   от привилегированного администратора.
+
+Если получение server-managed policy или проверка full-tunnel postcondition неуспешны,
+`all-except` не разрывает уже подключённую VPN-сессию: controller применяет и проверяет
+безопасный `only-forward` fallback. В этом состоянии `10.8.1.0/24` (и остальные
+`forwardRoutes`) идут через VPN, а обычный интернет возвращается на Wi-Fi/underlay;
+состояние явно помечается `routing_degraded`. `recovery_required` выставляется только
+если fallback невозможно применить или его readback не совпал с ожидаемым состоянием.
+
+После рестарта systemd допустим только узкий offline-reconnect случай: receipt
+`all-except` остаётся целым, интерфейс доказан absent/down, таблица `51821`
+пустая, а receipt-bound v4/v6 rules и DNS evidence проходят точную проверку.
+Такой receipt помечается `needsReapply`/`interfaceOffline` и не выдаётся за
+подключённый full tunnel; automatic reconnect сначала восстанавливает таблицу,
+critical/bypass rules и DNS, а затем снимает маркер только после readback.
+Интерфейс up при пустой/частичной таблице, foreign/mixed rules или recovery
+marker по-прежнему требуют ручного recovery.
 
 ## Безопасность разработки
 

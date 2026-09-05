@@ -3,6 +3,7 @@
 
 #include <QJsonObject>
 #include <QDateTime>
+#include <QList>
 #include <QString>
 #include <QStringList>
 
@@ -29,6 +30,19 @@ public:
     virtual bool isAvailable(const QString &program) const = 0;
     virtual QString resolveExecutable(const QStringList &candidates) const = 0;
     virtual CommandResult run(const QString &program, const QStringList &arguments) = 0;
+    // Execute a bounded set of argv-only commands in one privileged helper.
+    // The default keeps third-party runners source-compatible; Linux routing
+    // overrides this with `ip -batch` so large server allow-lists do not spawn
+    // one process per destination.
+    virtual CommandResult runBatch(const QString &program,
+                                   const QList<QStringList> &commands)
+    {
+        for (const QStringList &command : commands) {
+            const CommandResult result = run(program, command);
+            if (!result.ok) return result;
+        }
+        return { true, 0, {} };
+    }
     // Read-only command output is used only for local kernel state probes.
     // Keep the ordinary run() path output-free so backend output never enters
     // the daemon control protocol or logs.
@@ -54,12 +68,14 @@ public:
 class RealCommandRunner final : public CommandRunner
 {
 public:
-    RealCommandRunner();
+    explicit RealCommandRunner(QString stagingRoot = {});
     ~RealCommandRunner() override;
 
     bool isAvailable(const QString &program) const override;
     QString resolveExecutable(const QStringList &candidates) const override;
     CommandResult run(const QString &program, const QStringList &arguments) override;
+    CommandResult runBatch(const QString &program,
+                           const QList<QStringList> &commands) override;
     CommandResult runCaptured(const QString &program,
                               const QStringList &arguments) override;
     CommandResult startDetached(const QString &program,
@@ -72,6 +88,10 @@ public:
 private:
     struct RunningProcess;
     std::unique_ptr<RunningProcess> m_processes;
+    // Trusted runtime/staging root supplied by the installed service.  This
+    // is used for ip -batch input because ProtectSystem may make /tmp
+    // unavailable even though the unit grants access to /run/amnezia.
+    QString m_stagingRoot;
 };
 
 struct BackendResult

@@ -189,7 +189,7 @@ launch it manually with Qt IFW's unattended arguments and the self-hosted
 handoff marker (Windows may still display its UAC consent prompt):
 
 ```powershell
-& .\dist\selfhosted-windows-client\5.0.1.17\AmneziaVPN_5.0.1.17_windows_x64_selfhosted.exe `
+& .\dist\selfhosted-windows-client\5.0.1.37\AmneziaVPN_5.0.1.37_windows_x64_selfhosted.exe `
   --accept-messages --accept-licenses --confirm-command install AmneziaSelfHostedUpdate=true
 ```
 
@@ -217,11 +217,85 @@ only the source for official fixes/features that are ported into this branch;
 the self-hosted update version must stay higher than the last published fork
 artifact so installed clients never update backward to an older fork release.
 
-The current self-hosted release line is `5.0.1.17` with Android
-`versionCode` `2165`. The release includes the Linux headless client and the
+The current self-hosted release line is `5.0.1.37` with Android
+`versionCode` `2185`. The release includes the Linux headless client and the
 managed all-except/full-tunnel routing path.
 
-Release notes for `5.0.1.17`: the Windows QIF upgrade preflight now parses the
+Release notes for `5.0.1.36`: startup orphan validation now scopes narrow
+bypass-rule rejection to the daemon-managed dynamic priority namespace
+`1001..1099`, while an exact legacy receipt may continue to own `1000`.
+Foreign endpoint/underlay selectors at `1000` and outside that namespace are
+preserved; broad main-table preemptors remain independently rejected. Offline
+reapply coverage includes a 1216-selector receipt and two clean restarts.
+
+Release notes for `5.0.1.35`: startup diagnostics now retain a bounded,
+structured reject category in `lastError` and the controller log without
+including route lists, resolver output, or other policy data. An exact
+live-like receipt with 1216 bypass routes and 5 critical routes, canonical
+1100 full-tunnel rules, an empty managed table, a missing native link, and an
+empty successful resolver binding is retained as reconnectable offline state;
+missing or foreign rules remain fail-closed with a stable reason.
+
+Release notes for `5.0.1.34`: an exact reconnectable offline all-except
+receipt may retain its desired DNS fields when the VPN link-scoped resolver
+binding disappeared with the interface. Autoconnect must restore the native
+interface, reapply the full tunnel, and pass exact DNS readback before clearing
+`needsReapply`; present/up interfaces, mismatched DNS owners, and ambiguous
+resolver state remain fail-closed.
+
+Release notes for `5.0.1.33`: startup derives `needsReapply` from exact kernel
+evidence instead of trusting a stale receipt flag. A receipt-bound all-except
+policy with an empty table and an absent/down interface is retained as a
+reconnectable offline state, including legacy receipts without the field;
+exactly complete live table state derives healthy `false`. The inferred value
+is persisted after load, and partial, foreign, or mixed kernel state still
+fails closed.
+
+Release notes for `5.0.1.32`: managed route readback accepts only the two
+hardcoded iproute2 display aliases (`187`/`isis` for managed split routes and
+`186`/`bgp` for full-tunnel routes); all other protocol names and numbers are
+rejected as foreign. Rejected protocol diagnostics are bounded, and foreign
+routes are never deleted during preflight or cleanup.
+
+Release notes for `5.0.1.27`: read-only kernel probes now drain complete
+stdout snapshots up to a dedicated 1 MiB safety bound, rather than silently
+truncating at 8 KiB. Oversized probe output fails closed without exposing a
+partial snapshot; stderr and control diagnostics remain independently bounded.
+All exact kernel-observed private/link-local main-table prefixes on non-VPN
+interfaces, including Docker `docker0` and `br-*` bridges, are now installed
+and verified as critical full-tunnel bypasses before the full rule and policy
+batches. VPN-internal `10.8.1.0/24`, loopback, gateways, and public routes stay
+out of that critical set.
+
+Release notes for `5.0.1.25`: when all-except policy acquisition or full-tunnel
+postconditions fail, the connected VPN session is retained and the controller
+installs and verifies the safe only-forward fallback: `10.8.1.0/24` remains
+through VPN while ordinary internet traffic uses Wi-Fi/underlay. The daemon
+reports `routing_degraded` and persists the degraded receipt; it enters
+`recovery_required` only when that fallback cannot be installed or verified.
+Headless route readback accepts both symbolic
+`scope link` and the kernel's numeric `scope 253` spelling, including reordered
+IPv6 split-default lines. The strict token parser still rejects other scope
+names/numbers, gateways, and unknown route attributes. The release also includes
+the `ip -batch` staging changes from `5.0.1.22`, which uses the trusted
+service runtime directory (`/run/amnezia`) when available, rejects insecure or
+symlinked configured roots, and falls back to Qt's temporary directory only
+outside the installed service sandbox. Batch files remain owner-only and are
+removed automatically after each invocation.
+
+Release notes for `5.0.1.21`: headless startup binds bypass-rule ownership to
+the durable all-except receipt and preserves foreign underlay rules at priority
+1000. Fresh allocation starts at priority 1001, while legacy only-forward
+receipts are normalized without deleting the foreign rule; malformed selected
+priorities fail closed after batched rule application. Resolver cleanup retires
+stale receipts only after a vanished link and resolver status are both proven;
+partial delete batches are retried and verified against the final kernel
+snapshot, with bounded rollback substep diagnostics retained on failure.
+
+Release notes for `5.0.1.18`: the headless Linux policy-rule reconciler now
+selects an unoccupied priority before validating reserved defaults, preserves
+foreign rules, accepts endpoint-only bootstrap expansion, and rolls back exact
+owned selectors on a failed transition. The Windows QIF upgrade preflight now parses the
 native `FAILURE_ACTIONS_ON_NONCRASH_FAILURES : TRUE|FALSE` output and preserves
 its exact normalized value, verifies the existing service identity and trusted
 image path before SCM mutation, and writes an atomic protected recovery journal
