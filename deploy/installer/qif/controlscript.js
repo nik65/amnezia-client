@@ -338,44 +338,6 @@ function releaseWindowsUpgradeAdminRights()
     windowsUpgradeAdminRightsAcquired = false;
 }
 
-function parseScOutputFields(output)
-{
-    var fields = {};
-    var activeField = "";
-    var lines = String(output || "").replace(/\r\n?/g, "\n").split("\n");
-    for (var i = 0; i < lines.length; ++i) {
-        var line = lines[i];
-        var fieldMatch = line.match(/^\s*([^:]+?)\s*:\s*(.*)$/);
-        if (fieldMatch) {
-            var fieldName = fieldMatch[1].replace(/\s+/g, " ").trim().toUpperCase();
-            if (Object.prototype.hasOwnProperty.call(fields, fieldName)) {
-                return null;
-            }
-            fields[fieldName] = fieldMatch[2].trim();
-            activeField = fieldName;
-        } else if (activeField !== "" && line.trim() !== "") {
-            fields[activeField] = fields[activeField] === ""
-                ? line.trim()
-                : fields[activeField] + " " + line.trim();
-        }
-    }
-    return fields;
-}
-
-function scFieldsHaveOnly(fields, allowedFields)
-{
-    if (fields === null) {
-        return false;
-    }
-    for (var fieldName in fields) {
-        if (Object.prototype.hasOwnProperty.call(fields, fieldName)
-                && allowedFields.indexOf(fieldName) < 0) {
-            return false;
-        }
-    }
-    return true;
-}
-
 function normalizeWindowsFailureActionsFlag(value)
 {
     var normalized = String(value || "").trim().toUpperCase();
@@ -497,22 +459,20 @@ function windowsServiceIdentityFailureReason(identity, expectedStart, allowDisab
     return "identity-mismatch";
 }
 
-function queryWindowsMainServiceIdentity(serviceName)
+function queryWindowsMainServiceSnapshot(serviceName)
 {
+    // The payload is a compressed, source-embedded C# helper. Keeping the
+    // helper here makes it available before extraction and avoids localized
+    // `sc` text as well as separate CIM/registry/recovery races.
+    var sourceGzipBase64 = "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";
     var script = "& { param($ServiceName) $ErrorActionPreference='Stop'; try { "
-        + "$Service=Get-CimInstance -ClassName Win32_Service | Where-Object { $_.Name -ceq $ServiceName } | Select-Object -First 1; "
-        + "if ($null -eq $Service) { exit 1060 }; "
-        + "$Key='HKLM:\\SYSTEM\\CurrentControlSet\\Services\\'+$ServiceName; "
-        + "$Reg=Get-ItemProperty -LiteralPath $Key; "
-        + "$Deps=[array]$Reg.DependOnService; "
-        + "$Record=New-Object System.Collections.Specialized.OrderedDictionary; "
-        + "$Record.Add('name',[string]$Service.Name); $Record.Add('serviceType',[int]$Reg.Type); "
-        + "$Record.Add('errorControl',[int]$Reg.ErrorControl); $Record.Add('start',[int]$Reg.Start); "
-        + "$Record.Add('delayedAutoStart',([int]$Reg.DelayedAutoStart)); "
-        + "$Record.Add('startName',[string]$Service.StartName); "
-        + "$Record.Add('imagePath',[string]$Reg.ImagePath); "
-        + "$Record.Add('dependencies',([string]::Join(',',($Deps | ForEach-Object { [string]$_ })))); "
-        + "$Record | ConvertTo-Json -Compress; exit 0 } catch { exit 97 } }";
+        + "$Bytes=[Convert]::FromBase64String('" + sourceGzipBase64 + "'); "
+        + "$SnapshotInput=New-Object IO.MemoryStream(,$Bytes); $SnapshotGzip=New-Object IO.Compression.GzipStream($SnapshotInput,[IO.Compression.CompressionMode]::Decompress); "
+        + "$SnapshotReader=New-Object IO.StreamReader($SnapshotGzip); $Source=$SnapshotReader.ReadToEnd(); $SnapshotReader.Dispose(); $SnapshotInput.Dispose(); "
+        + "Add-Type -TypeDefinition $Source -Language CSharp; "
+        + "[AmneziaServiceSnapshotNative]::Read($ServiceName) | ConvertTo-Json -Compress -Depth 8; exit 0 } catch { "
+        + "$Code=97; if ($_.Exception -is [ComponentModel.Win32Exception]) { $Code=$_.Exception.NativeErrorCode }; "
+        + "if ($Code -lt 1 -or $Code -gt 16384) { $Code=97 }; exit $Code } }";
     var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
                                    ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
                                     "-Command", script, serviceName]);
@@ -522,11 +482,34 @@ function queryWindowsMainServiceIdentity(serviceName)
         return null;
     }
     try {
-        return JSON.parse(String(result[0] || ""));
+        var snapshot = JSON.parse(String(result[0] || ""));
+        if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+            windowsMainServiceConfigSnapshotFailureReason = "identity-json-invalid";
+            return null;
+        }
+        return snapshot;
     } catch (error) {
         windowsMainServiceConfigSnapshotFailureReason = "identity-json-invalid";
         return null;
     }
+}
+
+function queryWindowsMainServiceIdentity(serviceName)
+{
+    var snapshot = queryWindowsMainServiceSnapshot(serviceName);
+    if (snapshot === null) {
+        return null;
+    }
+    return {
+        name: snapshot.name,
+        serviceType: snapshot.serviceType,
+        errorControl: snapshot.errorControl,
+        start: snapshot.start,
+        delayedAutoStart: snapshot.delayedAutoStart,
+        startName: snapshot.startName,
+        imagePath: snapshot.imagePath,
+        dependencies: snapshot.dependencies
+    };
 }
 
 function persistWindowsServiceUpgradeJournal(snapshot)
@@ -583,36 +566,19 @@ function queryWindowsMainServiceConfig(serviceName)
         return null;
     }
 
-    // SCM is authoritative for the service configuration. Only the exact
-    // configuration emitted by the supported QIF install is round-tripped;
-    // an unrecognised/custom configuration fails closed before any mutation.
-    // Startup mode is derived from the structured identity query below, so
-    // this preflight does not depend on localized `sc qc` labels.
+    // SCM is authoritative for the service configuration. The single native
+    // helper returns identity and recovery data from QueryServiceConfig*;
+    // no localized command output is parsed here.
     windowsMainServiceConfigSnapshotFailureReason = "";
-    var systemSc = "C:/Windows/System32/sc.exe";
-    var queryResult = installer.execute(systemSc, ["query", serviceName]);
-    var failureResult = installer.execute(systemSc, ["qfailure", serviceName]);
-    var failureFlagResult = installer.execute(systemSc, ["qfailureflag", serviceName]);
-    if (queryResult.length < 2 || Number(queryResult[1]) !== 0
-            || failureResult.length < 2 || Number(failureResult[1]) !== 0
-            || failureFlagResult.length < 2 || Number(failureFlagResult[1]) !== 0) {
-        windowsMainServiceConfigSnapshotFailureReason = "sc-query-exit-"
-                + (queryResult.length < 2 ? "query" : Number(queryResult[1])) + "-"
-                + (failureResult.length < 2 ? "qfailure" : Number(failureResult[1])) + "-"
-                + (failureFlagResult.length < 2 ? "qfailureflag" : Number(failureFlagResult[1]));
+    var snapshot = queryWindowsMainServiceSnapshot(serviceName);
+    if (snapshot === null) {
         return null;
     }
 
-    var identity = queryWindowsMainServiceIdentity(serviceName);
-    if (identity === null || typeof identity !== "object") {
-        if (windowsMainServiceConfigSnapshotFailureReason === "") {
-            windowsMainServiceConfigSnapshotFailureReason = "identity-unavailable";
-        }
-        return null;
-    }
-    // Registry Start and DelayedAutoStart are numeric values emitted by the
+    var identity = snapshot;
+    // SCM start and delayed-auto fields are numeric values emitted by the
     // structured identity query. Reject every other representation and every
-    // SCM start mode before parsing or accepting recovery settings.
+    // SCM start mode before accepting recovery settings.
     if (!isStrictWindowsServiceNumber(identity.start)) {
         windowsMainServiceConfigSnapshotFailureReason = windowsServiceIdentityFailureReason(
                 identity, "auto", false);
@@ -628,97 +594,54 @@ function queryWindowsMainServiceConfig(serviceName)
         return null;
     }
     var startType = identity.delayedAutoStart === 1 ? "delayed-auto" : "auto";
-    var failureFields = parseScOutputFields(failureResult[0]);
-    var failureFlagFields = parseScOutputFields(failureFlagResult[0]);
-    var allowedFailureFields = [
-        "SERVICE_NAME",
-        "RESET_PERIOD (IN SECONDS)",
-        "REBOOT_MESSAGE",
-        "COMMAND_LINE",
-        "FAILURE_ACTIONS"
-    ];
-    var allowedFailureFlagFields = ["SERVICE_NAME", "FAILURE_ACTIONS_ON_NONCRASH_FAILURES"];
-    var expectedFailureActions =
-        "RESTART -- DELAY = 2000 MILLISECONDS. RESTART -- DELAY = 2000 MILLISECONDS. "
-        + "RESTART -- DELAY = 2000 MILLISECONDS.";
     if (!windowsServiceIdentityMatches(identity, startType)) {
         windowsMainServiceConfigSnapshotFailureReason = windowsServiceIdentityFailureReason(
                 identity, startType, false);
         return null;
     }
-    if (failureFields === null) {
-        windowsMainServiceConfigSnapshotFailureReason = "failure-output-malformed";
-        return null;
-    }
-    if (!scFieldsHaveOnly(failureFields, allowedFailureFields)) {
-        windowsMainServiceConfigSnapshotFailureReason = "failure-unknown-field";
-        return null;
-    }
-    if (!Object.prototype.hasOwnProperty.call(failureFields, "RESET_PERIOD (IN SECONDS)")) {
-        windowsMainServiceConfigSnapshotFailureReason = "failure-missing-reset-period";
-        return null;
-    }
-    if (!Object.prototype.hasOwnProperty.call(failureFields, "REBOOT_MESSAGE")) {
-        windowsMainServiceConfigSnapshotFailureReason = "failure-missing-reboot-message";
-        return null;
-    }
-    if (!Object.prototype.hasOwnProperty.call(failureFields, "COMMAND_LINE")) {
-        windowsMainServiceConfigSnapshotFailureReason = "failure-missing-command-line";
-        return null;
-    }
-    if (!Object.prototype.hasOwnProperty.call(failureFields, "FAILURE_ACTIONS")) {
-        windowsMainServiceConfigSnapshotFailureReason = "failure-missing-actions";
-        return null;
-    }
-
-    var failureActions = String(failureFields["FAILURE_ACTIONS"] || "")
-        .replace(/\s+/g, " ").trim().toUpperCase();
-    var resetPeriod = String(failureFields["RESET_PERIOD (IN SECONDS)"] || "")
-        .trim().toUpperCase();
-    var rebootMessage = String(failureFields["REBOOT_MESSAGE"] || "");
-    var commandLine = String(failureFields["COMMAND_LINE"] || "");
-    if (resetPeriod !== "100") {
+    var expectedFailureActions = "restart/2000/restart/2000/restart/2000";
+    if (!isStrictWindowsServiceNumber(snapshot.failureResetPeriod)
+            || snapshot.failureResetPeriod !== 100) {
         windowsMainServiceConfigSnapshotFailureReason = "failure-reset-period";
         return null;
     }
-    if (rebootMessage.trim() !== "") {
-        windowsMainServiceConfigSnapshotFailureReason = "failure-reboot-message";
-        return null;
-    }
-    if (commandLine.trim() !== "") {
-        windowsMainServiceConfigSnapshotFailureReason = "failure-command-line";
-        return null;
-    }
-    if (failureActions !== expectedFailureActions) {
+    if (!isStrictWindowsServiceNumber(snapshot.failureActionCount)
+            || snapshot.failureActionCount !== 3
+            || typeof snapshot.failureActionTypes !== "string"
+            || snapshot.failureActionTypes !== "1/1/1"
+            || typeof snapshot.failureActionDelays !== "string"
+            || snapshot.failureActionDelays !== "2000/2000/2000") {
         windowsMainServiceConfigSnapshotFailureReason = "failure-actions";
         return null;
     }
-    if (failureFlagFields === null) {
-        windowsMainServiceConfigSnapshotFailureReason = "failure-flag-output-malformed";
+    if (typeof snapshot.rebootMessage !== "string"
+            || snapshot.rebootMessage.trim() !== "") {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-reboot-message";
         return null;
     }
-    if (!scFieldsHaveOnly(failureFlagFields, allowedFailureFlagFields)) {
-        windowsMainServiceConfigSnapshotFailureReason = "failure-flag-unknown-field";
+    if (typeof snapshot.commandLine !== "string"
+            || snapshot.commandLine.trim() !== "") {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-command-line";
         return null;
     }
-    if (!Object.prototype.hasOwnProperty.call(
-            failureFlagFields, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES")) {
-        windowsMainServiceConfigSnapshotFailureReason = "failure-flag-missing";
+    if (typeof snapshot.failureActions !== "string"
+            || snapshot.failureActions !== expectedFailureActions) {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-actions";
         return null;
     }
-    var failureActionsFlagRaw = String(
-        failureFlagFields["FAILURE_ACTIONS_ON_NONCRASH_FAILURES"] || "").trim();
-    var failureActionsFlag = normalizeWindowsFailureActionsFlag(failureActionsFlagRaw);
-    if (failureActionsFlag === "") {
+    if (!isStrictWindowsServiceNumber(snapshot.failureActionsFlag)
+            || (snapshot.failureActionsFlag !== 0 && snapshot.failureActionsFlag !== 1)
+            || typeof snapshot.failureActionsFlagRaw !== "string"
+            || snapshot.failureActionsFlagRaw !== (snapshot.failureActionsFlag === 1 ? "TRUE" : "FALSE")) {
         windowsMainServiceConfigSnapshotFailureReason = "failure-flag-value";
         return null;
     }
 
     return {
         start: startType,
-        failureActions: "restart/2000/restart/2000/restart/2000",
-        failureActionsFlag: failureActionsFlag,
-        failureActionsFlagRaw: failureActionsFlagRaw
+        failureActions: snapshot.failureActions,
+        failureActionsFlag: snapshot.failureActionsFlag === 1 ? "1" : "0",
+        failureActionsFlagRaw: snapshot.failureActionsFlagRaw
     };
 }
 

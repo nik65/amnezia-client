@@ -345,8 +345,8 @@ read sharing, is explicitly non-inheritable, remains held through
 
 Before the QIF Windows product-update preflight changes the existing
 `AmneziaVPN-service` startup or recovery settings, it queries the SCM with
-`sc query`, `sc qfailure`, and `sc qfailureflag`; the startup mode comes from
-the structured service identity query. Only the exact supported QIF
+one locale-independent structured helper using the SCM query APIs; the helper
+returns numeric startup and recovery fields. Only the exact supported QIF
 configuration (`auto` or `delayed-auto` startup and three
 `restart/2000` recovery actions with a 100-second reset period) is accepted;
 a custom or unparseable configuration fails closed before update mutation.
@@ -355,7 +355,7 @@ with `start= auto`, while `AUTO_START (DELAYED)` restores with
 `start= delayed-auto`. On a supported QIF cancellation or rollback while the
 old service still exists, `sc config` (the SCM `ChangeServiceConfig` path),
 `sc failure`, and `sc failureflag` restore that configuration and the result is
-verified again with `sc query`, `sc qfailure`, and `sc qfailureflag`.
+verified again with the same structured helper.
 Once SCM has proven the old service absent, the snapshot is discarded and is
 never applied to the newly installed service. Administrator UAC consent and
 the brief desktop shutdown remain unavoidable operating-system handoffs and
