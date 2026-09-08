@@ -2559,7 +2559,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("Assert-LocalReleasePrerequisites", local_release)
         self.assertIn("Assert-WslReady", local_release)
         self.assertIn("GetTempFileName", local_release)
-        self.assertIn('Invoke-External "wsl.exe" @("bash", $tempScriptWsl)', local_release)
+        self.assertIn('Invoke-External "wsl.exe" @("-d", $LabDistro, "--", "bash", $tempScriptWsl)', local_release)
         self.assertIn("[System.Text.UTF8Encoding]::new($false)", local_release)
         self.assertIn('export PATH="$HOME/.local/jdk-17/bin:$HOME/.local/bin:$PATH"', local_release)
         self.assertIn('Assert-WslCommand "conan"', local_release)
@@ -6722,6 +6722,8 @@ class ManifestPublisherTests(unittest.TestCase):
                 "-RequirePlatform",
                 "windows-x64,linux-x64,android-arm64-v8a",
                 "-NoBundleUpdatesInWindowsClient",
+                "-LabLane",
+                "off",
                 "-ArtifactDir",
                 str(self.root / "artifacts"),
                 "-OutDir",
@@ -6743,6 +6745,7 @@ class ManifestPublisherTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("Verified self-hosted update manifest signature and required platforms", result.stdout)
+        self.assertIn("LabLane=off: this is an explicitly unvalidated build-only run", result.stderr + result.stdout)
         payload = manifest_payload(out_dir / "manifest.json")
         self.assertEqual(
             set(payload["platforms"]),
@@ -6793,6 +6796,8 @@ class ManifestPublisherTests(unittest.TestCase):
                 version,
                 "-SkipBuild",
                 "-NoBundleUpdatesInWindowsClient",
+                "-LabLane",
+                "off",
                 "-BuildPlatform",
                 "windows",
                 "-RequirePlatform",
@@ -6825,6 +6830,7 @@ class ManifestPublisherTests(unittest.TestCase):
             capture_output=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("LabLane=off: this is an explicitly unvalidated build-only run", result.stderr + result.stdout)
         payload = manifest_payload(out_dir / "manifest.json")
         self.assertEqual(payload["schema"], 2)
         self.assertEqual(payload["releasePolicy"]["generation"], 44)
@@ -6892,6 +6898,8 @@ class ManifestPublisherTests(unittest.TestCase):
                 "-Version",
                 "9.9.9.9",
                 "-Preflight",
+                "-LabLane",
+                "off",
                 "-BuildPlatform",
                 "windows",
                 "-OutDir",
@@ -6910,6 +6918,49 @@ class ManifestPublisherTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("Preflight OK", result.stdout)
         self.assertFalse((out_dir / "manifest.json").exists())
+
+    @unittest.skipUnless(find_powershell(), "PowerShell is required for the release-lane preflight smoke test")
+    def test_local_release_default_release_lane_rejects_build_only_without_outer_artifact(self) -> None:
+        powershell = find_powershell()
+        assert powershell
+        artifact = self.write_artifact("AmneziaVPN_9.9.9.9_windows_x64.exe", b"release-candidate")
+
+        result = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(SCRIPT_DIR / "local_release.ps1"),
+                "-Version",
+                "9.9.9.9",
+                "-SkipBuild",
+                "-NoBundleUpdatesInWindowsClient",
+                "-BuildPlatform",
+                "windows",
+                "-RequirePlatform",
+                "windows-x64",
+                "-ArtifactDir",
+                str(artifact.parent),
+                "-OutDir",
+                str(self.root / "release-default"),
+                "-BaseUrl",
+                "http://172.29.172.252:17865",
+                "-PrivateKey",
+                str(self.private_key),
+                "-PublicKeyBase64",
+                self.public_key_base64,
+            ],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn(
+            "Release lab requires the final bundled outer artifact",
+            result.stderr + result.stdout,
+        )
 
     @unittest.skipUnless(find_powershell() and find_wsl(), "PowerShell and WSL are required for the Linux local preflight smoke test")
     def test_local_release_linux_preflight_converts_windows_paths_for_wsl(self) -> None:
@@ -6940,6 +6991,8 @@ class ManifestPublisherTests(unittest.TestCase):
                 "-Version",
                 "9.9.9.9",
                 "-Preflight",
+                "-LabLane",
+                "off",
                 "-BuildPlatform",
                 "linux",
                 "-BaseUrl",
@@ -7007,6 +7060,8 @@ class ManifestPublisherTests(unittest.TestCase):
                 "-Version",
                 "9.9.9.9",
                 "-Preflight",
+                "-LabLane",
+                "off",
                 "-BuildPlatform",
                 "android",
                 "-BaseUrl",

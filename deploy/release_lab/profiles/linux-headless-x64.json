@@ -1,0 +1,32 @@
+{
+  "id": "linux-headless-x64",
+  "platform": "linux",
+  "mode": "headless",
+  "backend": "qemu-linux",
+  "profile_env": "linux-headless.env",
+  "base_image": "guests/linux-headless-x64-v2/golden-disk.qcow2",
+  "golden_readiness": "guests/linux-headless-x64-v2/golden-readiness.json",
+  "machine": "q35",
+  "nic": "none",
+  "uefi": false,
+  "tpm": false,
+  "provisioning_template": "guest_templates/linux-headless/user-data",
+  "display": "none",
+  "network_mode": "lab-nat-before-seal",
+  "post_seal_wan": "disabled",
+  "firmware": {"uefi": false, "tpm": false, "nic_model": "e1000"},
+  "memory_mb": 2048,
+  "cpus": 2,
+  "guest_agent": "qga",
+  "receipt_path": "/run/amnezia-release-lab/{run_id}/{profile_id}/receipt.json",
+  "runner": "deploy/release_lab/guest_runners/linux-release-lab.sh",
+  "guest_executables": [
+    "/bin/sh"
+  ],
+  "steps": [
+    {"id": "probe", "action": "probe", "executable": "/bin/sh", "args": ["/tmp/amnezia-release-lab-runner.sh", "probe", "linux-headless-x64"]},
+    {"id": "reinstall", "action": "reinstall", "executable": "/bin/sh", "args": ["/tmp/amnezia-release-lab-runner.sh", "reinstall", "linux-headless-x64"]},
+    {"id": "update", "action": "update", "executable": "/bin/sh", "args": ["/tmp/amnezia-release-lab-runner.sh", "update", "linux-headless-x64"]},
+    {"id": "service-health", "action": "service-health", "executable": "/bin/sh", "args": ["/tmp/amnezia-release-lab-runner.sh", "service-health", "linux-headless-x64"]}
+  ]
+}

@@ -1,0 +1,13 @@
+# Generated media and receipts belong under /var/lib/amnezia-release-lab or a
+# separately supplied external path. Never commit guest disks, ISOs, or answer
+# media because they can contain credentials and machine state.
+images/*.img
+images/*.iso
+**/disk.qcow2
+**/nocloud.iso
+**/windows-answer.iso
+**/answer-media/
+**/OVMF_VARS*
+**/*.receipt.json
+**/__pycache__/
+*.pyc

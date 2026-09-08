@@ -1,0 +1,29 @@
+{
+  "id": "server-router",
+  "platform": "linux",
+  "mode": "isolated-test-server-router",
+  "backend": "qemu-linux",
+  "base_image": "guests/server-router/golden-disk.qcow2",
+  "golden_readiness": "guests/server-router/golden-readiness.json",
+  "provisioning_template": "guest_templates/server-router/user-data",
+  "display": "none",
+  "network_mode": "isolated-test-server-router",
+  "post_seal_wan": "disabled",
+  "consumer_fixture": true,
+  "fixture_guest_http_port": 17865,
+  "fixture_host_bind": "127.0.0.1",
+  "fixture_network": "qemu-user-restrict-hostfwd-only",
+  "firmware": {"uefi": false, "tpm": false, "nic_model": "e1000"},
+  "memory_mb": 4096,
+  "cpus": 2,
+  "guest_agent": "qga",
+  "runner": "deploy/release_lab/guest_runners/linux-release-lab.sh",
+  "receipt_path": "/run/amnezia-release-lab/{run_id}/{profile_id}/receipt.json",
+  "guest_executables": ["/bin/sh"],
+  "steps": [
+    {"id": "probe", "action": "probe", "executable": "/bin/sh", "args": ["/tmp/amnezia-release-lab-runner.sh", "probe", "server-router"]},
+    {"id": "reinstall", "action": "reinstall", "executable": "/bin/sh", "args": ["/tmp/amnezia-release-lab-runner.sh", "reinstall", "server-router"]},
+    {"id": "update", "action": "update", "executable": "/bin/sh", "args": ["/tmp/amnezia-release-lab-runner.sh", "update", "server-router"]},
+    {"id": "service-health", "action": "service-health", "executable": "/bin/sh", "args": ["/tmp/amnezia-release-lab-runner.sh", "service-health", "server-router"]}
+  ]
+}

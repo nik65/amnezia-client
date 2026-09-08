@@ -1,0 +1,130 @@
+#cloud-config
+preserve_hostname: false
+hostname: amnezia-linux-gui
+timezone: UTC
+package_update: true
+package_reboot_if_required: false
+apt:
+  conf: |
+    APT::Install-Recommends "false";
+    APT::Install-Suggests "false";
+packages:
+  - ca-certificates
+  - curl
+  - openssh-server
+  - python3
+  - qemu-guest-agent
+  - iproute2
+  - ubuntu-desktop-minimal
+  - gdm3
+  - ubuntu-session
+  - dbus-x11
+  - gnome-keyring
+  - libpam-gnome-keyring
+  - libxcb-icccm4
+  - libxcb-image0
+  - libxcb-keysyms1
+  - libxcb-render-util0
+  - libxcb-cursor0
+  - xserver-xorg
+ssh_pwauth: false
+disable_root: true
+users:
+  - name: lab
+    gecos: Amnezia release lab operator
+    groups: [adm, audio, video]
+    lock_passwd: true
+    shell: /bin/bash
+    sudo: []
+    ssh_authorized_keys:
+      - __LAB_SSH_PUBLIC_KEY__
+write_files:
+  - path: /etc/amnezia-lab/profile
+    permissions: '0644'
+    content: |
+      profile=linux-x64-gui
+      image=ubuntu24-cloud-amd64
+      derivation=ubuntu-desktop-minimal
+      network_phase=pre-seal
+      candidate_credentials=absent
+  - path: /etc/gdm3/custom.conf
+    permissions: '0644'
+    content: |
+      [daemon]
+      AutomaticLoginEnable=true
+      AutomaticLogin=lab
+      WaylandEnable=false
+  - path: /etc/systemd/system/amnezia-lab-gui.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Amnezia release lab graphical session
+      After=multi-user.target
+      Before=graphical.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/systemctl start gdm.service
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=graphical.target
+  - path: /usr/local/sbin/amnezia-lab-guest-marker
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      set -eu
+      systemctl set-default graphical.target >/dev/null
+      systemctl daemon-reload
+      systemctl enable amnezia-lab-gui.service >/dev/null
+      systemctl start amnezia-lab-gui.service >/dev/null 2>&1 || true
+      systemctl is-active --quiet qemu-guest-agent.service || exit 20
+      systemctl is-active --quiet display-manager.service || exit 21
+      session_ready() {
+        loginctl list-sessions --no-legend 2>/dev/null | (
+          while read -r session uid user seat tty; do
+            [ "$user" = "lab" ] || continue
+            type=$(loginctl show-session "$session" -p Type --value 2>/dev/null || true)
+            active=$(loginctl show-session "$session" -p Active --value 2>/dev/null || true)
+            state=$(loginctl show-session "$session" -p State --value 2>/dev/null || true)
+            class=$(loginctl show-session "$session" -p Class --value 2>/dev/null || true)
+            case "$type" in
+              x11|wayland)
+                [ "$active" = "yes" ] && [ "$state" = "active" ] && [ "$class" = "user" ] || continue
+                printf '%s %s\n' "$session" "$type"
+                exit 0
+                ;;
+            esac
+          done
+          exit 1
+        )
+      }
+      desktop_ready() {
+        pgrep -x gnome-shell >/dev/null 2>&1 || return 1
+        pgrep -x Xorg >/dev/null 2>&1 || pgrep -x Xwayland >/dev/null 2>&1 || return 1
+      }
+      attempts=0
+      stable=0
+      session_info=''
+      while [ "$attempts" -lt 180 ]; do
+        session_info=$(session_ready 2>/dev/null || true)
+        if [ -n "$session_info" ] && desktop_ready; then
+          stable=$((stable + 1))
+          [ "$stable" -ge 3 ] && break
+        else
+          stable=0
+        fi
+        attempts=$((attempts + 1))
+        sleep 2
+      done
+      [ "$stable" -ge 3 ] || exit 22
+      session_id=${session_info%% *}
+      session_type=${session_info#* }
+      display_server=Xwayland
+      pgrep -x Xorg >/dev/null 2>&1 && display_server=Xorg
+      install -d -m 0755 /var/lib/amnezia-lab
+      printf '%s\n' "profile=linux-x64-gui" "image=ubuntu24-cloud-amd64" "phase=ready" "candidate_credentials=absent" "qga_service=running" "display_manager=running" "gui_session=available" "session_id=$session_id" "session_type=$session_type" "desktop_processes=gnome-shell+$display_server" "os_ready=true" "prerequisites=verified" > /var/lib/amnezia-lab/READY
+runcmd:
+  - [systemctl, enable, --now, qemu-guest-agent.service]
+  - [/usr/local/sbin/amnezia-lab-guest-marker]
+final_message: 'amnezia-lab linux-x64-gui provisioning complete; inspect /var/lib/amnezia-lab/READY'

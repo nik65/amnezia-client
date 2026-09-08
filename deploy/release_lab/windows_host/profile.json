@@ -1,0 +1,16 @@
+{
+  "id": "windows-x64-hyperv",
+  "backend": "hyperv",
+  "generation": 2,
+  "memory_mib": 8192,
+  "vcpus": 4,
+  "disk_gib": 128,
+  "secure_boot": true,
+  "secure_boot_template": "MicrosoftWindows",
+  "virtual_tpm": true,
+  "network": "none-by-default; private-switch-only-if-explicitly-needed",
+  "transport": "PowerShell Direct",
+  "guest_user": "labadmin",
+  "amnezia_product_installer": "future-guest-only-step-after-OS-readiness",
+  "host_network_mutation": false
+}

@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "id": "android-network-gate",
+  "profile": "android-arm64-v8a",
+  "status": "pending-controller-owned-peer",
+  "purpose": "Describe the fail-closed handoff to the shared lab network controller",
+  "required_evidence": [
+    "guest firewall or equivalent deny rule verified inside the owned AVD",
+    "only the controller-provided lab peer is reachable",
+    "10.8.1.0/24 traffic is mapped through the owned lab peer",
+    "ordinary internet remains blocked for the guest test",
+    "VPN UDP behaviour is verified directly, not inferred from an HTTP proxy",
+    "network gate is bound to the current qemu UUID"
+  ],
+  "prohibited": [
+    "Windows host route changes",
+    "Windows host firewall changes",
+    "production endpoint",
+    "physical Android device",
+    "HTTP-proxy-only UDP claim"
+  ],
+  "handoff": {
+    "marker": "${AMNEZIA_ANDROID_LAB_ROOT}/work/network-gate.ok",
+    "must_include": [
+      "avd_name",
+      "qemu_uuid",
+      "egress=deny",
+      "peer=controller-owned",
+      "peer_ipv4",
+      "peer_ipv6",
+      "allowlist=loopback,peer-only",
+      "rules=verified"
+    ]
+  }
+}

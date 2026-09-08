@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "id": "android-arm64-v8a",
+  "status": "ready-for-live-run",
+  "coverage": "translated-arm64",
+  "description": "Dedicated WSL/KVM Android release lab for the arm64 APK through the x86_64 Native Bridge",
+  "host": {
+    "runtime": "wsl2",
+    "architecture": "x86_64",
+    "requires_kvm": true,
+    "workspace_root_env": "AMNEZIA_ANDROID_LAB_ROOT",
+    "default_workspace_root": "/var/lib/amnezia-release-lab/android",
+    "images_cache_root": "/var/lib/amnezia-release-lab/android/downloads",
+    "dedicated_adb_server": true,
+    "adb_server_port": 5039,
+    "adb_server_socket": "tcp:127.0.0.1:5039",
+    "emulator_port": 5556
+    ,"gpu_mode": "software"
+  },
+  "sdk": {
+    "repository_metadata_url": "https://dl.google.com/android/repository/repository2-3.xml",
+    "system_image_metadata_url": "https://dl.google.com/android/repository/sys-img/google_apis/sys-img2-3.xml",
+    "package_revision_policy": "resolve-current-official-metadata-and-record-lock-receipt",
+    "command_line_tools": {
+      "revision": "13114758",
+      "url": "https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip",
+      "sha256": "7ec965280a073311c339e571cd5de778b9975026cfcbe79f2b1cdcb1e15317ee"
+    },
+    "build_tools": "35.0.0",
+    "system_images": [
+      {
+        "api": 35,
+        "package": "system-images;android-35;google_apis;x86_64",
+        "avd_name": "amnezia-release-api35",
+        "fallback": false
+      },
+      {
+        "api": 30,
+        "package": "system-images;android-30;google_apis;x86_64",
+        "avd_name": "amnezia-release-api30",
+        "fallback": true
+      }
+    ]
+  },
+  "guest": {
+    "abi_under_test": "arm64-v8a",
+    "host_abi": "x86_64",
+    "native_bridge_required": true,
+    "native_bridge_evidence": [
+      "ro.dalvik.vm.native.bridge=libndk_translation.so",
+      "libndk_translation",
+      "NativeBridge"
+    ],
+    "min_sdk": 28,
+    "target_sdk": 36,
+    "package": "org.amnezia.vpn",
+    "main_activity": "org.amnezia.vpn/org.amnezia.vpn.AmneziaActivity"
+  },
+  "artifacts": {
+    "release_version": "5.0.1.38",
+    "release_version_code": 2186,
+    "release_apk": "AmneziaVPN_5.0.1.38_android9+_arm64-v8a.apk",
+    "release_sha256": "aa6296143198e416b1baaccc6e36d9e06965beebd9d48168e9927efb5cd75d7a",
+    "previous_version": "5.0.1.37",
+    "previous_version_code": 2185,
+    "previous_apk": "AmneziaVPN_5.0.1.37_android9+_arm64-v8a.apk",
+    "previous_sha256": "9592e64c1d3d32ecefad033599614d5bcbc37ace8a430426b9803571f97b37da"
+  },
+  "network": {
+    "mode": "offline-by-default",
+    "production_network": false,
+    "host_routes_or_firewall": false,
+    "allowed_peer": "owned-lab-server-only",
+    "vpn_udp_passthrough": "pending-network-gate",
+    "fail_closed_until_verified": true
+  }
+}

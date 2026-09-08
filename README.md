@@ -47,6 +47,35 @@
 - [https://telegram.me/amnezia_vpn](https://telegram.me/amnezia_vpn) - Telegram support channel (Russian)
 - [Get Premium for 6 or 12 months](https://storage.googleapis.com/amnezia/pay?utm_source=github&utm_campaign=ampay-read)
 
+## Pre-release sandbox
+
+Self-hosted releases use a separate lab in Ubuntu 24 WSL with four product
+lanes: Windows x64 and Linux guests through QEMU/KVM, plus Android arm64-v8a
+through its dedicated guarded emulator adapter. The isolated server-router
+guest is an auxiliary consumer-fixture lane. Install, update, and service
+checks run only in disposable guest overlays through QGA/QMP or the owned
+Android adapter. See
+[`deploy/release_lab/README.md`](deploy/release_lab/README.md) for the lab
+contract. The release wrapper stops during preflight when a required lane is
+not ready.
+
+The 2026-09-08 checkpoint separates evidence types. Linux headless v2 and the
+Linux GUI v9 golden have OS/QGA readiness with strict GNOME/X11 session
+evidence. The GUI fresh baseline `5.0.1.37` installed successfully with its
+service active and canonical runtime version; candidate `5.0.1.38` failed in
+the legacy maintenance tool (exit 6), leaving baseline version/service active.
+Android has a real system-installer `5.0.1.37` to
+`5.0.1.38` PASS and a clean lavapipe UI screenshot, but the current x86 guest
+architecture selects no arm64 APK, so the real application update is not
+proven. Windows has no accepted guest golden: the Hyper-V backend is code-level
+GO (`hyperv_backend.ps1` SHA-256
+`800AD2B2A113CD8169FA8FF1833DB0C591FB2625895455527A59E8900B001892`), while
+the host feature/manual prerequisite and VM runtime remain pending. The
+server-router fixture's health/manifest requests do not prove publication.
+Reboot and rollback scenarios were not completed. Release automation remains
+fail-closed until product update, reboot/rollback, and self-hosted publication
+receipts exist for every required lane.
+
 ## Tech
 
 AmneziaVPN uses several open-source projects to work:

@@ -1,0 +1,46 @@
+#cloud-config
+preserve_hostname: false
+hostname: amnezia-server-router
+timezone: UTC
+package_update: true
+package_reboot_if_required: false
+packages:
+  - ca-certificates
+  - curl
+  - openssh-server
+  - python3
+  - qemu-guest-agent
+  - iproute2
+  - iputils-ping
+ssh_pwauth: false
+disable_root: true
+users:
+  - name: lab
+    gecos: Amnezia isolated test server operator
+    groups: [adm]
+    lock_passwd: true
+    shell: /bin/bash
+    sudo: []
+    ssh_authorized_keys:
+      - __LAB_SSH_PUBLIC_KEY__
+write_files:
+  - path: /etc/amnezia-lab/profile
+    permissions: '0644'
+    content: |
+      profile=server-router
+      image=ubuntu24-cloud-amd64
+      network_phase=pre-seal
+      wan_after_seal=disabled
+      candidate_credentials=absent
+  - path: /usr/local/sbin/amnezia-lab-guest-marker
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      set -eu
+      install -d -m 0755 /var/lib/amnezia-lab
+      printf '%s\n' "profile=server-router" "image=ubuntu24-cloud-amd64" "phase=ready" "wan_after_seal=disabled" "candidate_credentials=absent" > /var/lib/amnezia-lab/READY
+runcmd:
+  - [systemctl, enable, --now, qemu-guest-agent.service]
+  - [/usr/local/sbin/amnezia-lab-guest-marker]
+  - [bash, -c, "systemctl is-active --quiet qemu-guest-agent.service && printf 'qga_service=running\\nrouter_mode=guest-only\\nos_ready=true\\n' >> /var/lib/amnezia-lab/READY"]
+final_message: 'amnezia-lab server-router provisioning complete; seal and remove WAN before candidate testing'

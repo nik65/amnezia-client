@@ -28,7 +28,20 @@ Client installer or local updater.
 These prohibitions remain in force during release, publication, update,
 debugging, testing, build, or operator requests; such requests do not grant
 permission for those local actions. If any such action is needed, stop and
-require the user to perform it manually.
+require the user to perform it manually. The guest exception below applies
+only inside an owned disposable guest, never to this Windows host.
+
+The user explicitly authorizes automated installer, VPN, service, route, DNS,
+and firewall operations only inside verified disposable release-lab guests
+controlled by `deploy/release_lab/lab.py`. This narrow exception requires
+backend-specific proven ownership, an isolated profile-owned disk/state, and a
+guest marker matching the run and profile: QEMU uses PID/UUID/QMP and QGA;
+Android uses the dedicated guarded emulator identity and ADB transport;
+Hyper-V uses the owned VM ID and PowerShell Direct. It never authorizes those
+actions on the Windows host, the host VPN/application/service, host
+routes/DNS/firewall, production servers, or publication infrastructure. A
+release gate must reject dry-run, missing profiles/steps, host supplied
+receipts, and artifacts whose bytes changed after guest testing.
 
 The root agent is orchestration-only: it may read files and inspect status or
 metadata, but must not write code or execute build, test, install, network, or

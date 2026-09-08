@@ -1,0 +1,54 @@
+#cloud-config
+preserve_hostname: false
+hostname: amnezia-linux-headless
+timezone: UTC
+package_update: true
+package_reboot_if_required: false
+packages:
+  - ca-certificates
+  - curl
+  - openssh-server
+  - python3
+  - qemu-guest-agent
+  - iproute2
+  - binutils
+  - openssl
+  - util-linux
+  - passwd
+  - dpkg
+  - coreutils
+ssh_pwauth: false
+disable_root: true
+users:
+  - name: lab
+    gecos: Amnezia release lab operator
+    groups: [adm]
+    lock_passwd: true
+    shell: /bin/bash
+    sudo: []
+    ssh_authorized_keys:
+      - __LAB_SSH_PUBLIC_KEY__
+write_files:
+  - path: /etc/amnezia-lab/profile
+    permissions: '0644'
+    content: |
+      profile=linux-headless-x64
+      image=ubuntu24-cloud-amd64
+      network_phase=pre-seal
+      candidate_credentials=absent
+  - path: /usr/local/sbin/amnezia-lab-guest-marker
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      set -eu
+      required='python3 sha256sum awk openssl readelf readlink groupdel groupadd getent stat cmp mktemp id install flock cp touch rm rmdir mv chown chmod grep ldd dpkg dpkg-query systemctl dirname'
+      for command in $required; do
+        command -v "$command" >/dev/null 2>&1 || exit 20
+      done
+      systemctl is-active --quiet qemu-guest-agent.service || exit 21
+      install -d -m 0755 /var/lib/amnezia-lab
+      printf '%s\n' "profile=linux-headless-x64" "image=ubuntu24-cloud-amd64" "phase=ready" "candidate_credentials=absent" "qga_service=running" "os_ready=true" "prerequisites=verified" > /var/lib/amnezia-lab/READY
+runcmd:
+  - [systemctl, enable, --now, qemu-guest-agent.service]
+  - [/usr/local/sbin/amnezia-lab-guest-marker]
+final_message: 'amnezia-lab linux-headless-x64 provisioning complete; inspect /var/lib/amnezia-lab/READY'

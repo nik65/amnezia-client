@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale><UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <DiskConfiguration>
+        <Disk wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"><DiskID>0</DiskID><WillWipeDisk>true</WillWipeDisk><CreatePartitions><CreatePartition wcm:action="add"><Order>1</Order><Size>260</Size><Type>EFI</Type></CreatePartition><CreatePartition wcm:action="add"><Order>2</Order><Size>16</Size><Type>MSR</Type></CreatePartition><CreatePartition wcm:action="add"><Order>3</Order><Size>100000</Size><Type>Primary</Type></CreatePartition></CreatePartitions><ModifyPartitions><ModifyPartition wcm:action="add"><Order>1</Order><PartitionID>1</PartitionID><Format>FAT32</Format><Label>System</Label></ModifyPartition><ModifyPartition wcm:action="add"><Order>2</Order><PartitionID>2</PartitionID></ModifyPartition><ModifyPartition wcm:action="add"><Order>3</Order><PartitionID>3</PartitionID><Format>NTFS</Format><Label>Windows</Label><Letter>C</Letter></ModifyPartition></ModifyPartitions></Disk>
+        <WillShowUI>OnError</WillShowUI>
+      </DiskConfiguration>
+      <UserData><AcceptEula>true</AcceptEula><ProductKey><Key></Key><WillShowUI>Never</WillShowUI></ProductKey></UserData>
+      <ImageInstall><OSImage><InstallFrom><MetaData wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"><Key>/IMAGE/INDEX</Key><Value>1</Value></MetaData></InstallFrom><InstallToAvailablePartition>false</InstallToAvailablePartition><InstallTo><DiskID>0</DiskID><PartitionID>3</PartitionID></InstallTo></OSImage></ImageInstall>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <OOBE><HideEULAPage>true</HideEULAPage><HideOnlineAccountScreens>true</HideOnlineAccountScreens><HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE><ProtectYourPC>3</ProtectYourPC></OOBE>
+      <UserAccounts><LocalAccounts><LocalAccount wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"><Name>labadmin</Name><Group>Administrators</Group><Password><Value>__LAB_ADMIN_PASSWORD__</Value><PlainText>true</PlainText></Password></LocalAccount></LocalAccounts></UserAccounts>
+      <AutoLogon><Password><Value>__LAB_ADMIN_PASSWORD__</Value><PlainText>true</PlainText></Password><Enabled>true</Enabled><LogonCount>1</LogonCount><Username>labadmin</Username></AutoLogon>
+      <RegisteredOwner>Amnezia release lab</RegisteredOwner>
+      <FirstLogonCommands><SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"><Order>1</Order><CommandLine>cmd /c "for %D in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %D:\amnezia-lab-seed-__SEED_NONCE__.txt if exist %D:\install-qga.cmd (mkdir C:\ProgramData\AmneziaLab &amp; copy /y %D:\install-qga.cmd C:\ProgramData\AmneziaLab\install-qga.cmd &amp; call C:\ProgramData\AmneziaLab\install-qga.cmd &amp; exit /b %errorlevel%) &amp; exit /b 20"</CommandLine><Description>Locate the uniquely marked trusted lab seed CD and install QGA</Description></SynchronousCommand><SynchronousCommand wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"><Order>2</Order><CommandLine>cmd /c "sc query qemu-ga | findstr /i RUNNING &gt; nul || exit /b 23 &amp; echo profile=windows-x64&gt;C:\ProgramData\AmneziaLab\READY &amp; echo phase=ready&gt;&gt;C:\ProgramData\AmneziaLab\READY &amp; echo qga_service=running&gt;&gt;C:\ProgramData\AmneziaLab\READY &amp; echo candidate_credentials=absent&gt;&gt;C:\ProgramData\AmneziaLab\READY"</CommandLine><Description>Write lab readiness marker only after QGA is running</Description></SynchronousCommand></FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>

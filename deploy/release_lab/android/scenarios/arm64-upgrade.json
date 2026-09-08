@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "id": "android-arm64-upgrade",
+  "profile": "android-arm64-v8a",
+  "status": "ready-for-live-installer-smoke",
+  "commands": [
+    "prepare",
+    "create",
+    "start",
+    "probe",
+    "install-baseline",
+    "test-update",
+    "run",
+    "collect",
+    "reset"
+  ],
+  "assertions": {
+    "baseline": {
+      "package": "org.amnezia.vpn",
+      "version": "5.0.1.37",
+      "version_code": 2185,
+      "apk_abi": "arm64-v8a",
+      "install_mode": "adb-install-abi-explicit"
+    },
+    "update": {
+      "package": "org.amnezia.vpn",
+      "version": "5.0.1.38",
+      "version_code": 2186,
+      "apk_abi": "arm64-v8a",
+      "install_mode": "system-package-installer-ui",
+      "persistent_external_marker": true,
+      "native_bridge_live_log": true
+    }
+  },
+  "forbidden_shortcuts": [
+    "adb install -r",
+    "adb install --abi arm64-v8a release.apk",
+    "x86_64 APK in place of arm64-v8a APK",
+    "metadata-only ABI assertion"
+  ],
+  "network": {
+    "required_for_this_scenario": false,
+    "status": "pending-controller-owned-peer",
+    "host_routes_or_firewall": false
+  },
+  "real_app_server_update": "pending-controller-flow",
+  "controller_receipt": {
+    "env": "AMNEZIA_ANDROID_LAB_CONTROLLER_RECEIPT",
+    "origin": "guest",
+    "transport": "android-adapter",
+    "required_status": "installer-smoke-pass-real-update-pending"
+  }
+}

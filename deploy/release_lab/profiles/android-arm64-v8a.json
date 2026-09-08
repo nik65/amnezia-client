@@ -1,0 +1,28 @@
+{
+  "id": "android-arm64-v8a",
+  "platform": "android",
+  "backend": "android-adapter",
+  "adapter_script": "deploy/release_lab/android/android-lab.sh",
+  "base_image": null,
+  "display": "vnc-unix",
+  "network_mode": "lab-nat-before-seal",
+  "post_seal_wan": "disabled",
+  "firmware": {"uefi": false, "tpm": false, "nic_model": "e1000"},
+  "memory_mb": 4096,
+  "cpus": 2,
+  "guest_agent": "adapter",
+  "receipt_path": "receipts/controller/{run_id}/{profile_id}.json",
+  "receipt_transport": "android-adapter",
+  "guest_executables": [
+    "/usr/local/libexec/amnezia-release-lab/probe",
+    "/usr/local/libexec/amnezia-release-lab/install",
+    "/usr/local/libexec/amnezia-release-lab/update",
+    "/usr/local/libexec/amnezia-release-lab/service-health"
+  ],
+  "steps": [
+    {"id": "probe", "action": "probe", "executable": "/usr/local/libexec/amnezia-release-lab/probe", "args": ["android-arm64-v8a"]},
+    {"id": "reinstall", "action": "reinstall", "executable": "/usr/local/libexec/amnezia-release-lab/install", "args": ["--clean"]},
+    {"id": "update", "action": "update", "executable": "/usr/local/libexec/amnezia-release-lab/update", "args": ["--from-lab"]},
+    {"id": "service-health", "action": "service-health", "executable": "/usr/local/libexec/amnezia-release-lab/service-health", "args": ["--expect-running"]}
+  ]
+}

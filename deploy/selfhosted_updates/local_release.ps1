@@ -42,7 +42,15 @@ param(
     [int] $BuildJobs = 0,
     [switch] $SkipBuild,
     [switch] $NoBundleUpdatesInWindowsClient,
-    [switch] $Preflight
+    [switch] $Preflight,
+    [ValidateSet("off", "candidate", "release")]
+    [string] $LabLane = "release",
+    [string] $LabDistro = $(if ($env:AMNEZIA_RELEASE_LAB_WSL_DISTRO) { $env:AMNEZIA_RELEASE_LAB_WSL_DISTRO } else { "Ubuntu" }),
+    [string] $LabStateRoot = $(if ($env:AMNEZIA_RELEASE_LAB_STATE_ROOT) { $env:AMNEZIA_RELEASE_LAB_STATE_ROOT } else { "/var/lib/amnezia-release-lab" }),
+    [string] $LabRunId = "",
+    [string[]] $LabBaselineArtifact = @(),
+    [string] $LabBaselineVersion = $(if ($env:AMNEZIA_RELEASE_LAB_BASELINE_VERSION) { $env:AMNEZIA_RELEASE_LAB_BASELINE_VERSION } else { "" }),
+    [string] $LabManifestPublicKey = $(if ($env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY) { $env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY } else { "" })
 )
 
 if ($PSBoundParameters.ContainsKey("BuildPlatform") -and
@@ -245,7 +253,7 @@ function Convert-ToWslPath([string] $Path) {
     Assert-Command "wsl.exe"
     $resolved = (Resolve-Path -LiteralPath $Path).Path
     $wslInputPath = $resolved.Replace("\", "/")
-    $converted = & wsl.exe wslpath -a $wslInputPath
+    $converted = & wsl.exe -d $LabDistro -- wslpath -a $wslInputPath
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($converted)) {
         throw "Failed to convert path to WSL path: $Path"
     }
@@ -474,7 +482,7 @@ run_repo_build_sh() {
     [System.IO.File]::WriteAllText($tempScript, $scriptBody, [System.Text.UTF8Encoding]::new($false))
     try {
         $tempScriptWsl = Convert-ToWslPath $tempScript
-        Invoke-External "wsl.exe" @("bash", $tempScriptWsl)
+        Invoke-External "wsl.exe" @("-d", $LabDistro, "--", "bash", $tempScriptWsl)
     } finally {
         Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue
     }
@@ -487,7 +495,7 @@ function Invoke-WslBashOutput([string] $Script) {
     [System.IO.File]::WriteAllText($tempScript, $scriptBody, [System.Text.UTF8Encoding]::new($false))
     try {
         $tempScriptWsl = Convert-ToWslPath $tempScript
-        $output = & wsl.exe bash $tempScriptWsl
+        $output = & wsl.exe -d $LabDistro -- bash $tempScriptWsl
         if ($LASTEXITCODE -ne 0) {
             return ""
         }
@@ -601,12 +609,12 @@ function Assert-AndroidSigningEnvironment {
 function Assert-WslReady {
     Assert-Command "wsl.exe"
     $repoWsl = Convert-ToWslPath $RepoRoot
-    Invoke-External "wsl.exe" @("bash", "-lc", "test -d $(Quote-Sh $repoWsl) && command -v bash >/dev/null")
+    Invoke-External "wsl.exe" @("-d", $LabDistro, "--", "bash", "-lc", "test -d $(Quote-Sh $repoWsl) && command -v bash >/dev/null")
 }
 
 function Assert-WslCommand([string] $CommandName) {
     $bashScript = 'export PATH="$HOME/.local/jdk-17/bin:$HOME/.local/bin:$PATH"; command -v ' + (Quote-Sh $CommandName) + ' >/dev/null'
-    & wsl.exe bash -lc $bashScript
+    & wsl.exe -d $LabDistro -- bash -lc $bashScript
     if ($LASTEXITCODE -ne 0) {
         throw "Required command is not available inside WSL: $CommandName"
     }
@@ -615,13 +623,13 @@ function Assert-WslCommand([string] $CommandName) {
 function Resolve-WslAndroidHome {
     if (-not [string]::IsNullOrWhiteSpace($WslAndroidHome)) {
         $script = 'cd ' + (Quote-Sh $WslAndroidHome) + ' 2>/dev/null && pwd || printf %s ' + (Quote-Sh $WslAndroidHome)
-        $resolved = & wsl.exe bash -lc $script
+        $resolved = & wsl.exe -d $LabDistro -- bash -lc $script
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($resolved)) {
             throw "Failed to resolve WSL_ANDROID_HOME: $WslAndroidHome"
         }
         return $resolved.Trim()
     }
-    $wslHome = & wsl.exe bash -lc 'printf %s "$HOME"'
+    $wslHome = & wsl.exe -d $LabDistro -- bash -lc 'printf %s "$HOME"'
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($wslHome)) {
         throw "Failed to resolve WSL home directory for Android SDK"
     }
@@ -636,7 +644,7 @@ function Test-WindowsJavaHome {
 }
 
 function Assert-JavaForWsl {
-    & wsl.exe bash -lc 'export PATH="$HOME/.local/jdk-17/bin:$HOME/.local/bin:$PATH"; command -v java >/dev/null'
+    & wsl.exe -d $LabDistro -- bash -lc 'export PATH="$HOME/.local/jdk-17/bin:$HOME/.local/bin:$PATH"; command -v java >/dev/null'
     if ($LASTEXITCODE -eq 0) {
         return
     }
@@ -677,6 +685,7 @@ function Assert-LocalReleasePrerequisites {
     Assert-Command "python"
     Assert-Command "cmd.exe"
     Assert-ReleaseInputs
+    Assert-ReleaseLabPrerequisites
 
     if ($BuildPlatform -contains "linux" -or $BuildPlatform -contains "android" -or $BuildPlatform -contains "headless") {
         Assert-WslReady
@@ -709,6 +718,38 @@ function Assert-LocalReleasePrerequisites {
             Convert-ToWslPath $env:QT_INSTALL_DIR | Out-Null
         }
     }
+}
+
+function Invoke-ReleaseLab([string] $Command, [string[]] $Arguments = @()) {
+    if ($LabLane -eq "off") {
+        throw "Release-lab command requested while -LabLane off"
+    }
+    Assert-Command "wsl.exe"
+    $labScriptWsl = Convert-ToWslPath (Join-Path $RepoRoot "deploy\release_lab\lab.py")
+    $labArgs = @("-d", $LabDistro, "-u", "amnezia-lab", "-e", "/usr/bin/python3", $labScriptWsl, "--state-root", $LabStateRoot, "--json", $Command) + $Arguments
+    Invoke-External "wsl.exe" $labArgs
+}
+
+function Assert-ReleaseLabPrerequisites {
+    if ($LabLane -eq "off") { return }
+    Write-Step "Preflight disposable release lab ($LabLane lane)"
+    $preflightProfiles = @()
+    if ($LabLane -eq "release") {
+        $preflightProfiles = @("windows-x64", "android-arm64-v8a", "linux-x64-gui", "linux-headless-x64", "server-router")
+    } else {
+        foreach ($platform in $RequirePlatform) {
+            switch ($platform) {
+                "windows-x64" { $preflightProfiles += "windows-x64" }
+                "android-arm64-v8a" { $preflightProfiles += "android-arm64-v8a" }
+                "linux-x64" { $preflightProfiles += "linux-x64-gui" }
+                "linux-headless-x64" { $preflightProfiles += "linux-headless-x64" }
+                default { throw "Unsupported release-lab preflight platform: $platform" }
+            }
+        }
+    }
+    $preflightArgs = @()
+    foreach ($profile in ($preflightProfiles | Select-Object -Unique)) { $preflightArgs += @("--profile", $profile) }
+    Invoke-ReleaseLab "preflight" $preflightArgs | Out-Null
 }
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
@@ -816,7 +857,7 @@ if (-not $SkipBuild) {
         if (Test-Path -LiteralPath $awgAndroidSourceDir -PathType Container) {
             $androidExports += "export AWG_ANDROID_SOURCE_DIR=$(Quote-Sh (Convert-ToWslPath $awgAndroidSourceDir))"
         }
-        & wsl.exe bash -lc 'export PATH="$HOME/.local/jdk-17/bin:$HOME/.local/bin:$PATH"; command -v java >/dev/null'
+        & wsl.exe -d $LabDistro -- bash -lc 'export PATH="$HOME/.local/jdk-17/bin:$HOME/.local/bin:$PATH"; command -v java >/dev/null'
         if ($LASTEXITCODE -ne 0 -and (Test-WindowsJavaHome)) {
             $androidExports += "export JAVA_HOME=$(Quote-Sh (Convert-ToWslPath $env:JAVA_HOME))"
         }
@@ -968,6 +1009,65 @@ if (-not $NoBundleUpdatesInWindowsClient -and ($BuildPlatform -contains "windows
     $adminInstallerTarget = Join-Path $adminInstallerDir "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
     Copy-Item -LiteralPath $adminInstallerSource -Destination $adminInstallerTarget -Force
     Write-Host "Bundled Windows release client: $adminInstallerTarget"
+}
+
+if ($LabLane -ne "off") {
+    if ([string]::IsNullOrWhiteSpace($LabRunId)) {
+        $LabRunId = "release-$Version-$(Get-Date -Format yyyyMMddTHHmmssZ)"
+    }
+    $outerForLab = Join-Path $RepoRoot "dist\selfhosted-windows-client\$Version\AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
+    if (-not (Test-Path -LiteralPath $outerForLab -PathType Leaf)) {
+        if ($LabLane -eq "release") {
+            throw "Release lab requires the final bundled outer artifact; do not use -NoBundleUpdatesInWindowsClient for the release lane."
+        }
+        $outerForLab = ""
+    }
+    Write-Step "Run disposable release lab against exact built artifacts ($LabLane lane)"
+    $suiteArgs = @("--run-id", $LabRunId)
+    foreach ($platform in $RequirePlatform) {
+        if (-not $requiredArtifactNames.ContainsKey($platform)) {
+            throw "Unsupported release-lab artifact platform: $platform"
+        }
+        $artifactPath = Join-Path $ArtifactDir $requiredArtifactNames[$platform]
+        Assert-ExistingFile $artifactPath "Release-lab artifact $platform"
+        $suiteArgs += @("--artifact", "$platform=$(Convert-ToWslPath $artifactPath)")
+    }
+    $suiteArgs += @("--lane", $LabLane)
+    if ([string]::IsNullOrWhiteSpace($LabBaselineVersion)) {
+        throw "Release-lab baseline version is required and is separate from -PreviousVersion"
+    }
+    $suiteArgs += @("--baseline-version", $LabBaselineVersion, "--candidate-version", $Version)
+    foreach ($baseline in $LabBaselineArtifact) {
+        $baselineParts = [string]$baseline -split "=", 2
+        if ($baselineParts.Count -ne 2 -or [string]::IsNullOrWhiteSpace($baselineParts[0]) -or [string]::IsNullOrWhiteSpace($baselineParts[1])) {
+            throw "-LabBaselineArtifact must be platform=path: $baseline"
+        }
+        $baselinePlatform = $baselineParts[0].Trim()
+        $baselinePath = $baselineParts[1]
+        Assert-ExistingFile $baselinePath "Release-lab baseline artifact $baselinePlatform"
+        $suiteArgs += @("--baseline-artifact", "$baselinePlatform=$(Convert-ToWslPath $baselinePath)")
+    }
+    $manifestPath = Join-Path $OutDir "manifest.json"
+    Assert-ExistingFile $manifestPath "Release-lab signed manifest"
+    $suiteArgs += @("--manifest", (Convert-ToWslPath $manifestPath))
+    if ([string]::IsNullOrWhiteSpace($LabManifestPublicKey)) {
+        throw "Release-lab signed manifest public key is required"
+    }
+    Assert-ExistingFile $LabManifestPublicKey "Release-lab manifest public key"
+    $suiteArgs += @("--manifest-public-key", (Convert-ToWslPath $LabManifestPublicKey))
+    if (-not [string]::IsNullOrWhiteSpace($outerForLab)) {
+        $suiteArgs += @("--outer-artifact", (Convert-ToWslPath $outerForLab))
+    }
+    Invoke-ReleaseLab "run-suite" $suiteArgs | Out-Null
+    $gateArgs = @("--run-id", $LabRunId, "--lane", $LabLane, "--artifact-dir", (Convert-ToWslPath $ArtifactDir))
+    if (-not [string]::IsNullOrWhiteSpace($outerForLab)) {
+        $gateArgs += @("--outer-artifact", (Convert-ToWslPath $outerForLab))
+    }
+    Invoke-ReleaseLab "gate" $gateArgs | Out-Null
+    Write-Host "Release lab gate passed: $LabLane"
+}
+else {
+    Write-Warning "LabLane=off: this is an explicitly unvalidated build-only run; output is not release-gate eligible."
 }
 
 Write-Step "Done"

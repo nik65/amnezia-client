@@ -33,7 +33,15 @@ param(
     [string] $PreviousVersion = "",
     [string[]] $RollbackArtifact = @(),
     [switch] $SkipPreflight,
-    [switch] $NoBundleUpdatesInWindowsClient
+    [switch] $NoBundleUpdatesInWindowsClient,
+    [ValidateSet("off", "candidate", "release")]
+    [string] $LabLane = "release",
+    [string] $LabStateRoot = $(if ($env:AMNEZIA_RELEASE_LAB_STATE_ROOT) { $env:AMNEZIA_RELEASE_LAB_STATE_ROOT } else { "/var/lib/amnezia-release-lab" }),
+    [string] $LabDistro = $(if ($env:AMNEZIA_RELEASE_LAB_WSL_DISTRO) { $env:AMNEZIA_RELEASE_LAB_WSL_DISTRO } else { "Ubuntu" }),
+    [string] $LabRunId = "",
+    [string[]] $LabBaselineArtifact = @(),
+    [string] $LabBaselineVersion = $(if ($env:AMNEZIA_RELEASE_LAB_BASELINE_VERSION) { $env:AMNEZIA_RELEASE_LAB_BASELINE_VERSION } else { "" }),
+    [string] $LabManifestPublicKey = $(if ($env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY) { $env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY } else { "" })
 )
 
 Set-StrictMode -Version Latest
@@ -84,6 +92,27 @@ function New-LocalReleaseCommand([switch] $PreflightCommand) {
     }
     if ($NoBundleUpdatesInWindowsClient) {
         $parts += "-NoBundleUpdatesInWindowsClient"
+    }
+    if ($RebuildBoundParameters.ContainsKey("LabLane") -or $LabLane -ne "off") {
+        $parts += @("-LabLane", (Quote-PowerShellString $LabLane))
+    }
+    if ($RebuildBoundParameters.ContainsKey("LabStateRoot")) {
+        $parts += @("-LabStateRoot", (Quote-PowerShellString $LabStateRoot))
+    }
+    if ($RebuildBoundParameters.ContainsKey("LabDistro") -or $LabDistro -ne "Ubuntu") {
+        $parts += @("-LabDistro", (Quote-PowerShellString $LabDistro))
+    }
+    if ($RebuildBoundParameters.ContainsKey("LabRunId")) {
+        $parts += @("-LabRunId", (Quote-PowerShellString $LabRunId))
+    }
+    if ($RebuildBoundParameters.ContainsKey("LabBaselineArtifact") -or $LabBaselineArtifact.Count -gt 0) {
+        $parts += @("-LabBaselineArtifact", (Format-PowerShellStringArray $LabBaselineArtifact))
+    }
+    if ($RebuildBoundParameters.ContainsKey("LabBaselineVersion") -or -not [string]::IsNullOrWhiteSpace($LabBaselineVersion)) {
+        $parts += @("-LabBaselineVersion", (Quote-PowerShellString $LabBaselineVersion))
+    }
+    if ($RebuildBoundParameters.ContainsKey("LabManifestPublicKey") -or -not [string]::IsNullOrWhiteSpace($LabManifestPublicKey)) {
+        $parts += @("-LabManifestPublicKey", (Quote-PowerShellString $LabManifestPublicKey))
     }
     if ($RebuildBoundParameters.ContainsKey("PayloadSchema")) {
         $parts += "-PayloadSchema $PayloadSchema"
@@ -186,6 +215,7 @@ if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
 $version = Get-ProjectVersion
 Write-Host "Version: $version"
 Write-Host "Platforms: $($BuildPlatform -join ', ')"
+Write-Host "Release lab lane: $LabLane"
 if ($BuildJobs -gt 0) {
     Write-Host "Build jobs: $BuildJobs"
 }

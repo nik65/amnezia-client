@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "generated_by": "deploy/release_lab/images/download_official_images.sh",
+  "cache_policy": "external-only",
+  "images": {
+    "ubuntu24-cloud-amd64": {
+      "platform": "linux",
+      "source": "official-ubuntu-cloud-images",
+      "url": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
+      "checksums_url": "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
+      "checksums_signature_url": "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS.gpg",
+      "sha256": null,
+      "signature_required": true,
+      "signing_key_fingerprint": "D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81",
+      "filename": "noble-server-cloudimg-amd64.img",
+      "notes": "The SHA-256 is resolved from the signed upstream checksum file at download time."
+    },
+    "windows11-25h2-evaluation-amd64": {
+      "platform": "windows",
+      "source": "official-microsoft-evaluation-center",
+      "url": "https://aka.ms/Win11E-ISO-25H2-en-us",
+      "checksums_url": "https://aka.ms/Win11-Hash-PDF",
+      "checksums_signature_url": null,
+      "sha256": "a61adeab895ef5a4db436e0a7011c92a2ff17bb0357f58b13bbc4062e535e7b9",
+      "hash_source": "https://aka.ms/Win11-Hash-PDF",
+      "signature_required": false,
+      "filename": "Windows11-25H2-evaluation-amd64.iso",
+      "requires_registration": true,
+      "notes": "Official Microsoft Evaluation Center alias and published hash PDF. Registration/account requirements remain Microsoft-controlled; no user registration is automated."
+    },
+    "windows-virtio-win-stable": {
+      "platform": "windows-support",
+      "source": "official-fedora-virtio-win-stable",
+      "url": "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso",
+      "checksums_url": "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/CHECKSUM",
+      "checksums_signature_url": null,
+      "sha256": "303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d",
+      "signature_required": false,
+      "filename": "virtio-win.iso",
+      "requires_manual_download": false,
+      "verification_blocked": false,
+      "hash_source": "local-observed-2026-09-08; upstream CHECKSUM is MD5-only and does not cover the ISO",
+      "payload_signature_evidence": "vioser.cat and vioser.sys are Microsoft Windows Hardware Compatibility Publisher signed; qemu-ga MSI/inner EXE are unsigned userland files from the official virtio-win ISO",
+      "notes": "Stable ISO contains vioserial/w11/amd64/vioser.* and guest-agent/qemu-ga-x86_64.msi. The observed ISO SHA-256 pins this downloaded copy; Secure Boot relies on the Microsoft-signed driver catalog and driver, with no test-signing bypass. Recheck signatures and hash when refreshing the upstream ISO."
+    }
+  },
+  "derived": {
+    "ubuntu24-gui-amd64": {
+      "base": "ubuntu24-cloud-amd64",
+      "build_profile": "linux-gui",
+      "notes": "Derived in the guest from the verified Ubuntu cloud image; no second OS image is downloaded."
+    },
+    "ubuntu24-server-router-amd64": {
+      "base": "ubuntu24-cloud-amd64",
+      "build_profile": "server-router",
+      "notes": "Derived in the guest from the verified Ubuntu cloud image and sealed before candidate credentials are introduced."
+    }
+  }
+}

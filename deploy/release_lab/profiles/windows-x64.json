@@ -1,0 +1,37 @@
+{
+  "id": "windows-x64",
+  "platform": "windows",
+  "backend": "qemu-windows",
+  "profile_env": "windows11.env",
+  "base_image": "guests/windows11/golden-disk.qcow2",
+  "golden_readiness": "guests/windows11/golden-readiness.json",
+  "machine": "q35",
+  "nic": "none",
+  "uefi": true,
+  "tpm": true,
+  "ovmf_code": "/usr/share/OVMF/OVMF_CODE_4M.ms.fd",
+  "ovmf_vars_golden": "guests/windows11/OVMF_VARS_4M.ms.fd",
+  "tpm_state_golden": "guests/windows11/tpm-state",
+  "tpm_state_policy": "sealed-copy-only",
+  "provisioning_template": "guest_templates/windows11/autounattend.xml.template",
+  "display": "vnc-unix",
+  "network_mode": "lab-nat-before-seal",
+  "post_seal_wan": "disabled",
+  "firmware": {"uefi": true, "ovmf_secure_boot": true, "tpm": "2.0", "nic_model": "e1000", "driver_policy": "signed-only"},
+  "memory_mb": 4096,
+  "cpus": 2,
+  "guest_agent": "qga",
+  "receipt_path": "C:\\ProgramData\\AmneziaLab\\runs\\{run_id}\\receipt.json",
+  "interactive_required": true,
+  "interactive_lane": {"transport": "qmp-vnc", "logged_in_user": "labadmin", "uac_journal_required": true},
+  "runner": "deploy/release_lab/guest_runners/windows-release-lab.ps1",
+  "guest_executables": [
+    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+  ],
+  "steps": [
+    {"id": "probe", "action": "probe", "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "args": ["-NoProfile", "-File", "C:\\ProgramData\\AmneziaLab\\probe.ps1", "windows-x64"]},
+    {"id": "reinstall", "action": "reinstall", "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "args": ["-NoProfile", "-File", "C:\\ProgramData\\AmneziaLab\\install.ps1", "--clean"]},
+    {"id": "update", "action": "update", "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "args": ["-NoProfile", "-File", "C:\\ProgramData\\AmneziaLab\\update.ps1", "--from-lab"]},
+    {"id": "service-health", "action": "service-health", "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "args": ["-NoProfile", "-File", "C:\\ProgramData\\AmneziaLab\\service-health.ps1", "--expect-running"]}
+  ]
+}
