@@ -68,10 +68,11 @@ Android has a real system-installer `5.0.1.37` to
 `5.0.1.38` PASS and a clean lavapipe UI screenshot, but the current x86 guest
 architecture selects no arm64 APK, so the real application update is not
 proven. Windows has no accepted guest golden: the Hyper-V backend is code-level
-GO (`hyperv_backend.ps1` SHA-256
+GO and requires an administrator token (`hyperv_backend.ps1` SHA-256
 `800AD2B2A113CD8169FA8FF1833DB0C591FB2625895455527A59E8900B001892`), while
-the host feature/manual prerequisite and VM runtime remain pending. The
-server-router fixture's health/manifest requests do not prove publication.
+the host feature/manual prerequisite and VM runtime remain pending; unattended
+Windows automation is not yet verified. The server-router fixture's
+health/manifest requests do not prove publication.
 Reboot and rollback scenarios were not completed. Release automation remains
 fail-closed until product update, reboot/rollback, and self-hosted publication
 receipts exist for every required lane.

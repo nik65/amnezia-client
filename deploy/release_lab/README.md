@@ -47,9 +47,10 @@ Linux GUI v9 OS/QGA golden plus strict GNOME/X11 session evidence are
 available. The v9 product run installed baseline `5.0.1.37` successfully with
 an active service and canonical runtime version; candidate `5.0.1.38` failed
 in the legacy maintenance tool (exit 6), leaving baseline version/service
-active. Windows has no accepted golden; its Hyper-V backend
-is code-level GO only and the host feature/manual prerequisite remains
-pending. Android's installer and lavapipe UI receipts do not yet prove the
+active. Windows has no accepted golden; its Hyper-V backend is code-level GO
+but requires an administrator token, and the host feature/manual prerequisite
+remains pending, so unattended Windows automation is not verified. Android's
+installer and lavapipe UI receipts do not yet prove the
 real application update on the current x86 guest. The server-router fixture
 has health/manifest traffic only and is not publication evidence. Then the
 pipeline uses `plan`/`create`, starts and probes each selected lane, runs
