@@ -1,0 +1,24 @@
+$ErrorActionPreference = 'Stop'
+$markerPath = Join-Path $PSScriptRoot 'amnezia-lab-seed-__SEED_NONCE__.txt'
+if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { throw 'Hyper-V seed marker is missing' }
+$markerLines = @(Get-Content -LiteralPath $markerPath)
+$requiredLines = @(
+    'profile=windows-x64'
+    'backend=hyperv'
+    'bootstrap_id=__BOOTSTRAP_ID__'
+    'seed_nonce=__SEED_NONCE__'
+)
+foreach ($requiredLine in $requiredLines) {
+    if ($markerLines -notcontains $requiredLine) { throw "Hyper-V seed marker is missing required line: $requiredLine" }
+}
+$readyPath = 'C:\ProgramData\AmneziaLab\READY'
+New-Item -ItemType Directory -Path (Split-Path -Parent $readyPath) -Force | Out-Null
+@(
+    'profile=windows-x64'
+    'backend=hyperv'
+    'bootstrap_id=__BOOTSTRAP_ID__'
+    'seed_nonce=__SEED_NONCE__'
+    'phase=ready'
+    'transport=hyperv-powershell-direct'
+    'candidate_credentials=absent'
+) | Set-Content -LiteralPath $readyPath -Encoding ASCII

@@ -67,11 +67,15 @@ the legacy maintenance tool (exit 6), leaving baseline version/service active.
 Android has a real system-installer `5.0.1.37` to
 `5.0.1.38` PASS and a clean lavapipe UI screenshot, but the current x86 guest
 architecture selects no arm64 APK, so the real application update is not
-proven. Windows has no accepted guest golden: the Hyper-V backend is code-level
-GO and requires an administrator token (`hyperv_backend.ps1` SHA-256
-`800AD2B2A113CD8169FA8FF1833DB0C591FB2625895455527A59E8900B001892`), while
-the host feature/manual prerequisite and VM runtime remain pending; unattended
-Windows automation is not yet verified. The server-router fixture's
+proven. The separate Hyper-V Windows OS baseline is sealed and independently
+read back as Windows 11 EnterpriseEval 25H2/build 26200: self-contained 128 GiB
+VHDX, VM Off, 0 DVD/0 NIC/0 automatic checkpoints, Secure Boot
+`MicrosoftWindows`, first boot on the owned VHD, and marker/VHD SHA-256
+`8ded92f7c7a2f522dd6609f6afbb9e023515055ac3cd3db1309df9214e7275cb`. Its
+backend is `A31969B917C3C6CC243D177C5EEFADCD1D4D3D723285EE3F38240E5C321F5146`.
+This OS baseline remains separate from the `lab.py` QEMU product lane;
+thin/outer Windows installer, interactive UI/UAC, reboot/rollback, and
+self-hosted publication receipts remain pending. The server-router fixture's
 health/manifest requests do not prove publication.
 Reboot and rollback scenarios were not completed. Release automation remains
 fail-closed until product update, reboot/rollback, and self-hosted publication

@@ -21,10 +21,11 @@ The Windows receipt also records the sealed OVMF NVRAM and TPM-state hashes;
 each run clones those exact states and never creates fresh firmware state.
 
 The Linux profiles use explicit KVM acceleration and `-nic none` for ordinary
-release runs. Windows requires the signed UEFI/swtpm profile and is currently
-blocked until a verified golden baseline is available; the reviewed TCG
-software experiment is recorded separately and is not silently substituted for
-KVM. The server-router consumer fixture is the one explicit exception: it uses
+release runs. The QEMU Windows profile remains blocked by its signed
+UEFI/swtpm boot issue; a separate Hyper-V OS baseline is sealed and
+independently read back, but is not wired into this QEMU controller. The
+reviewed TCG software experiment is recorded separately and is not silently
+substituted for KVM. The server-router consumer fixture is the one explicit exception: it uses
 QEMU user networking with `restrict=on` and a loopback-only hostfwd to guest
 port `17865`. Android uses the owned `android/android-lab.sh` adapter and its
 dedicated ADB/emulator; it is not treated as a Linux/QGA guest. If an adapter
@@ -47,9 +48,12 @@ Linux GUI v9 OS/QGA golden plus strict GNOME/X11 session evidence are
 available. The v9 product run installed baseline `5.0.1.37` successfully with
 an active service and canonical runtime version; candidate `5.0.1.38` failed
 in the legacy maintenance tool (exit 6), leaving baseline version/service
-active. Windows has no accepted golden; its Hyper-V backend is code-level GO
-but requires an administrator token, and the host feature/manual prerequisite
-remains pending, so unattended Windows automation is not verified. Android's
+active. The separate Hyper-V Windows OS baseline is sealed with marker/VHD
+SHA-256 `8ded92f7c7a2f522dd6609f6afbb9e023515055ac3cd3db1309df9214e7275cb`,
+VM Off, 128 GiB self-contained disk, 0 DVD/0 NIC/0 checkpoints, Secure Boot
+`MicrosoftWindows`, first boot on the owned VHD, and licensed EnterpriseEval
+25H2/build 26200. It remains separate from `lab.py`: the backend is code-level
+GO, but the product installer runner/receipt adapter is still pending. Android's
 installer and lavapipe UI receipts do not yet prove the
 real application update on the current x86 guest. The server-router fixture
 has health/manifest traffic only and is not publication evidence. Then the

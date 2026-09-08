@@ -47,9 +47,27 @@ Private Hyper-V switch. The preview never calls `New-VM`, `New-VMSwitch`,
 Windows guest automation uses PowerShell Direct after the VM is running. It
 does not require a guest NIC and is supported for Windows 10 or later guests
 with a configured user profile. The lab uses a local `labadmin` account with
-normal UAC; credentials remain runtime inputs outside Git.
+normal UAC; credentials remain runtime inputs outside Git. After the one-time
+manual feature enable/restart, the backend uses the enabled `Hyper-V
+Administrators` group and a non-mutating Hyper-V management-plane probe, so
+normal plan/status/start/stop/finalize/collect runs do not require a full
+administrator token. The backend does not query DISM online, enable features,
+or reboot the host.
 
-Sources checked 2026-09-08:
+## Sealed OS baseline
+
+The Hyper-V OS baseline was completed and independently read back on
+2026-09-09. Windows 11 EnterpriseEval 25H2/build 26200 is licensed with
+positive evaluation grace. The VM is Off and its self-contained 128 GiB VHDX
+has marker/VHD SHA-256
+`8ded92f7c7a2f522dd6609f6afbb9e023515055ac3cd3db1309df9214e7275cb`; readback
+also records Secure Boot `MicrosoftWindows`, first boot on the owned VHD, 0
+DVD, 0 NIC, and automatic checkpoints disabled. This proves OS readiness for
+the separate Hyper-V path. It does not connect the backend to `lab.py`, and it
+does not prove thin/outer installer, interactive UI/UAC, reboot/rollback, or
+self-hosted publication evidence.
+
+Sources checked 2026-09-09:
 
 * [Install Hyper-V](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/get-started/Install-Hyper-V) documents Windows Pro/Enterprise requirements, the elevated PowerShell command, and the restart needed to complete feature installation.
 * [Manage Windows Virtual Machines with PowerShell Direct](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/powershell-direct) documents PowerShell Direct for Windows 10 or later guests without relying on network configuration.

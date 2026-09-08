@@ -79,11 +79,16 @@ candidate `5.0.1.38` завершилось ошибкой legacy maintenance to
 реальный system-installer
 `5.0.1.37` → `5.0.1.38` прошёл, lavapipe дал чистый UI-скриншот, но x86-гость
 не выбирает arm64 APK, поэтому настоящее обновление приложения не доказано.
-Для Windows принятого golden нет: Hyper-V backend готов на уровне кода и
-требует администраторский token (SHA-256
-`800AD2B2A113CD8169FA8FF1833DB0C591FB2625895455527A59E8900B001892`), но
-ручное включение host feature и создание VM ещё не выполнены, поэтому
-автоматизация Windows без ручного этапа ещё не подтверждена. Проверка
+Отдельный Windows OS baseline Hyper-V запечатан и независимо прочитан:
+Windows 11 EnterpriseEval 25H2/build 26200, self-contained VHDX 128 GiB,
+VM Off, 0 DVD/0 NIC/0 automatic checkpoints, Secure Boot
+`MicrosoftWindows`, первый boot с owned VHD; SHA-256 marker/VHD
+`8ded92f7c7a2f522dd6609f6afbb9e023515055ac3cd3db1309df9214e7275cb`.
+SHA-256 backend —
+`A31969B917C3C6CC243D177C5EEFADCD1D4D3D723285EE3F38240E5C321F5146`.
+Этот OS baseline остаётся отдельным от QEMU product lane `lab.py`;
+доказательства thin/outer Windows installer, интерактивного UI/UAC,
+перезагрузки/отката и self-hosted publication ещё ожидаются. Проверка
 server-router `/healthz` и `/manifest.json` не является публикацией.
 Сценарии перезагрузки и отката не завершены. Полный release остаётся
 fail-closed до receipts установки/обновления, перезагрузки/отката и
