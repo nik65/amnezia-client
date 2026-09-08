@@ -8258,9 +8258,14 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         )
         self.assertIn("parseScOutputFields", query_service)
         self.assertIn('replace(/\\s+/g, " ")', query_service)
-        self.assertIn('startType = "delayed-auto"', query_service)
+        self.assertIn(
+            'identity.delayedAutoStart === 1 ? "delayed-auto" : "auto"',
+            query_service,
+        )
         self.assertIn('start: startType', query_service)
-        self.assertIn("AUTO_START\\s+\\(DELAYED\\)", query_service)
+        self.assertIn("identity.start", query_service)
+        self.assertIn("identity.delayedAutoStart", query_service)
+        self.assertNotIn('["qc", serviceName]', query_service)
         self.assertIn('failureFields["FAILURE_ACTIONS"]', query_service)
         self.assertIn('failureFields["RESET_PERIOD (IN SECONDS)"]', query_service)
         self.assertIn('failureFields["REBOOT_MESSAGE"]', query_service)
@@ -8464,6 +8469,12 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         identity_matches = self.function_body(
             "function windowsServiceIdentityMatches", self.qif_control_script
         )
+        strict_number = self.function_body(
+            "function isStrictWindowsServiceNumber", self.qif_control_script
+        )
+        detail_helper = self.function_body(
+            "function windowsServiceConfigSnapshotFailureDetail", self.qif_control_script
+        )
         identity_reason = self.function_body(
             "function windowsServiceIdentityFailureReason", self.qif_control_script
         )
@@ -8479,6 +8490,28 @@ RESET_PERIOD (in seconds) : 100
 REBOOT_MESSAGE :
 """
         nonstandard_failure = standard_failure.replace("2000", "5000", 1)
+        malformed_failure = standard_failure + "SERVICE_NAME : duplicate\n"
+        unknown_failure = standard_failure + "UNKNOWN_FIELD : value\n"
+        missing_reset_failure = standard_failure.replace(
+            "RESET_PERIOD (in seconds) : 100\n", ""
+        )
+        wrong_reset_failure = standard_failure.replace(
+            "RESET_PERIOD (in seconds) : 100", "RESET_PERIOD (in seconds) : 99"
+        )
+        reboot_failure = standard_failure.replace(
+            "REBOOT_MESSAGE :", "REBOOT_MESSAGE : unexpected"
+        )
+        command_failure = standard_failure.replace(
+            "COMMAND_LINE :", "COMMAND_LINE : unexpected"
+        )
+        missing_actions_failure = standard_failure.replace(
+            "FAILURE_ACTIONS :\n  RESTART -- Delay = 2000 milliseconds.\n  RESTART -- Delay = 2000 milliseconds.\n  RESTART -- Delay = 2000 milliseconds.\n",
+            ""
+        )
+        malformed_flag = "SERVICE_NAME : one\nSERVICE_NAME : two\n"
+        unknown_flag = "UNKNOWN_FLAG : value\n"
+        missing_flag = ""
+        invalid_flag = "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : MAYBE\n"
         harness = f"""
 {parser}
 {field_guard}
@@ -8486,46 +8519,114 @@ function normalizeWindowsFailureActionsFlag(value)
 {normalize_flag}
 function normalizeWindowsServiceImagePath(value)
 {normalize_image}
+function isStrictWindowsServiceNumber(value)
+{strict_number}
 function windowsServiceIdentityMatches(identity, expectedStart, allowDisabled)
 {identity_matches}
 function windowsServiceIdentityFailureReason(identity, expectedStart, allowDisabled)
 {identity_reason}
+function windowsServiceConfigSnapshotFailureDetail()
+{detail_helper}
 function queryWindowsMainServiceIdentity(serviceName)
 {identity}
 function queryWindowsMainServiceConfig(serviceName)
 {query}
 function runningOnWindows() {{ return true; }}
 var outputs = {{}};
+var windowsMainServiceConfigSnapshotFailureReason = "";
+var calls = [];
 var installer = {{
     execute: function(_path, args) {{
+        calls.push(args[0]);
         if (args.indexOf("-Command") >= 0) {{
-            return [outputs.identity || "", outputs.identityExit === undefined ? 0 : outputs.identityExit];
+            return [outputs.identityRaw === undefined ? (outputs.identity || "") : outputs.identityRaw,
+                outputs.identityExit === undefined ? 0 : outputs.identityExit];
         }}
-        return [outputs[args[0]] || "", 0];
+        if (args[0] === "qc") {{ throw new Error("sc qc must not be called"); }}
+        return [outputs[args[0]] || "", outputs[args[0] + "Exit"] === undefined ? 0 : outputs[args[0] + "Exit"]];
     }}
 }};
-function evaluate(startOutput, failureOutput, failureFlagOutput) {{
+function evaluate(identity, failureOutput, failureFlagOutput, identityExit, queryExit) {{
     outputs = {{
         query: "SERVICE_NAME : AmneziaVPN-service",
-        qc: startOutput,
+        qc: "START_TYPE : ЛОКАЛИЗОВАНО",
         qfailure: failureOutput,
         qfailureflag: failureFlagOutput,
-        identity: JSON.stringify({{
-            name: "AmneziaVPN-service", serviceType: 16, errorControl: 1, start: 2,
-            delayedAutoStart: startOutput.indexOf("(DELAYED)") >= 0 ? 1 : 0,
-            startName: "LocalSystem",
-            imagePath: "C:/Program Files/AmneziaVPN/AmneziaVPN-service.exe",
-            dependencies: "BFE,nsi"
-        }})
+        identity: JSON.stringify(identity)
+    }};
+    if (identityExit !== undefined) {{ outputs.identityExit = identityExit; }}
+    if (queryExit !== undefined) {{ outputs.queryExit = queryExit; }}
+    return queryWindowsMainServiceConfig("AmneziaVPN-service");
+}}
+function evaluateRaw(identityRaw, failureOutput, failureFlagOutput) {{
+    outputs = {{
+        query: "SERVICE_NAME : AmneziaVPN-service",
+        qfailure: failureOutput,
+        qfailureflag: failureFlagOutput,
+        identityRaw: identityRaw
     }};
     return queryWindowsMainServiceConfig("AmneziaVPN-service");
 }}
+function reasonFor(identity, failureOutput, failureFlagOutput, identityExit) {{
+    evaluate(identity, failureOutput, failureFlagOutput, identityExit);
+    return windowsMainServiceConfigSnapshotFailureReason;
+}}
+var standardIdentity = {{
+    name: "AmneziaVPN-service", serviceType: 16, errorControl: 1, start: 2,
+    delayedAutoStart: 0, startName: "LocalSystem",
+    imagePath: "C:/Program Files/AmneziaVPN/AmneziaVPN-service.exe",
+    dependencies: "nSi,bFe"
+}};
+var delayedIdentity = Object.assign({{}}, standardIdentity, {{ delayedAutoStart: 1 }});
+var disabledIdentity = Object.assign({{}}, standardIdentity, {{ start: 4 }});
+var malformedIdentities = {{
+    missing: Object.assign({{}}, standardIdentity, {{ start: undefined }}),
+    string: Object.assign({{}}, standardIdentity, {{ start: "2" }}),
+    boolean: Object.assign({{}}, standardIdentity, {{ start: true }}),
+    noninteger: Object.assign({{}}, standardIdentity, {{ start: 2.5 }}),
+    missingDelayed: Object.assign({{}}, standardIdentity, {{ delayedAutoStart: undefined }}),
+    nullDelayed: Object.assign({{}}, standardIdentity, {{ delayedAutoStart: null }}),
+    stringDelayed: Object.assign({{}}, standardIdentity, {{ delayedAutoStart: "0" }}),
+    booleanDelayed: Object.assign({{}}, standardIdentity, {{ delayedAutoStart: false }}),
+    nonintegerDelayed: Object.assign({{}}, standardIdentity, {{ delayedAutoStart: 0.5 }}),
+    stringType: Object.assign({{}}, standardIdentity, {{ serviceType: "16" }}),
+    booleanError: Object.assign({{}}, standardIdentity, {{ errorControl: true }})
+}};
 process.stdout.write(JSON.stringify({{
-    standard: evaluate("START_TYPE : 2 AUTO_START", {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
-    delayed: evaluate("START_TYPE : 2 AUTO_START (DELAYED)", {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : TRUE"),
-    unsupported: evaluate("START_TYPE : 3 DEMAND_START", {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
-    nonstandard: evaluate("START_TYPE : 2 AUTO_START", {json.dumps(nonstandard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
-    localized: evaluate("START_TYPE : 2 AUTO_START", {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : НЕИЗВЕСТНО")
+    standard: evaluate(standardIdentity, {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+    delayed: evaluate(delayedIdentity, {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : TRUE"),
+    unsupported: evaluate(Object.assign({{}}, standardIdentity, {{ start: 3 }}), {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+    disabled: evaluate(disabledIdentity, {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+    nonstandard: evaluate(standardIdentity, {json.dumps(nonstandard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+    localized: evaluate(standardIdentity, {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+    malformed: Object.fromEntries(Object.keys(malformedIdentities).map(function(key) {{
+        return [key, evaluate(malformedIdentities[key], {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE")];
+    }})),
+    reasons: {{
+        malformed: reasonFor(standardIdentity, {json.dumps(malformed_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+        unknown: reasonFor(standardIdentity, {json.dumps(unknown_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+        missingReset: reasonFor(standardIdentity, {json.dumps(missing_reset_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+        reset: reasonFor(standardIdentity, {json.dumps(wrong_reset_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+        reboot: reasonFor(standardIdentity, {json.dumps(reboot_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+        command: reasonFor(standardIdentity, {json.dumps(command_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+        actions: reasonFor(standardIdentity, {json.dumps(nonstandard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+        missingActions: reasonFor(standardIdentity, {json.dumps(missing_actions_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+        malformedFlag: reasonFor(standardIdentity, {json.dumps(standard_failure)}, {json.dumps(malformed_flag)}),
+        unknownFlag: reasonFor(standardIdentity, {json.dumps(standard_failure)}, {json.dumps(unknown_flag)}),
+        missingFlag: reasonFor(standardIdentity, {json.dumps(standard_failure)}, {json.dumps(missing_flag)}),
+        invalidFlag: reasonFor(standardIdentity, {json.dumps(standard_failure)}, {json.dumps(invalid_flag)}),
+        identityQuery: reasonFor(standardIdentity, {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE", 7)
+    }},
+    identityJson: evaluateRaw("not-json", {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE"),
+    identityJsonReason: windowsMainServiceConfigSnapshotFailureReason,
+    restoreStart4WithoutAllow: windowsServiceIdentityMatches(disabledIdentity, "auto", false),
+    restoreStart4WithAllow: windowsServiceIdentityMatches(disabledIdentity, "auto", true),
+    unsafeDetail: (windowsMainServiceConfigSnapshotFailureReason = "raw/secret\\nvalue", windowsServiceConfigSnapshotFailureDetail()),
+    scExit: (function() {{
+        var value = evaluate(standardIdentity, {json.dumps(standard_failure)}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES : FALSE", undefined, 5);
+        return {{ value: value, reason: windowsMainServiceConfigSnapshotFailureReason, detail: windowsServiceConfigSnapshotFailureDetail() }};
+    }})(),
+    calls: calls
 }}));
 """
         completed = subprocess.run(
@@ -8548,8 +8649,48 @@ process.stdout.write(JSON.stringify({{
         self.assertEqual(result["delayed"]["start"], "delayed-auto")
         self.assertEqual(result["delayed"]["failureActionsFlag"], "1")
         self.assertIsNone(result["unsupported"])
+        self.assertIsNone(result["disabled"])
         self.assertIsNone(result["nonstandard"])
-        self.assertIsNone(result["localized"])
+        self.assertEqual(result["localized"]["start"], "auto")
+        self.assertEqual(result["malformed"], {
+            "missing": None,
+            "string": None,
+            "boolean": None,
+            "noninteger": None,
+            "missingDelayed": None,
+            "nullDelayed": None,
+            "stringDelayed": None,
+            "booleanDelayed": None,
+            "nonintegerDelayed": None,
+            "stringType": None,
+            "booleanError": None,
+        })
+        self.assertEqual(result["reasons"], {
+            "malformed": "failure-output-malformed",
+            "unknown": "failure-unknown-field",
+            "missingReset": "failure-missing-reset-period",
+            "reset": "failure-reset-period",
+            "reboot": "failure-reboot-message",
+            "command": "failure-command-line",
+            "actions": "failure-actions",
+            "missingActions": "failure-missing-actions",
+            "malformedFlag": "failure-flag-output-malformed",
+            "unknownFlag": "failure-flag-unknown-field",
+            "missingFlag": "failure-flag-missing",
+            "invalidFlag": "failure-flag-value",
+            "identityQuery": "identity-query-exit-7",
+        })
+        self.assertIsNone(result["identityJson"])
+        self.assertEqual(result["identityJsonReason"], "identity-json-invalid")
+        self.assertFalse(result["restoreStart4WithoutAllow"])
+        self.assertTrue(result["restoreStart4WithAllow"])
+        self.assertEqual(result["unsafeDetail"], "unknown")
+        self.assertEqual(result["scExit"], {
+            "value": None,
+            "reason": "sc-query-exit-5-0-0",
+            "detail": "sc-query-exit-5-0-0",
+        })
+        self.assertNotIn("qc", result["calls"])
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is required")
     def test_qif_windows_legacy_wait_requires_consecutive_combined_states(self) -> None:

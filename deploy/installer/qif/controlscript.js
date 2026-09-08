@@ -404,25 +404,40 @@ function normalizeWindowsServiceImagePath(value)
     return imagePath;
 }
 
+function isStrictWindowsServiceNumber(value)
+{
+    return typeof value === "number" && isFinite(value) && Math.floor(value) === value;
+}
+
 function windowsServiceIdentityMatches(identity, expectedStart, allowDisabled)
 {
     if (identity === null || typeof identity !== "object"
+            || (expectedStart !== "auto" && expectedStart !== "delayed-auto")
+            || !isStrictWindowsServiceNumber(identity.serviceType)
+            || !isStrictWindowsServiceNumber(identity.errorControl)
+            || !isStrictWindowsServiceNumber(identity.start)
+            || !isStrictWindowsServiceNumber(identity.delayedAutoStart)
             || String(identity.name || "") !== "AmneziaVPN-service"
-            || Number(identity.serviceType) !== 16
-            || Number(identity.errorControl) !== 1
-            || (Number(identity.start) !== 2 && !(allowDisabled && Number(identity.start) === 4))
+            || identity.serviceType !== 16
+            || identity.errorControl !== 1
+            || (identity.start !== 2 && !(allowDisabled === true && identity.start === 4))
             || String(identity.startName || "") !== "LocalSystem") {
         return false;
     }
     var expectedDelayed = expectedStart === "delayed-auto" ? 1 : 0;
-    if (Number(identity.delayedAutoStart) !== expectedDelayed) {
+    if (identity.delayedAutoStart !== expectedDelayed) {
         return false;
     }
-    var dependencies = String(identity.dependencies || "").split(",");
-    dependencies = dependencies.filter(function(value) { return value !== ""; });
+    if (typeof identity.dependencies !== "string") {
+        return false;
+    }
+    var dependencies = identity.dependencies.split(",");
+    if (dependencies.length !== 2 || dependencies[0] === "" || dependencies[1] === "") {
+        return false;
+    }
+    dependencies = dependencies.map(function(value) { return value.toUpperCase(); });
     dependencies.sort();
-    if (dependencies.length !== 2 || dependencies[0].toUpperCase() !== "BFE"
-            || dependencies[1].toUpperCase() !== "NSI") {
+    if (dependencies[0] !== "BFE" || dependencies[1] !== "NSI") {
         return false;
     }
     var imagePath = normalizeWindowsServiceImagePath(identity.imagePath);
@@ -437,29 +452,39 @@ function windowsServiceIdentityFailureReason(identity, expectedStart, allowDisab
     if (identity === null || typeof identity !== "object") {
         return windowsMainServiceConfigSnapshotFailureReason || "identity-unavailable";
     }
+    if (expectedStart !== "auto" && expectedStart !== "delayed-auto") {
+        return "identity-expected-start";
+    }
     if (String(identity.name || "") !== "AmneziaVPN-service") {
         return "identity-name";
     }
-    if (Number(identity.serviceType) !== 16) {
+    if (!isStrictWindowsServiceNumber(identity.serviceType) || identity.serviceType !== 16) {
         return "identity-service-type";
     }
-    if (Number(identity.errorControl) !== 1) {
+    if (!isStrictWindowsServiceNumber(identity.errorControl) || identity.errorControl !== 1) {
         return "identity-error-control";
     }
-    if (Number(identity.start) !== 2 && !(allowDisabled && Number(identity.start) === 4)) {
+    if (!isStrictWindowsServiceNumber(identity.start)
+            || (identity.start !== 2 && !(allowDisabled === true && identity.start === 4))) {
         return "identity-start-mode";
     }
     if (String(identity.startName || "") !== "LocalSystem") {
         return "identity-account";
     }
-    if (Number(identity.delayedAutoStart) !== (expectedStart === "delayed-auto" ? 1 : 0)) {
+    if (!isStrictWindowsServiceNumber(identity.delayedAutoStart)
+            || identity.delayedAutoStart !== (expectedStart === "delayed-auto" ? 1 : 0)) {
         return "identity-delayed-auto";
     }
-    var dependencies = String(identity.dependencies || "").split(",");
-    dependencies = dependencies.filter(function(value) { return value !== ""; });
+    if (typeof identity.dependencies !== "string") {
+        return "identity-dependencies";
+    }
+    var dependencies = identity.dependencies.split(",");
+    if (dependencies.length !== 2 || dependencies[0] === "" || dependencies[1] === "") {
+        return "identity-dependencies";
+    }
+    dependencies = dependencies.map(function(value) { return value.toUpperCase(); });
     dependencies.sort();
-    if (dependencies.length !== 2 || dependencies[0].toUpperCase() !== "BFE"
-            || dependencies[1].toUpperCase() !== "NSI") {
+    if (dependencies[0] !== "BFE" || dependencies[1] !== "NSI") {
         return "identity-dependencies";
     }
     var imagePath = normalizeWindowsServiceImagePath(identity.imagePath);
@@ -561,33 +586,48 @@ function queryWindowsMainServiceConfig(serviceName)
     // SCM is authoritative for the service configuration. Only the exact
     // configuration emitted by the supported QIF install is round-tripped;
     // an unrecognised/custom configuration fails closed before any mutation.
+    // Startup mode is derived from the structured identity query below, so
+    // this preflight does not depend on localized `sc qc` labels.
     windowsMainServiceConfigSnapshotFailureReason = "";
     var systemSc = "C:/Windows/System32/sc.exe";
     var queryResult = installer.execute(systemSc, ["query", serviceName]);
-    var configResult = installer.execute(systemSc, ["qc", serviceName]);
     var failureResult = installer.execute(systemSc, ["qfailure", serviceName]);
     var failureFlagResult = installer.execute(systemSc, ["qfailureflag", serviceName]);
     if (queryResult.length < 2 || Number(queryResult[1]) !== 0
-            || configResult.length < 2 || Number(configResult[1]) !== 0
             || failureResult.length < 2 || Number(failureResult[1]) !== 0
             || failureFlagResult.length < 2 || Number(failureFlagResult[1]) !== 0) {
         windowsMainServiceConfigSnapshotFailureReason = "sc-query-exit-"
-                + (queryResult.length < 2 ? "query" : Number(queryResult[1])) + "/"
-                + (configResult.length < 2 ? "qc" : Number(configResult[1])) + "/"
-                + (failureResult.length < 2 ? "qfailure" : Number(failureResult[1])) + "/"
+                + (queryResult.length < 2 ? "query" : Number(queryResult[1])) + "-"
+                + (failureResult.length < 2 ? "qfailure" : Number(failureResult[1])) + "-"
                 + (failureFlagResult.length < 2 ? "qfailureflag" : Number(failureFlagResult[1]));
         return null;
     }
 
-    var configOutput = String(configResult[0] || "").replace(/\s+/g, " ").toUpperCase();
-    // Preserve delayed automatic startup instead of silently normalizing it to
-    // plain auto; every other SCM start mode is rejected before mutation.
-    var startType = "";
-    if (/START_TYPE\s*:\s*2\s+AUTO_START\s+\(DELAYED\)/.test(configOutput)) {
-        startType = "delayed-auto";
-    } else if (/START_TYPE\s*:\s*2\s+AUTO_START\b/.test(configOutput)) {
-        startType = "auto";
+    var identity = queryWindowsMainServiceIdentity(serviceName);
+    if (identity === null || typeof identity !== "object") {
+        if (windowsMainServiceConfigSnapshotFailureReason === "") {
+            windowsMainServiceConfigSnapshotFailureReason = "identity-unavailable";
+        }
+        return null;
     }
+    // Registry Start and DelayedAutoStart are numeric values emitted by the
+    // structured identity query. Reject every other representation and every
+    // SCM start mode before parsing or accepting recovery settings.
+    if (!isStrictWindowsServiceNumber(identity.start)) {
+        windowsMainServiceConfigSnapshotFailureReason = windowsServiceIdentityFailureReason(
+                identity, "auto", false);
+        return null;
+    }
+    if (identity.start !== 2) {
+        windowsMainServiceConfigSnapshotFailureReason = "unsupported-start-type";
+        return null;
+    }
+    if (!isStrictWindowsServiceNumber(identity.delayedAutoStart)
+            || (identity.delayedAutoStart !== 0 && identity.delayedAutoStart !== 1)) {
+        windowsMainServiceConfigSnapshotFailureReason = "identity-delayed-auto";
+        return null;
+    }
+    var startType = identity.delayedAutoStart === 1 ? "delayed-auto" : "auto";
     var failureFields = parseScOutputFields(failureResult[0]);
     var failureFlagFields = parseScOutputFields(failureFlagResult[0]);
     var allowedFailureFields = [
@@ -601,38 +641,76 @@ function queryWindowsMainServiceConfig(serviceName)
     var expectedFailureActions =
         "RESTART -- DELAY = 2000 MILLISECONDS. RESTART -- DELAY = 2000 MILLISECONDS. "
         + "RESTART -- DELAY = 2000 MILLISECONDS.";
-    var failureActions = failureFields === null ? ""
-        : String(failureFields["FAILURE_ACTIONS"] || "")
-              .replace(/\s+/g, " ").trim().toUpperCase();
-    var resetPeriod = failureFields === null ? ""
-        : String(failureFields["RESET_PERIOD (IN SECONDS)"] || "").trim().toUpperCase();
-    var rebootMessage = failureFields === null ? "not-empty"
-        : String(failureFields["REBOOT_MESSAGE"] || "");
-    var commandLine = failureFields === null ? "not-empty"
-        : String(failureFields["COMMAND_LINE"] || "");
-    var failureActionsFlagRaw = failureFlagFields === null ? ""
-        : String(failureFlagFields["FAILURE_ACTIONS_ON_NONCRASH_FAILURES"] || "").trim();
+    if (!windowsServiceIdentityMatches(identity, startType)) {
+        windowsMainServiceConfigSnapshotFailureReason = windowsServiceIdentityFailureReason(
+                identity, startType, false);
+        return null;
+    }
+    if (failureFields === null) {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-output-malformed";
+        return null;
+    }
+    if (!scFieldsHaveOnly(failureFields, allowedFailureFields)) {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-unknown-field";
+        return null;
+    }
+    if (!Object.prototype.hasOwnProperty.call(failureFields, "RESET_PERIOD (IN SECONDS)")) {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-missing-reset-period";
+        return null;
+    }
+    if (!Object.prototype.hasOwnProperty.call(failureFields, "REBOOT_MESSAGE")) {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-missing-reboot-message";
+        return null;
+    }
+    if (!Object.prototype.hasOwnProperty.call(failureFields, "COMMAND_LINE")) {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-missing-command-line";
+        return null;
+    }
+    if (!Object.prototype.hasOwnProperty.call(failureFields, "FAILURE_ACTIONS")) {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-missing-actions";
+        return null;
+    }
+
+    var failureActions = String(failureFields["FAILURE_ACTIONS"] || "")
+        .replace(/\s+/g, " ").trim().toUpperCase();
+    var resetPeriod = String(failureFields["RESET_PERIOD (IN SECONDS)"] || "")
+        .trim().toUpperCase();
+    var rebootMessage = String(failureFields["REBOOT_MESSAGE"] || "");
+    var commandLine = String(failureFields["COMMAND_LINE"] || "");
+    if (resetPeriod !== "100") {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-reset-period";
+        return null;
+    }
+    if (rebootMessage.trim() !== "") {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-reboot-message";
+        return null;
+    }
+    if (commandLine.trim() !== "") {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-command-line";
+        return null;
+    }
+    if (failureActions !== expectedFailureActions) {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-actions";
+        return null;
+    }
+    if (failureFlagFields === null) {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-flag-output-malformed";
+        return null;
+    }
+    if (!scFieldsHaveOnly(failureFlagFields, allowedFailureFlagFields)) {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-flag-unknown-field";
+        return null;
+    }
+    if (!Object.prototype.hasOwnProperty.call(
+            failureFlagFields, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES")) {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-flag-missing";
+        return null;
+    }
+    var failureActionsFlagRaw = String(
+        failureFlagFields["FAILURE_ACTIONS_ON_NONCRASH_FAILURES"] || "").trim();
     var failureActionsFlag = normalizeWindowsFailureActionsFlag(failureActionsFlagRaw);
-    var identity = queryWindowsMainServiceIdentity(serviceName);
-    if (startType === ""
-            || !windowsServiceIdentityMatches(identity, startType)
-            || !scFieldsHaveOnly(failureFields, allowedFailureFields)
-            || !scFieldsHaveOnly(failureFlagFields, allowedFailureFlagFields)
-            || !Object.prototype.hasOwnProperty.call(failureFields || {}, "RESET_PERIOD (IN SECONDS)")
-            || !Object.prototype.hasOwnProperty.call(failureFields || {}, "REBOOT_MESSAGE")
-            || !Object.prototype.hasOwnProperty.call(failureFields || {}, "COMMAND_LINE")
-            || !Object.prototype.hasOwnProperty.call(failureFields || {}, "FAILURE_ACTIONS")
-            || !Object.prototype.hasOwnProperty.call(failureFlagFields || {}, "FAILURE_ACTIONS_ON_NONCRASH_FAILURES")
-            || resetPeriod !== "100"
-            || rebootMessage.trim() !== ""
-            || commandLine.trim() !== ""
-            || failureActions !== expectedFailureActions
-            || failureActionsFlag === "") {
-        if (windowsMainServiceConfigSnapshotFailureReason === "") {
-            windowsMainServiceConfigSnapshotFailureReason = startType === ""
-                    ? "unsupported-start-type"
-                    : windowsServiceIdentityFailureReason(identity, startType, false);
-        }
+    if (failureActionsFlag === "") {
+        windowsMainServiceConfigSnapshotFailureReason = "failure-flag-value";
         return null;
     }
 
@@ -651,6 +729,12 @@ function windowsMainServiceConfigMatches(left, right)
         && left.failureActions === right.failureActions
         && left.failureActionsFlag === right.failureActionsFlag
         && left.failureActionsFlagRaw === right.failureActionsFlagRaw;
+}
+
+function windowsServiceConfigSnapshotFailureDetail()
+{
+    var detail = String(windowsMainServiceConfigSnapshotFailureReason || "unknown");
+    return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$/.test(detail) ? detail : "unknown";
 }
 
 function recoverWindowsServiceUpgradeJournalIfPresent()
@@ -707,7 +791,7 @@ function recoverWindowsServiceUpgradeJournalIfPresent()
     var restored = restoreWindowsMainServiceAfterAbortedUpgrade(true);
     if (!restored) {
         windowsUpgradePrepareFailureReason = "service-journal-restore-failed-"
-                + (windowsMainServiceConfigSnapshotFailureReason || "unknown");
+                + windowsServiceConfigSnapshotFailureDetail();
     }
     releaseWindowsUpgradeAdminRights();
     return restored;
@@ -745,7 +829,7 @@ function restoreWindowsMainServiceAfterAbortedUpgrade(allowMissingInstallation)
         windowsMainServiceConfigSnapshotFailureReason = windowsServiceIdentityFailureReason(
                 currentIdentity, windowsMainServiceConfigSnapshot.start, true);
         console.log("Refusing to restore an untrusted AmneziaVPN service identity; reason: "
-                    + windowsMainServiceConfigSnapshotFailureReason);
+                    + windowsServiceConfigSnapshotFailureDetail());
         return false;
     }
     // Never race the legacy maintenance tool. Its elevated child may still be
@@ -799,6 +883,10 @@ function windowsUpgradePrepareFailureMessage()
     }
     if (windowsUpgradePrepareFailureReason === "service-deletion-pending") {
         return qsTr("The previous AmneziaVPN Windows service is still pending deletion after the bounded wait. The upgrade did not start. Restart Windows, then run this full offline installer again.");
+    }
+    if (windowsUpgradePrepareFailureReason === "service-config-snapshot-unavailable") {
+        return qsTr("The existing AmneziaVPN Windows service could not be prepared for a safe upgrade even with administrator rights. The upgrade did not start. Details: ")
+            + windowsServiceConfigSnapshotFailureDetail();
     }
     return qsTr("The existing AmneziaVPN Windows service could not be prepared for a safe upgrade even with administrator rights. The upgrade did not start. Details: ")
         + windowsUpgradePrepareFailureReason;
@@ -871,7 +959,7 @@ function prepareWindowsMainServiceForUpgrade()
     if (windowsMainServiceConfigSnapshot === null) {
         windowsUpgradePrepareFailureReason = "service-config-snapshot-unavailable";
         console.log("Unable to snapshot the previous AmneziaVPN service start/recovery configuration; reason: "
-                    + windowsMainServiceConfigSnapshotFailureReason);
+                    + windowsServiceConfigSnapshotFailureDetail());
         return false;
     }
     if (!persistWindowsServiceUpgradeJournal(windowsMainServiceConfigSnapshot)) {
