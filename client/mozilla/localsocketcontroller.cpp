@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
@@ -553,39 +554,28 @@ void LocalSocketController::parseCommand(const QByteArray& command) {
   }
 
   if (type == "backendFailure") {
-    if (!obj.contains("errorCode")) {
-      // report a generic error if we dont know what it is.
+    const QJsonValue rawErrorCode = obj.value("errorCode");
+    if (!rawErrorCode.isDouble()) {
       logger.error() << "generic backend failure error";
-      // REPORTERROR(ErrorHandler::ControllerError, "controller");
+      emit backendFailure(DaemonError::ERROR_FATAL);
       return;
     }
-    auto errorCode = static_cast<uint8_t>(obj["errorCode"].toInt());
-    if (errorCode >= (uint8_t)DaemonError::DAEMON_ERROR_MAX) {
-      // Also report a generic error if the code is invalid.
+    const double numericErrorCode = rawErrorCode.toDouble();
+    if (!isValidDaemonFailureNumber(numericErrorCode)) {
       logger.error() << "invalid backend failure error code";
-      // REPORTERROR(ErrorHandler::ControllerError, "controller");
+      emit backendFailure(DaemonError::ERROR_FATAL);
       return;
     }
-    switch (static_cast<DaemonError>(errorCode)) {
-      case DaemonError::ERROR_NONE:
-        [[fallthrough]];
-      case DaemonError::ERROR_FATAL:
-        logger.error() << "generic backend failure error (fatal or error none)";
-        // REPORTERROR(ErrorHandler::ControllerError, "controller");
-        break;
-      case DaemonError::ERROR_SPLIT_TUNNEL_INIT_FAILURE:
-        [[fallthrough]];
-      case DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE:
-        [[fallthrough]];
-      case DaemonError::ERROR_SPLIT_TUNNEL_EXCLUDE_FAILURE:
-        logger.error() << "split tunnel backend failure error";
-        //REPORTERROR(ErrorHandler::SplitTunnelError, "controller");
-        break;
-      case DaemonError::DAEMON_ERROR_MAX:
-        // We should not get here.
-        Q_ASSERT(false);
-        break;
+    const int errorCode = static_cast<int>(numericErrorCode);
+    if (!isDaemonFailureIpcValue(errorCode)) {
+      logger.error() << "invalid backend failure error code" << errorCode;
+      emit backendFailure(DaemonError::ERROR_FATAL);
+      return;
     }
+    const DaemonError error = daemonErrorFromIpcValue(errorCode);
+    logger.error() << "backend failure error code" << errorCode;
+    emit backendFailure(error);
+    return;
   }
 
   if (type == "logs") {

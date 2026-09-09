@@ -522,8 +522,8 @@ function persistWindowsServiceUpgradeJournal(snapshot)
     // is repeated immediately before every privileged path operation.
     var script = "& { param($Path,$ServiceName,$Start,$Actions,$Flag,$FlagRaw) $ErrorActionPreference='Stop'; $Temp=''; $BackupPath=''; "
         + "$TestAcl={ param($Target,$Directory) try { $Item=Get-Item -LiteralPath $Target -Force; if ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }; $Acl=if ($Directory) { [IO.Directory]::GetAccessControl($Target) } else { [IO.File]::GetAccessControl($Target) }; if (-not $Acl.AreAccessRulesProtected) { return $false }; $Allowed='S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'; $OwnerSid=(New-Object Security.Principal.NTAccount($Acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value; if ($Allowed -notcontains $OwnerSid) { return $false }; $Dangerous=[Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::CreateDirectories -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::WriteAttributes -bor [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership; foreach ($Rule in $Acl.Access) { if ($Rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and ($Rule.FileSystemRights -band $Dangerous) -ne 0) { $Sid=$Rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; if ($Allowed -notcontains $Sid) { return $false } } }; return $true } catch { return $false } }; "
-        + "$Root=[IO.Path]::GetDirectoryName($Path); if (Test-Path -LiteralPath $Root) { if (-not [bool](& $TestAcl $Root $true)) { exit 92 } } else { New-Item -ItemType Directory -Path $Root | Out-Null; & 'C:\\Windows\\System32\\icacls.exe' $Root '/inheritance:r' | Out-Null; if ($LASTEXITCODE -ne 0) { exit 93 }; & 'C:\\Windows\\System32\\icacls.exe' $Root '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null; if ($LASTEXITCODE -ne 0 -or -not [bool](& $TestAcl $Root $true)) { exit 94 } }; "
-        + "$Temp=$Path+'.tmp-'+[Guid]::NewGuid().ToString('N'); $Record=New-Object System.Collections.Specialized.OrderedDictionary; $Record.Add('schema',1); $Record.Add('serviceName',$ServiceName); $Record.Add('phase','prepared'); $Record.Add('start',$Start); $Record.Add('failureActions',$Actions); $Record.Add('failureActionsFlag',$Flag); $Record.Add('failureActionsFlagRaw',$FlagRaw); $Bytes=(New-Object Text.UTF8Encoding($false)).GetBytes($Record | ConvertTo-Json -Compress); $Stream=New-Object IO.FileStream($Temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); try { $Stream.Write($Bytes,0,$Bytes.Length); $Stream.Flush($true) } finally { $Stream.Dispose() }; if (-not [bool](& $TestAcl $Temp $false)) { exit 95 }; if (Test-Path -LiteralPath $Path) { if (-not [bool](& $TestAcl $Path $false)) { exit 96 }; $BackupPath=$Path+'.bak-'+[Guid]::NewGuid().ToString('N'); [IO.File]::Replace($Temp,$Path,$BackupPath,$true); if (-not (Test-Path -LiteralPath $Path)) { exit 98 }; if (Test-Path -LiteralPath $BackupPath) { Remove-Item -LiteralPath $BackupPath -Force -ErrorAction Stop } } else { [IO.File]::Move($Temp,$Path) }; if (Test-Path -LiteralPath $Temp) { exit 98 }; if (-not [bool](& $TestAcl $Path $false)) { exit 99 }; exit 0 } catch { $CleanupOk=$true; if ($Temp -and (Test-Path -LiteralPath $Temp)) { try { Remove-Item -LiteralPath $Temp -Force -ErrorAction Stop } catch { $CleanupOk=$false } }; if ($BackupPath -and (Test-Path -LiteralPath $BackupPath)) { try { if (-not (Test-Path -LiteralPath $Path)) { [IO.File]::Move($BackupPath,$Path) } else { Remove-Item -LiteralPath $BackupPath -Force -ErrorAction Stop } } catch { $CleanupOk=$false } }; if (-not $CleanupOk) { exit 98 }; exit 97 } }";
+        + "try { $Root=[IO.Path]::GetDirectoryName($Path); if (Test-Path -LiteralPath $Root) { if (-not [bool](& $TestAcl $Root $true)) { exit 92 } } else { New-Item -ItemType Directory -Path $Root | Out-Null; & 'C:\\Windows\\System32\\icacls.exe' $Root '/inheritance:r' | Out-Null; if ($LASTEXITCODE -ne 0) { exit 93 }; & 'C:\\Windows\\System32\\icacls.exe' $Root '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null; if ($LASTEXITCODE -ne 0 -or -not [bool](& $TestAcl $Root $true)) { exit 94 } }; "
+        + "$Temp=$Path+'.tmp-'+[Guid]::NewGuid().ToString('N'); $Record=New-Object System.Collections.Specialized.OrderedDictionary; $Record.Add('schema',1); $Record.Add('serviceName',$ServiceName); $Record.Add('phase','prepared'); $Record.Add('start',$Start); $Record.Add('failureActions',$Actions); $Record.Add('failureActionsFlag',$Flag); $Record.Add('failureActionsFlagRaw',$FlagRaw); $Json=$Record | ConvertTo-Json -Compress; $Bytes=(New-Object Text.UTF8Encoding($false)).GetBytes($Json); $Stream=New-Object IO.FileStream($Temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); try { $Stream.Write($Bytes,0,$Bytes.Length); $Stream.Flush($true) } finally { $Stream.Dispose() }; if (-not [bool](& $TestAcl $Temp $false)) { exit 95 }; if (Test-Path -LiteralPath $Path) { if (-not [bool](& $TestAcl $Path $false)) { exit 96 }; $BackupPath=$Path+'.bak-'+[Guid]::NewGuid().ToString('N'); [IO.File]::Replace($Temp,$Path,$BackupPath,$true); if (-not (Test-Path -LiteralPath $Path)) { exit 98 }; if (Test-Path -LiteralPath $BackupPath) { Remove-Item -LiteralPath $BackupPath -Force -ErrorAction Stop } } else { [IO.File]::Move($Temp,$Path) }; if (Test-Path -LiteralPath $Temp) { exit 98 }; if (-not [bool](& $TestAcl $Path $false)) { exit 99 }; exit 0 } catch { $CleanupOk=$true; if ($Temp -and (Test-Path -LiteralPath $Temp)) { try { Remove-Item -LiteralPath $Temp -Force -ErrorAction Stop } catch { $CleanupOk=$false } }; if ($BackupPath -and (Test-Path -LiteralPath $BackupPath)) { try { if (-not (Test-Path -LiteralPath $Path)) { [IO.File]::Move($BackupPath,$Path) } else { Remove-Item -LiteralPath $BackupPath -Force -ErrorAction Stop } } catch { $CleanupOk=$false } }; if (-not $CleanupOk) { exit 98 }; exit 97 } }";
     var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
                                    ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
                                     "-Command", script, windowsServiceUpgradeJournalPath,
@@ -1062,7 +1062,7 @@ function requestToQuit(installer,gui)
     gui.clickButton(buttons.CancelButton);
 
     if (runningOnWindows()) {
-        installer.setCancelled();
+        installer.setCanceled();
     }
 }
 
@@ -1214,7 +1214,7 @@ function Controller () {
             "windows.driver.update.unsupported",
             appName(),
             qsTr("The Windows maintenance-tool updater cannot safely replace the split-tunnel driver. Download and run the full offline AmneziaVPN installer instead."));
-        installer.setCancelled();
+        installer.setCanceled();
         return;
     }
 
@@ -1234,7 +1234,7 @@ function Controller () {
             "windows.service.upgrade.journal.recovery.failed",
             appName(),
             qsTr("A previous AmneziaVPN Windows service upgrade did not complete safely. The installer stopped before changing files or services. Resolve the protected recovery state, then run this full offline installer again."));
-        installer.setCancelled();
+        installer.setCanceled();
         return;
     }
 
@@ -1300,7 +1300,7 @@ function Controller () {
                             "windows.service.upgrade.prepare.failed",
                             appName(),
                             windowsUpgradePrepareFailureMessage());
-                        installer.setCancelled();
+                        installer.setCanceled();
                         return;
                     }
                     if (runningOnWindows()) {
@@ -1332,7 +1332,7 @@ function Controller () {
                             "windows.upgrade.multiple.installations",
                             appName(),
                             qsTr("More than one previous AmneziaVPN maintenance tool was found. The upgrade did not start because running two uninstallers would be unsafe. Restart Windows, remove the duplicate installation, then run this full offline installer again."));
-                        installer.setCancelled();
+                        installer.setCanceled();
                         return;
                     }
                     if (availableUninstallers.length === 1) {
@@ -1385,7 +1385,7 @@ function Controller () {
                                 appName(),
                                 qsTr("The previous AmneziaVPN uninstaller is still active or could not be verified after the bounded wait. The old Windows service was left disabled to avoid racing the cleanup. Wait for removal to finish or restart Windows, then run this full offline installer again."));
                         }
-                        installer.setCancelled();
+                        installer.setCanceled();
                         return;
                     }
                     writeWindowsInstallerLog("legacy-uninstaller-postcondition", "removed");
@@ -1395,7 +1395,7 @@ function Controller () {
 
             } else {
                 console.log("Request to quit from user");
-                installer.setCancelled();
+                installer.setCanceled();
                 return;
             }
         }
@@ -1416,7 +1416,7 @@ function Controller () {
                 "windows.driver.cleanup.incomplete",
                 appName(),
                 qsTr("The previous AmneziaVPN Windows services were not fully removed. Restart Windows, then run the full offline installer again. No new files were installed."));
-            installer.setCancelled();
+            installer.setCanceled();
             return;
         }
         if (runningOnWindows()) {
@@ -1428,7 +1428,7 @@ function Controller () {
                     "windows.service.upgrade.journal.clear.failed",
                     appName(),
                     qsTr("The previous AmneziaVPN Windows service was removed, but its protected upgrade journal could not be cleared. No new files were installed. Run this full offline installer again after resolving the protected recovery state."));
-                installer.setCancelled();
+                installer.setCanceled();
                 return;
             }
             // The old service is now proven absent. Do not retain its snapshot
@@ -1493,7 +1493,7 @@ isDesktopAppProcessRunningMessageLoop = function ()
     if (desktopAppProcessRunning) {
         if (isSelfHostedAutomaticUpdate()) {
             console.log("AmneziaVPN could not be closed automatically during a self-hosted update; cancelling without user interaction");
-            installer.setCancelled();
+            installer.setCanceled();
             return;
         }
         var result = QMessageBox.warning("QMessageBox", appName() + " installer",

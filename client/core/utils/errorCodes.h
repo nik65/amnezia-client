@@ -65,6 +65,12 @@ namespace amnezia
         ExecutableMissing = 604,
         XrayExecutableMissing = 605,
         Tun2SockExecutableMissing = 606,
+        SplitTunnelInitializationFailed = 607,
+        SplitTunnelStartFailed = 608,
+        SplitTunnelExclusionFailed = 609,
+        SplitTunnelConfigurationTimeout = 610,
+        SplitTunnelConfigurationWaitFailed = 611,
+        SplitTunnelConfigurationCleanupFailed = 612,
 
         // VPN errors
         OpenVpnAdaptersInUseError = 700,

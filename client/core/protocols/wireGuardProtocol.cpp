@@ -13,8 +13,18 @@ WireguardProtocol::WireguardProtocol(const QJsonObject &configuration, QObject *
     : VpnProtocol(configuration, parent)
 {
     m_impl.reset(new LocalSocketController());
+    connect(m_impl.get(), &ControllerImpl::backendFailure, this,
+            [this](DaemonError error) {
+                const amnezia::ErrorCode mapped =
+                    amnezia::wireguardProtocolPolicy::errorCodeForDaemonFailure(error);
+                m_backendFailureLatch.latch();
+                setLastError(mapped);
+            });
     connect(m_impl.get(), &ControllerImpl::connected, this,
             [this](const QString &pubkey, const QDateTime &connectionTimestamp) {
+                if (!m_backendFailureLatch.acceptsConnectionEvent()) {
+                    return;
+                }
                 setConnectionState(Vpn::ConnectionState::Connected);
             });
     connect(m_impl.get(), &ControllerImpl::statusUpdated, this,
@@ -38,7 +48,12 @@ WireguardProtocol::WireguardProtocol(const QJsonObject &configuration, QObject *
             });
 
     connect(m_impl.get(), &ControllerImpl::disconnected, this,
-            [this]() { setConnectionState(Vpn::ConnectionState::Disconnected); });
+            [this]() {
+                if (!m_backendFailureLatch.acceptsConnectionEvent()) {
+                    return;
+                }
+                setConnectionState(Vpn::ConnectionState::Disconnected);
+            });
     m_impl->initialize(nullptr, nullptr);
 }
 
@@ -56,6 +71,13 @@ void WireguardProtocol::stop()
 
 ErrorCode WireguardProtocol::startMzImpl()
 {
+    // A new explicit activation attempt is the only event that clears a
+    // latched backend failure. Late connected/disconnected notifications from
+    // the previous attempt must not hide the actionable error.
+    m_backendFailureLatch.beginAttempt();
+    if (lastError() != ErrorCode::NoError) {
+        setLastError(ErrorCode::NoError);
+    }
     QString protocolName = m_rawConfig.value("protocol").toString();
     QJsonObject vpnConfigData = m_rawConfig.value(protocolName + "_config_data").toObject();
     vpnConfigData[configKey::hostName] = NetworkUtilities::getIPAddress(vpnConfigData.value(configKey::hostName).toString());

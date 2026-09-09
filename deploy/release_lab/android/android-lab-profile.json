@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "id": "android-arm64-v8a",
-  "status": "ready-for-live-run",
+  "status": "ready-for-live-app-selfhosted-update",
   "coverage": "translated-arm64",
   "description": "Dedicated WSL/KVM Android release lab for the arm64 APK through the x86_64 Native Bridge",
   "host": {
@@ -71,6 +71,12 @@
     "production_network": false,
     "host_routes_or_firewall": false,
     "allowed_peer": "owned-lab-server-only",
+    "fixture_guest_endpoint_env": "AMNEZIA_ANDROID_FIXTURE_GUEST_ENDPOINT",
+    "fixture_attempt_nonce_env": "AMNEZIA_ANDROID_UPDATE_ATTEMPT_NONCE",
+    "fixture_guest_endpoint_source": "same-run-planned-server-context",
+    "fixture_guest_port": 17865,
+    "fixture_http_paths": ["/manifest.json", "/files/artifacts/<candidate-sha256>"],
+    "fixture_runtime_gateway": "10.0.2.2-observed-inside-guest",
     "vpn_udp_passthrough": "pending-network-gate",
     "fail_closed_until_verified": true
   }

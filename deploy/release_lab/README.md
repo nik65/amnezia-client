@@ -1,7 +1,7 @@
 # Disposable release lab
 
 `lab.py` controls four release product lanes from the existing Ubuntu 24 WSL
-instance: Windows x64 and two Linux x64 QEMU guests through QMP/QGA, plus the
+instance: Windows x64 through an explicit QEMU or Hyper-V backend, two Linux x64 QEMU guests through QMP/QGA, plus the
 Android arm64-v8a adapter/emulator lane. The isolated `server-router` QEMU
 guest is an auxiliary consumer-fixture lane, not a fifth product artifact.
 The host boundary is QMP/QGA or the owned Android adapter. The controller never
@@ -22,8 +22,11 @@ each run clones those exact states and never creates fresh firmware state.
 
 The Linux profiles use explicit KVM acceleration and `-nic none` for ordinary
 release runs. The QEMU Windows profile remains blocked by its signed
-UEFI/swtpm boot issue; a separate Hyper-V OS baseline is sealed and
-independently read back, but is not wired into this QEMU controller. The
+UEFI/swtpm boot issue. The explicit Hyper-V backend uses the sealed OS marker
+as a read-only parent and creates a differencing child VM per lab run; the
+sealed parent is never booted or finalized by `lab.py`. Hyper-V product
+evidence is collected through PowerShell Direct by VM ID and must carry a
+guest-origin receipt bound to the child VM and parent hash. The
 reviewed TCG software experiment is recorded separately and is not silently
 substituted for KVM. The server-router consumer fixture is the one explicit exception: it uses
 QEMU user networking with `restrict=on` and a loopback-only hostfwd to guest
@@ -42,18 +45,23 @@ never satisfy the gate.
 ## Workflow
 
 Run `python deploy/release_lab/lab.py preflight --json` before provisioning.
+For the Windows Hyper-V lane use `--windows-backend hyperv` and provide the
+runtime-only `AMNEZIA_HYPERV_CREDENTIAL_FILE` when a child guest action needs
+PowerShell Direct. From Windows WSL interop, invoke the dedicated lab user
+directly with `wsl.exe -d Ubuntu -u amnezia-lab --exec /usr/bin/python3`.
 It is expected to fail closed until QEMU, `/dev/kvm`, all required goldens and
 profile harnesses exist. At the current checkpoint Linux headless v2 and the
 Linux GUI v9 OS/QGA golden plus strict GNOME/X11 session evidence are
 available. The v9 product run installed baseline `5.0.1.37` successfully with
 an active service and canonical runtime version; candidate `5.0.1.38` failed
 in the legacy maintenance tool (exit 6), leaving baseline version/service
-active. The separate Hyper-V Windows OS baseline is sealed with marker/VHD
+active. The Hyper-V Windows OS baseline is sealed with marker/VHD
 SHA-256 `8ded92f7c7a2f522dd6609f6afbb9e023515055ac3cd3db1309df9214e7275cb`,
 VM Off, 128 GiB self-contained disk, 0 DVD/0 NIC/0 checkpoints, Secure Boot
 `MicrosoftWindows`, first boot on the owned VHD, and licensed EnterpriseEval
-25H2/build 26200. It remains separate from `lab.py`: the backend is code-level
-GO, but the product installer runner/receipt adapter is still pending. Android's
+25H2/build 26200. The controller path is static-only until the consolidated
+release candidate passes final review and a user-authorized child-guest run is
+performed. Android's
 installer and lavapipe UI receipts do not yet prove the
 real application update on the current x86 guest. The server-router fixture
 has health/manifest traffic only and is not publication evidence. Then the

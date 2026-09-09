@@ -9,6 +9,7 @@ set(AMNEZIA_FOCUSED_TEST_DIRS
     remote_log_sanitizer
     selfhosted_update_bootstrapper_path
     selfhosted_update_policy
+    backend_failure_contract
 )
 
 foreach(test_dir IN LISTS AMNEZIA_FOCUSED_TEST_DIRS)

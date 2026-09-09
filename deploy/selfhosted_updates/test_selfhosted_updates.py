@@ -3141,6 +3141,13 @@ class SourceContractTests(unittest.TestCase):
         ):
             self.assertIn(marker, installer)
 
+    def test_headless_installer_lock_lifecycle_is_noclobber_and_inode_bound(self) -> None:
+        installer = (REPO_ROOT / "deploy/headless/install_headless.sh").read_text(encoding="utf-8")
+        self.assertIn("set -o noclobber", installer)
+        self.assertIn("flock -n 9", installer)
+        self.assertIn("LOCK_IDENTITY", installer)
+        self.assertIn("stat -c '%d:%i'", installer)
+
     def test_headless_route_cleanup_is_transactional_and_probes_orphans(self) -> None:
         reconciler = (REPO_ROOT / "headless/linuxRouteReconciler.cpp").read_text(encoding="utf-8")
         self.assertIn("QStringList removedRoutes", reconciler)
@@ -8337,6 +8344,8 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertIn("$BackupPath=$Path+'.bak-'+[Guid]::NewGuid().ToString('N')", self.qif_control_script)
         self.assertIn("[IO.File]::Replace($Temp,$Path,$BackupPath,$true)", self.qif_control_script)
         self.assertIn("$Stream.Flush($true)", self.qif_control_script)
+        self.assertIn("installer.setCanceled()", self.qif_control_script)
+        self.assertNotIn("installer.setCancelled()", self.qif_control_script)
         self.assertIn("$CleanupOk", self.qif_control_script)
         self.assertIn("AreAccessRulesProtected", self.qif_control_script)
         self.assertIn("S-1-5-32-544", self.qif_control_script)
@@ -8381,7 +8390,7 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         prepare_failure = controller[
             prepare_service : controller.find("var installedUninstallers", prepare_service)
         ]
-        self.assertIn("installer.setCancelled()", prepare_failure)
+        self.assertIn("installer.setCanceled()", prepare_failure)
         self.assertIn("return;", prepare_failure)
         wait_for_uninstall = controller.find(
             "var uninstallerOutcome = waitForWindowsLegacyUninstaller();",
@@ -8397,12 +8406,12 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         restore_service = postcondition.find(
             "restoreWindowsMainServiceAfterAbortedUpgrade()"
         )
-        cancel_install = postcondition.find("installer.setCancelled()")
+        cancel_install = postcondition.find("installer.setCanceled()")
         self.assertIn("uninstallerExitCode", uninstaller_launch)
         self.assertIn('writeWindowsInstallerLog("legacy-uninstaller-exit"', uninstaller_launch)
         self.assertNotIn("uninstallerExitCode !== 0", controller)
         self.assertNotIn("uninstallerExitCode === 0", controller)
-        self.assertNotIn("installer.setCancelled()", uninstaller_launch)
+        self.assertNotIn("installer.setCanceled()", uninstaller_launch)
         self.assertNotIn("return;", uninstaller_launch)
         self.assertIn("availableUninstallers.length > 1", controller)
         self.assertIn("availableUninstallers.length === 1", controller)
@@ -9178,7 +9187,7 @@ process.stdout.write(JSON.stringify(outcome));
         self.assertGreaterEqual(updater_guard, 0)
         self.assertLess(updater_guard, installer_dispatch)
         self.assertIn("full offline AmneziaVPN installer", controller)
-        self.assertIn("installer.setCancelled()", controller[updater_guard:installer_dispatch])
+        self.assertIn("installer.setCanceled()", controller[updater_guard:installer_dispatch])
 
         component_updater_guard = component_ops.find("if (runningOnWindows()")
         default_extract_creation = component_ops.find("component.createOperations()")

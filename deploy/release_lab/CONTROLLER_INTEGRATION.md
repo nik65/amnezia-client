@@ -10,6 +10,15 @@ canonical JSON profile IDs to these assets:
 | `linux-headless-x64` | `guest_templates/linux-headless/user-data` | verified Ubuntu Noble cloud image | none | e1000 | no WAN |
 | `server-router` | `guest_templates/server-router/user-data` | verified Ubuntu Noble cloud image | none | guest-only test NIC | no WAN |
 
+With `--windows-backend hyperv`, `windows-x64` keeps the canonical controller
+ID but uses `windows_host/hyperv_adapter.ps1`. The adapter validates the
+sealed `.owned-vm.json` parent and its VHDX hash, creates a run-scoped
+differencing VHDX and Gen-2 child with no NIC, and addresses the child only by
+its recorded VM ID. The sealed parent is never started or finalized. Artifact
+bytes are checked at the WSL source, Windows staging path, and guest path;
+guest receipts are read through VM-ID PowerShell Direct and carry
+`origin=guest` and `transport=hyperv-powershell-direct`.
+
 `bootstrap_guest.py` is the guarded golden-image entrypoint. It verifies the
 base SHA-256, prepares a new output directory, and prints a plan unless
 `--execute` is explicitly supplied. With `--execute` it boots a temporary
@@ -38,7 +47,9 @@ diagnosing a guest.
 
 No receipt is accepted from a host path. For QEMU guests the controller writes
 the run marker through QGA, waits for every guest assertion to exit, and builds
-the receipt only from QGA readback and those completed assertions. Android's
+the receipt only from QGA readback and those completed assertions. Hyper-V uses
+the same receipt contract with a guest run marker bound to `run_id/profile` and
+a binding containing only the observed child VM ID and parent hash. Android's
 adapter must emit the equivalent common receipt under its owned adapter root.
 Provisioning users,
 SSH keys, Windows labadmin passwords, candidate artifacts, and production

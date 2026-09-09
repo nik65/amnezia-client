@@ -66,9 +66,9 @@ if [[ -e "$TRANSACTION_LOCK_PATH" ]]; then
     echo "another headless update or provisioning transaction is already running" >&2
     exit 4
 fi
-# QLockFile uses this same path in amneziad.  Atomic no-clobber creation is
-# required here; flock alone would not coordinate with Qt's lock-file
-# protocol and a redirection could truncate an updater's lock identity.
+# QLockFile uses this same path in amneziad. Keep an inherited verified empty
+# inode stable and use the same inode for the nonblocking mutual-exclusion
+# gate. Only a new path may be created, and creation is no-clobber.
 set -o noclobber
 if ! exec 9>"$TRANSACTION_LOCK_PATH"; then
     set +o noclobber
@@ -76,6 +76,8 @@ if ! exec 9>"$TRANSACTION_LOCK_PATH"; then
     exit 4
 fi
 set +o noclobber
+LOCK_CREATED=1
+LOCK_IDENTITY="$(stat -c '%d:%i' -- "$TRANSACTION_LOCK_PATH" 2>/dev/null || true)"
 chown root:root "$TRANSACTION_LOCK_PATH"
 chmod 0600 "$TRANSACTION_LOCK_PATH"
 if ! flock -n 9; then
@@ -85,7 +87,7 @@ fi
 # Cover validation failures and --recover exits before the transaction trap is
 # installed.  The descriptor remains open until shell exit, so this exact
 # unlink cannot race another owner acquiring the path.
-trap 'if [[ -e "$TRANSACTION_LOCK_PATH" && ! -L "$TRANSACTION_LOCK_PATH" ]]; then rm -f -- "$TRANSACTION_LOCK_PATH"; fi' EXIT
+trap 'if [[ "${LOCK_CREATED:-0}" -eq 1 && -e "$TRANSACTION_LOCK_PATH" && ! -L "$TRANSACTION_LOCK_PATH" && "$(stat -c "%d:%i" -- "$TRANSACTION_LOCK_PATH" 2>/dev/null || true)" == "${LOCK_IDENTITY:-}" ]]; then rm -f -- "$TRANSACTION_LOCK_PATH"; fi' EXIT
 if [[ "$RECOVER_ONLY" -eq 1 && "$#" -ne 0 ]]; then
     echo "usage: $0 --recover" >&2
     exit 2
@@ -528,7 +530,8 @@ cleanup_private_inputs() {
     fi
 }
 release_shared_lock() {
-    if [[ -e "$TRANSACTION_LOCK_PATH" && ! -L "$TRANSACTION_LOCK_PATH" ]]; then
+    if [[ "${LOCK_CREATED:-0}" -eq 1 && -e "$TRANSACTION_LOCK_PATH" && ! -L "$TRANSACTION_LOCK_PATH" \
+        && "$(stat -c '%d:%i' -- "$TRANSACTION_LOCK_PATH" 2>/dev/null || true)" == "${LOCK_IDENTITY:-}" ]]; then
         rm -f -- "$TRANSACTION_LOCK_PATH" || return 1
     fi
 }

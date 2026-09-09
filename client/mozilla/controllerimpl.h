@@ -9,6 +9,8 @@
 #include <functional>
 #include <QDateTime>
 
+#include "daemon/daemonerrors.h"
+
 class Keys;
 class Device;
 class Server;
@@ -75,6 +77,10 @@ class ControllerImpl : public QObject {
   void connected(const QString& pubkey,
                  const QDateTime& connectionTimestamp = QDateTime());
   void disconnected();
+
+  // A privileged backend failure is typed at the IPC boundary so protocol
+  // clients can preserve it until a new explicit activation attempt.
+  void backendFailure(DaemonError error);
 
   // This method should be emitted after a checkStatus() call.
   // "serverIpv4Gateway" is the current VPN tunnel gateway.

@@ -12,6 +12,8 @@
 #include <memory>
 #include <vector>
 
+#include "daemon/daemonerrors.h"
+
 // Note: the ws2tcpip.h import must come before the others.
 // clang-format off
 #include <ws2tcpip.h>
@@ -78,6 +80,9 @@ class WindowsSplitTunnel final {
   // Returns true if the split-tunnel driver is now up and running.
   bool isRunning();
 
+  /** Returns the typed failure from the most recent configuration attempt. */
+  DaemonError lastFailure() const;
+
   static bool detectConflict();
 
   // States for GetState
@@ -112,7 +117,9 @@ class WindowsSplitTunnel final {
   static bool resetDriver(HANDLE driverIO);
   bool applyConfigurationBounded(const std::vector<uint8_t>& config);
   void quarantineConfigurationHelper(HANDLE job, HANDLE process,
-                                     HANDLE abortEvent);
+                                     HANDLE abortEvent, DaemonError failure,
+                                     DWORD waitError = ERROR_SUCCESS,
+                                     DWORD elapsedMs = 0);
   bool reapQuarantinedConfigurationHelper();
 
   HANDLE m_driver = INVALID_HANDLE_VALUE;
@@ -120,6 +127,7 @@ class WindowsSplitTunnel final {
   HANDLE m_quarantinedHelperJob = nullptr;
   HANDLE m_quarantinedHelperProcess = nullptr;
   HANDLE m_quarantinedHelperAbortEvent = nullptr;
+  DaemonError m_lastFailure = DaemonError::ERROR_NONE;
   DRIVER_STATE getState();
   QString stateString();
 

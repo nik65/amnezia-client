@@ -408,6 +408,20 @@ namespace amnezia::selfhostedUpdatePolicy
         candidates.removeDuplicates();
         return candidates;
     }
+
+    inline QString platformArchitecture(PlatformFamily platform,
+                                        const QString &runtimeArchitecture,
+                                        const QString &buildArchitecture)
+    {
+        // Android may execute an ARM64 package through a translated runtime on
+        // an x86 device. Artifact selection follows the ABI the app was built
+        // for; native desktop and non-Android callers keep runtime detection.
+        if (platform == PlatformFamily::Android
+                && !buildArchitecture.trimmed().isEmpty()) {
+            return buildArchitecture;
+        }
+        return runtimeArchitecture;
+    }
 }
 
 #endif // SELFHOSTEDUPDATEPOLICY_H

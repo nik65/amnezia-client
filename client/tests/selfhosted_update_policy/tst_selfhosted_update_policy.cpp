@@ -279,6 +279,22 @@ int main(int argc, char *argv[])
     CHECK(armLinux.contains(QStringLiteral("linux")));
     CHECK(platformCandidates(PlatformFamily::Android, QStringLiteral("aarch64"))
                   .contains(QStringLiteral("android-arm64-v8a")));
+    CHECK(platformCandidates(
+                  PlatformFamily::Android,
+                  platformArchitecture(PlatformFamily::Android,
+                                        QStringLiteral("x86"),
+                                        QStringLiteral("arm64")))
+                  .first() == QStringLiteral("android-arm64-v8a"));
+    CHECK(platformCandidates(
+                  PlatformFamily::Android,
+                  platformArchitecture(PlatformFamily::Android,
+                                        QStringLiteral("x86"),
+                                        QStringLiteral("x86")))
+                  .first() == QStringLiteral("android-x86"));
+    CHECK(platformArchitecture(PlatformFamily::Linux,
+                                QStringLiteral("x86_64"),
+                                QStringLiteral("arm64"))
+                  == QStringLiteral("x86_64"));
 
     using amnezia::secureSettingsPolicy::canonicalKey;
     using amnezia::secureSettingsPolicy::isLocalOnlySetting;

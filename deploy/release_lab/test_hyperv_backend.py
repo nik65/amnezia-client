@@ -7,6 +7,8 @@ from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parent
 BACKEND = ROOT / "windows_host" / "hyperv_backend.ps1"
+ADAPTER = ROOT / "windows_host" / "hyperv_adapter.ps1"
+UI_HELPER = ROOT / "windows_host" / "hyperv_ui_helper.ps1"
 PROVISION = ROOT / "provision_windows_guest.ps1"
 HELPER_TEMPLATE = ROOT / "guest_templates" / "windows11" / "hyperv-seed-helper.ps1.template"
 
@@ -14,6 +16,46 @@ HELPER_TEMPLATE = ROOT / "guest_templates" / "windows11" / "hyperv-seed-helper.p
 class HyperVBackendContractTests(unittest.TestCase):
     def setUp(self):
         self.source = BACKEND.read_text(encoding="utf-8")
+
+    def test_controller_adapter_is_powershell_51_parseable_and_child_bound(self):
+        command = (
+            "$tokens=$null;$errors=$null;"
+            f"[System.Management.Automation.Language.Parser]::ParseFile("
+            f"'{ADAPTER}',[ref]$tokens,[ref]$errors)|Out-Null;"
+            "if($errors.Count){$errors|%%{$_.Message};exit 1}"
+        )
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            check=False, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        adapter = ADAPTER.read_text(encoding="utf-8")
+        for required in (
+            "create-child", "CaseId", "New-VHD -Path $disk -ParentPath $parent.vhdx",
+            "-Differencing", "Test-HyperVOnState $firmware.SecureBoot",
+            "New-VM -Name $name -Generation 2", "New-PSSession -VMId ([guid]$Child.vm.Id)",
+            "Copy-Item -LiteralPath $destination -Destination $guestArtifact -ToSession $session",
+            "parent_sha256", "guest_artifact_sha256", "origin='guest'", "injected=$false",
+            "Remove-VM -VM $vm -Force", "parent_sha256_before=$before", "parent_sha256_after=$after",
+            "Get-VMDvdDrive -VM $vm", "key_protector_present", "first_boot_device_id",
+            "precondition", "prepare-interactive", "ui-observe", "ui-confirm", "Msvm_Keyboard", "consent.exe", "fixed_key='Alt+Y'",
+            "AutoAdminLogon", "DefaultPassword", "Restart-Computer", "LastBootUpTime", "explorer_count",
+            "PressKey", "ReleaseKey", "GetOwnerSid", "pending-installer.json", "launcher_pid",
+            "CaseRoot", ".creation-intent.json", "creation cleanup incomplete", "nameHash",
+        ):
+            self.assertIn(required, adapter)
+        self.assertNotIn("Start-VM -Name", adapter)
+        self.assertNotIn("Stop-VM -Name", adapter)
+        self.assertNotIn("New-PSSession -VMName", adapter)
+
+    def test_ui_helper_is_guest_bound_without_host_input_automation(self):
+        helper = UI_HELPER.read_text(encoding="utf-8")
+        self.assertIn("Get-CimInstance Win32_Process", helper)
+        self.assertIn("CopyFromScreen", helper)
+        self.assertIn("SendInput", helper)
+        self.assertIn("interactive_token", helper)
+        self.assertNotIn("VMConnect", helper)
+        self.assertNotIn("SendKeys", helper)
 
     def test_powershell_51_parser_accepts_backend(self):
         command = (

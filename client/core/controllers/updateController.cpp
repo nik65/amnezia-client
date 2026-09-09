@@ -13,6 +13,7 @@
 #include <QSaveFile>
 #include <QSet>
 #include <QStandardPaths>
+#include <QSysInfo>
 #include <QVersionNumber>
 #include <QUrl>
 #include <QUrlQuery>
@@ -3023,7 +3024,11 @@ QList<QString> UpdateController::platformCandidates() const
     constexpr PlatformFamily platform = PlatformFamily::Unsupported;
 #endif
     return amnezia::selfhostedUpdatePolicy::platformCandidates(
-            platform, QSysInfo::currentCpuArchitecture());
+            platform,
+            amnezia::selfhostedUpdatePolicy::platformArchitecture(
+                    platform,
+                    QSysInfo::currentCpuArchitecture(),
+                    QSysInfo::buildCpuArchitecture()));
 }
 
 UpdateController::ManifestProcessResult UpdateController::processSelfHostedManifest(const QUrl &manifestUrl,

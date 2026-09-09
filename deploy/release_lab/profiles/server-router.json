@@ -13,6 +13,11 @@
   "fixture_guest_http_port": 17865,
   "fixture_host_bind": "127.0.0.1",
   "fixture_network": "qemu-user-restrict-hostfwd-only",
+  "readiness_requirements": {
+    "passwordless_sudo": true,
+    "docker_service": "running",
+    "busybox_image": "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+  },
   "firmware": {"uefi": false, "tpm": false, "nic_model": "e1000"},
   "memory_mb": 4096,
   "cpus": 2,

@@ -62,10 +62,29 @@ positive evaluation grace. The VM is Off and its self-contained 128 GiB VHDX
 has marker/VHD SHA-256
 `8ded92f7c7a2f522dd6609f6afbb9e023515055ac3cd3db1309df9214e7275cb`; readback
 also records Secure Boot `MicrosoftWindows`, first boot on the owned VHD, 0
-DVD, 0 NIC, and automatic checkpoints disabled. This proves OS readiness for
-the separate Hyper-V path. It does not connect the backend to `lab.py`, and it
-does not prove thin/outer installer, interactive UI/UAC, reboot/rollback, or
-self-hosted publication evidence.
+DVD, 0 NIC, and automatic checkpoints disabled. `lab.py --windows-backend
+hyperv` consumes this marker as a read-only parent and creates one
+differencing child under the run-owned Hyper-V state root. Child lifecycle and
+artifact transfer use `hyperv_adapter.ps1`, pinned Windows PowerShell 5.1,
+VM-ID PowerShell Direct, and guest-origin receipts. The parent is never
+booted or finalized. Product installer, interactive UI/UAC, reboot/rollback,
+AF_HYPERV relay, and self-hosted publication remain separate gated evidence.
+The controller matrix now allocates six independent case roots/VM IDs:
+`thin-clean`, `thin-upgrade`, `thin-reinstall`, `outer-clean`,
+`outer-upgrade`, and `outer-reinstall`. Clean cases require absence of the
+installer directory, service, and component metadata before install. Each case
+has separate guest paths, markers, receipts, and reset cleanup; the parent
+hash is checked for every case.
+
+Interactive UI/UAC remains `pending_guest_ui_lane` until the case-owned
+`Register-ScheduledTask` launcher (`InteractiveToken`, `RunLevel Limited`)
+writes a guest pending request before starting the installer, `ui-observe`
+sees the owned `System32\consent.exe` PID/start/session bound to that request,
+and `ui-confirm` successfully uses the VM-bound `Msvm_Keyboard` methods for
+fixed English `Alt+Y`. Host keys, VMConnect, and post-install screenshots are
+not accepted as proof.
+The legacy host-12 fixture remains a separate pending lane and must not be
+counted as covered while its installer artifact is absent.
 
 Sources checked 2026-09-09:
 

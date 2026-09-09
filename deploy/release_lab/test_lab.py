@@ -75,6 +75,8 @@ class ReleaseLabContractTests(unittest.TestCase):
             "candidate_version": "5.0.1.38",
             "guest_marker": "amnezia-release-lab:run-1:windows-x64",
             "transport": "qga",
+            "origin": "guest",
+            "injected": False,
             "steps": [{"id": "probe", "passed": True}],
             "observed_at": "2026-09-08T00:00:00Z",
         }

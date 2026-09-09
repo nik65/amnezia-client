@@ -69,6 +69,12 @@ QString errorString(ErrorCode code) {
     // Distro errors
     case (ErrorCode::OpenVpnExecutableMissing): errorMessage = QObject::tr("OpenVPN executable missing"); break;
     case (ErrorCode::AmneziaServiceConnectionFailed): errorMessage = QObject::tr("Amnezia helper service error"); break;
+    case (ErrorCode::SplitTunnelInitializationFailed): errorMessage = QObject::tr("Split-tunnel driver initialization failed"); break;
+    case (ErrorCode::SplitTunnelStartFailed): errorMessage = QObject::tr("Split-tunnel driver start failed"); break;
+    case (ErrorCode::SplitTunnelExclusionFailed): errorMessage = QObject::tr("Split-tunnel application exclusion failed"); break;
+    case (ErrorCode::SplitTunnelConfigurationTimeout): errorMessage = QObject::tr("Split-tunnel configuration timed out; retry after cleanup completes"); break;
+    case (ErrorCode::SplitTunnelConfigurationWaitFailed): errorMessage = QObject::tr("Split-tunnel configuration wait failed; retry after cleanup, or restart Windows manually if the error persists"); break;
+    case (ErrorCode::SplitTunnelConfigurationCleanupFailed): errorMessage = QObject::tr("Split-tunnel cleanup failed; retry after cleanup, or restart Windows manually if the error persists"); break;
     case (ErrorCode::OpenSslFailed): errorMessage = QObject::tr("OpenSSL failed"); break;
 
     // VPN errors

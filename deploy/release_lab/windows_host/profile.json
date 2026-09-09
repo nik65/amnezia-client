@@ -1,5 +1,6 @@
 {
   "id": "windows-x64-hyperv",
+  "controller_profile_id": "windows-x64",
   "backend": "hyperv",
   "generation": 2,
   "memory_mib": 8192,
@@ -10,6 +11,18 @@
   "virtual_tpm": true,
   "network": "none-by-default; private-switch-only-if-explicitly-needed",
   "transport": "PowerShell Direct",
+  "adapter": "deploy/release_lab/windows_host/hyperv_adapter.ps1",
+  "ui_helper": "deploy/release_lab/windows_host/hyperv_ui_helper.ps1",
+  "parent_root": "C:\\ProgramData\\AmneziaReleaseLab\\hyperv\\windows-x64",
+  "runs_root": "C:\\ProgramData\\AmneziaReleaseLab\\hyperv\\runs",
+  "cases": [
+    {"id": "thin-clean", "artifact": "thin", "precondition": "clean", "phases": ["install", "service-health"]},
+    {"id": "thin-upgrade", "artifact": "thin", "precondition": "baseline-installed", "phases": ["baseline-install", "candidate-upgrade", "service-health"]},
+    {"id": "thin-reinstall", "artifact": "thin", "precondition": "clean", "phases": ["install", "same-version-reinstall", "service-health"]},
+    {"id": "outer-clean", "artifact": "outer", "precondition": "clean", "phases": ["install", "service-health"]},
+    {"id": "outer-upgrade", "artifact": "outer", "precondition": "baseline-installed", "phases": ["baseline-install", "candidate-upgrade", "service-health"]},
+    {"id": "outer-reinstall", "artifact": "outer", "precondition": "clean", "phases": ["install", "same-version-reinstall", "service-health"]}
+  ],
   "guest_user": "labadmin",
   "amnezia_product_installer": "future-guest-only-step-after-OS-readiness",
   "host_network_mutation": false

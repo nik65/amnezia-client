@@ -45,6 +45,15 @@ HOST_EXECUTABLE_PATHS = {name: f"/usr/bin/{name}" for name in HOST_EXECUTABLES}
 RELEASE_PLATFORM_IDS = frozenset(("windows-x64", "android-arm64-v8a", "linux-x64", "linux-headless-x64"))
 RECEIPT_REQUIRED = frozenset(("schema", "run_id", "profile", "artifact", "artifact_sha256", "baseline_version", "candidate_version", "guest_marker", "transport", "steps", "observed_at"))
 CONSUMER_FIXTURE_GUEST_PORT = 17865
+HYPERV_TRANSPORT = "hyperv-powershell-direct"
+HYPERV_ADAPTER_RELATIVE = "deploy/release_lab/windows_host/hyperv_adapter.ps1"
+HYPERV_UI_HELPER_RELATIVE = "deploy/release_lab/windows_host/hyperv_ui_helper.ps1"
+HYPERV_LAUNCHER_RELATIVE = "deploy/release_lab/windows_host/hyperv_interactive_launcher.ps1"
+HYPERV_PROFILE_RELATIVE = "deploy/release_lab/windows_host/profile.json"
+HYPERV_POWERSHELL_WSL = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+HYPERV_PARENT_ROOT_WINDOWS = "C:/ProgramData/AmneziaReleaseLab/hyperv/windows-x64"
+HYPERV_RUNS_ROOT_WINDOWS = "C:/ProgramData/AmneziaReleaseLab/hyperv/runs"
+HYPERV_CASE_IDS = ("thin-clean", "thin-upgrade", "thin-reinstall", "outer-clean", "outer-upgrade", "outer-reinstall")
 
 
 class LabError(RuntimeError):
@@ -90,6 +99,47 @@ def state_root_from(value: str | None) -> Path:
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def windows_path_for_wsl(path: Path) -> str:
+    """Convert a /mnt/<drive> path to a stable forward-slash Windows path."""
+    raw = Path(os.path.abspath(str(path))).as_posix()
+    match = re.fullmatch(r"/mnt/([A-Za-z])/(.+)", raw)
+    if not match:
+        raise LabError(f"Hyper-V bridge requires an artifact/script visible through /mnt/<drive>: {path}")
+    return f"{match.group(1).upper()}:/{match.group(2)}"
+
+
+def hyperv_adapter_source() -> Path:
+    path = (repo_root() / HYPERV_ADAPTER_RELATIVE).resolve()
+    try:
+        path.relative_to(repo_root())
+    except ValueError as exc:
+        raise LabError("Hyper-V adapter escaped repository") from exc
+    if not path.is_file() or path.is_symlink():
+        raise LabError(f"Hyper-V adapter is missing or symlinked: {path}")
+    return path
+
+
+def hyperv_profile_source() -> Path:
+    path = (repo_root() / HYPERV_PROFILE_RELATIVE).resolve()
+    if not path.is_file() or path.is_symlink():
+        raise LabError(f"Hyper-V profile is missing or symlinked: {path}")
+    return path
+
+
+def hyperv_ui_helper_source() -> Path:
+    path = (repo_root() / HYPERV_UI_HELPER_RELATIVE).resolve()
+    if not path.is_file() or path.is_symlink():
+        raise LabError(f"Hyper-V UI helper is missing or symlinked: {path}")
+    return path
+
+
+def hyperv_launcher_source() -> Path:
+    path = (repo_root() / HYPERV_LAUNCHER_RELATIVE).resolve()
+    if not path.is_file() or path.is_symlink():
+        raise LabError(f"Hyper-V interactive launcher is missing or symlinked: {path}")
+    return path
 
 
 def profiles_root() -> Path:
@@ -544,10 +594,56 @@ class LabController:
     root: Path
     dry_run: bool = False
     test_mode: bool = False
+    windows_backend: str = "qemu"
 
     def assert_mutation_context(self) -> None:
         if not self.test_mode:
             assert_lab_identity(self.root)
+
+    def uses_hyperv(self, run: Mapping[str, Any], profile_id: str) -> bool:
+        return profile_id == "windows-x64" and run.get("windows_backend") == "hyperv"
+
+    def hyperv_credential(self) -> str:
+        raw = os.environ.get("AMNEZIA_HYPERV_CREDENTIAL_FILE")
+        if not raw:
+            raise LabError("Hyper-V PowerShell Direct requires AMNEZIA_HYPERV_CREDENTIAL_FILE at runtime")
+        path = Path(raw).expanduser().resolve()
+        if path.is_symlink() or not path.is_file():
+            raise LabError("Hyper-V credential file must be a regular runtime-only file")
+        secret = path.read_text(encoding="utf-8").rstrip("\r\n")
+        if not secret or len(secret) > 512:
+            raise LabError("Hyper-V credential file is empty or too large")
+        return secret
+
+    def hyperv_call(self, action: str, *, run_id: str | None = None, credential: bool = False, **kwargs: Any) -> dict[str, Any]:
+        adapter = hyperv_adapter_source()
+        if not Path(HYPERV_POWERSHELL_WSL).is_file() or not os.access(HYPERV_POWERSHELL_WSL, os.X_OK):
+            raise LabError(f"pinned Windows PowerShell bridge is unavailable: {HYPERV_POWERSHELL_WSL}")
+        argv = [HYPERV_POWERSHELL_WSL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", windows_path_for_wsl(adapter), "-Action", action, "-ParentRoot", HYPERV_PARENT_ROOT_WINDOWS, "-RunsRoot", HYPERV_RUNS_ROOT_WINDOWS]
+        if run_id:
+            argv += ["-RunId", run_id]
+        for key, value in kwargs.items():
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                if value:
+                    argv.append(f"-{key}")
+            else:
+                argv += [f"-{key}", str(value)]
+        secret = self.hyperv_credential() if credential else None
+        if credential:
+            argv.append("-CredentialStdin")
+        result = subprocess.run(argv, input=(secret + "\n") if secret is not None else None, check=False, shell=False, text=True, capture_output=True, timeout=900)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout)[-1500:]
+            raise LabError(f"Hyper-V adapter {action} failed: {detail}")
+        try:
+            value = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise LabError(f"Hyper-V adapter {action} returned non-JSON output") from exc
+        if not isinstance(value, dict):
+            raise LabError(f"Hyper-V adapter {action} returned a non-object response")
+        return value
 
     @property
     def state_path(self) -> Path:
@@ -610,6 +706,13 @@ class LabController:
                     image_checks[profile_id] = {"ready": adapter_profile.is_file(), "adapter": str(script), "profile": str(adapter_profile)}
                 except LabError as exc:
                     image_checks[profile_id] = {"ready": False, "reason": str(exc)}
+            elif profile_id == "windows-x64" and self.windows_backend == "hyperv":
+                try:
+                    adapter = hyperv_adapter_source(); host_profile = hyperv_profile_source()
+                    plan = self.hyperv_call("plan") if not self.dry_run else {"ready": False, "reason": "dry-run"}
+                    image_checks[profile_id] = {"ready": plan.get("ready") is True, "backend": "hyperv", "adapter": str(adapter), "profile": str(host_profile), "parent_sha256": plan.get("parent_sha256"), "reason": None if plan.get("ready") is True else plan.get("reason", "Hyper-V parent is not ready")}
+                except (LabError, OSError, subprocess.SubprocessError) as exc:
+                    image_checks[profile_id] = {"ready": False, "backend": "hyperv", "reason": str(exc)}
             else:
                 ready, detail = golden_readiness(self.root, profile)
                 image_checks[profile_id] = {"ready": ready, "path": detail if ready else str(self.root / profile.get("base_image", "")), "reason": None if ready else detail}
@@ -618,6 +721,13 @@ class LabController:
         for profile_id in selected:
             profile = profiles[profile_id]
             runner = profile.get("runner")
+            if profile_id == "windows-x64" and self.windows_backend == "hyperv":
+                try:
+                    runner_path = (repo_root() / str(runner)).resolve()
+                    runner_checks[profile_id] = {"ready": runner_path.is_file() and hyperv_adapter_source().is_file() and hyperv_ui_helper_source().is_file() and hyperv_launcher_source().is_file(), "path": str(runner_path), "adapter": str(hyperv_adapter_source()), "ui_helper": str(hyperv_ui_helper_source()), "launcher": str(hyperv_launcher_source()), "transport": HYPERV_TRANSPORT}
+                except LabError as exc:
+                    runner_checks[profile_id] = {"ready": False, "reason": str(exc)}
+                continue
             if profile.get("backend") == "android-adapter":
                 runner_checks[profile_id] = {"ready": True, "adapter": str(profile.get("adapter_script"))}
                 continue
@@ -626,11 +736,12 @@ class LabController:
         checks["guest_runners"] = runner_checks
         server_profile = profiles_root() / "server-router.env"
         checks["lab_server_profile"] = {"ready": server_profile.is_file(), "path": str(server_profile), "role": "isolated-test-server-router"}
+        qemu_required = any(profile_id != "windows-x64" for profile_id in selected)
         ready = (
             checks["identity"].get("ready", False)
             and checks["profiles"].get("ready", False)
-            and all(item.get("ready", False) for item in qemu_checks.values())
-            and checks["kvm"].get("ready", False)
+            and (not qemu_required or all(item.get("ready", False) for item in qemu_checks.values()))
+            and (not qemu_required or checks["kvm"].get("ready", False))
             and all(item.get("ready", False) for item in image_checks.values())
             and all(item.get("ready", False) for item in runner_checks.values())
             and ("server-router" not in selected or checks["lab_server_profile"].get("ready", False))
@@ -638,11 +749,13 @@ class LabController:
         )
         return {"schema": SCHEMA_VERSION, "ready": ready, "dry_run": self.dry_run, "checks": checks, "release_passed": False}
 
-    def create(self, lane: str, artifacts: Mapping[str, Path], outer_artifact: Path | None = None, run_id: str | None = None, manifest: Path | None = None, baseline_artifacts: Mapping[str, Path] | None = None, baseline_version: str | None = None, candidate_version: str | None = None, manifest_public_key: Path | None = None, baseline_manifest: Path | None = None, headless_baseline_receipt: Path | None = None, headless_candidate_receipt: Path | None = None) -> dict[str, Any]:
+    def create(self, lane: str, artifacts: Mapping[str, Path], outer_artifact: Path | None = None, run_id: str | None = None, manifest: Path | None = None, baseline_artifacts: Mapping[str, Path] | None = None, baseline_version: str | None = None, candidate_version: str | None = None, manifest_public_key: Path | None = None, baseline_manifest: Path | None = None, headless_baseline_receipt: Path | None = None, headless_candidate_receipt: Path | None = None, baseline_outer_artifact: Path | None = None) -> dict[str, Any]:
         self.assert_mutation_context()
         profiles = load_profiles()
         if lane not in ("candidate", "release"):
             raise LabError("lane must be candidate or release")
+        if self.windows_backend not in ("qemu", "hyperv"):
+            raise LabError("Windows backend must be qemu or hyperv")
         if not artifacts:
             raise LabError("at least one artifact is required")
         records = {name: artifact_record(path) for name, path in artifacts.items()}
@@ -663,8 +776,14 @@ class LabController:
             if baseline_manifest is None or headless_baseline_receipt is None or headless_candidate_receipt is None:
                 raise LabError("headless run requires baseline manifest and verified baseline/candidate provisioning receipts")
         baseline_records = {name: artifact_record(path) for name, path in baseline_artifacts.items()}
+        baseline_outer_record = artifact_record(baseline_outer_artifact) if baseline_outer_artifact else None
+        if self.windows_backend == "hyperv" and outer_artifact is not None and baseline_outer_artifact is None:
+            raise LabError("Hyper-V Windows run requires an explicit baseline outer artifact")
         profile_records = {profile_id: artifact_record(profiles_root() / f"{profile_id}.json") for profile_id in profiles}
         runner_records = {profile_id: artifact_record(repo_root() / profile["runner"]) for profile_id, profile in profiles.items() if isinstance(profile.get("runner"), str)}
+        hyperv_records = None
+        if self.windows_backend == "hyperv":
+            hyperv_records = {"adapter": artifact_record(hyperv_adapter_source()), "profile": artifact_record(hyperv_profile_source()), "ui_helper": artifact_record(hyperv_ui_helper_source()), "launcher": artifact_record(hyperv_launcher_source())}
         outer = artifact_record(outer_artifact) if outer_artifact else None
         manifest_record = artifact_record(manifest) if manifest else None
         baseline_manifest_record = artifact_record(baseline_manifest) if baseline_manifest else None
@@ -694,12 +813,13 @@ class LabController:
             expected_profiles = list(PROFILE_IDS)
         state.setdefault("runs", {})[run_id] = {
             "run_id": run_id, "lane": lane, "dry_run": self.dry_run,
-            "created_at": utc_now(), "artifacts": records, "baseline_artifacts": baseline_records, "outer_artifact": outer,
+            "created_at": utc_now(), "artifacts": records, "baseline_artifacts": baseline_records, "outer_artifact": outer, "baseline_outer_artifact": baseline_outer_record,
             "baseline_version": baseline_version, "candidate_version": candidate_version,
             "manifest": manifest_record,
             "baseline_manifest": baseline_manifest_record,
             "headless_verified_receipts": headless_receipt_records,
-            "manifest_public_key": artifact_record(manifest_public_key),
+            "manifest_public_key": artifact_record(manifest_public_key), "windows_backend": self.windows_backend,
+            "hyperv_records": hyperv_records,
             "profile_records": profile_records, "runner_records": runner_records,
             "server_observation": None,
             "expected_profiles": list(dict.fromkeys(expected_profiles)),
@@ -725,6 +845,14 @@ class LabController:
         profile = profiles[profile_id]
         if profile.get("backend") == "android-adapter":
             return self._run_android_adapter(run_id, profile_id, "start")
+        if self.uses_hyperv(run, profile_id):
+            child = self.hyperv_call("create-child", run_id=run_id, CaseId="control")
+            started = self.hyperv_call("start", run_id=run_id, CaseId="control", credential=True)
+            vm = dict(started.get("child") or child.get("child") or {})
+            vm.update({"backend": "hyperv", "case_id": "control", "vm_id": vm.get("vm_id"), "parent_sha256": started.get("parent_sha256") or (child.get("child") or {}).get("parent_sha256"), "transport": HYPERV_TRANSPORT, "adapter": str(hyperv_adapter_source())})
+            run["profiles"][profile_id].update(status="started", vm=vm)
+            state = self.load_state(); state["runs"][run_id] = run; self.save_state(state)
+            return vm
         run_dir = ensure_owned_child(self.root, self.root / "runs" / run_id / profile_id, "run directory")
         golden_ok, golden_detail = golden_readiness(self.root, profile)
         if not golden_ok:
@@ -883,6 +1011,13 @@ class LabController:
         profile = load_profiles()[profile_id]
         if profile.get("backend") == "android-adapter":
             return self._run_android_adapter(run_id, profile_id, "probe")
+        run = self.get_run(run_id)
+        if self.uses_hyperv(run, profile_id):
+            case_id = (run.get("profiles", {}).get(profile_id, {}).get("vm") or {}).get("case_id", "control")
+            result = self.hyperv_call("probe", run_id=run_id, CaseId=case_id, credential=True)
+            if result.get("transport") != HYPERV_TRANSPORT or result.get("origin") != "guest" or result.get("injected") is True:
+                raise LabError("Hyper-V readiness probe is not guest-origin PowerShell Direct evidence")
+            return result
         vm = self.owned_vm(run_id, profile_id)
         qmp = QmpClient(Path(vm["qmp_socket"]))
         qga = QgaClient(Path(vm["qga_socket"]))
@@ -1001,6 +1136,65 @@ class LabController:
         baseline = planned_run.get("baseline_artifacts", {}).get(artifact_id)
         if not isinstance(baseline, dict):
             raise LabError(f"no planned N-1 baseline artifact for guest profile {profile_id}")
+        if self.uses_hyperv(planned_run, profile_id):
+            self.hyperv_call("reset", run_id=run_id, CaseId="control", credential=False)
+            runner = profile.get("runner")
+            runner_source = (repo_root() / str(runner)).resolve()
+            runner_record = planned_run.get("runner_records", {}).get(profile_id) or {}
+            if not runner_source.is_file() or runner_record.get("sha256") != sha256_file(runner_source)[0]:
+                raise LabError("Hyper-V runner changed after planning")
+            thin_candidate = planned_run["artifacts"][artifact_id]
+            outer_candidate = planned_run.get("outer_artifact")
+            outer_baseline = planned_run.get("baseline_outer_artifact")
+            if not isinstance(outer_candidate, dict) or not isinstance(outer_baseline, dict):
+                raise LabError("Hyper-V matrix requires candidate and baseline outer artifacts")
+            case_specs: dict[str, list[tuple[str, dict[str, Any], str, str]]] = {
+                "thin-clean": [("candidate-thin", thin_candidate, "reinstall", str(planned_run["candidate_version"]))],
+                "thin-upgrade": [("baseline-thin", baseline, "reinstall", str(planned_run["baseline_version"])), ("candidate-thin", thin_candidate, "update", str(planned_run["candidate_version"]))],
+                "thin-reinstall": [("candidate-thin", thin_candidate, "reinstall", str(planned_run["candidate_version"])), ("candidate-thin", thin_candidate, "reinstall", str(planned_run["candidate_version"]))],
+                "outer-clean": [("candidate-outer", outer_candidate, "reinstall", str(planned_run["candidate_version"]))],
+                "outer-upgrade": [("baseline-outer", outer_baseline, "reinstall", str(planned_run["baseline_version"])), ("candidate-outer", outer_candidate, "update", str(planned_run["candidate_version"]))],
+                "outer-reinstall": [("candidate-outer", outer_candidate, "reinstall", str(planned_run["candidate_version"])), ("candidate-outer", outer_candidate, "reinstall", str(planned_run["candidate_version"]))],
+            }
+            observed_steps: list[dict[str, Any]] = [{"id": "probe", "action": "probe", "passed": True, "transport": HYPERV_TRANSPORT}]
+            case_receipts: list[dict[str, Any]] = []
+            case_ids = list(case_specs)
+            for case_index, case_id in enumerate(case_ids):
+                child = self.hyperv_call("create-child", run_id=run_id, CaseId=case_id)
+                started = self.hyperv_call("start", run_id=run_id, CaseId=case_id, credential=True)
+                case_vm = started.get("child") or child.get("child") or {}
+                self.hyperv_call("probe", run_id=run_id, CaseId=case_id, credential=True)
+                if case_id.endswith("-clean"):
+                    self.hyperv_call("precondition", run_id=run_id, CaseId=case_id, credential=True)
+                case_steps: list[dict[str, Any]] = []
+                for stage_name, selected_artifact, action, expected_version in case_specs[case_id]:
+                    staged = self.hyperv_call("stage", run_id=run_id, CaseId=case_id, credential=True, ArtifactPath=windows_path_for_wsl(Path(selected_artifact["path"])), ArtifactSha256=selected_artifact["sha256"], ArtifactSize=selected_artifact["size"], Stage=stage_name)
+                    if staged.get("guest", {}).get("sha256") != selected_artifact.get("sha256"):
+                        raise LabError(f"Hyper-V guest artifact hash mismatch for {case_id}/{stage_name}")
+                    ran = self.hyperv_call("run", run_id=run_id, CaseId=case_id, credential=True, GuestAction=action, ExpectedSha256=selected_artifact["sha256"], ExpectedVersion=expected_version, BaselineVersion=str(planned_run["baseline_version"]), CandidateVersion=str(planned_run["candidate_version"]), RunnerPath=windows_path_for_wsl(runner_source), RunnerSha256=runner_record["sha256"])
+                    result = ran.get("result", {}); readback = result.get("readback", {}) if isinstance(result, dict) else {}
+                    try: receipt = json.loads(str(readback.get("receipt", "")))
+                    except json.JSONDecodeError as exc: raise LabError(f"Hyper-V {case_id}/{stage_name} returned no guest receipt") from exc
+                    if receipt.get("transport") != HYPERV_TRANSPORT or receipt.get("origin") != "guest" or receipt.get("injected") is True or receipt.get("case_id") != case_id:
+                        raise LabError(f"Hyper-V {case_id} receipt is not bound guest-origin evidence")
+                    validate_receipt(receipt, run_id=run_id, profile_id=profile_id, artifact=selected_artifact, case_id=case_id)
+                    if not all(step.get("passed") is True for step in receipt.get("steps", [])): raise LabError(f"Hyper-V guest step failed for {case_id}/{stage_name}")
+                    case_steps.append({"stage": stage_name, "action": action, "passed": True, "guest_receipt": receipt, "vm_id": result.get("vm_id"), "parent_sha256": result.get("parent_sha256")})
+                    observed_steps.append({"id": action, "case_id": case_id, "stage": stage_name, "action": action, "passed": True, "guest_receipt": receipt, "transport": HYPERV_TRANSPORT, "vm_id": result.get("vm_id"), "parent_sha256": result.get("parent_sha256")})
+                final_artifact = case_specs[case_id][-1][1]
+                health = self.hyperv_call("run", run_id=run_id, CaseId=case_id, credential=True, GuestAction="service-health", ExpectedSha256=final_artifact["sha256"], ExpectedVersion=str(planned_run["candidate_version"]), BaselineVersion=str(planned_run["baseline_version"]), CandidateVersion=str(planned_run["candidate_version"]), RunnerPath=windows_path_for_wsl(runner_source), RunnerSha256=runner_record["sha256"])
+                health_result = health.get("result", {}); health_readback = (health_result.get("readback") or {})
+                try: health_receipt = json.loads(str(health_readback.get("receipt", "")))
+                except json.JSONDecodeError as exc: raise LabError(f"Hyper-V {case_id} service-health returned no receipt") from exc
+                validate_receipt(health_receipt, run_id=run_id, profile_id=profile_id, artifact=final_artifact, case_id=case_id)
+                case_receipts.append({"case_id": case_id, "steps": case_steps, "service_health": health_receipt, "vm_id": health_result.get("vm_id"), "parent_sha256": health_result.get("parent_sha256")})
+                if case_index < len(case_ids) - 1:
+                    self.hyperv_call("reset", run_id=run_id, CaseId=case_id, credential=False)
+            planned_run["profiles"][profile_id].update(status="tested", steps=observed_steps, case_receipts=case_receipts, last_case_id=case_ids[-1])
+            planned_run["profiles"][profile_id]["matrix_status"] = "independent-child-matrix"
+            planned_run["profiles"][profile_id]["interactive_status"] = "pending_guest_ui_lane"
+            state = self.load_state(); state["runs"][run_id] = planned_run; self.save_state(state)
+            return {"run_id": run_id, "profile": profile_id, "steps": observed_steps, "transport": HYPERV_TRANSPORT, "dry_run": self.dry_run}
         if profile.get("backend") == "android-adapter":
             artifact_path = artifact.get("path")
             if not artifact_path:
@@ -1064,7 +1258,7 @@ class LabController:
                 qga.write_file(receipt_target, Path(inputs["verified_receipt_path"]).read_bytes())
                 headless_args = ["--provisioning-artifact-path", provisioning_target, "--public-key", public_key_target, "--key-sha256", inputs["key_sha256"], "--package-manifest-sha256", inputs["package_manifest_sha256"], "--checksums-sha256", inputs["checksums_sha256"], "--signed-manifest-sha256", inputs["signed_manifest_sha256"], "--verified-receipt", receipt_target]
             if profile.get("backend") == "qemu-windows":
-                step_args = ["-NoProfile", "-File", runner_path, step["action"], profile_id, "-RunId", run_id, "-ExpectedVersion", str(expected_version), "-ExpectedSha256", selected["sha256"], "-ArtifactPath", selected_target, "-ReceiptPath", guest_receipt_path]
+                step_args = ["-NoProfile", "-File", runner_path, step["action"], profile_id, "-RunId", run_id, "-ExpectedVersion", str(expected_version), "-BaselineVersion", str(planned_run["baseline_version"]), "-CandidateVersion", str(planned_run["candidate_version"]), "-ExpectedSha256", selected["sha256"], "-ArtifactPath", selected_target, "-ReceiptPath", guest_receipt_path]
             else:
                 step_args = [runner_path, step["action"], profile_id, "--run-id", run_id, "--expected-version", str(expected_version), "--expected-sha256", selected["sha256"], "--artifact-path", selected_target, "--receipt-path", guest_receipt_path, *headless_args]
             qga.write_file(selected_target, Path(selected["path"]).read_bytes())
@@ -1100,6 +1294,28 @@ class LabController:
             run["profiles"][profile_id].update(status="evidence-collected", evidence=receipt)
             state = self.load_state(); state["runs"][run_id] = run; self.save_state(state)
             return receipt
+        run = self.get_run(run_id)
+        if self.uses_hyperv(run, profile_id):
+            case_id = (run.get("profiles", {}).get(profile_id, {}).get("last_case_id") or (run.get("profiles", {}).get(profile_id, {}).get("vm") or {}).get("case_id") or "control")
+            result = self.hyperv_call("collect", run_id=run_id, CaseId=case_id, credential=True)
+            wrapped = result.get("result", {})
+            if wrapped.get("transport") != HYPERV_TRANSPORT or wrapped.get("origin") != "guest" or wrapped.get("injected") is True:
+                raise LabError("Hyper-V collect is not guest-origin PowerShell Direct evidence")
+            readback = wrapped.get("readback", {})
+            try:
+                receipt = json.loads(str(readback.get("receipt", "")))
+            except json.JSONDecodeError as exc:
+                raise LabError("Hyper-V guest receipt is invalid JSON") from exc
+            artifact = run.get("outer_artifact") or run.get("artifacts", {}).get(profile_id)
+            validate_receipt(receipt, run_id=run_id, profile_id=profile_id, artifact=artifact, case_id=case_id)
+            if readback.get("guest_marker", "").strip().splitlines()[0] != f"amnezia-release-lab:{run_id}:{profile_id}":
+                raise LabError("Hyper-V guest marker was not read back from the child session")
+            if readback.get("guest_artifact_sha256") != receipt.get("artifact_sha256"):
+                raise LabError("Hyper-V guest artifact readback differs from receipt")
+            receipt["hyperv_binding"] = {"vm_id": wrapped.get("vm_id"), "case_id": case_id, "parent_sha256": wrapped.get("parent_sha256"), "transport": HYPERV_TRANSPORT}
+            run["profiles"][profile_id].update(status="evidence-collected", evidence=receipt)
+            state = self.load_state(); state["runs"][run_id] = run; self.save_state(state)
+            return receipt
         run = self.get_run(run_id); vm = self.owned_vm(run_id, profile_id)
         qga = QgaClient(Path(vm["qga_socket"]))
         artifact = run.get("outer_artifact") if profile_id == "windows-x64" else (run.get("artifacts", {}).get(profile_id) or run.get("artifacts", {}).get(profile_id.replace("-gui", "")))
@@ -1117,21 +1333,14 @@ class LabController:
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise LabError(f"guest runner receipt is invalid or missing: {exc}") from exc
         receipt = dict(receipt)
-        receipt.setdefault("baseline_version", run.get("baseline_version"))
-        receipt.setdefault("candidate_version", run.get("candidate_version"))
-        receipt.setdefault("guest_marker", marker)
-        receipt.setdefault("transport", "qga")
-        receipt.setdefault("origin", "guest")
-        receipt.setdefault("injected", False)
-        receipt.setdefault("interactive_verified", bool(receipt.get("assertion", {}).get("interactive_passed") is True))
         validate_receipt(receipt, run_id=run_id, profile_id=profile_id, artifact=artifact)
         run["profiles"][profile_id].update(status="evidence-collected", evidence=receipt)
         state = self.load_state(); state["runs"][run_id] = run; self.save_state(state)
         return receipt
 
-    def run_suite(self, lane: str, artifacts: Mapping[str, Path], outer_artifact: Path | None, run_id: str | None = None, manifest: Path | None = None, baseline_artifacts: Mapping[str, Path] | None = None, baseline_version: str | None = None, candidate_version: str | None = None, manifest_public_key: Path | None = None, baseline_manifest: Path | None = None, headless_baseline_receipt: Path | None = None, headless_candidate_receipt: Path | None = None) -> dict[str, Any]:
+    def run_suite(self, lane: str, artifacts: Mapping[str, Path], outer_artifact: Path | None, run_id: str | None = None, manifest: Path | None = None, baseline_artifacts: Mapping[str, Path] | None = None, baseline_version: str | None = None, candidate_version: str | None = None, manifest_public_key: Path | None = None, baseline_manifest: Path | None = None, headless_baseline_receipt: Path | None = None, headless_candidate_receipt: Path | None = None, baseline_outer_artifact: Path | None = None) -> dict[str, Any]:
         """Create and execute every selected real guest, then return evidence summary."""
-        run = self.create(lane, artifacts, outer_artifact, run_id, manifest, baseline_artifacts, baseline_version, candidate_version, manifest_public_key, baseline_manifest, headless_baseline_receipt, headless_candidate_receipt)
+        run = self.create(lane, artifacts, outer_artifact, run_id, manifest, baseline_artifacts, baseline_version, candidate_version, manifest_public_key, baseline_manifest, headless_baseline_receipt, headless_candidate_receipt, baseline_outer_artifact)
         run_id = run["run_id"]
         expected = run.get("expected_profiles") or list(PROFILE_IDS)
         completed: list[str] = []
@@ -1151,6 +1360,15 @@ class LabController:
         for current in targets:
             if current not in run["profiles"]:
                 raise LabError(f"unknown profile in run: {current}")
+            if self.uses_hyperv(run, current):
+                case_ids = [run.get("profiles", {}).get(current, {}).get("last_case_id") or "control", "control"]
+                for case_id in dict.fromkeys(case_ids):
+                    result = self.hyperv_call("reset", run_id=run_id, CaseId=case_id, credential=False)
+                    if result.get("parent_sha256_before") != result.get("parent_sha256_after"):
+                        raise LabError("Hyper-V reset changed the sealed parent hash")
+                run["profiles"][current] = {"status": "reset", "evidence": None, "vm": None}
+                removed.append(f"hyperv-child:{run_id}:{current}")
+                continue
             profile_dir = ensure_owned_child(self.root, self.root / "runs" / run_id / current, "profile directory")
             marker = profile_dir / ".owned-overlay.json"
             overlay = profile_dir / "overlay.qcow2"
@@ -1237,6 +1455,11 @@ class LabController:
             current = artifact_record(Path(planned["path"]))
             if (current["sha256"], current["size"]) != (planned.get("sha256"), planned.get("size")):
                 raise LabError(f"baseline artifact changed after guest testing: {artifact_id}")
+        if isinstance(run.get("baseline_outer_artifact"), dict):
+            planned_baseline_outer = run["baseline_outer_artifact"]
+            current_baseline_outer = artifact_record(Path(planned_baseline_outer["path"]))
+            if (current_baseline_outer["sha256"], current_baseline_outer["size"]) != (planned_baseline_outer.get("sha256"), planned_baseline_outer.get("size")):
+                raise LabError("baseline outer artifact changed after guest testing")
         if not outer_artifact:
             raise LabError("gate requires the exact planned outer artifact path")
         outer = artifact_record(outer_artifact)
@@ -1255,6 +1478,10 @@ class LabController:
                 current = artifact_record(Path(planned["path"]))
                 if (current["sha256"], current["size"]) != (planned.get("sha256"), planned.get("size")):
                     raise LabError(f"{label} changed after plan: {item_id}")
+        for item_id, planned in (run.get("hyperv_records") or {}).items():
+            current = artifact_record(Path(planned["path"]))
+            if (current["sha256"], current["size"]) != (planned.get("sha256"), planned.get("size")):
+                raise LabError(f"hyperv_records changed after plan: {item_id}")
         validate_signed_manifest(Path(run["manifest"]["path"]), Path(run["manifest_public_key"]["path"]), version=str(run["candidate_version"]), artifacts=run.get("artifacts", {}))
         if lane == "release":
             observation = run.get("server_observation")
@@ -1269,6 +1496,18 @@ class LabController:
             observed = {step.get("id") for step in profiles.get(profile_id, {}).get("steps", []) if isinstance(step, dict) and step.get("passed") is True}
             if not declared.issubset(observed):
                 missing.append(f"{profile_id}-steps")
+        if self.uses_hyperv(run, "windows-x64") and profiles.get("windows-x64", {}).get("status") == "evidence-collected":
+            evidence = profiles["windows-x64"].get("evidence") or {}
+            binding = evidence.get("hyperv_binding") if isinstance(evidence, dict) else None
+            case_id = profiles["windows-x64"].get("last_case_id") or "control"
+            live = self.hyperv_call("status", run_id=run_id, CaseId=case_id)
+            child = live.get("child") or {}
+            if not isinstance(binding, dict) or binding.get("case_id") != case_id or binding.get("vm_id") != child.get("vm_id") or binding.get("parent_sha256") != live.get("parent_sha256"):
+                missing.append("windows-x64-hyperv-parent-vmid-binding")
+            if profiles["windows-x64"].get("matrix_status") != "independent-child-matrix":
+                missing.append("windows-x64-hyperv-independent-child-matrix")
+            if profiles["windows-x64"].get("interactive_status") != "verified_guest_ui_uac":
+                missing.append("windows-x64-hyperv-interactive-ui-uac-pending")
         if profiles.get("windows-x64", {}).get("status") == "evidence-collected" and profiles["windows-x64"].get("evidence", {}).get("interactive_verified") is not True:
             missing.append("windows-x64-interactive-uac")
         if missing:
@@ -1281,17 +1520,19 @@ class LabController:
         return result
 
 
-def validate_receipt(receipt: Mapping[str, Any], *, run_id: str, profile_id: str, artifact: Mapping[str, Any] | None) -> None:
+def validate_receipt(receipt: Mapping[str, Any], *, run_id: str, profile_id: str, artifact: Mapping[str, Any] | None, case_id: str | None = None) -> None:
     missing = sorted(RECEIPT_REQUIRED - set(receipt))
     if missing:
         raise LabError(f"guest receipt missing fields: {', '.join(missing)}")
     if receipt.get("schema") != 1 or receipt.get("run_id") != run_id or receipt.get("profile") != profile_id:
         raise LabError("guest receipt identity mismatch")
+    if case_id is not None and receipt.get("case_id") != case_id:
+        raise LabError("guest receipt case identity mismatch")
     if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", str(receipt.get("baseline_version", ""))) or not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", str(receipt.get("candidate_version", ""))):
         raise LabError("guest receipt has invalid baseline/candidate versions")
-    expected_transport = "android-adapter" if profile_id == "android-arm64-v8a" else "qga"
-    if receipt.get("transport") != expected_transport or receipt.get("origin") == "host" or receipt.get("injected") is True:
-        raise LabError("guest receipt is not real QGA evidence")
+    allowed_transports = {"android-adapter"} if profile_id == "android-arm64-v8a" else ({"qga", HYPERV_TRANSPORT} if profile_id == "windows-x64" else {"qga"})
+    if receipt.get("transport") not in allowed_transports or receipt.get("origin") != "guest" or receipt.get("injected") is True:
+        raise LabError("guest receipt is not real guest-transport evidence")
     marker = receipt.get("guest_marker")
     if not isinstance(marker, str) or marker != f"amnezia-release-lab:{run_id}:{profile_id}":
         raise LabError("guest marker is missing or does not identify this run/profile")
@@ -1330,6 +1571,7 @@ def emit(value: Any, as_json: bool) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Amnezia disposable QEMU release lab")
     parser.add_argument("--state-root", default=None)
+    parser.add_argument("--windows-backend", choices=("qemu", "hyperv"), default="qemu")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true", dest="as_json")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1340,6 +1582,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--lane", choices=("candidate", "release"), default="release")
     plan.add_argument("--artifact", action="append", default=[])
     plan.add_argument("--outer-artifact")
+    plan.add_argument("--baseline-outer-artifact")
     plan.add_argument("--manifest")
     plan.add_argument("--manifest-public-key")
     plan.add_argument("--baseline-manifest")
@@ -1352,6 +1595,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--lane", choices=("candidate", "release"), default="release")
     create.add_argument("--artifact", action="append", default=[])
     create.add_argument("--outer-artifact")
+    create.add_argument("--baseline-outer-artifact")
     create.add_argument("--manifest")
     create.add_argument("--manifest-public-key")
     create.add_argument("--baseline-manifest")
@@ -1370,6 +1614,7 @@ def build_parser() -> argparse.ArgumentParser:
     suite.add_argument("--lane", choices=("candidate", "release"), default="release")
     suite.add_argument("--artifact", action="append", default=[])
     suite.add_argument("--outer-artifact")
+    suite.add_argument("--baseline-outer-artifact")
     suite.add_argument("--manifest")
     suite.add_argument("--manifest-public-key")
     suite.add_argument("--baseline-manifest")
@@ -1397,17 +1642,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    controller = LabController(state_root_from(args.state_root), dry_run=args.dry_run)
+    controller = LabController(state_root_from(args.state_root), dry_run=args.dry_run, windows_backend=args.windows_backend)
     try:
         if args.command == "preflight": result = controller.preflight(args.profile or None)
         elif args.command == "status": result = controller.load_state()
         elif args.command in ("plan", "create"):
-            result = controller.create(args.lane, parse_artifacts(args.artifact), Path(args.outer_artifact).resolve() if args.outer_artifact else None, getattr(args, "run_id", None), Path(args.manifest).resolve() if args.manifest else None, parse_artifacts(args.baseline_artifact), args.baseline_version, args.candidate_version, Path(args.manifest_public_key).resolve() if args.manifest_public_key else None, Path(args.baseline_manifest).resolve() if args.baseline_manifest else None, Path(args.headless_baseline_receipt).resolve() if args.headless_baseline_receipt else None, Path(args.headless_candidate_receipt).resolve() if args.headless_candidate_receipt else None)
+            result = controller.create(args.lane, parse_artifacts(args.artifact), Path(args.outer_artifact).resolve() if args.outer_artifact else None, getattr(args, "run_id", None), Path(args.manifest).resolve() if args.manifest else None, parse_artifacts(args.baseline_artifact), args.baseline_version, args.candidate_version, Path(args.manifest_public_key).resolve() if args.manifest_public_key else None, Path(args.baseline_manifest).resolve() if args.baseline_manifest else None, Path(args.headless_baseline_receipt).resolve() if args.headless_baseline_receipt else None, Path(args.headless_candidate_receipt).resolve() if args.headless_candidate_receipt else None, Path(args.baseline_outer_artifact).resolve() if args.baseline_outer_artifact else None)
         elif args.command == "start": result = controller.start(args.run_id, args.profile)
         elif args.command == "guest-probe": result = controller.guest_probe(args.run_id, args.profile)
         elif args.command == "run": result = controller.run_steps(args.run_id, args.profile, args.step)
         elif args.command == "collect": result = controller.collect(args.run_id, args.profile)
-        elif args.command == "run-suite": result = controller.run_suite(args.lane, parse_artifacts(args.artifact), Path(args.outer_artifact).resolve() if args.outer_artifact else None, args.run_id, Path(args.manifest).resolve() if args.manifest else None, parse_artifacts(args.baseline_artifact), args.baseline_version, args.candidate_version, Path(args.manifest_public_key).resolve() if args.manifest_public_key else None, Path(args.baseline_manifest).resolve() if args.baseline_manifest else None, Path(args.headless_baseline_receipt).resolve() if args.headless_baseline_receipt else None, Path(args.headless_candidate_receipt).resolve() if args.headless_candidate_receipt else None)
+        elif args.command == "run-suite": result = controller.run_suite(args.lane, parse_artifacts(args.artifact), Path(args.outer_artifact).resolve() if args.outer_artifact else None, args.run_id, Path(args.manifest).resolve() if args.manifest else None, parse_artifacts(args.baseline_artifact), args.baseline_version, args.candidate_version, Path(args.manifest_public_key).resolve() if args.manifest_public_key else None, Path(args.baseline_manifest).resolve() if args.baseline_manifest else None, Path(args.headless_baseline_receipt).resolve() if args.headless_baseline_receipt else None, Path(args.headless_candidate_receipt).resolve() if args.headless_candidate_receipt else None, Path(args.baseline_outer_artifact).resolve() if args.baseline_outer_artifact else None)
         elif args.command == "reset": result = controller.reset(args.run_id, args.profile)
         elif args.command == "gate": result = controller.gate(args.run_id, args.lane, Path(args.artifact_dir).resolve() if args.artifact_dir else None, Path(args.outer_artifact).resolve() if args.outer_artifact else None)
         elif args.command == "server-observe": result = controller.observe_server(args.run_id, args.ssh_host_key_pin)

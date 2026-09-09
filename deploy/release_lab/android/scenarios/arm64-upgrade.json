@@ -2,7 +2,7 @@
   "schema": 1,
   "id": "android-arm64-upgrade",
   "profile": "android-arm64-v8a",
-  "status": "ready-for-live-installer-smoke",
+  "status": "ready-for-live-app-selfhosted-update",
   "commands": [
     "prepare",
     "create",
@@ -27,9 +27,14 @@
       "version": "5.0.1.38",
       "version_code": 2186,
       "apk_abi": "arm64-v8a",
-      "install_mode": "system-package-installer-ui",
+      "install_mode": "app-selfhosted-update-to-system-package-installer-ui",
       "persistent_external_marker": true,
-      "native_bridge_live_log": true
+      "native_bridge_live_log": true,
+      "manifest_get": true,
+      "apk_get": true,
+      "manifest_sha256_readback": true,
+      "apk_sha256_readback": true,
+      "version_code_readback": true
     }
   },
   "forbidden_shortcuts": [
@@ -43,11 +48,12 @@
     "status": "pending-controller-owned-peer",
     "host_routes_or_firewall": false
   },
-  "real_app_server_update": "pending-controller-flow",
+  "real_app_server_update": "same-run-app-request-log-readback",
+  "expected_baseline_outcome": "baseline-abi-blocked",
   "controller_receipt": {
     "env": "AMNEZIA_ANDROID_LAB_CONTROLLER_RECEIPT",
     "origin": "guest",
     "transport": "android-adapter",
-    "required_status": "installer-smoke-pass-real-update-pending"
+    "required_status": "app-selfhosted-update-pass"
   }
 }

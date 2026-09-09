@@ -28,6 +28,14 @@
 
 namespace {
 Logger logger("WindowsDaemon");
+
+DaemonError splitTunnelFailureOr(const WindowsSplitTunnel* manager,
+                                 DaemonError fallback) {
+  if (manager == nullptr || manager->lastFailure() == DaemonError::ERROR_NONE) {
+    return fallback;
+  }
+  return manager->lastFailure();
+}
 }
 
 WindowsDaemon::WindowsDaemon() : Daemon(nullptr) {
@@ -89,15 +97,19 @@ void WindowsDaemon::activateSplitTunnel(const InterfaceConfig& config, int vpnAd
     }
 
   if (config.m_vpnDisabledApps.length() > 0) {
-      if (!m_splitTunnelManager->start(m_inetAdapterIndex, vpnAdapterIndex)) {
+        if (!m_splitTunnelManager->start(m_inetAdapterIndex, vpnAdapterIndex)) {
           logger.error() << "Failed to start split tunnel";
-          emit backendFailure(DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE);
+          emit backendFailure(splitTunnelFailureOr(
+              m_splitTunnelManager.get(),
+              DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE));
           m_splitTunnelManager->stop();
           return;
       }
-      if (!m_splitTunnelManager->excludeApps(config.m_vpnDisabledApps)) {
+        if (!m_splitTunnelManager->excludeApps(config.m_vpnDisabledApps)) {
           logger.error() << "Failed to apply split tunnel app exclusions";
-          emit backendFailure(DaemonError::ERROR_SPLIT_TUNNEL_EXCLUDE_FAILURE);
+          emit backendFailure(splitTunnelFailureOr(
+              m_splitTunnelManager.get(),
+              DaemonError::ERROR_SPLIT_TUNNEL_EXCLUDE_FAILURE));
           m_splitTunnelManager->stop();
           return;
       }
@@ -132,13 +144,17 @@ bool WindowsDaemon::run(Op op, const InterfaceConfig& config) {
   if (config.m_vpnDisabledApps.length() > 0) {
     if (!m_splitTunnelManager->start(m_inetAdapterIndex)) {
       logger.error() << "Split tunnel start failed";
-      emit backendFailure(DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE);
+      emit backendFailure(splitTunnelFailureOr(
+          m_splitTunnelManager.get(),
+          DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE));
       m_splitTunnelManager->stop();
       return false;
     };
     if (!m_splitTunnelManager->excludeApps(config.m_vpnDisabledApps)) {
       logger.error() << "Split tunnel app exclusion failed";
-      emit backendFailure(DaemonError::ERROR_SPLIT_TUNNEL_EXCLUDE_FAILURE);
+      emit backendFailure(splitTunnelFailureOr(
+          m_splitTunnelManager.get(),
+          DaemonError::ERROR_SPLIT_TUNNEL_EXCLUDE_FAILURE));
       m_splitTunnelManager->stop();
       return false;
     };

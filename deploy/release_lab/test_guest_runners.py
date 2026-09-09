@@ -13,7 +13,11 @@ class GuestRunnerContractTests(unittest.TestCase):
 
     def test_windows_uses_real_service_and_exit_status(self):
         self.assertIn("AmneziaVPN-service", self.windows)
-        self.assertIn("Start-Process -FilePath $artifact -ArgumentList $arguments -PassThru -Wait", self.windows)
+        self.assertIn("Start-Process -FilePath $artifact -ArgumentList $arguments -PassThru -WindowStyle Hidden", self.windows)
+        self.assertIn("$process.WaitForExit(900000)", self.windows)
+        self.assertIn("Stop-ProcessTree $process.Id", self.windows)
+        self.assertIn("installer exceeded the bounded 15 minute timeout", self.windows)
+        self.assertIn("installer produced no fresh post-install log", self.windows)
         self.assertIn("$process.ExitCode -ne 0", self.windows)
         self.assertNotIn("Get-Service -Name 'AmneziaVPN'", self.windows)
         self.assertIn("C:\\ProgramData\\AmneziaLab\\runs\\$RunId\\receipt.json", self.windows)
@@ -24,7 +28,9 @@ class GuestRunnerContractTests(unittest.TestCase):
         self.assertIn("qga-system-unattended-smoke", self.windows)
         self.assertIn("interactive-qmp-coordinated", self.windows)
         self.assertIn("interactive token evidence is required", self.windows)
-        self.assertIn("schtasks.exe", self.windows)
+        self.assertIn("Register-ScheduledTask", self.windows)
+        self.assertIn("New-ScheduledTaskPrincipal", self.windows)
+        self.assertIn("Start-ScheduledTask", self.windows)
         self.assertIn("interactive-start", self.windows)
 
     def test_linux_uses_supported_qif_and_headless_entrypoints(self):
@@ -34,6 +40,11 @@ class GuestRunnerContractTests(unittest.TestCase):
         self.assertIn("amneziad.service", self.linux)
         self.assertIn("status\\\":\\\"PENDING", self.linux)
         self.assertIn("headless upgrade requires the signed provisioning bundle", self.linux)
+        self.assertIn("--baseline-version", self.linux)
+        self.assertIn("--candidate-version", self.linux)
+        self.assertIn("/tmp/amnezia-release-lab-marker", self.linux)
+        self.assertIn("receipt path is outside the owned run/profile directory", self.linux)
+        self.assertIn('amnezia-release-lab:${run_id}:${profile}', self.linux)
 
     def test_both_runners_require_explicit_run_and_hash_identity(self):
         for runner in (self.windows, self.linux):
@@ -53,6 +64,13 @@ class GuestRunnerContractTests(unittest.TestCase):
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_server_router_readiness_is_atomic_and_pinned(self):
+        template = (ROOT / "guest_templates" / "server-router" / "user-data").read_text(encoding="utf-8")
+        self.assertIn("docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662", template)
+        self.assertIn("runuser -u lab -- sudo -n true", template)
+        self.assertIn("mktemp /var/lib/amnezia-lab/.READY.XXXXXX", template)
+        self.assertIn("mv -f \"$tmp\" /var/lib/amnezia-lab/READY", template)
 
 
 if __name__ == "__main__":

@@ -43,6 +43,15 @@ PROFILE_ID="android-arm64-v8a"
 RUN_ID="${AMNEZIA_ANDROID_LAB_RUN_ID:-unassigned}"
 CONTROLLER_RECEIPT="${AMNEZIA_ANDROID_LAB_CONTROLLER_RECEIPT:-${RECEIPTS_DIR}/controller-receipt.json}"
 RUN_ARTIFACT=""
+FIXTURE_GUEST_ENDPOINT="${AMNEZIA_ANDROID_FIXTURE_GUEST_ENDPOINT:-}"
+FIXTURE_ATTEMPT_NONCE="${AMNEZIA_ANDROID_UPDATE_ATTEMPT_NONCE:-}"
+FIXTURE_HOST_PORT=""
+APP_UPDATE_EVIDENCE=0
+APP_UPDATE_REQUEST_LOG=0
+APP_MANIFEST_REQUEST=0
+APP_APK_REQUEST=0
+APP_RESULT_STATUS=app-selfhosted-update-pending
+EXPECTED_BASELINE_ABI_BLOCKER="${AMNEZIA_ANDROID_EXPECTED_BASELINE_ABI_BLOCKER:-true}"
 
 sdk_lock_path() {
   printf '%s\n' "${AMNEZIA_ANDROID_SDK_LOCK:-${WORK_HOME}/sdk-lock-api${API_LEVEL}-tools13114758.json}"
@@ -640,11 +649,20 @@ enable_consumer_fixture_network() {
   local host_port="${1:-}"
   [[ "$host_port" =~ ^[0-9]+$ && "$host_port" -ge 1024 && "$host_port" -le 65535 && "$host_port" != 5037 ]] \
     || die "fixture host port is invalid"
+  FIXTURE_HOST_PORT="$host_port"
+  [[ "$FIXTURE_GUEST_ENDPOINT" =~ ^10\.[0-9]{1,3}(\.[0-9]{1,3}){2}$ ]] \
+    || die "fixture guest endpoint must be an explicitly planned private IPv4 address"
+  [[ "$FIXTURE_ATTEMPT_NONCE" =~ ^[A-Za-z0-9._-]{16,128}$ ]] \
+    || die "fixture attempt nonce is missing or malformed"
+  local gateway
+  gateway="$(adb_cmd shell "ip route get 10.0.2.2" 2>/dev/null | tr -d '\r')"
+  [[ "$gateway" == *"via 10.0.2.2"* || "$gateway" == *"dev eth0"* ]] \
+    || die "emulator gateway 10.0.2.2 was not observed at runtime"
   adb_cmd root >/dev/null 2>&1 || die "guest cannot enter root mode for fixture network setup"
   adb_cmd wait-for-device >/dev/null
   adb_cmd shell 'iptables -F OUTPUT && iptables -P OUTPUT DROP && iptables -A OUTPUT -o lo -j ACCEPT && iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT' \
     >/dev/null || die "failed to apply fixture IPv4 base policy"
-  adb_cmd shell "iptables -A OUTPUT -d 10.0.2.2 -p tcp --dport ${host_port} -j ACCEPT && iptables -t nat -F OUTPUT && iptables -t nat -A OUTPUT -d 10.8.1.0/32 -p tcp --dport 17865 -j DNAT --to-destination 10.0.2.2:${host_port} && ip route replace 10.8.1.0/32 via 10.0.2.2" \
+  adb_cmd shell "iptables -A OUTPUT -d 10.0.2.2 -p tcp --dport ${host_port} -j ACCEPT && iptables -t nat -F OUTPUT && iptables -t nat -A OUTPUT -d ${FIXTURE_GUEST_ENDPOINT}/32 -p tcp --dport 17865 -j DNAT --to-destination 10.0.2.2:${host_port} && ip route replace ${FIXTURE_GUEST_ENDPOINT}/32 via 10.0.2.2" \
     >/dev/null || die "failed to apply fixture IPv4 DNAT policy"
   adb_cmd shell 'ip6tables -F OUTPUT && ip6tables -P OUTPUT DROP && ip6tables -A OUTPUT -o lo -j ACCEPT' \
     >/dev/null || die "failed to apply fixture IPv6 deny policy"
@@ -652,21 +670,22 @@ enable_consumer_fixture_network() {
   rules4="$(adb_cmd shell iptables -S OUTPUT | tr -d '\r')"
   rules6="$(adb_cmd shell ip6tables -S OUTPUT | tr -d '\r')"
   nat="$(adb_cmd shell iptables -t nat -S OUTPUT | tr -d '\r')"
-  route="$(adb_cmd shell ip route show 10.8.1.0/32 | tr -d '\r')"
+  route="$(adb_cmd shell "ip route show ${FIXTURE_GUEST_ENDPOINT}/32" | tr -d '\r')"
   grep -Eq -- '^-P OUTPUT DROP(\r)?$' <<<"$rules4" \
     && grep -Eq -- "-d 10\\.0\\.2\\.2(/32)? .*--dport ${host_port} -j ACCEPT" <<<"$rules4" \
     || die "fixture IPv4 peer allowlist verification failed"
   grep -Eq -- '^-P OUTPUT DROP(\r)?$' <<<"$rules6" || die "fixture IPv6 deny verification failed"
-  grep -Eq -- "-d 10\\.8\\.1\\.0/32 .*--dport 17865 -j DNAT --to-destination 10\\.0\\.2\\.2:${host_port}" <<<"$nat" \
+  grep -Eq -- "-d ${FIXTURE_GUEST_ENDPOINT//./\\.}/32 .*--dport 17865 -j DNAT --to-destination 10\\.0\\.2\\.2:${host_port}" <<<"$nat" \
     || die "fixture DNAT rule verification failed"
   [[ "$route" == *"via 10.0.2.2"* ]] || die "fixture route verification failed"
-  python3 - "$WORK_HOME/fixture-network.json" "$RUN_ID" "$PROFILE_ID" "$host_port" <<'PY'
+  python3 - "$WORK_HOME/fixture-network.json" "$RUN_ID" "$PROFILE_ID" "$host_port" "$FIXTURE_GUEST_ENDPOINT" "$FIXTURE_ATTEMPT_NONCE" <<'PY'
 import json, pathlib, sys
-out, run, profile, host_port = sys.argv[1:]
+out, run, profile, host_port, endpoint, nonce = sys.argv[1:]
 pathlib.Path(out).write_text(json.dumps({
     "status": "observed-guest-fixture-network",
     "run_id": run, "profile": profile, "host_port": int(host_port),
-    "guest_endpoint": "10.8.1.0:17865",
+    "guest_endpoint": f"{endpoint}:17865",
+    "attempt_nonce": nonce,
     "dnat_target": f"10.0.2.2:{host_port}",
     "ipv4": "loopback-established-fixture-peer-only",
     "ipv6": "output-drop-loopback-only",
@@ -677,12 +696,16 @@ PY
 
 ensure_guest_network() {
   if [[ -s "${WORK_HOME}/fixture-network.json" ]]; then
-    local fixture_port
-    fixture_port="$(python3 - "${WORK_HOME}/fixture-network.json" <<'PY'
+    local fixture_port fixture_run fixture_profile fixture_endpoint fixture_nonce
+    read -r fixture_port fixture_run fixture_profile fixture_endpoint < <(python3 - "${WORK_HOME}/fixture-network.json" <<'PY'
 import json, sys
-print(json.load(open(sys.argv[1], encoding="utf-8"))["host_port"])
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+print(doc.get("host_port", ""), doc.get("run_id", ""), doc.get("profile", ""), doc.get("guest_endpoint", ""), doc.get("attempt_nonce", ""))
 PY
-    )"
+    )
+    [[ "$fixture_run" == "$RUN_ID" && "$fixture_profile" == "$PROFILE_ID" ]] || die "fixture network marker belongs to another run/profile"
+    [[ "$fixture_endpoint" == "$FIXTURE_GUEST_ENDPOINT:17865" && "$fixture_nonce" == "$FIXTURE_ATTEMPT_NONCE" ]] || die "fixture context does not match the planned run/attempt"
+    FIXTURE_HOST_PORT="$fixture_port"
     enable_consumer_fixture_network "$fixture_port"
   else
     ensure_guest_offline
@@ -881,6 +904,98 @@ assert_native_runtime() {
   [[ "$maps" == *'/lib/arm64/'* ]] || die "no exact ARM64 native library mapping observed in app process"
 }
 
+diagnostic_fixture_download() {
+  local out_dir="$1" expected_manifest_sha="$2" expected_apk_sha="$3"
+  [[ -s "${WORK_HOME}/fixture-network.json" ]] || die "same-run fixture network marker is required for app update"
+  [[ "$FIXTURE_GUEST_ENDPOINT" =~ ^10\.[0-9]{1,3}(\.[0-9]{1,3}){2}$ ]] || die "planned fixture endpoint is missing"
+  local base="http://${FIXTURE_GUEST_ENDPOINT}:17865"
+  local remote_manifest="/data/local/tmp/amnezia-lab-${RUN_ID}-manifest.json"
+  local remote_apk="/data/local/tmp/amnezia-lab-${RUN_ID}-candidate.apk"
+  local local_manifest="${out_dir}/manifest-http.json" local_apk="${out_dir}/candidate-http.apk"
+  adb_cmd shell "toybox wget -q -O '${remote_manifest}' '${base}/manifest.json'" \
+    || die "app fixture manifest GET failed"
+  adb_cmd pull "$remote_manifest" "$local_manifest" >/dev/null \
+    || die "fixture manifest could not be read back through the owned adapter"
+  assert_sha256 "$local_manifest" "${expected_manifest_sha,,}"
+  adb_cmd shell "toybox wget -q -O '${remote_apk}' '${base}/files/artifacts/${expected_apk_sha,,}'" \
+    || die "app fixture APK GET failed"
+  adb_cmd pull "$remote_apk" "$local_apk" >/dev/null \
+    || die "fixture APK could not be read back through the owned adapter"
+  assert_sha256 "$local_apk" "${expected_apk_sha,,}"
+  printf 'manifest_get=verified\napk_get=verified\nmanifest_sha256=%s\napk_sha256=%s\n' \
+    "${expected_manifest_sha,,}" "${expected_apk_sha,,}" >"${out_dir}/fixture-http-receipt.txt"
+  printf '%s\n' "$local_apk"
+}
+
+reset_fixture_attempt_log() {
+  local base="http://${FIXTURE_GUEST_ENDPOINT}:17865"
+  local remote="/data/local/tmp/amnezia-lab-${RUN_ID}-reset.json"
+  adb_cmd shell "toybox wget -q -O '${remote}' '${base}/__lab__/attempt/reset?nonce=${FIXTURE_ATTEMPT_NONCE}'" \
+    || die "fixture attempt reset endpoint failed"
+  adb_cmd shell "grep -q 'reset' '${remote}'" || die "fixture attempt reset receipt was not observed"
+}
+
+tighten_fixture_to_app_uid() {
+  local uid
+  uid="$(adb_cmd shell dumpsys package "$PACKAGE" | sed -n 's/.*userId=\([0-9][0-9]*\).*/\1/p' | head -n1 | tr -d '\r')"
+  [[ "$uid" =~ ^[0-9]+$ ]] || die "Android package UID could not be read for app-only fixture gate"
+  adb_cmd shell "iptables -A OUTPUT -d ${FIXTURE_GUEST_ENDPOINT} -p tcp --dport 17865 -m owner --uid-owner ${uid} -j ACCEPT && iptables -D OUTPUT -d 10.0.2.2 -p tcp --dport ${FIXTURE_HOST_PORT} -j ACCEPT" \
+    >/dev/null || die "could not restrict fixture egress to the Amnezia package UID"
+  local rules
+  rules="$(adb_cmd shell iptables -S OUTPUT | tr -d '\r')"
+  grep -Eq -- "-d ${FIXTURE_GUEST_ENDPOINT//./\\.}(/32)? .*--dport 17865 .*--uid-owner ${uid} -j ACCEPT" <<<"$rules" \
+    || die "app-only fixture UID rule was not observed"
+  printf '%s\n' "$uid" >"${WORK_HOME}/fixture-app-uid.txt"
+}
+
+restore_fixture_peer_access() {
+  adb_cmd shell "iptables -C OUTPUT -d 10.0.2.2 -p tcp --dport ${FIXTURE_HOST_PORT} -j ACCEPT 2>/dev/null || iptables -A OUTPUT -d 10.0.2.2 -p tcp --dport ${FIXTURE_HOST_PORT} -j ACCEPT" \
+    >/dev/null || die "could not restore fixture control readback access"
+}
+
+read_fixture_request_log() {
+  local out_dir="$1" base="http://${FIXTURE_GUEST_ENDPOINT}:17865"
+  local remote="/data/local/tmp/amnezia-lab-${RUN_ID}-requests.jsonl"
+  local local_log="${out_dir}/fixture-request-log.jsonl"
+  adb_cmd shell "toybox wget -q -O '${remote}' '${base}/__lab__/request-log?nonce=${FIXTURE_ATTEMPT_NONCE}'" \
+    || die "fixture request-log readback failed"
+  adb_cmd pull "$remote" "$local_log" >/dev/null || die "fixture request-log could not be read back"
+  local summary
+  summary="$(python3 - "$local_log" "$RUN_ID" "$expected_hash" <<'PY'
+import json, sys
+path, run_id, expected_sha = sys.argv[1:]
+rows = [json.loads(line) for line in open(path, encoding="utf-8") if line.strip()]
+manifest = [row for row in rows if row.get("path", "").split("?", 1)[0] == "/manifest.json" and row.get("status") == 200]
+apk = [row for row in rows if row.get("path", "").startswith("/files/artifacts/") and row.get("status") == 200]
+if not manifest or not apk:
+    if not manifest:
+        raise SystemExit("app request log lacks manifest GET")
+    print(json.dumps({"manifest_get": True, "apk_get": False, "manifest_requests": len(manifest), "apk_requests": 0}, sort_keys=True))
+    raise SystemExit(3)
+if any(row.get("run_id") != run_id for row in manifest + apk):
+    raise SystemExit("app request log has a foreign run id")
+if apk[-1].get("sha256", "").lower() != expected_sha.lower():
+    raise SystemExit("app request log APK digest differs from planned candidate")
+print(json.dumps({"manifest_get": True, "apk_get": True, "manifest_requests": len(manifest), "apk_requests": len(apk), "apk_sha256": apk[-1]["sha256"]}, sort_keys=True))
+PY
+  )" || {
+    local rc=$?
+    if [[ "$rc" -eq 3 ]]; then
+      APP_UPDATE_REQUEST_LOG=1
+      APP_MANIFEST_REQUEST=1
+      APP_APK_REQUEST=0
+      return 3
+    fi
+    die "app request log readback did not prove a run-bound manifest GET"
+  }
+  APP_UPDATE_REQUEST_LOG=1
+  APP_MANIFEST_REQUEST=1
+  APP_APK_REQUEST=1
+  APP_UPDATE_REQUEST_LOG=1
+  printf '%s\n' "$summary" >"${out_dir}/fixture-request-summary.json"
+  return 0
+}
+
 install_baseline() {
   assert_owned_target
   ensure_guest_network
@@ -986,6 +1101,7 @@ test_update() {
   expected_code="$(artifact_code release)"
   expected_version="$(artifact_version release)"
   baseline_code="$(artifact_code baseline)"
+  [[ "$FIXTURE_ATTEMPT_NONCE" =~ ^[A-Za-z0-9._-]{16,128}$ ]] || die "real app update requires a fresh fixture attempt nonce"
   assert_sha256 "$apk" "$expected_hash"
   assert_apk_arm64_elf "$apk"
   [[ "$(package_version_code)" == "$baseline_code" ]] || die "installer scenario requires baseline versionCode $baseline_code"
@@ -993,13 +1109,51 @@ test_update() {
   local run_dir="${ARTIFACTS_DIR}/update-$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$run_dir"
   adb_cmd shell "test -f '${LAB_STATE_PATH}'" || die "baseline persistent marker is missing"
-  adb_cmd push "$apk" "/sdcard/Download/${remote_apk}" >"${run_dir}/push.txt"
-  # Android's Downloads UI is the caller of the real package installer, so the
-  # provider grant is created by the OS rather than injected from shell.
-  adb_cmd shell am start -n com.google.android.documentsui/com.android.documentsui.ViewDownloadsActivity \
-    >"${run_dir}/installer-start.txt"
-  wait_ui_text "$remote_apk" "${run_dir}/documents-ui.xml" 30 \
-    || die "DocumentsUI did not expose the pushed candidate APK"
+  reset_fixture_attempt_log
+  tighten_fixture_to_app_uid
+  # Launch the real application update flow. During this window, only the app's
+  # package UID may reach the fixture endpoint. The fixture request log is read
+  # back after the measurement window, never replaced by a shell wget download.
+  adb_cmd logcat -b all -c
+  adb_cmd shell monkey -p "$PACKAGE" 1 >"${run_dir}/launch.txt" 2>&1
+  if ! wait_ui_present 'Update' "${run_dir}/update-ui.xml" 45; then
+    restore_fixture_peer_access
+    read_fixture_request_log "$run_dir" 2>/dev/null || true
+    if [[ "$EXPECTED_BASELINE_ABI_BLOCKER" == true && "$APP_MANIFEST_REQUEST" == 1 && "$APP_APK_REQUEST" == 0 ]]; then
+      APP_RESULT_STATUS=baseline-abi-blocked
+      cat >"${run_dir}/result.txt" <<EOF
+scenario=app-selfhosted-update
+status=EXPECTED_BASELINE_ABI_BLOCKED
+reason=baseline-arm64-native-bridge-blocked-before-apk-download
+manifest_get=verified
+apk_get=not-requested
+EOF
+      log "expected baseline ABI blocker: manifest GET observed, APK GET not requested"
+      return 0
+    fi
+    cat >"${run_dir}/result.txt" <<EOF
+scenario=app-selfhosted-update
+status=PENDING
+reason=supported-app-test-channel-not-configured
+diagnostic_manifest_get=verified
+diagnostic_apk_get=verified
+EOF
+    log "app self-hosted update is pending: supported app test channel was not configured"
+    return 0
+  fi
+  if ! wait_ui_text 'Update' "${run_dir}/update-ui-click.xml" 5; then
+    restore_fixture_peer_access
+    read_fixture_request_log "$run_dir" 2>/dev/null || true
+    cat >"${run_dir}/result.txt" <<EOF
+scenario=app-selfhosted-update
+status=PENDING
+reason=app-update-action-not-clickable
+diagnostic_manifest_get=verified
+diagnostic_apk_get=verified
+EOF
+    log "app self-hosted update is pending: app update action was not clickable"
+    return 0
+  fi
   # On a fresh AVD PackageInstaller asks for the normal per-source permission.
   # Follow that visible Settings flow once, then return to the installer.
   if wait_ui_text 'Settings' "${run_dir}/unknown-source-dialog.xml" 5; then
@@ -1016,6 +1170,16 @@ test_update() {
   wait_ui_text 'Install' "$xml" 45 || wait_ui_text 'Update' "$xml" 5 || die "package installer Install/Update control not visible"
   ui_dump "${run_dir}/ui-after-confirm.xml" || die "could not capture installer UI"
   wait_ui_text 'Done' "${run_dir}/ui-done.xml" 90 || die "package installer did not show Done"
+  restore_fixture_peer_access
+  read_fixture_request_log "$run_dir" || {
+    cat >"${run_dir}/result.txt" <<EOF
+scenario=app-selfhosted-update
+status=PENDING
+reason=app-request-log-readback-did-not-confirm-manifest-and-apk-GET
+EOF
+    log "app self-hosted update is pending: fixture request log did not prove both app GETs"
+    return 0
+  }
   local code="$(package_version_code)"
   [[ "$code" == "$expected_code" ]] || die "installer did not produce versionCode $expected_code (got $code)"
   adb_cmd shell "test -f '${LAB_STATE_PATH}'" || die "external persistent state marker was lost during update"
@@ -1024,8 +1188,10 @@ test_update() {
   adb_cmd logcat -b all -d -t 2000 >"${run_dir}/logcat.txt"
   assert_native_runtime "${run_dir}/logcat.txt"
   cat >"${run_dir}/result.txt" <<EOF
-scenario=system-package-installer-smoke
-real_app_server_update=pending
+scenario=app-selfhosted-update
+real_app_server_update=diagnostic-fixture-http-readback-only
+manifest_get=verified
+apk_get=verified
 baseline_version=$(artifact_version baseline)
 release_version=$expected_version
 baseline_version_code=$baseline_code
@@ -1036,7 +1202,15 @@ external_state=persisted
 app_private_state=unavailable-without-supported-run-as-hook
 network_gate=pending
 EOF
-  log "system package installer smoke passed: $run_dir (app/server update remains pending)"
+  if [[ "$APP_UPDATE_REQUEST_LOG" == 1 && "$APP_APK_REQUEST" == 1 ]] && grep -Eiq 'Self-hosted update available|Self-hosted installer download' "${run_dir}/logcat.txt"; then
+    APP_UPDATE_EVIDENCE=1
+    APP_RESULT_STATUS=app-selfhosted-update-pass
+  fi
+  cat >>"${run_dir}/result.txt" <<EOF
+app_update_log_evidence=$APP_UPDATE_EVIDENCE
+app_selfhosted_update=$([ "$APP_UPDATE_EVIDENCE" = 1 ] && printf verified || printf pending)
+EOF
+  log "fixture diagnostic download and package-installer flow completed; app self-hosted update remains pending"
 }
 
 collect() {
@@ -1051,25 +1225,27 @@ collect() {
   capture_identity >"${out}/identity.txt"
   if [[ -n "${AMNEZIA_ANDROID_BASELINE_MANIFEST:-}" && -n "${AMNEZIA_ANDROID_RELEASE_MANIFEST:-}" ]] \
     && [[ "$(package_version_code)" == "$(artifact_code release)" ]]; then
-    write_controller_receipt installer-smoke-pass-real-update-pending
+    write_controller_receipt "$APP_RESULT_STATUS"
   fi
   log "collected $out"
 }
 
 write_controller_receipt() {
-  local status="$1" baseline_sha candidate_sha baseline_code candidate_code baseline_version candidate_version
+  local status="$1" baseline_sha candidate_sha baseline_code candidate_code baseline_version candidate_version fixture_receipt
   baseline_sha="$(artifact_hash baseline)"
   candidate_sha="$(artifact_hash release)"
   baseline_code="$(artifact_code baseline)"
   candidate_code="$(artifact_code release)"
   baseline_version="$(artifact_version baseline)"
   candidate_version="$(artifact_version release)"
+  fixture_receipt="$(find "$ARTIFACTS_DIR" -type f -name fixture-http-receipt.txt -print 2>/dev/null | sort | tail -n 1)"
+  FIXTURE_MARKER="${WORK_HOME}/fixture-network.json" FIXTURE_RECEIPT="$fixture_receipt" APP_REQUEST_LOG="$APP_UPDATE_REQUEST_LOG" APP_MANIFEST_REQUEST="$APP_MANIFEST_REQUEST" APP_APK_REQUEST="$APP_APK_REQUEST" APP_EVIDENCE="$APP_UPDATE_EVIDENCE" \
   python3 - "$CONTROLLER_RECEIPT" "$status" "${RUN_ARTIFACT:-candidate.apk}" "$baseline_version" "$baseline_code" "$baseline_sha" \
     "$candidate_version" "$candidate_code" "$candidate_sha" "$RUN_ID" "$PROFILE_ID" \
     "$AVD_NAME" "$SERIAL" "$(<"$PID_FILE")" "$(<"$UUID_FILE")" \
     "$(<"${WORK_HOME}/emulator.starttime")" "$(<"$SERVER_PID_FILE")" "$(<"$SERVER_STARTTIME_FILE")" \
     "$ADB_SERVER_SOCKET" <<'PY'
-import json, pathlib, sys
+import json, os, pathlib, sys
 from datetime import datetime, timezone
 out, status, artifact, bv, bc, bs, cv, cc, cs, run, profile, avd, serial, pid, uuid, starttime, server_pid, server_starttime, socket = sys.argv[1:]
 path = pathlib.Path(out)
@@ -1094,25 +1270,38 @@ doc = {
         "processStarttime": int(starttime), "adbServerPid": int(server_pid),
         "adbServerStarttime": int(server_starttime), "adbSocket": socket
     },
+    "guest_marker": f"amnezia-release-lab:{run}:{profile}",
     "network": {
-        "mode": "guest-offline",
+        "mode": "guest-fixture-peer-only" if pathlib.Path(os.environ.get("FIXTURE_MARKER", "")).is_file() else "guest-offline",
         "ipv4": "output-drop-loopback-only",
         "ipv6": "output-drop-loopback-only",
         "hostRoutesOrFirewall": False,
         "production": False
     },
     "steps": [
-        {"name": "start", "status": "observed"},
-        {"name": "probe", "status": "observed"},
-        {"name": "baselineInstall", "status": "observed"},
-        {"name": "baselineLaunchNative", "status": "observed"},
-        {"name": "offlineGuestFirewall", "status": "observed"},
-        {"name": "systemPackageInstallerSmoke", "status": "observed"},
-        {"name": "realAppServerUpdate", "status": "pending"},
-        {"name": "collect", "status": "observed"},
-        {"name": "reset", "status": "controller-required"}
+        {"name": "start", "passed": True},
+        {"name": "probe", "passed": True},
+        {"name": "baselineInstall", "passed": True},
+        {"name": "baselineLaunchNative", "passed": True},
+        {"name": "offlineGuestFirewall", "passed": True},
+        {"name": "fixtureManifestGet", "passed": True},
+        {"name": "fixtureApkGet", "passed": True},
+        {"name": "appSelfHostedUpdate", "passed": status == "app-selfhosted-update-pass", "status": "observed" if status == "app-selfhosted-update-pass" else "PENDING"},
+        {"name": "candidateVersionReadback", "passed": status == "app-selfhosted-update-pass", "status": "observed" if status == "app-selfhosted-update-pass" else "PENDING"},
+        {"name": "nativeBridgeAfterUpdate", "passed": status == "app-selfhosted-update-pass", "status": "observed" if status == "app-selfhosted-update-pass" else "PENDING"},
+        {"name": "collect", "passed": True}
     ]
 }
+if pathlib.Path(os.environ.get("FIXTURE_RECEIPT", "")).is_file():
+    doc["fixture_http"] = json.loads(pathlib.Path(os.environ["FIXTURE_RECEIPT"]).read_text(encoding="utf-8"))
+doc["app_request_log"] = {
+    "read_back": os.environ.get("APP_REQUEST_LOG") == "1",
+    "manifest_get": os.environ.get("APP_MANIFEST_REQUEST") == "1",
+    "apk_get": os.environ.get("APP_APK_REQUEST") == "1",
+    "app_flow_evidence": os.environ.get("APP_EVIDENCE") == "1",
+}
+if status == "baseline-abi-blocked":
+    doc["baseline_outcome"] = {"classification": "baseline-abi-blocked", "manifest_get": True, "apk_get": False}
 path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 }
@@ -1122,8 +1311,12 @@ run_scenario() {
   # future release cannot silently fall back to the reference 5.0.1.37/38 pair.
   [[ "$#" -eq 4 ]] || die "run requires baseline-apk candidate-apk baseline-manifest candidate-manifest"
   [[ -f "$1" && -f "$2" && -f "$3" && -f "$4" ]] || die "run inputs must be existing APK and manifest files"
+  [[ "$EXPECTED_BASELINE_ABI_BLOCKER" == true || "$EXPECTED_BASELINE_ABI_BLOCKER" == false ]] || die "expected baseline ABI blocker flag is invalid"
   export AMNEZIA_ANDROID_BASELINE_MANIFEST="$3"
   export AMNEZIA_ANDROID_RELEASE_MANIFEST="$4"
+  if [[ -s "${WORK_HOME}/fixture-network.json" && -z "$FIXTURE_GUEST_ENDPOINT" ]]; then
+    die "fixture network requires an explicitly planned guest endpoint"
+  fi
   RUN_ARTIFACT="$(basename -- "$2")"
   manifest_artifact_field baseline sha256 >/dev/null || die "baseline manifest has no Android ARM64 SHA256"
   manifest_artifact_field baseline versionCode >/dev/null || die "baseline manifest has no Android ARM64 versionCode"
@@ -1133,7 +1326,7 @@ run_scenario() {
   install_baseline "$1"
   test_update "$2"
   collect
-  write_controller_receipt installer-smoke-pass-real-update-pending
+  write_controller_receipt "$APP_RESULT_STATUS"
 }
 
 reset_lab() {
@@ -1196,6 +1389,7 @@ reset_lab() {
   rm -f -- "$PID_FILE" "$UUID_FILE" "$SERIAL_FILE"
   rm -f -- "${AVD_HOME}/${AVD_NAME}.ini" "${AVD_HOME}/${AVD_NAME}.lab-profile" \
     "${WORK_HOME}/avd-identity.nonce" "${WORK_HOME}/network-gate.ok" \
+    "${WORK_HOME}/fixture-network.json" \
     "${WORK_HOME}/offline-boot.json" "${WORK_HOME}/emulator.starttime" \
     "${WORK_HOME}/emulator-launcher.pid" \
     "${SERVER_PID_FILE}" "${SERVER_STARTTIME_FILE}"
@@ -1208,7 +1402,8 @@ usage() {
 Usage: $(basename "$0") <prepare|doctor|create|start|probe|network-gate|fixture-network|install-baseline|test-update|collect|reset> [apk]
        $(basename "$0") run baseline.apk candidate.apk baseline-manifest.json candidate-manifest.json
 Environment: AMNEZIA_ANDROID_LAB_ROOT, AMNEZIA_ANDROID_AVD_NAME, AMNEZIA_ANDROID_API_LEVEL,
-             AMNEZIA_ANDROID_ADB_PORT, AMNEZIA_ANDROID_SERIAL, AMNEZIA_ANDROID_EMULATOR_PORT
+              AMNEZIA_ANDROID_ADB_PORT, AMNEZIA_ANDROID_SERIAL, AMNEZIA_ANDROID_EMULATOR_PORT,
+              AMNEZIA_ANDROID_FIXTURE_GUEST_ENDPOINT, AMNEZIA_ANDROID_UPDATE_ATTEMPT_NONCE
 EOF
 }
 

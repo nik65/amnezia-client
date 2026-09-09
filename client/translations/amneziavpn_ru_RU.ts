@@ -7678,6 +7678,36 @@ Create one from the current settings.</source>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="61"/>
+        <source>Split-tunnel driver initialization failed</source>
+        <translation>Не удалось инициализировать драйвер раздельного VPN-туннелирования</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="62"/>
+        <source>Split-tunnel driver start failed</source>
+        <translation>Не удалось запустить драйвер раздельного VPN-туннелирования</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="63"/>
+        <source>Split-tunnel application exclusion failed</source>
+        <translation>Не удалось применить исключения приложений для раздельного VPN-туннелирования</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="64"/>
+        <source>Split-tunnel configuration timed out; retry after cleanup completes</source>
+        <translation>Настройка раздельного VPN-туннелирования превысила время ожидания. Повторите попытку после завершения очистки</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="65"/>
+        <source>Split-tunnel configuration wait failed; retry after cleanup, or restart Windows manually if the error persists</source>
+        <translation>Не удалось дождаться настройки раздельного VPN-туннелирования. Повторите попытку после очистки; если ошибка сохраняется, вручную перезагрузите Windows</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="66"/>
+        <source>Split-tunnel cleanup failed; retry after cleanup, or restart Windows manually if the error persists</source>
+        <translation>Не удалось очистить состояние раздельного VPN-туннелирования. Повторите попытку после очистки; если ошибка сохраняется, вручную перезагрузите Windows</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="61"/>
         <source>OpenSSL failed</source>
         <translation>Ошибка OpenSSL</translation>
     </message>

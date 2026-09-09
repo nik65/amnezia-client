@@ -67,7 +67,7 @@ Component.prototype.createOperations = function()
     // installer and its uninstall-first controller path.
     if (runningOnWindows()
             && (installer.isUpdater() || component.updateRequested())) {
-        installer.setCancelled();
+        installer.setCanceled();
         throw new Error("Windows split-tunnel driver updates require the full offline AmneziaVPN installer.");
     }
 

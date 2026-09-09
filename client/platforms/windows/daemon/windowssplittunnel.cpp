@@ -140,6 +140,8 @@ enum CONFIGURATION_HELPER_EXIT_CODE {
   CONFIGURATION_HELPER_DRIVER_OPEN_FAILED = 3,
   CONFIGURATION_HELPER_IOCTL_FAILED = 4,
   CONFIGURATION_HELPER_ABORTED = 5,
+  CONFIGURATION_HELPER_CLEANUP_FAILED = 6,
+  CONFIGURATION_HELPER_CLEANUP_VERIFIED = 7,
 };
 
 #pragma endregion
@@ -467,6 +469,10 @@ WindowsSplitTunnel::~WindowsSplitTunnel() {
   }
 }
 
+DaemonError WindowsSplitTunnel::lastFailure() const {
+  return m_lastFailure;
+}
+
 bool WindowsSplitTunnel::excludeApps(const QStringList& appPaths) {
   if (m_driver == INVALID_HANDLE_VALUE &&
       !reapQuarantinedConfigurationHelper()) {
@@ -510,6 +516,10 @@ int WindowsSplitTunnel::runConfigurationHelper(
     const QString& abortEventHandleValue,
     const QString& parentProcessHandleValue,
     const QString& configSizeValue) {
+  const ULONGLONG helperStartedAt = GetTickCount64();
+  const auto elapsedMs = [&]() {
+    return static_cast<DWORD>(GetTickCount64() - helperStartedAt);
+  };
   HANDLE mappingHandle = parseInheritedHandle(mappingHandleValue);
   HANDLE configuredEvent = parseInheritedHandle(configuredEventHandleValue);
   HANDLE commitEvent = parseInheritedHandle(commitEventHandleValue);
@@ -574,13 +584,27 @@ int WindowsSplitTunnel::runConfigurationHelper(
                                stopSignals.data(), FALSE, 0);
     // WAIT_TIMEOUT is the only result proving both the parent and request are
     // still live.  Invalid/inconclusive inherited state must fail closed.
+    if (wait == WAIT_FAILED) {
+      logger.error() << "Split-tunnel helper parent check failed"
+                     << "stage=parent-check"
+                     << "elapsed_ms=" << elapsedMs()
+                     << "wait_error=" << GetLastError();
+      return true;
+    }
     return wait != WAIT_TIMEOUT;
   };
   if (parentStoppedOrAborted()) {
-    return CONFIGURATION_HELPER_ABORTED;
+    return CONFIGURATION_HELPER_CLEANUP_VERIFIED;
   }
 
+  logger.debug() << "Split-tunnel helper stage=before-open-driver"
+                 << "elapsed_ms=" << elapsedMs();
   HANDLE driver = openSplitTunnelDriver();
+  const DWORD openError = driver == INVALID_HANDLE_VALUE ? GetLastError()
+                                                          : ERROR_SUCCESS;
+  logger.debug() << "Split-tunnel helper stage=after-open-driver"
+                 << "elapsed_ms=" << elapsedMs()
+                 << "result=" << openError;
   if (driver == INVALID_HANDLE_VALUE) {
     return CONFIGURATION_HELPER_DRIVER_OPEN_FAILED;
   }
@@ -589,17 +613,23 @@ int WindowsSplitTunnel::runConfigurationHelper(
   // Recheck immediately before the mutating IOCTL.  The service may have
   // exited while this helper was waiting for the driver's exclusive handle.
   if (parentStoppedOrAborted()) {
-    return CONFIGURATION_HELPER_ABORTED;
+    return CONFIGURATION_HELPER_CLEANUP_VERIFIED;
   }
 
   DWORD bytesReturned = 0;
+  logger.debug() << "Split-tunnel helper stage=before-set-configuration"
+                 << "elapsed_ms=" << elapsedMs();
   const bool configured =
       DeviceIoControl(driver, IOCTL_SET_CONFIGURATION,
                       const_cast<void*>(config), configSize, nullptr, 0,
                       &bytesReturned, nullptr) != FALSE;
+  const DWORD configureError = configured ? ERROR_SUCCESS : GetLastError();
+  logger.debug() << "Split-tunnel helper stage=after-set-configuration"
+                 << "elapsed_ms=" << elapsedMs()
+                 << "result=" << configureError;
   if (!configured) {
     logger.error() << "Split-tunnel configuration helper IOCTL failed:"
-                   << GetLastError();
+                   << configureError;
     SetEvent(configuredEvent);
     return CONFIGURATION_HELPER_IOCTL_FAILED;
   }
@@ -613,39 +643,134 @@ int WindowsSplitTunnel::runConfigurationHelper(
   const DWORD control =
       WaitForMultipleObjects(static_cast<DWORD>(controlEvents.size()),
                              controlEvents.data(), FALSE, INFINITE);
+  const bool controlWaitFailed = control == WAIT_FAILED;
+  const DWORD controlWaitError = controlWaitFailed ? GetLastError()
+                                                    : ERROR_SUCCESS;
+  if (controlWaitFailed) {
+    logger.error() << "Split-tunnel helper control wait failed"
+                   << "stage=control-wait"
+                   << "elapsed_ms=" << elapsedMs()
+                   << "wait_error=" << controlWaitError;
+  }
   if (control != WAIT_OBJECT_0 + 2) {
-    // The parent already continued without split tunneling. If the original
-    // request completed late, remove that late ruleset before releasing the
-    // quarantined device handle. This is best effort because the v1.3 driver
-    // ABI does not support cancelable/generation-bound requests.
-    DeviceIoControl(driver, IOCTL_CLEAR_CONFIGURATION, nullptr, 0, nullptr, 0,
-                    &bytesReturned, nullptr);
-    return CONFIGURATION_HELPER_ABORTED;
+    // The parent did not commit this request. If the original request
+    // completed late, remove that late ruleset before releasing the
+    // quarantined device handle. The driver ABI has no generation-bound
+    // cancellation, so cleanup must be verified before quarantine is cleared.
+    logger.debug() << "Split-tunnel helper stage=before-clear-configuration"
+                   << "elapsed_ms=" << elapsedMs();
+    const BOOL cleared = DeviceIoControl(
+        driver, IOCTL_CLEAR_CONFIGURATION, nullptr, 0, nullptr, 0,
+        &bytesReturned, nullptr);
+    const DWORD cleanupError = cleared ? ERROR_SUCCESS : GetLastError();
+    logger.debug() << "Split-tunnel helper stage=after-clear-configuration"
+                   << "elapsed_ms=" << elapsedMs()
+                   << "result=" << cleanupError;
+    if (!cleared) {
+      logger.error() << "Split-tunnel helper cleanup failed"
+                     << "stage=late-abort"
+                     << "result=" << cleanupError;
+      return CONFIGURATION_HELPER_CLEANUP_FAILED;
+    }
+    logger.debug() << "Split-tunnel helper stage=before-verify-cleanup"
+                   << "elapsed_ms=" << elapsedMs();
+    SIZE_T cleanupState = 0;
+    DWORD cleanupStateBytes = 0;
+    const BOOL stateVerified = DeviceIoControl(
+        driver, IOCTL_GET_STATE, nullptr, 0, &cleanupState,
+        sizeof(cleanupState), &cleanupStateBytes, nullptr);
+    const DWORD stateError = stateVerified ? ERROR_SUCCESS : GetLastError();
+    logger.debug() << "Split-tunnel helper stage=after-verify-cleanup"
+                   << "elapsed_ms=" << elapsedMs()
+                   << "result=" << stateError
+                   << "bytes=" << cleanupStateBytes;
+    if (!stateVerified || cleanupStateBytes == 0
+        || cleanupState >= STATE_RUNNING) {
+      logger.error() << "Split-tunnel helper cleanup state verification failed"
+                     << "stage=verify-cleanup"
+                     << "result=" << stateError
+                     << "state=" << cleanupState;
+      return CONFIGURATION_HELPER_CLEANUP_FAILED;
+    }
+    if (controlWaitFailed) {
+      return CONFIGURATION_HELPER_CLEANUP_FAILED;
+    }
+    return CONFIGURATION_HELPER_CLEANUP_VERIFIED;
   }
   return CONFIGURATION_HELPER_SUCCESS;
 }
 
 void WindowsSplitTunnel::quarantineConfigurationHelper(
-    HANDLE job, HANDLE process, HANDLE abortEvent) {
-  SetEvent(abortEvent);
+    HANDLE job, HANDLE process, HANDLE abortEvent, DaemonError failure,
+    DWORD waitError, DWORD elapsedMs) {
+  const BOOL abortSignaled = SetEvent(abortEvent);
+  const DWORD abortError = abortSignaled ? ERROR_SUCCESS : GetLastError();
+  m_lastFailure = abortSignaled
+      ? failure
+      : DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_CLEANUP_FAILED;
   m_quarantinedHelperJob = job;
   m_quarantinedHelperProcess = process;
   m_quarantinedHelperAbortEvent = abortEvent;
+  // state is indeterminate until late cleanup completes
+  // State is indeterminate until late cleanup completes; preserve the
+  // quarantined handles and fail closed for subsequent mutations.
   logger.error()
-      << "Split-tunnel configuration timed out after"
-      << CONFIGURATION_HELPER_TIMEOUT_MS
-      << "ms; helper and driver quarantined while main VPN activation resumes; "
-         "split-tunnel state is indeterminate until late cleanup completes";
+      << "Split-tunnel configuration helper quarantined"
+      << "stage=wait"
+      << "elapsed_ms=" << elapsedMs
+      << "failure_code=" << static_cast<int>(failure)
+      << "wait_error=" << waitError
+      << "abort_result=" << abortError;
 }
 
 bool WindowsSplitTunnel::reapQuarantinedConfigurationHelper() {
   if (m_quarantinedHelperProcess == nullptr) {
     return m_driver != INVALID_HANDLE_VALUE;
   }
-  if (WaitForSingleObject(m_quarantinedHelperProcess, 0) != WAIT_OBJECT_0) {
+  const DWORD processWait =
+      WaitForSingleObject(m_quarantinedHelperProcess, 0);
+  if (processWait == WAIT_TIMEOUT) {
     logger.warning() << "Split-tunnel helper is still quarantined";
     return false;
   }
+  if (processWait == WAIT_FAILED) {
+    const DWORD waitError = GetLastError();
+    m_lastFailure = DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_WAIT_FAILED;
+    logger.error() << "Split-tunnel helper reap wait failed"
+                   << "stage=reap"
+                   << "wait_error=" << waitError;
+    return false;
+  }
+
+  DWORD exitCode = CONFIGURATION_HELPER_IOCTL_FAILED;
+  if (!GetExitCodeProcess(m_quarantinedHelperProcess, &exitCode)) {
+    const DWORD exitError = GetLastError();
+    m_lastFailure = DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_CLEANUP_FAILED;
+    logger.error() << "Split-tunnel helper cleanup result unavailable"
+                   << "stage=reap"
+                   << "result=" << exitError;
+    return false;
+  }
+  const QuarantineCleanup cleanup =
+      exitCode == CONFIGURATION_HELPER_CLEANUP_VERIFIED
+          ? QuarantineCleanup::Verified
+          : QuarantineCleanup::Failed;
+  if (!mayReleaseQuarantine(processWait == WAIT_OBJECT_0, cleanup)) {
+    m_lastFailure = DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_CLEANUP_FAILED;
+    logger.error() << "Split-tunnel helper cleanup was not verified"
+                   << "stage=reap"
+                   << "exit_code=" << exitCode;
+    return false;
+  }
+
+  HANDLE reopenedDriver = reopenSplitTunnelDriverBounded();
+  if (reopenedDriver == INVALID_HANDLE_VALUE) {
+    m_lastFailure = DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_CLEANUP_FAILED;
+    logger.error() << "Failed to reopen split-tunnel driver after quarantine"
+                   << "stage=reopen";
+    return false;
+  }
+  m_driver = reopenedDriver;
 
   CloseHandle(m_quarantinedHelperJob);
   CloseHandle(m_quarantinedHelperProcess);
@@ -654,12 +779,9 @@ bool WindowsSplitTunnel::reapQuarantinedConfigurationHelper() {
   m_quarantinedHelperProcess = nullptr;
   m_quarantinedHelperAbortEvent = nullptr;
 
-  m_driver = reopenSplitTunnelDriverBounded();
-  if (m_driver == INVALID_HANDLE_VALUE) {
-    logger.error() << "Failed to reopen split-tunnel driver after quarantine";
-    return false;
-  }
-  logger.info() << "Split-tunnel helper quarantine cleared";
+  logger.info() << "Split-tunnel helper quarantine cleared"
+                << "verified=1";
+  m_lastFailure = DaemonError::ERROR_NONE;
   return true;
 }
 
@@ -828,11 +950,28 @@ bool WindowsSplitTunnel::applyConfigurationBounded(
 
   const std::array<HANDLE, 2> completionHandles = {configuredEvent,
                                                    processInfo.hProcess};
+  const ULONGLONG helperStartedAt = GetTickCount64();
   const DWORD waitResult = WaitForMultipleObjects(
       static_cast<DWORD>(completionHandles.size()), completionHandles.data(),
       FALSE, CONFIGURATION_HELPER_TIMEOUT_MS);
-  if (waitResult == WAIT_TIMEOUT || waitResult == WAIT_FAILED) {
-    quarantineConfigurationHelper(job, processInfo.hProcess, abortEvent);
+  const DWORD waitElapsedMs = static_cast<DWORD>(
+      GetTickCount64() - helperStartedAt);
+  if (waitResult == WAIT_TIMEOUT) {
+    quarantineConfigurationHelper(
+        job, processInfo.hProcess, abortEvent,
+        DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_TIMEOUT, ERROR_SUCCESS,
+        waitElapsedMs);
+    closeJob.dismiss();
+    closeProcess.dismiss();
+    closeAbortEvent.dismiss();
+    return false;
+  }
+  if (waitResult == WAIT_FAILED) {
+    const DWORD waitError = GetLastError();
+    quarantineConfigurationHelper(
+        job, processInfo.hProcess, abortEvent,
+        DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_WAIT_FAILED, waitError,
+        waitElapsedMs);
     closeJob.dismiss();
     closeProcess.dismiss();
     closeAbortEvent.dismiss();
@@ -841,8 +980,23 @@ bool WindowsSplitTunnel::applyConfigurationBounded(
 
   if (waitResult == WAIT_OBJECT_0) {
     SetEvent(commitEvent);
-    if (WaitForSingleObject(processInfo.hProcess, 1000) != WAIT_OBJECT_0) {
-      quarantineConfigurationHelper(job, processInfo.hProcess, abortEvent);
+    const DWORD processWait = WaitForSingleObject(processInfo.hProcess, 1000);
+    if (processWait == WAIT_TIMEOUT) {
+      quarantineConfigurationHelper(
+          job, processInfo.hProcess, abortEvent,
+          DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_TIMEOUT, ERROR_SUCCESS,
+          static_cast<DWORD>(GetTickCount64() - helperStartedAt));
+      closeJob.dismiss();
+      closeProcess.dismiss();
+      closeAbortEvent.dismiss();
+      return false;
+    }
+    if (processWait == WAIT_FAILED) {
+      const DWORD waitError = GetLastError();
+      quarantineConfigurationHelper(
+          job, processInfo.hProcess, abortEvent,
+          DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_WAIT_FAILED, waitError,
+          static_cast<DWORD>(GetTickCount64() - helperStartedAt));
       closeJob.dismiss();
       closeProcess.dismiss();
       closeAbortEvent.dismiss();
@@ -851,15 +1005,25 @@ bool WindowsSplitTunnel::applyConfigurationBounded(
   }
 
   DWORD exitCode = CONFIGURATION_HELPER_IOCTL_FAILED;
+  bool exitCodeAvailable = true;
   if (!GetExitCodeProcess(processInfo.hProcess, &exitCode)) {
+    m_lastFailure = DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_CLEANUP_FAILED;
+    exitCodeAvailable = false;
     exitCode = CONFIGURATION_HELPER_IOCTL_FAILED;
   }
   m_driver = reopenSplitTunnelDriverBounded();
   if (m_driver == INVALID_HANDLE_VALUE) {
+    m_lastFailure = DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_CLEANUP_FAILED;
     logger.error() << "Failed to reopen split-tunnel driver after helper";
     return false;
   }
+  if (!exitCodeAvailable) {
+    return false;
+  }
   if (exitCode != CONFIGURATION_HELPER_SUCCESS) {
+    m_lastFailure = exitCode == CONFIGURATION_HELPER_CLEANUP_FAILED
+        ? DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_CLEANUP_FAILED
+        : DaemonError::ERROR_SPLIT_TUNNEL_EXCLUDE_FAILURE;
     logger.error() << "Split-tunnel configuration helper failed with code"
                    << exitCode;
     return false;
@@ -877,6 +1041,7 @@ bool WindowsSplitTunnel::start(int inetAdapterIndex, int vpnAdapterIndex) {
       !reapQuarantinedConfigurationHelper()) {
     return false;
   }
+  m_lastFailure = DaemonError::ERROR_NONE;
 
   if (getState() == STATE_STARTED) {
     logger.debug() << "Driver needs Init Call";
@@ -939,6 +1104,7 @@ void WindowsSplitTunnel::stop() {
   auto ok = DeviceIoControl(m_driver, IOCTL_CLEAR_CONFIGURATION, nullptr, 0,
                             nullptr, 0, &bytesReturned, nullptr);
   if (!ok) {
+    m_lastFailure = DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_CLEANUP_FAILED;
     logger.error() << "Stopping Split tunnel not successfull";
     return;
   }
