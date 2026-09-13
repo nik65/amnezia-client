@@ -1,0 +1,652 @@
+"""Transport-free, fail-closed contracts for nested ARM64 Cuttlefish.
+
+The controller must obtain receipts from a freshly ownership-checked outer
+guest over QGA. This module plans and validates; it never claims a live run.
+"""
+from __future__ import annotations
+
+import base64, hashlib, json, re, shlex, time
+from dataclasses import asdict, dataclass
+from pathlib import PurePosixPath
+from typing import BinaryIO, Callable, Iterator, Mapping, Sequence
+from urllib.parse import quote
+
+try:
+    from .nested_cuttlefish_wayland_dependency import WaylandDependencyPlan, validate_install as validate_wayland_install, validate_runtime as validate_wayland_runtime
+except ImportError:
+    from nested_cuttlefish_wayland_dependency import WaylandDependencyPlan, validate_install as validate_wayland_install, validate_runtime as validate_wayland_runtime
+
+# The bridge negotiates this ceiling with an exact write/readback probe and
+# falls back to 64/32 KiB on an explicit frame, count, or hash failure.
+MAX_CHUNK_SIZE = 256 * 1024
+OWNED_ROOT = PurePosixPath("/var/lib/amnezia-release-lab")
+NESTED_ROOT = OWNED_ROOT / "n"
+SHA_RE = re.compile(r"[0-9a-f]{64}")
+ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
+PACKAGE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+")
+APK_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,158}\.apk")
+NOBLE_DASH_SHA256 = "86d31f6fb799e91fa21bad341484564510ca287703a16e9e46c53338776f4f42"
+NOBLE_VULKAN_DEB_SHA256 = "ccf4fe8f4461442f27ea2494c7ae650b60bd396fec2688b0c44a27d66a222f74"
+NOBLE_VULKAN_LOADER_SHA256 = "e833b010f814b72c6aca0300c8b5f19b6106ffa06c24ddc95a293970c7d6058e"
+
+class NestedCuttlefishError(RuntimeError): pass
+
+def _id(label: str, value: str) -> None:
+    if not ID_RE.fullmatch(value): raise NestedCuttlefishError(f"invalid {label}")
+
+def _under(path: str, root: PurePosixPath) -> bool:
+    value = PurePosixPath(path)
+    try: value.relative_to(root)
+    except ValueError: return False
+    return value.is_absolute() and value != root
+
+@dataclass(frozen=True)
+class OuterOwnership:
+    run_id: str; profile: str; attempt_nonce: str; pid: int; start_ticks: int
+    uuid: str; qmp_socket: str; qga_socket: str
+    def validate(self) -> None:
+        _id("run id", self.run_id); _id("profile", self.profile); _id("attempt nonce", self.attempt_nonce)
+        if self.profile != "linux-headless-x64" or self.pid <= 1 or self.start_ticks <= 0:
+            raise NestedCuttlefishError("outer ownership is not a usable headless guest")
+        try:
+            import uuid; uuid.UUID(self.uuid)
+        except (ValueError, AttributeError) as exc: raise NestedCuttlefishError("invalid outer UUID") from exc
+        if not _under(self.qmp_socket, OWNED_ROOT) or not _under(self.qga_socket, OWNED_ROOT):
+            raise NestedCuttlefishError("outer sockets are outside the owned lab root")
+
+@dataclass(frozen=True)
+class AssetSpec:
+    name: str; source_path: str; size: int; sha256: str
+    def validate(self) -> None:
+        _id("asset name", self.name)
+        if not PurePosixPath(self.source_path).is_absolute() or self.size <= 0 or not SHA_RE.fullmatch(self.sha256):
+            raise NestedCuttlefishError(f"invalid asset {self.name}")
+
+@dataclass(frozen=True)
+class ApkSpec(AssetSpec):
+    package: str; version_code: int
+    def validate(self) -> None:
+        # Release APK names legitimately contain '+'.  Keep this grammar
+        # basename-only; separators, traversal, NUL and controls remain
+        # impossible, while generic Cuttlefish asset names stay stricter.
+        if (not APK_NAME_RE.fullmatch(self.name) or PurePosixPath(self.name).name != self.name
+                or not PurePosixPath(self.source_path).is_absolute() or self.size <= 0
+                or not SHA_RE.fullmatch(self.sha256)
+                or not PACKAGE_RE.fullmatch(self.package) or self.version_code <= 0):
+            raise NestedCuttlefishError("invalid exact APK identity")
+
+@dataclass(frozen=True)
+class InnerPlan:
+    ownership: OuterOwnership; assets: tuple[AssetSpec, ...]; apk: ApkSpec
+    vsock_cid: int; runtime_uid: int; adb_endpoint: str = "127.0.0.1:5053"
+    boot_timeout_seconds: int = 1200; transfer_timeout_seconds: int = 1800
+    launch_argv: tuple[str, ...] = ()
+    qemu_aarch64_sha256: str = ""
+    trusted_shell_sha256: str = NOBLE_DASH_SHA256
+    vulkan_deb_path: str = "/mnt/c/Users/ivano/PycharmProjects/amnezia-client/dist/release-lab-fixtures/android-cvd-vulkan-noble-amd64-20260913/libvulkan1_1.3.275.0-1build1_amd64.deb"
+    vulkan_deb_sha256: str = NOBLE_VULKAN_DEB_SHA256
+    vulkan_deb_size: int = 142010
+    vulkan_loader_sha256: str = NOBLE_VULKAN_LOADER_SHA256
+    vulkan_loader_size: int = 510592
+    @property
+    def root(self) -> str:
+        # Cuttlefish appends deep per-instance Unix socket names. Keep the
+        # owned runtime path below sockaddr_un.sun_path while binding its
+        # opaque directory to the full run/attempt through the marker.
+        # Staging creates this directory exclusively and the full marker below
+        # retains the complete run/nonce binding. Eight hex characters also
+        # leave room for Cuttlefish's deepest generated Unix socket name.
+        token=hashlib.sha256(f"{self.ownership.run_id}\0{self.ownership.attempt_nonce}".encode()).hexdigest()[:8]
+        return str(NESTED_ROOT / token)
+    @property
+    def marker(self) -> str: return f"amnezia-release-lab:{self.ownership.run_id}:android-arm64-v8a:{self.ownership.attempt_nonce}"
+    def validate(self) -> None:
+        self.ownership.validate(); self.apk.validate()
+        if self.runtime_uid <= 0 or not 3 <= self.vsock_cid <= 0x7fffffff:
+            raise NestedCuttlefishError("invalid nested uid or vsock CID")
+        match = re.fullmatch(r"127\.0\.0\.1:([1-9][0-9]{0,4})", self.adb_endpoint)
+        if not match or int(match.group(1)) > 65535: raise NestedCuttlefishError("ADB must use a valid loopback port")
+        if not 60 <= self.boot_timeout_seconds <= 1800 or not 60 <= self.transfer_timeout_seconds <= 3600:
+            raise NestedCuttlefishError("lifecycle timeout is outside the bounded range")
+        generated_socket_suffixes=(
+            f"/runtime/tmp/cf_avd_{self.runtime_uid}/cvd-1/grpc_socket/GnssGrpcProxyServer.sock",
+            f"/runtime/tmp/cf_avd_{self.runtime_uid}/cvd-1/internal/confui_sign.sock",
+        )
+        if any(len((self.root+s).encode("utf-8")) > 107 for s in generated_socket_suffixes):
+            raise NestedCuttlefishError("nested generated runtime path exceeds Unix socket limit")
+        if len(self.assets) != 3 or len({x.name for x in self.assets}) != 3:
+            raise NestedCuttlefishError("exactly three unique Cuttlefish assets are required")
+        for item in self.assets: item.validate()
+        if (not self.assets[0].name.endswith(".tar.gz") or not self.assets[1].name.endswith(".zip")
+                or not self.assets[2].name.endswith(".tar.gz") or not SHA_RE.fullmatch(self.qemu_aarch64_sha256)
+                or not SHA_RE.fullmatch(self.trusted_shell_sha256)
+                or not PurePosixPath(self.vulkan_deb_path).is_absolute()
+                or self.vulkan_deb_sha256 != NOBLE_VULKAN_DEB_SHA256 or self.vulkan_deb_size != 142010
+                or self.vulkan_loader_sha256 != NOBLE_VULKAN_LOADER_SHA256 or self.vulkan_loader_size != 510592):
+            raise NestedCuttlefishError("Cuttlefish host/image asset roles are not canonical")
+        _validate_launch(self)
+
+def _flags(argv: Sequence[str]) -> dict[str, str]:
+    result = {}
+    for token in argv[1:]:
+        if not token.startswith("-"): raise NestedCuttlefishError("noncanonical launch token")
+        body = token.lstrip("-")
+        if body == "noresume":
+            key, value = body, "true"
+        elif "=" in body:
+            key, value = body.split("=", 1)
+        else:
+            raise NestedCuttlefishError("noncanonical launch token")
+        if not key or key in result: raise NestedCuttlefishError("duplicate launch flag")
+        result[key] = value
+    return result
+
+def _validate_launch(plan: InnerPlan) -> None:
+    expected_exe = f"{plan.root}/runtime/host/bin/launch_cvd"
+    if not plan.launch_argv or plan.launch_argv[0] != expected_exe:
+        raise NestedCuttlefishError("launch executable escaped the exact staged runtime")
+    required = {"instance_dir":f"{plan.root}/runtime/instance", "assembly_dir":f"{plan.root}/runtime/assembly",
+        "system_image_dir":f"{plan.root}/runtime/images", "early_tmp_dir":f"{plan.root}/runtime/tmp",
+        "vm_manager":"qemu_cli", "device_external_network":"slirp", "enable_tap_devices":"false",
+        "enable_modem_simulator":"false", "start_gnss_proxy":"false", "enable_host_bluetooth":"false",
+        "enable_host_nfc":"false", "enable_host_uwb":"false",
+        "start_webrtc":"false", "report_anonymous_usage_stats":"n", "gpu_mode":"guest_swiftshader",
+        "adb_mode":"vsock_half_tunnel", "run_adb_connector":"true", "cpus":"2", "memory_mb":"4096",
+        "vsock_guest_cid":str(plan.vsock_cid),
+        "qemu_binary_dir":f"{plan.root}/runtime/qemu",
+        "noresume":"true"}
+    if _flags(plan.launch_argv) != required: raise NestedCuttlefishError("launch argv differs from canonical isolated configuration")
+
+def iter_asset_chunks(stream: BinaryIO, *, expected_size: int, deadline_monotonic: float,
+                      chunk_size: int = MAX_CHUNK_SIZE, now: Callable[[], float] = time.monotonic) -> Iterator[dict]:
+    if expected_size <= 0 or not 1 <= chunk_size <= MAX_CHUNK_SIZE: raise NestedCuttlefishError("invalid transfer bound")
+    offset = seq = 0
+    while offset < expected_size:
+        if now() > deadline_monotonic: raise NestedCuttlefishError("asset transfer deadline expired")
+        data = stream.read(min(chunk_size, expected_size-offset))
+        if not data: raise NestedCuttlefishError("asset stream ended before expected size")
+        yield {"sequence":seq,"offset":offset,"size":len(data),"sha256":hashlib.sha256(data).hexdigest(),
+               "data_b64":base64.b64encode(data).decode(),"eof":False}
+        offset += len(data); seq += 1
+    if stream.read(1): raise NestedCuttlefishError("asset stream exceeds expected size")
+    if now() > deadline_monotonic: raise NestedCuttlefishError("asset deadline expired before EOF")
+    yield {"sequence":seq,"offset":offset,"size":0,"data_b64":"","eof":True}
+
+def transcript_sha256(chunks: Sequence[Mapping]) -> str:
+    rows=[{k:x.get(k) for k in ("sequence","offset","size","sha256","eof")} for x in chunks]
+    return hashlib.sha256(json.dumps(rows,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+
+def _items(plan: InnerPlan) -> list[AssetSpec]:
+    return [*plan.assets, AssetSpec(plan.apk.name,plan.apk.source_path,plan.apk.size,plan.apk.sha256)]
+
+def build_stage_plan(plan: InnerPlan) -> dict:
+    plan.validate()
+    return {"schema":2,"operation":"nested-cuttlefish-stage","ownership":asdict(plan.ownership),"marker":plan.marker,
+        "guest_root":plan.root,"chunk_size_max":MAX_CHUNK_SIZE,"transfer_timeout_seconds":plan.transfer_timeout_seconds,
+        "assets":[{**asdict(x),"guest_path":f"{plan.root}/input/{x.name}","require_eof":True,
+                   "require_guest_rehash":True,"require_transcript":True} for x in _items(plan)],
+        "host_mounts":[],"host_network_mutation":False}
+
+def _common(plan: InnerPlan, receipt: Mapping, operation: str) -> None:
+    plan.validate()
+    if receipt.get("schema") != 2 or receipt.get("operation") != operation: raise NestedCuttlefishError("invalid receipt schema")
+    if (receipt.get("run_id"),receipt.get("profile"),receipt.get("attempt_nonce"),receipt.get("marker")) != \
+       (plan.ownership.run_id,plan.ownership.profile,plan.ownership.attempt_nonce,plan.marker):
+        raise NestedCuttlefishError("receipt identity mismatch")
+    if receipt.get("guest_root") != plan.root or receipt.get("origin") != "guest" or receipt.get("transport") != "qga" or receipt.get("injected") is not False:
+        raise NestedCuttlefishError("receipt is not authentic guest QGA evidence")
+    if receipt.get("outer_ownership") != asdict(plan.ownership): raise NestedCuttlefishError("outer ownership binding mismatch")
+
+def validate_stage_receipt(plan: InnerPlan, receipt: Mapping) -> dict:
+    _common(plan,receipt,"nested-cuttlefish-stage")
+    root_identity=receipt.get("guest_root_identity")
+    if (not isinstance(root_identity,Mapping) or any(isinstance(root_identity.get(k),bool) or not isinstance(root_identity.get(k),int) or root_identity[k]<=0 for k in ("dev","inode"))
+            or root_identity.get("uid")!=0 or root_identity.get("gid")!=0 or root_identity.get("mode")!="0711"):
+        raise NestedCuttlefishError("staged guest root identity is missing")
+    ancestry=receipt.get("guest_ancestry")
+    rows=ancestry.get("ancestry") if isinstance(ancestry,Mapping) else None
+    expected_paths=["/var/lib/amnezia-release-lab","/var/lib/amnezia-release-lab/n"]
+    if not isinstance(rows,list) or len(rows)!=2:
+        raise NestedCuttlefishError("staged guest ancestry evidence is missing")
+    for row,path in zip(rows,expected_paths):
+        before=row.get("before") if isinstance(row,Mapping) else None;after=row.get("after") if isinstance(row,Mapping) else None
+        if (not isinstance(before,Mapping) or not isinstance(after,Mapping) or before.get("path")!=path or after.get("path")!=path
+                or before.get("uid")!=0 or before.get("gid")!=0 or before.get("mode") not in ("0700","0711","0755") or after.get("mode")!="0711"
+                or any(isinstance(before.get(k),bool) or not isinstance(before.get(k),int) or before[k]<=0 for k in ("dev","inode"))
+                or {k:before.get(k) for k in ("dev","inode","uid","gid")}!={k:after.get(k) for k in ("dev","inode","uid","gid")}):
+            raise NestedCuttlefishError("staged guest ancestry transition is invalid")
+    attempt=ancestry.get("attempt")
+    if (not isinstance(attempt,Mapping) or attempt.get("mode")!="0700" or {k:attempt.get(k) for k in ("dev","inode","uid","gid")}!={k:root_identity.get(k) for k in ("dev","inode","uid","gid")}):
+        raise NestedCuttlefishError("staged attempt root phase chain is invalid")
+    probe=ancestry.get("runtime_probe")
+    if (not isinstance(probe,Mapping) or probe.get("euid")!=plan.runtime_uid or isinstance(probe.get("egid"),bool)
+            or not isinstance(probe.get("egid"),int) or probe.get("egid",0)<=0 or probe.get("groups")!=[]
+            or probe.get("paths")!=[{"path":p,"execute":True} for p in expected_paths]):
+        raise NestedCuttlefishError("runtime uid cannot traverse staged ancestry")
+    ownership=receipt.get("runtime_ownership");before=ownership.get("qemu_before") if isinstance(ownership,Mapping) else None;after=ownership.get("qemu_after") if isinstance(ownership,Mapping) else None
+    directories=ownership.get("directories") if isinstance(ownership,Mapping) else None
+    qemu_path=f"{plan.root}/runtime/qemu/qemu-system-aarch64"
+    if (not isinstance(ownership,Mapping) or ownership.get("schema")!=1 or ownership.get("root")!=plan.root or ownership.get("runtime_uid")!=plan.runtime_uid
+            or isinstance(ownership.get("primary_gid"),bool) or not isinstance(ownership.get("primary_gid"),int) or ownership.get("primary_gid",0)<=0
+            or ownership.get("qemu_sha256")!=plan.qemu_aarch64_sha256 or ownership.get("access_exit_code")!=0 or ownership.get("access")!={"read":True,"execute":True} or ownership.get("origin")!="guest" or ownership.get("transport")!="qga" or ownership.get("injected") is not False
+            or not isinstance(before,Mapping) or not isinstance(after,Mapping) or before.get("path")!=qemu_path or after.get("path")!=qemu_path
+            or any(isinstance(before.get(k),bool) or not isinstance(before.get(k),int) or before[k]<=0 for k in ("dev","inode"))
+            or {k:before.get(k) for k in ("path","dev","inode","mode")}!={k:after.get(k) for k in ("path","dev","inode","mode")}
+            or after.get("uid")!=plan.runtime_uid or after.get("gid")!=ownership.get("primary_gid")
+            or (ownership.get("root_before") or {}).get("mode")!="0700" or (ownership.get("root_after") or {}).get("mode")!="0711"
+            or ownership.get("root_before")!=dict(attempt, path=plan.root) or ownership.get("root_after")!=dict(root_identity, path=plan.root)
+            or {k:(ownership.get("root_before") or {}).get(k) for k in ("path","dev","inode","uid","gid")}!={k:(ownership.get("root_after") or {}).get(k) for k in ("path","dev","inode","uid","gid")}
+            or not isinstance(directories,list) or [x.get("path") for x in directories if isinstance(x,Mapping)]!=[f"{plan.root}/runtime",f"{plan.root}/logs",f"{plan.root}/runtime/home",f"{plan.root}/runtime/tmp",f"{plan.root}/runtime/instance",f"{plan.root}/runtime/assembly"]
+            or directories[0].get("created") is not False or any(x.get("created") not in (True,False) for x in directories[1:])
+            or any(x.get("mode") not in ("0700","0755") for x in directories)
+            or any(x.get("uid")!=0 or x.get("gid")!=0 or isinstance(x.get("dev"),bool) or not isinstance(x.get("dev"),int) or x.get("dev",0)<=0 or isinstance(x.get("inode"),bool) or not isinstance(x.get("inode"),int) or x.get("inode",0)<=0 for x in directories)):
+        raise NestedCuttlefishError("runtime ownership receipt is invalid")
+    mutable=[f"{plan.root}/runtime/{x}" for x in ("home","tmp","instance","assembly")]+[f"{plan.root}/logs"]
+    if ownership.get("write_probe_exit_code")!=0 or ownership.get("write_probes")!=[{"path":p,"write_delete":True} for p in mutable]:
+        raise NestedCuttlefishError("runtime mutable directory proof is invalid")
+    records=receipt.get("assets")
+    if not isinstance(records,list) or len(records)!=4: raise NestedCuttlefishError("incomplete staged asset set")
+    by_name={x.get("name"):x for x in records if isinstance(x,Mapping)}
+    if len(by_name)!=len(records): raise NestedCuttlefishError("malformed staged asset set")
+    for spec in _items(plan):
+        item=by_name.get(spec.name); expected_path=f"{plan.root}/input/{spec.name}"
+        if not item or item.get("guest_path")!=expected_path or item.get("size")!=spec.size or item.get("received_size")!=spec.size or item.get("sha256")!=spec.sha256 or item.get("guest_sha256")!=spec.sha256 or item.get("eof") is not True:
+            raise NestedCuttlefishError(f"staged bytes/path mismatch for {spec.name}")
+        transfer=item.get("transfer")
+        if (not isinstance(transfer,Mapping) or isinstance(transfer.get("chunk_count"),bool)
+                or not isinstance(transfer.get("chunk_count"),int) or transfer["chunk_count"]<=0
+                or transfer.get("received_size")!=spec.size or transfer.get("eof") is not True
+                or not SHA_RE.fullmatch(str(transfer.get("transcript_sha256","")) )):
+            raise NestedCuttlefishError("compact transfer transcript is invalid")
+    if receipt.get("passed") is not True: raise NestedCuttlefishError("stage failed")
+    return dict(receipt)
+
+def build_launch_script(plan: InnerPlan) -> str:
+    plan.validate()
+    assemble=[f"{plan.root}/runtime/host/bin/assemble_cvd",*plan.launch_argv[1:]]
+    assemble_argv=" ".join(shlex.quote(x) for x in assemble)
+    run_cvd=shlex.quote(f"{plan.root}/runtime/host/bin/run_cvd")
+    config_patch=shlex.quote(r'''import hashlib,json,os,pathlib,stat,sys
+root=pathlib.Path(sys.argv[1]).resolve(strict=True); paths=(root/'runtime/assembly/cuttlefish_config.json',root/'runtime/instance/assembly/cuttlefish_config.json',root/'runtime/instance/instances/cvd-1/cuttlefish_config.json'); snapshots=[]; groups={}
+for p in paths:
+ try: target=p.resolve(strict=True); target.relative_to(root)
+ except (OSError,ValueError): raise SystemExit('generated config escaped owned root')
+ s=target.stat()
+ if not stat.S_ISREG(s.st_mode) or target.is_symlink(): raise SystemExit('generated config missing')
+ before=p.read_bytes(); d=json.loads(before); inst=d.get('instances',{}).get('1')
+ if not isinstance(inst,dict) or inst.get('external_network_mode')!='slirp' or (inst.get('ril_ipaddr'),inst.get('ril_gateway'),inst.get('ril_prefixlen'))!=('', '', 255): raise SystemExit('unexpected generated RIL config')
+ inst.update(ril_ipaddr='10.0.2.15',ril_gateway='10.0.2.2',ril_prefixlen=24,ril_dns='10.0.2.3')
+ after=(json.dumps(d,sort_keys=True,separators=(',',':'))+'\n').encode(); key=(s.st_dev,s.st_ino); snapshots.append((p,target,before,after,key)); groups.setdefault(key,(target,after,s))
+for target,after,s in groups.values():
+ tmp=target.with_name(target.name+'.ril-new'); fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,stat.S_IMODE(s.st_mode))
+ with os.fdopen(fd,'wb') as f:f.write(after);f.flush();os.fchmod(f.fileno(),stat.S_IMODE(s.st_mode));os.fchown(f.fileno(),s.st_uid,s.st_gid);os.fsync(f.fileno())
+ os.replace(tmp,target);d=os.open(target.parent,os.O_RDONLY|os.O_DIRECTORY);os.fsync(d);os.close(d)
+records=[]; corrected=None
+for p,target,before,after,key in snapshots:
+ observed=p.read_bytes(); digest=hashlib.sha256(observed).hexdigest(); corrected=corrected or digest
+ if observed!=after or digest!=corrected: raise SystemExit('generated config copies diverged after correction')
+ records.append({'path':str(p),'alias_target':str(target),'before_sha256':hashlib.sha256(before).hexdigest(),'after_sha256':digest,'size':len(observed),'ril_ipaddr':'10.0.2.15','ril_gateway':'10.0.2.2','ril_prefixlen':24,'ril_dns':'10.0.2.3'})
+receipt=(json.dumps({'schema':1,'records':records},sort_keys=True,separators=(',',':'))+'\n').encode(); rp=root/'runtime/ril-config-receipt.json'
+fd=os.open(rp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+with os.fdopen(fd,'wb') as f:f.write(receipt);f.flush();os.fsync(f.fileno())
+''')
+    return f'''#!/bin/sh
+set -eu
+umask 077
+root={shlex.quote(plan.root)}
+[ "$(cat "$root/marker")" = {shlex.quote(plan.marker)} ] || {{ echo marker-mismatch >&2; exit 70; }}
+cvd_entry=$(getent group cvdnetwork) || {{ echo cvdnetwork-missing >&2; exit 72; }}
+old_ifs=$IFS; IFS=:; set -- $cvd_entry; IFS=$old_ifs; cvd_gid=$3
+kvm_entry=$(getent group kvm) || {{ echo kvm-missing >&2; exit 72; }}
+old_ifs=$IFS; IFS=:; set -- $kvm_entry; IFS=$old_ifs; kvm_gid=$3
+case "$kvm_gid" in ''|*[!0-9]*) echo kvm-gid-invalid >&2; exit 72;; esac
+[ "$(stat -c '%F:%u:%g:%a' /dev/vhost-vsock)" = "character special file:0:$kvm_gid:660" ] || {{ echo vhost-vsock-identity >&2; exit 72; }}
+case "$cvd_gid" in ''|*[!0-9]*) echo cvdnetwork-gid-invalid >&2; exit 72;; esac
+id -G {plan.runtime_uid} | tr ' ' '\n' | grep -Fx "$cvd_gid" >/dev/null || {{ echo runtime-not-cvdnetwork-member >&2; exit 72; }}
+export HOME="$root/runtime/home" TMPDIR="$root/runtime/tmp" ANDROID_HOST_OUT="$root/runtime/host" ANDROID_PRODUCT_OUT="$root/runtime/images"
+export LD_LIBRARY_PATH="$root/runtime/private-libs:$root/runtime/qemu:$root/runtime/host/lib64:$root/runtime/host/lib" ADB_SERVER_SOCKET=tcp:localhost:{plan.adb_endpoint.rsplit(':',1)[1]}
+[ -d "$HOME" ] && [ -d "$TMPDIR" ] && [ -d "$root/runtime/instance" ] && [ -d "$root/runtime/assembly" ] && [ -d "$root/logs" ] || {{ echo runtime-directory-missing >&2; exit 71; }}
+[ "$(stat -c '%u:%g:%a' "$HOME")" = "{plan.runtime_uid}:{plan.runtime_uid}:700" ] && [ "$(stat -c '%u:%g:%a' "$TMPDIR")" = "{plan.runtime_uid}:{plan.runtime_uid}:700" ] && [ "$(stat -c '%u:%g:%a' "$root/runtime/instance")" = "{plan.runtime_uid}:{plan.runtime_uid}:700" ] && [ "$(stat -c '%u:%g:%a' "$root/runtime/assembly")" = "{plan.runtime_uid}:{plan.runtime_uid}:700" ] && [ "$(stat -c '%u:%g:%a' "$root/logs")" = "{plan.runtime_uid}:{plan.runtime_uid}:700" ] || {{ echo runtime-directory-identity >&2; exit 71; }}
+[ -x "$root/runtime/host/bin/launch_cvd" ] && [ -x "$root/runtime/host/bin/adb" ] && [ -x "$root/runtime/qemu/qemu-system-aarch64" ] || {{ echo executable-missing >&2; exit 71; }}
+setpriv --reuid={plan.runtime_uid} --regid={plan.runtime_uid} --groups "$cvd_gid" test -x "$root/runtime/host/bin/launch_cvd"
+setpriv --reuid={plan.runtime_uid} --regid={plan.runtime_uid} --groups "$cvd_gid" test -x "$root/runtime/host/bin/adb"
+setpriv --reuid={plan.runtime_uid} --regid={plan.runtime_uid} --groups "$cvd_gid,$kvm_gid" test -r /dev/vhost-vsock
+setpriv --reuid={plan.runtime_uid} --regid={plan.runtime_uid} --groups "$cvd_gid,$kvm_gid" test -w /dev/vhost-vsock
+setpriv --reuid={plan.runtime_uid} --regid={plan.runtime_uid} --groups "$cvd_gid,$kvm_gid" test -x "$root/runtime/qemu/qemu-system-aarch64"
+cgroup=/sys/fs/cgroup/amnezia-release-lab/{shlex.quote(plan.ownership.run_id)}/{shlex.quote(plan.ownership.attempt_nonce)}
+install -d -m 0755 "$cgroup"
+owned_exec='import os,sys; p=sys.argv[1]; a=sys.argv[2:]; fd=os.open(p,os.O_WRONLY); n=(str(os.getpid())+"\\n").encode(); w=os.write(fd,n); os.close(fd); w==len(n) or (_ for _ in ()).throw(OSError("short cgroup write")); os.execvp(a[0],a)'
+python3 -c "$owned_exec" "$cgroup/cgroup.procs" setpriv --reuid={plan.runtime_uid} --regid={plan.runtime_uid} --groups "$cvd_gid" "$ANDROID_HOST_OUT/bin/adb" -L tcp:localhost:{plan.adb_endpoint.rsplit(':',1)[1]} server nodaemon >"$root/logs/adb.stdout" 2>"$root/logs/adb.stderr" &
+printf '%s\n' "$!" >"$root/adb.pid"
+cd "$root/runtime"
+cat >"$root/runtime/start-cvd.sh" <<'AMNEZIA_CVD_START'
+#!/bin/sh
+set -eu
+{assemble_argv}
+/usr/bin/python3 -c {config_patch} {shlex.quote(plan.root)}
+exec {run_cvd}
+AMNEZIA_CVD_START
+chmod 0700 "$root/runtime/start-cvd.sh"
+chown {plan.runtime_uid}:{plan.runtime_uid} "$root/runtime/start-cvd.sh"
+python3 -c "$owned_exec" "$cgroup/cgroup.procs" setpriv --reuid={plan.runtime_uid} --regid={plan.runtime_uid} --groups "$cvd_gid,$kvm_gid" setsid "$root/runtime/start-cvd.sh" >"$root/logs/launch.stdout" 2>"$root/logs/launch.stderr" &
+printf '%s\n' "$!" >"$root/session-leader.pid"
+'''
+
+PROCESS_FIELDS=("pid","start_ticks","exe","exe_sha256","uid","groups","state","argv","cmdline_sha256","cgroup")
+def _proc(plan: InnerPlan, role: str, item: object, cgroup: str, cvd_gid: int, kvm_gid: int) -> int:
+    if not isinstance(item,Mapping) or any(k not in item for k in PROCESS_FIELDS): raise NestedCuttlefishError(f"incomplete {role} /proc identity")
+    expected_groups=[cvd_gid] if role=="adb" else sorted([cvd_gid,kvm_gid])
+    if (not isinstance(item["pid"],int) or item["pid"]<=1 or not isinstance(item["start_ticks"],int) or item["start_ticks"]<=0 or item["uid"]!=plan.runtime_uid
+            or (item["groups"] not in ([cvd_gid],sorted([cvd_gid,kvm_gid])) if role=="aux" else item["groups"]!=expected_groups) or item["cgroup"]!=cgroup):
+        raise NestedCuttlefishError(f"invalid {role} identity")
+    if item["state"] in {"Z","X","x"} or not SHA_RE.fullmatch(str(item["exe_sha256"])) or not SHA_RE.fullmatch(str(item["cmdline_sha256"])): raise NestedCuttlefishError(f"unhashed/dead {role}")
+    exe=str(item["exe"])
+    roots=(PurePosixPath(plan.root)/"runtime/qemu",PurePosixPath(plan.root)/"runtime/host/bin") if role=="aux" else \
+          (PurePosixPath(plan.root)/("runtime/qemu" if role=="qemu" else "runtime/host/bin"),)
+    argv=item["argv"]
+    trusted_launcher_shell=(role=="aux" and exe=="/usr/bin/dash" and item["exe_sha256"]==plan.trusted_shell_sha256
+        and argv==["/bin/sh",f"{plan.root}/runtime/start-cvd.sh"])
+    if not any(_under(exe,root) for root in roots) and not trusted_launcher_shell: raise NestedCuttlefishError(f"{role} executable escaped runtime")
+    if (not isinstance(argv,list) or not argv or not all(isinstance(x,str) and x for x in argv)
+            or (not any(_under(argv[0],root) for root in roots) and not trusted_launcher_shell)):
+        raise NestedCuttlefishError(f"{role} argv is invalid")
+    if role in {"cvd","adb","qemu"} and plan.root not in "\0".join(argv): raise NestedCuttlefishError(f"{role} argv is not root-bound")
+    token={"cvd":"cvd","adb":"adb","qemu":"qemu-system-aarch64"}.get(role)
+    if token and token not in PurePosixPath(exe).name.lower(): raise NestedCuttlefishError(f"unexpected {role} executable")
+    if role=="qemu" and str(plan.vsock_cid) not in "\0".join(argv): raise NestedCuttlefishError("QEMU vsock mismatch")
+    if role=="adb" and plan.adb_endpoint.rsplit(":",1)[1] not in "\0".join(argv): raise NestedCuttlefishError("ADB port mismatch")
+    return item["pid"]
+
+def validate_boot_receipt(plan: InnerPlan, receipt: Mapping) -> dict:
+    _common(plan,receipt,"nested-cuttlefish-boot")
+    containment=receipt.get("containment"); processes=receipt.get("processes"); roles=receipt.get("roles")
+    cvd_gid=receipt.get("cvdnetwork_gid");kvm_gid=receipt.get("kvm_gid");vhost=receipt.get("vhost_vsock")
+    if (isinstance(cvd_gid,bool) or not isinstance(cvd_gid,int) or cvd_gid<=0 or isinstance(kvm_gid,bool) or not isinstance(kvm_gid,int) or kvm_gid<=0
+            or not isinstance(vhost,Mapping) or vhost.get("path")!="/dev/vhost-vsock" or any(isinstance(vhost.get(k),bool) or not isinstance(vhost.get(k),int) or vhost[k]<=0 for k in ("dev","inode","rdev"))
+            or vhost.get("uid")!=0 or vhost.get("gid")!=kvm_gid or vhost.get("mode")!="0660" or vhost.get("char") is not True):
+        raise NestedCuttlefishError("cvdnetwork/kvm/vhost binding missing")
+    expected_cgroup=f"/amnezia-release-lab/{plan.ownership.run_id}/{plan.ownership.attempt_nonce}"
+    if not isinstance(containment,Mapping) or containment.get("kind")!="cgroup-v2" or containment.get("path")!=expected_cgroup or not isinstance(containment.get("stable_reads"),int) or containment["stable_reads"]<2: raise NestedCuttlefishError("owned cgroup containment missing")
+    if not isinstance(processes,list) or len(processes)<2 or not isinstance(roles,Mapping) or set(roles)!={"cvd","adb","qemu"} or (roles.get("cvd") is not None and roles.get("cvd") not in {x.get("pid") for x in processes if isinstance(x,Mapping)}): raise NestedCuttlefishError("complete process inventory/roles missing")
+    by_pid={x.get("pid"):x for x in processes if isinstance(x,Mapping)}
+    if len(by_pid)!=len(processes) or containment.get("member_pids")!=sorted(by_pid): raise NestedCuttlefishError("cgroup membership ambiguous")
+    for item in processes: _proc(plan,"aux",item,expected_cgroup,cvd_gid,kvm_gid)
+    pids=[_proc(plan,r,by_pid.get(roles[r]),expected_cgroup,cvd_gid,kvm_gid) for r in ("adb","qemu")]
+    if roles.get("cvd") is not None: pids.append(_proc(plan,"cvd",by_pid.get(roles["cvd"]),expected_cgroup,cvd_gid,kvm_gid))
+    if len(set(pids))!=len(pids): raise NestedCuttlefishError("role identities are ambiguous")
+    boot=receipt.get("boot")
+    if not isinstance(boot,Mapping) or boot.get("abi")!="arm64-v8a" or boot.get("boot_completed")!="1" or not ID_RE.fullmatch(str(boot.get("serial",""))): raise NestedCuttlefishError("ARM64 boot evidence incomplete")
+    try:
+        import uuid; uuid.UUID(str(boot.get("boot_id","")))
+    except ValueError as exc: raise NestedCuttlefishError("invalid boot ID") from exc
+    network=receipt.get("network")
+    if not isinstance(network,Mapping) or {k:network.get(k) for k in ("adb_listen","host_mutation","host_mounts")}!={"adb_listen":plan.adb_endpoint,"host_mutation":False,"host_mounts":[]}: raise NestedCuttlefishError("private transport mismatch")
+    netargv=network.get("qemu_netdev_argv"); ril=network.get("ril_config")
+    if not isinstance(netargv,list) or not netargv or any(not isinstance(x,str) or "net=/255" in x or "host=," in x for x in netargv): raise NestedCuttlefishError("QEMU network argv was not proven")
+    hostnet=[x for x in netargv if x.startswith("user,id=hostnet0,")]
+    if hostnet!=["user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"]: raise NestedCuttlefishError("QEMU hostnet0 differs from corrected config")
+    if not isinstance(ril,Mapping) or ril.get("schema")!=1 or not isinstance(ril.get("records"),list) or len(ril["records"])!=3: raise NestedCuttlefishError("RIL config receipt missing")
+    expected_paths={f"{plan.root}/runtime/assembly/cuttlefish_config.json",f"{plan.root}/runtime/instance/assembly/cuttlefish_config.json",f"{plan.root}/runtime/instance/instances/cvd-1/cuttlefish_config.json"}
+    if {x.get("path") for x in ril["records"] if isinstance(x,Mapping)}!=expected_paths: raise NestedCuttlefishError("RIL config paths are not exact")
+    for item in ril["records"]:
+        if (not isinstance(item,Mapping) or not SHA_RE.fullmatch(str(item.get("before_sha256","")))
+                or not SHA_RE.fullmatch(str(item.get("after_sha256",""))) or item.get("before_sha256")==item.get("after_sha256")
+                or not isinstance(item.get("size"),int) or isinstance(item.get("size"),bool) or item["size"]<=0
+                or not _under(str(item.get("alias_target","")),PurePosixPath(plan.root))
+                or (item.get("ril_ipaddr"),item.get("ril_gateway"),item.get("ril_prefixlen"),item.get("ril_dns"))!=("10.0.2.15","10.0.2.2",24,"10.0.2.3")): raise NestedCuttlefishError("RIL config binding invalid")
+    if len({x["before_sha256"] for x in ril["records"]})!=1 or len({x["after_sha256"] for x in ril["records"]})!=1: raise NestedCuttlefishError("generated config copies diverged")
+    connection=network.get("adb_connection"); binding=connection.get("binding") if isinstance(connection,Mapping) else None
+    if not isinstance(binding,Mapping) or not isinstance(binding.get("endpoint"),str) or not re.fullmatch(r"127\.0\.0\.1:([1-9][0-9]{3,4})",binding["endpoint"]): raise NestedCuttlefishError("derived ADB endpoint binding missing")
+    endpoint=binding["endpoint"]; guest_port=int(endpoint.rsplit(":",1)[1])
+    if guest_port>65535 or connection.get("endpoint")!=endpoint or boot.get("serial")!=endpoint.replace(":","_"): raise NestedCuttlefishError("derived ADB endpoint differs from boot")
+    config_rows=binding.get("config_rows")
+    if not isinstance(config_rows,list) or len(config_rows)!=3 or {x.get("path") for x in config_rows if isinstance(x,Mapping)}!=expected_paths: raise NestedCuttlefishError("ADB generated config bindings missing")
+    ril_by_path={x["path"]:x for x in ril["records"]}
+    for item in config_rows:
+        source=ril_by_path.get(item.get("path"))
+        if (not isinstance(item,Mapping) or source is None or item.get("sha256")!=source.get("after_sha256") or item.get("size")!=source.get("size")
+                or item.get("adb_host_port")!=guest_port or item.get("adb_ip_and_port")!=f"0.0.0.0:{guest_port}"): raise NestedCuttlefishError("ADB generated config binding invalid")
+    connector=by_pid.get(binding.get("connector_pid")); proxy=by_pid.get(binding.get("proxy_pid"))
+    connector_argv=[f"{plan.root}/runtime/host/bin/adb_connector",f"--addresses=0.0.0.0:{guest_port}"]
+    if connector is None or connector.get("argv")!=connector_argv or binding.get("connector_argv")!=connector_argv: raise NestedCuttlefishError("ADB connector process binding invalid")
+    if proxy is None or PurePosixPath(str(proxy.get("exe",""))).name!="socket_vsock_proxy" or binding.get("proxy_argv")!=proxy.get("argv"): raise NestedCuttlefishError("ADB vsock proxy process binding invalid")
+    proxy_flags={a[2:].split("=",1)[0]:a[2:].split("=",1)[1] for a in proxy["argv"][1:] if isinstance(a,str) and a.startswith("--") and "=" in a}
+    if {k:proxy_flags.get(k) for k in ("server_type","server_tcp_port","client_type","client_vsock_port","client_vsock_id","label")}!={"server_type":"tcp","server_tcp_port":str(guest_port),"client_type":"vsock","client_vsock_port":"5555","client_vsock_id":str(plan.vsock_cid),"label":"adb"}: raise NestedCuttlefishError("ADB vsock proxy argv binding invalid")
+    adb=f"{plan.root}/runtime/host/bin/adb"; server_port=plan.adb_endpoint.rsplit(":",1)[1]
+    expected_commands=([adb,"-P",server_port,"devices"],[adb,"-P",server_port,"connect",endpoint],[adb,"-P",server_port,"devices"])
+    for key,argv in zip(("before","connect","after"),expected_commands):
+        row=connection.get(key)
+        if (not isinstance(row,Mapping) or row.get("argv")!=argv or isinstance(row.get("exit_code"),bool) or row.get("exit_code")!=0
+                or any(isinstance(row.get(k),bool) or not isinstance(row.get(k),int) or not 0<=row[k]<=1_048_576 for k in ("stdout_size","stderr_size"))
+                or any(not SHA_RE.fullmatch(str(row.get(k,""))) for k in ("stdout_sha256","stderr_sha256"))
+                or any(not isinstance(row.get(k),str) or len(row[k])>4096 for k in ("stdout","stderr"))): raise NestedCuttlefishError("ADB connection command receipt invalid")
+    lines=connection["after"]["stdout"].splitlines(); devices=[x.split()[0] for x in lines[1:] if x.strip().endswith("device")]
+    if devices!=[endpoint]: raise NestedCuttlefishError("derived ADB device was not registered")
+    if receipt.get("vsock_cid")!=plan.vsock_cid or receipt.get("adb_endpoint")!=plan.adb_endpoint: raise NestedCuttlefishError("private transport mismatch")
+    dependency=receipt.get("runtime_dependency"); provision=dependency.get("group_provisioning") if isinstance(dependency,Mapping) else None; installed=dependency.get("installed") if isinstance(dependency,Mapping) else None
+    wayland_install=dependency.get("wayland_install") if isinstance(dependency,Mapping) else None;wayland_runtime=dependency.get("wayland_runtime") if isinstance(dependency,Mapping) else None
+    wayland_plan=object.__new__(WaylandDependencyPlan)
+    for key,value in (("run_id",plan.ownership.run_id),("profile",plan.ownership.profile),("attempt_nonce",plan.ownership.attempt_nonce),("runtime_uid",plan.runtime_uid),("outer",asdict(plan.ownership)),("qemu_sha256",plan.qemu_aarch64_sha256)):
+        object.__setattr__(wayland_plan,key,value)
+    qemu_path=f"{plan.root}/runtime/qemu/qemu-system-aarch64"
+    try:
+        validate_wayland_install(wayland_plan,wayland_install)
+        validate_wayland_runtime(wayland_plan,wayland_install,wayland_runtime,qemu_path)
+    except (TypeError,ValueError,RuntimeError) as exc:
+        raise NestedCuttlefishError("frozen Wayland runtime dependency evidence missing") from exc
+    loader=installed.get("loader") if isinstance(installed,Mapping) else None
+    commands=provision.get("commands") if isinstance(provision,Mapping) else None; group_files=provision.get("files") if isinstance(provision,Mapping) else None
+    if (not isinstance(dependency,Mapping) or not isinstance(provision,Mapping) or provision.get("schema")!=1
+            or provision.get("uid")!=plan.runtime_uid or provision.get("created") is not True or provision.get("member") is not True
+            or provision.get("cvdnetwork_gid")!=cvd_gid or provision.get("origin")!="guest" or provision.get("transport")!="qga" or provision.get("injected") is not False
+            or provision.get("kvm_modified") is not False or provision.get("vhost_modified") is not False
+            or not isinstance(group_files,list) or {x.get("path") for x in group_files if isinstance(x,Mapping)}!={"/etc/group","/etc/gshadow"}
+            or any(not SHA_RE.fullmatch(str(x.get(k,""))) for x in group_files for k in ("before_sha256","after_sha256"))
+            or any(x.get("before_sha256")==x.get("after_sha256") for x in group_files)
+            or not isinstance(commands,list) or [x.get("argv") for x in commands] != [["/usr/sbin/groupadd","--system","cvdnetwork"],["/usr/sbin/usermod","-aG","cvdnetwork",provision.get("user")]]
+            or any(x.get("exit_code")!=0 or not SHA_RE.fullmatch(str(x.get("exe_sha256",""))) for x in commands)
+            or not isinstance(dependency.get("stage"),Mapping)
+            or dependency["stage"].get("sha256")!=plan.vulkan_deb_sha256 or dependency["stage"].get("size")!=plan.vulkan_deb_size
+            or not isinstance(dependency["stage"].get("guest_root_identity"),Mapping)
+            or set(dependency["stage"]["guest_root_identity"])!={"dev","inode","uid","gid","mode"}
+            or any(isinstance(dependency["stage"]["guest_root_identity"].get(k),bool) or not isinstance(dependency["stage"]["guest_root_identity"].get(k),int) or dependency["stage"]["guest_root_identity"][k]<0 for k in ("dev","inode","uid","gid"))
+            or dependency["stage"]["guest_root_identity"].get("dev")<=0 or dependency["stage"]["guest_root_identity"].get("inode")<=0
+            or dependency["stage"]["guest_root_identity"].get("uid")!=0 or dependency["stage"]["guest_root_identity"].get("gid")!=0 or dependency["stage"]["guest_root_identity"].get("mode")!="0711"
+            or not isinstance(installed,Mapping) or installed.get("run_id")!=plan.ownership.run_id or installed.get("attempt_nonce")!=plan.ownership.attempt_nonce
+            or installed.get("origin")!="guest" or installed.get("transport")!="qga" or installed.get("injected") is not False
+            or not isinstance(loader,Mapping) or loader.get("path")!=f"{plan.root}/runtime/private-libs/libvulkan.so.1.3.275"
+            or loader.get("sha256")!=plan.vulkan_loader_sha256 or loader.get("size")!=plan.vulkan_loader_size
+            or loader.get("uid")!=0 or loader.get("mode")!="0644" or loader.get("directory_uid")!=0 or loader.get("directory_mode")!="0755"
+            or installed.get("dlopen") is not True or installed.get("vkGetInstanceProcAddr") is not True
+            or not isinstance(installed.get("graphics_detector"),Mapping)
+            or installed["graphics_detector"].get("exit_code")!=0 or installed["graphics_detector"].get("assertion") is not False
+            or installed["graphics_detector"].get("uid")!=plan.runtime_uid or installed["graphics_detector"].get("groups")!=[cvd_gid]
+            or not SHA_RE.fullmatch(str(installed["graphics_detector"].get("stdout_sha256","")))
+            or not SHA_RE.fullmatch(str(installed["graphics_detector"].get("stderr_sha256","")))
+            or any(isinstance(installed["graphics_detector"].get(k),bool) or not isinstance(installed["graphics_detector"].get(k),int) or not 0<=installed["graphics_detector"][k]<=16384 for k in ("stdout_size","stderr_size"))
+            or not isinstance(installed["graphics_detector"].get("output_file"),Mapping)
+            or installed["graphics_detector"]["output_file"].get("path")!=f"{plan.root}/runtime/graphics-probe/availability.pbtxt"
+            or installed["graphics_detector"]["output_file"].get("kind")!="regular"
+            or installed["graphics_detector"]["output_file"].get("uid")!=plan.runtime_uid
+            or installed["graphics_detector"]["output_file"].get("mode")!="0600"
+            or any(isinstance(installed["graphics_detector"]["output_file"].get(k),bool) or not isinstance(installed["graphics_detector"]["output_file"].get(k),int) or installed["graphics_detector"]["output_file"][k]<=0 for k in ("dev","inode","gid"))
+            or installed["graphics_detector"]["output_file"].get("eof") is not True
+            or not SHA_RE.fullmatch(str(installed["graphics_detector"]["output_file"].get("sha256","")))
+            or isinstance(installed["graphics_detector"]["output_file"].get("size"),bool) or not isinstance(installed["graphics_detector"]["output_file"].get("size"),int)
+            or not 0<=installed["graphics_detector"]["output_file"]["size"]<=1048576):
+        raise NestedCuttlefishError("frozen Vulkan runtime dependency evidence missing")
+    if receipt.get("passed") is not True: raise NestedCuttlefishError("boot failed")
+    return dict(receipt)
+
+def receipt_sha(receipt: Mapping) -> str:
+    return hashlib.sha256(json.dumps(dict(receipt),sort_keys=True,separators=(",",":")).encode()).hexdigest()
+
+def validate_app_update_receipt(plan: InnerPlan, boot: Mapping, receipt: Mapping) -> dict:
+    validate_boot_receipt(plan,boot); _common(plan,receipt,"nested-cuttlefish-app-update")
+    if receipt.get("boot_binding_sha256")!=receipt_sha(boot): raise NestedCuttlefishError("app receipt not bound to boot")
+    package=receipt.get("package_installer"); exact={"package":plan.apk.package,"version_code":plan.apk.version_code,"artifact_sha256":plan.apk.sha256,"artifact_size":plan.apk.size}
+    if not isinstance(package,Mapping) or any(package.get(k)!=v for k,v in exact.items()) or package.get("download_sha256")!=plan.apk.sha256 or not isinstance(package.get("session_id"),int) or isinstance(package.get("session_id"),bool) or package["session_id"]<0 or package.get("status")!="STATUS_SUCCESS" or package.get("method")!="PackageInstaller": raise NestedCuttlefishError("exact PackageInstaller evidence missing")
+    http=receipt.get("http")
+    if not isinstance(http,Mapping) or not ID_RE.fullmatch(str(http.get("fixture_nonce",""))) or not SHA_RE.fullmatch(str(http.get("manifest_sha256",""))): raise NestedCuttlefishError("authenticated HTTP evidence missing")
+    requests=http.get("requests"); paths=["/manifest.json",f"/files/artifacts/{plan.apk.sha256}/{quote(plan.apk.name,safe='-._~')}"]
+    if not isinstance(requests,list) or [x.get("path") for x in requests if isinstance(x,Mapping)]!=paths: raise NestedCuttlefishError("HTTP path/order mismatch")
+    for item in requests:
+        if item.get("method")!="GET" or item.get("status")!=200 or item.get("eof") is not True or not isinstance(item.get("bytes"),int) or item["bytes"]<=0 or not SHA_RE.fullmatch(str(item.get("sha256",""))): raise NestedCuttlefishError("HTTP transcript incomplete")
+    if requests[1]["bytes"]!=plan.apk.size or requests[1]["sha256"]!=plan.apk.sha256: raise NestedCuttlefishError("HTTP APK differs from plan")
+    ui=receipt.get("ui"); keys=("activity","window_id","window_title","package_pid","package_uid","version_code","screenshot_sha256")
+    if not isinstance(ui,Mapping) or any(not ui.get(k) for k in keys) or ui.get("package")!=plan.apk.package or ui.get("version_code")!=plan.apk.version_code or not SHA_RE.fullmatch(str(ui.get("screenshot_sha256",""))): raise NestedCuttlefishError("semantic UI evidence incomplete")
+    if ui.get("completion_action") not in ("Done","Open"):raise NestedCuttlefishError("exact completion action missing")
+    keyguards=ui.get("keyguard");policy_argv=["shell","dumpsys","window","policy"];phases=["installer-monkey","update-tap","install-tap","completion-tap","launch-monkey"]
+    if not isinstance(keyguards,list) or len(keyguards)!=len(phases) or [x.get("phase") for x in keyguards if isinstance(x,Mapping)]!=phases:raise NestedCuttlefishError("keyguard readiness evidence missing")
+    def policy(row):
+        raw=row.get("raw") if isinstance(row,Mapping) else None
+        if (not isinstance(row,Mapping) or row.get("argv")!=policy_argv or not isinstance(row.get("showing"),bool) or not isinstance(row.get("secure"),bool)
+                or not isinstance(raw,Mapping) or raw.get("origin")!="guest" or raw.get("transport")!="qga-adb" or raw.get("path")!="adb:keyguard-policy"
+                or not isinstance(raw.get("size"),int) or isinstance(raw.get("size"),bool) or not 0<raw["size"]<=65536 or not SHA_RE.fullmatch(str(raw.get("sha256",""))) or not isinstance(raw.get("bytes_b64"),str)):raise NestedCuttlefishError("keyguard policy evidence invalid")
+        try:data=base64.b64decode(raw["bytes_b64"],validate=True)
+        except Exception as exc:raise NestedCuttlefishError("keyguard policy bytes invalid") from exc
+        if len(data)!=raw["size"] or hashlib.sha256(data).hexdigest()!=raw["sha256"]:raise NestedCuttlefishError("keyguard policy bytes mismatch")
+        text=data.decode("utf-8","replace");showing=re.findall(r"(?m)^\s*showing=(true|false)\s*$",text);secure=re.findall(r"(?m)^\s*secure=(true|false)\s*$",text)
+        if showing!=[str(row["showing"]).lower()] or secure!=[str(row["secure"]).lower()]:raise NestedCuttlefishError("keyguard policy semantic mismatch")
+    for entry in keyguards:
+        if set(entry)!={"phase","receipt"}:raise NestedCuttlefishError("keyguard readiness evidence missing")
+        keyguard=entry["receipt"]
+        if not isinstance(keyguard,Mapping) or set(keyguard)!={"before","commands","after","passed"} or keyguard.get("passed") is not True:raise NestedCuttlefishError("keyguard readiness evidence missing")
+        policy(keyguard["before"]);policy(keyguard["after"])
+        expected_commands=[] if keyguard["before"]["showing"] is False else [["shell","wm","dismiss-keyguard"],["shell","input","keyevent","82"]]
+        if keyguard["before"]["secure"] or keyguard["after"]["secure"] or keyguard["after"]["showing"] or [x.get("argv") for x in keyguard["commands"] if isinstance(x,Mapping)]!=expected_commands:raise NestedCuttlefishError("keyguard was not safely dismissed")
+        for command in keyguard["commands"]:
+            raw=command.get("raw") if isinstance(command,Mapping) else None
+            if (set(command)!={"argv","exit_code","raw"} or command.get("exit_code")!=0 or not isinstance(raw,Mapping) or raw.get("origin")!="guest" or raw.get("transport")!="qga-adb"
+                    or raw.get("path")!="adb:keyguard-command" or not isinstance(raw.get("size"),int) or isinstance(raw.get("size"),bool) or not 0<=raw["size"]<=65536 or not SHA_RE.fullmatch(str(raw.get("sha256",""))) or not isinstance(raw.get("bytes_b64"),str)):raise NestedCuttlefishError("keyguard command evidence invalid")
+            try:data=base64.b64decode(raw["bytes_b64"],validate=True)
+            except Exception as exc:raise NestedCuttlefishError("keyguard command bytes invalid") from exc
+            if len(data)!=raw["size"] or hashlib.sha256(data).hexdigest()!=raw["sha256"]:raise NestedCuttlefishError("keyguard command bytes mismatch")
+    focus=ui.get("focus_observations");focus_argv=["shell","dumpsys","activity","top-resumed"]
+    if (not isinstance(focus,list) or not 1<=len(focus)<=3
+            or any(not isinstance(row,Mapping) or set(row)!={"argv","exit_code","timed_out","size","sha256","relevant_lines","matches"} or row.get("argv")!=focus_argv
+                   or row.get("exit_code") not in (0,124) or row.get("timed_out") is not (row.get("exit_code")==124)
+                   or not isinstance(row.get("size"),int) or isinstance(row.get("size"),bool) or not 0<=row["size"]<=6144 or (row["exit_code"]==0 and row["size"]==0)
+                   or not SHA_RE.fullmatch(str(row.get("sha256",""))) or not isinstance(row.get("relevant_lines"),str) or len(row["relevant_lines"])>4096
+                   or not isinstance(row.get("matches"),list) or len(row["matches"])>32 for row in focus)):
+        raise NestedCuttlefishError("bounded foreground observation missing")
+    final_matches=focus[-1]["matches"]
+    top=final_matches[0] if len(final_matches)==1 else None
+    if (focus[-1]["exit_code"]!=0 or not isinstance(top,Mapping) or set(top)!={"package","component","pid","uid"}
+            or top.get("package")!=plan.apk.package or not isinstance(top.get("component"),str) or not top["component"]
+            or not isinstance(top.get("pid"),int) or isinstance(top.get("pid"),bool) or top["pid"]<=0
+            or not isinstance(top.get("uid"),int) or isinstance(top.get("uid"),bool) or top["uid"]<=0
+            or ui.get("package_pid")!=top["pid"] or ui.get("package_uid")!=top["uid"] or ui.get("window_id")!=f"activity-top:{top['pid']}"):
+        raise NestedCuttlefishError("exact activity-top binding missing")
+    launch=ui.get("launch_probe");launch_output=launch.get("output") if isinstance(launch,Mapping) else None;launch_argv=["shell","monkey","-p",plan.apk.package,"1"]
+    if (not isinstance(launch,Mapping) or launch.get("argv")!=launch_argv or launch.get("exit_code")!=0 or not isinstance(launch_output,Mapping)
+            or launch_output.get("origin")!="guest" or launch_output.get("transport")!="qga-adb" or launch_output.get("path")!="adb:candidate-monkey"
+            or not isinstance(launch_output.get("size"),int) or isinstance(launch_output.get("size"),bool) or not 0<=launch_output["size"]<=65536
+            or not SHA_RE.fullmatch(str(launch_output.get("sha256",""))) or not isinstance(launch_output.get("bytes_b64"),str)):
+        raise NestedCuttlefishError("bounded app launch command evidence missing")
+    try: launch_bytes=base64.b64decode(launch_output["bytes_b64"],validate=True)
+    except Exception as exc: raise NestedCuttlefishError("app launch command bytes invalid") from exc
+    if len(launch_bytes)!=launch_output["size"] or hashlib.sha256(launch_bytes).hexdigest()!=launch_output["sha256"]: raise NestedCuttlefishError("app launch command bytes mismatch")
+    state=ui.get("package_state");dumpsys=state.get("dumpsys") if isinstance(state,Mapping) else None;uid_lookup=state.get("uid_lookup") if isinstance(state,Mapping) else None
+    expected_dumpsys=["shell","dumpsys","package",plan.apk.package];expected_uid=["shell","cmd","package","list","packages","-U",plan.apk.package]
+    if (not isinstance(state,Mapping) or state.get("version_code")!=plan.apk.version_code or state.get("uid")!=ui.get("package_uid")
+            or not isinstance(dumpsys,Mapping) or dumpsys.get("argv")!=expected_dumpsys or dumpsys.get("exit_code")!=0
+            or not isinstance(uid_lookup,Mapping) or uid_lookup.get("argv")!=expected_uid or uid_lookup.get("exit_code")!=0): raise NestedCuttlefishError("package state command binding missing")
+    for command in (dumpsys,uid_lookup):
+        raw=command.get("output")
+        if (not isinstance(raw,Mapping) or raw.get("origin")!="guest" or raw.get("transport")!="qga-adb" or not isinstance(raw.get("size"),int) or isinstance(raw.get("size"),bool) or not 0<raw["size"]<=(1<<20)
+                or not SHA_RE.fullmatch(str(raw.get("sha256",""))) or not isinstance(raw.get("bytes_b64"),str)):
+            raise NestedCuttlefishError("package state bounded command evidence missing")
+        try: decoded=base64.b64decode(raw["bytes_b64"],validate=True)
+        except Exception as exc: raise NestedCuttlefishError("package state command bytes invalid") from exc
+        if len(decoded)!=raw["size"] or hashlib.sha256(decoded).hexdigest()!=raw["sha256"]: raise NestedCuttlefishError("package state command bytes mismatch")
+    dumpsys_bytes=base64.b64decode(dumpsys["output"]["bytes_b64"],validate=True);dump_versions=[int(x) for x in re.findall(rb"versionCode=(\d+)",dumpsys_bytes)]
+    if dump_versions!=[plan.apk.version_code]: raise NestedCuttlefishError("package version evidence mismatch")
+    uid_lines=base64.b64decode(uid_lookup["output"]["bytes_b64"],validate=True).decode("utf-8","strict").splitlines()
+    if uid_lines!=[f"package:{plan.apk.package} uid:{ui['package_uid']}"] or not isinstance(ui.get("package_uid"),int) or isinstance(ui.get("package_uid"),bool) or ui["package_uid"]<=0: raise NestedCuttlefishError("package UID evidence mismatch")
+    log=receipt.get("logcat")
+    if not isinstance(log,Mapping) or not log.get("started_at") or not log.get("finished_at") or not SHA_RE.fullmatch(str(log.get("sha256",""))) or log.get("crashes")!=[]: raise NestedCuttlefishError("bounded crash-free logcat missing")
+    if receipt.get("passed") is not True: raise NestedCuttlefishError("app/update failed")
+    return dict(receipt)
+
+def validate_runtime_receipt(plan: InnerPlan, receipt: Mapping) -> dict:
+    """Legacy name now validates boot only; it cannot imply app acceptance."""
+    return validate_boot_receipt(plan,receipt)
+
+def build_cleanup_script(plan: InnerPlan, boot: Mapping) -> str:
+    validate_boot_receipt(plan,boot)
+    payload=repr(json.dumps({"root":plan.root,"root_identity":boot["runtime_dependency"]["stage"]["guest_root_identity"],"marker":plan.marker,"uid":plan.runtime_uid,"containment":boot["containment"],"processes":boot["processes"]},sort_keys=True,separators=(",",":")))
+    return '''#!/usr/bin/env python3
+import hashlib,json,os,pathlib,signal,stat,time
+e=json.loads(%s); root=pathlib.Path(e['root'])
+root_fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW); root_stat=os.fstat(root_fd);root_identity=(root_stat.st_dev,root_stat.st_ino,root_stat.st_uid,root_stat.st_gid,format(stat.S_IMODE(root_stat.st_mode),'04o'))
+expected_root=e['root_identity']
+if root_identity!=(expected_root['dev'],expected_root['inode'],expected_root['uid'],expected_root['gid'],expected_root['mode']): raise SystemExit('owned root identity changed before cleanup')
+marker_fd=os.open('marker',os.O_RDONLY|os.O_NOFOLLOW,dir_fd=root_fd)
+try: marker=os.read(marker_fd,4096).decode()
+finally: os.close(marker_fd)
+if marker!=e['marker']: raise SystemExit('marker mismatch')
+def ident(pid):
+ p=pathlib.Path('/proc')/str(pid); raw=p.joinpath('stat').read_text(); fields=raw[raw.rfind(')')+2:].split(); cmd=p.joinpath('cmdline').read_bytes(); exe=p.joinpath('exe').resolve(strict=True)
+ cgroups=[line.split(':',2)[-1] for line in p.joinpath('cgroup').read_text().splitlines() if line.startswith('0::')]
+ return {'pid':pid,'start_ticks':int(fields[19]),'state':fields[0],'uid':p.joinpath('status').stat().st_uid,'exe':str(exe),'exe_sha256':hashlib.sha256(exe.read_bytes()).hexdigest(),'cmdline_sha256':hashlib.sha256(cmd).hexdigest(),'cgroup':cgroups[0] if len(cgroups)==1 else ''}
+def check(item):
+ cur=ident(item['pid'])
+ for key in ('pid','start_ticks','uid','exe','exe_sha256','cmdline_sha256','cgroup'):
+  if cur[key]!=item[key]: raise SystemExit('process identity changed: '+key)
+ return cur
+items=list(e['processes']); known={x['pid'] for x in items}
+cgroup_file=pathlib.Path('/sys/fs/cgroup'+e['containment']['path'])/'cgroup.procs'
+actual={int(x) for x in cgroup_file.read_text().split()}
+if actual!=known: raise SystemExit('owned cgroup membership is uncertain')
+for item in sorted(items,key=lambda x:x['pid'],reverse=True): check(item); os.kill(item['pid'],signal.SIGTERM)
+deadline=time.monotonic()+30
+for item in items:
+ while time.monotonic()<deadline:
+  try:
+   if ident(item['pid'])['state']=='Z': break
+  except OSError: break
+  time.sleep(.1)
+ else:
+  check(item); os.kill(item['pid'],signal.SIGKILL); end=time.monotonic()+10
+  while time.monotonic()<end:
+   try:
+    if ident(item['pid'])['state']=='Z': break
+   except OSError: break
+   time.sleep(.1)
+  else: raise SystemExit('owned process did not stop')
+# Bind every stale UNIX socket under the authenticated root before deleting any.
+sockets=[]
+for parent,dirs,files,parent_fd in os.fwalk('.',topdown=True,follow_symlinks=False,dir_fd=root_fd):
+ for name in files:
+  st=os.stat(name,dir_fd=parent_fd,follow_symlinks=False)
+  if stat.S_ISSOCK(st.st_mode): sockets.append((str(pathlib.PurePosixPath(parent)/name),st.st_dev,st.st_ino,st.st_uid,st.st_gid,stat.S_IMODE(st.st_mode)))
+def parent_fd_for(rel):
+ fd=os.dup(root_fd)
+ try:
+  for part in pathlib.PurePosixPath(rel).parts[:-1]:
+   nxt=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd);os.close(fd);fd=nxt
+  return fd
+ except BaseException:
+  os.close(fd);raise
+for rel,dev,ino,uid,gid,mode in sockets:
+ pfd=parent_fd_for(rel)
+ try:
+  name=pathlib.PurePosixPath(rel).name;st=os.stat(name,dir_fd=pfd,follow_symlinks=False)
+  if (st.st_dev,st.st_ino,st.st_uid,st.st_gid,stat.S_IMODE(st.st_mode))!=(dev,ino,uid,gid,mode) or not stat.S_ISSOCK(st.st_mode): raise SystemExit('owned socket identity changed')
+  os.unlink(name,dir_fd=pfd);os.fsync(pfd)
+ finally: os.close(pfd)
+root_now=os.fstat(root_fd)
+if (root_now.st_dev,root_now.st_ino,root_now.st_uid,root_now.st_gid,format(stat.S_IMODE(root_now.st_mode),'04o'))!=root_identity: raise SystemExit('owned root identity changed')
+os.unlink('marker',dir_fd=root_fd);os.fsync(root_fd);os.close(root_fd)
+print(json.dumps({'terminated_pids':sorted(known),'all_stopped':True,'marker_removed':True,'removed_sockets':len(sockets)}))
+''' % payload
+
+def validate_cleanup_receipt(plan: InnerPlan, receipt: Mapping, boot: Mapping) -> dict:
+    validate_boot_receipt(plan,boot); _common(plan,receipt,"nested-cuttlefish-cleanup")
+    expected=sorted(x["pid"] for x in boot["processes"]); observed=receipt.get("terminated_pids")
+    if not isinstance(observed,list) or any(not isinstance(x,int) or isinstance(x,bool) or x<=1 for x in observed) or observed!=expected: raise NestedCuttlefishError("cleanup PID set mismatch")
+    stopped=receipt.get("stopped_identities")
+    if not isinstance(stopped,list) or sorted(x.get("pid") for x in stopped if isinstance(x,Mapping))!=expected or any(x.get("stopped") is not True for x in stopped): raise NestedCuttlefishError("stopped identity evidence missing")
+    if receipt.get("unknown_survivors")!=[] or receipt.get("owned_sockets_remaining")!=[] or receipt.get("all_stopped") is not True or receipt.get("marker_removed") is not True or receipt.get("passed") is not True: raise NestedCuttlefishError("cleanup is incomplete or uncertain")
+    return dict(receipt)
