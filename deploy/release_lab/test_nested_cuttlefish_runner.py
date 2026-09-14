@@ -130,9 +130,11 @@ def app()->dict:
       "connect":{"argv":["shell","toybox","nc","-z","-w","5","10.8.1.0","17865"],"exit_code":0,"timed_out":False,"output":raw("adb:fixture-preflight-connect",""),"stderr":raw("adb:fixture-preflight-connect-stderr","")},
       "fixture_request":{"method":"GET","path":"/healthz","status":200,"sha256":hashlib.sha256(health_bytes).hexdigest(),"bytes":len(health_bytes),"content_length":len(health_bytes),"eof":True,"peer":"10.0.2.15","observed_at":99.0,"run_id":"run-1","attempt_nonce":"nonce-1"}}
     pf=result["diagnostic_preflight"];request_text="GET /healthz HTTP/1.1\r\nHost: 10.8.1.0:17865\r\nConnection: close\r\n\r\n";response=f"HTTP/1.1 200 OK\r\nContent-Length: {len(health_bytes)}\r\nConnection: close\r\n\r\n{health_text}"
-    pf["healthz"]={"argv":["shell","sh","-c","printf 'GET /healthz HTTP/1.1\\r\\nHost: 10.8.1.0:17865\\r\\nConnection: close\\r\\n\\r\\n' | toybox nc -w 8 10.8.1.0 17865"],"exit_code":0,"timed_out":False,"output":raw("adb:fixture-preflight-healthz",response),"stderr":raw("adb:fixture-preflight-healthz-stderr","")}
+    request_b64=base64.b64encode(request_text.encode("ascii")).decode("ascii");pf["healthz"]={"argv":["shell","sh","-c",shlex.quote(f"echo {request_b64} | toybox base64 -d | toybox nc -w 3 10.8.1.0 17865")],"exit_code":0,"timed_out":False,"output":raw("adb:fixture-preflight-healthz",response),"stderr":raw("adb:fixture-preflight-healthz-stderr","")}
     for label,argv,out in (("link",["shell","ip","-details","link","show"],"2: eth0: UP\n"),("capability",["shell","toybox","nc","--help"],"usage: nc [-w SEC] HOST PORT\n"),("ril_state",["shell","getprop","init.svc.vendor.ril-daemon"],"running\n"),("ril_log",["shell","logcat","-d","-t","200","-v","threadtime","-b","main","-b","system","-b","events","RIL*:V","libcuttlefish-rild:V","init:I","*:S"],"")):pf[label]={"argv":argv,"exit_code":0,"timed_out":False,"output":raw("adb:fixture-preflight-"+label,out),"stderr":raw("adb:fixture-preflight-"+label+"-stderr","")}
     pf["health_body"]=raw("adb:fixture-preflight-health-body",health_text)
+    commands={k:v for k,v in pf.items() if k not in ("fixture_request","health_body")};attempt={"index":1,"commands":commands,"capture_error":None,"health_result":json.loads(health_text),"health_body":pf["health_body"],"fixture_request":pf["fixture_request"],"ready":True}
+    result["diagnostic_preflight"]={"window_seconds":35,"attempt_limit":3,"attempts":[attempt],"selected_attempt":1,"commands":commands,"fixture_request":pf["fixture_request"],"health_body":pf["health_body"]};pf=result["diagnostic_preflight"]
     result["package_installer"]["session_evidence"]={"before":raw("adb:dumpsys-package-installs",""),"after":[raw("adb:dumpsys-package-installs","Session 7:\n  mAppPackageName=org.amnezia.vpn\n  mFinalStatus=1\n")]}
     policy=["shell","dumpsys","window","policy"]
     before_raw=raw("adb:keyguard-policy","KeyguardServiceDelegate:\n  showing=true\n  inputRestricted=true\n  simSecure=false");after_raw=raw("adb:keyguard-policy","KeyguardServiceDelegate:\n  showing=false\n  inputRestricted=false\n  simSecure=false")
@@ -269,15 +271,15 @@ def test_boot_is_only_boot_and_requires_complete_stable_cgroup_inventory():
 def test_app_pass_needs_exact_apk_http_packageinstaller_ui_and_logcat():
     assert validate_app_update_receipt(plan(),boot(),app())["passed"]
 def test_preflight_diagnostic_rc2_is_allowed_but_health_remains_strict():
-    p=plan();r=app();r["diagnostic_preflight"]["route"]["exit_code"]=2
+    p=plan();r=app();r["diagnostic_preflight"]["commands"]["route"]["exit_code"]=2
     assert validate_app_update_receipt(p,boot(),r)["passed"]
-    r=app();r["diagnostic_preflight"]["healthz"]["exit_code"]=2
+    r=app();r["diagnostic_preflight"]["commands"]["healthz"]["exit_code"]=2
     with pytest.raises(NestedCuttlefishError,match="semantic mismatch"):validate_app_update_receipt(p,boot(),r)
 @pytest.mark.parametrize("tamper",["raw-extra","raw-oversize","request-hash","request-size"])
 def test_preflight_raw_and_health_cross_binding_tamper_fails(tamper):
     p=plan();r=app()
-    if tamper=="raw-extra":r["diagnostic_preflight"]["route"]["output"]["extra"]=1
-    elif tamper=="raw-oversize":r["diagnostic_preflight"]["route"]["output"]["size"]=65537
+    if tamper=="raw-extra":r["diagnostic_preflight"]["commands"]["route"]["output"]["extra"]=1
+    elif tamper=="raw-oversize":r["diagnostic_preflight"]["commands"]["route"]["output"]["size"]=65537
     elif tamper=="request-hash":r["diagnostic_preflight"]["fixture_request"]["sha256"]="0"*64
     else:r["diagnostic_preflight"]["fixture_request"]["bytes"]+=1
     with pytest.raises(NestedCuttlefishError):validate_app_update_receipt(p,boot(),r)

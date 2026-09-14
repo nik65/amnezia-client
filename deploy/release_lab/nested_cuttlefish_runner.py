@@ -197,6 +197,89 @@ def _common(plan: InnerPlan, receipt: Mapping, operation: str) -> None:
         raise NestedCuttlefishError("receipt is not authentic guest QGA evidence")
     if receipt.get("outer_ownership") != asdict(plan.ownership): raise NestedCuttlefishError("outer ownership binding mismatch")
 
+def validate_native_crash_evidence(receipt: Mapping) -> dict:
+    if not isinstance(receipt,Mapping) or receipt.get("schema")!=2 or set(receipt)!={"schema","package","expected_pid","observed_pid","launch_epoch","sources"}: raise NestedCuttlefishError("native crash evidence schema invalid")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+",str(receipt.get("package",""))):raise NestedCuttlefishError("native crash package invalid")
+    if isinstance(receipt.get("expected_pid"),bool) or not isinstance(receipt.get("expected_pid"),int) or receipt["expected_pid"]<=0: raise NestedCuttlefishError("native crash expected PID invalid")
+    observed=receipt.get("observed_pid")
+    if observed is not None and (isinstance(observed,bool) or not isinstance(observed,int) or observed<=0): raise NestedCuttlefishError("native crash observed PID invalid")
+    epoch=str(receipt.get("launch_epoch",""))
+    if not re.fullmatch(r"\d{10,}(?:\.\d{3})?",epoch): raise NestedCuttlefishError("native crash epoch invalid")
+    sources=receipt.get("sources")
+    if not isinstance(sources,list) or not 14<=len(sources)<=15: raise NestedCuttlefishError("native crash source count invalid")
+    required=("crash","all-since-launch","tombstone-metadata","dropbox-data-app-native-crash","dropbox-data-app-crash","dropbox-system-tombstone","dropbox-system-tombstone-proto","dropbox-system-tombstone-proto-with-headers","capability-shell-id","capability-build-type","capability-debuggable","capability-secure","capability-debug-tools","capability-run-as")
+    if tuple(x.get("label") if isinstance(x,Mapping) else None for x in sources[:14])!=required: raise NestedCuttlefishError("native crash source order invalid")
+    metadata_script='for f in /data/tombstones/tombstone_*; do [ -e "$f" ] || continue; if [ -f "$f" ] && [ -r "$f" ]; then r=1; else r=0; fi; stat -Lc "%n|%F|%d|%i|%u|%g|%a|%s|%Y|$r" "$f" 2>&1; done'
+    tool_script='for f in /system/bin/debuggerd /system/bin/crash_dump64 /system/bin/lldb-server /apex/com.android.runtime/bin/lldb-server /data/local/tmp/lldb-server; do if [ -e "$f" ]; then stat -c "%n|%F|%u|%g|%a|%s" "$f" 2>&1; sha256sum "$f" 2>&1; else printf "%s|missing\\n" "$f"; fi; done'
+    expected={"crash":["logcat","-b","crash","-d","-T",epoch,"-v","threadtime"],"all-since-launch":["logcat","-b","all","-d","-T",epoch,"-t","1200","-v","threadtime"],"tombstone-metadata":["shell","sh","-c",metadata_script],"capability-shell-id":["shell","id"],"capability-build-type":["shell","getprop","ro.build.type"],"capability-debuggable":["shell","getprop","ro.debuggable"],"capability-secure":["shell","getprop","ro.secure"],"capability-debug-tools":["shell","sh","-c",tool_script],"capability-run-as":["shell","run-as",receipt.get("package"),"id"]}
+    for tag in ("data_app_native_crash","data_app_crash","SYSTEM_TOMBSTONE","SYSTEM_TOMBSTONE_PROTO","SYSTEM_TOMBSTONE_PROTO_WITH_HEADERS"):expected["dropbox-"+tag.lower().replace("_","-")]=["shell","dumpsys","dropbox","--print",tag]
+    caps={"crash":262144,"all-since-launch":1048576,"tombstone-metadata":131072,**{x:524288 for x in required[3:8]},**{x:16384 for x in ("capability-shell-id","capability-run-as")},**{x:4096 for x in ("capability-build-type","capability-debuggable","capability-secure")},"capability-debug-tools":131072,"tombstone-bytes":524288,"tombstone-rejected":524288}
+    def bounded_bytes(value,cap):
+        if not isinstance(value,Mapping) or isinstance(value.get("size"),bool) or not isinstance(value.get("size"),int) or not 0<=value["size"]<=cap or not SHA_RE.fullmatch(str(value.get("sha256",""))):return False
+        if value.get("bytes_b64") is not None:
+            try:data=base64.b64decode(value["bytes_b64"],validate=True)
+            except Exception:return False
+            return len(data)==value["size"] and hashlib.sha256(data).hexdigest()==value["sha256"]
+        try:excerpt=base64.b64decode(value.get("excerpt_b64",""),validate=True)
+        except Exception:return False
+        return value.get("complete") is False and value.get("excerpt_size")==len(excerpt) and len(excerpt)<=4096 and hashlib.sha256(excerpt).hexdigest()==value.get("excerpt_sha256")
+    def bounded_command(row):
+        command=row.get("bounded_command")
+        if not isinstance(command,Mapping) or not set(command)<=set(("argv","exit_code","capture_transport","capture_metadata","stdout","stderr")) or not isinstance(command.get("argv"),list) or command["argv"][-len(row["argv"]):]!=row["argv"]:return False
+        prefix=command["argv"][:-len(row["argv"])]
+        if len(prefix)!=5 or not isinstance(prefix[0],str) or not prefix[0].endswith("/runtime/host/bin/adb") or prefix[1]!="-P" or not re.fullmatch(r"\d{1,5}",str(prefix[2])) or prefix[3]!="-s" or not re.fullmatch(r"127\.0\.0\.1:\d{1,5}",str(prefix[4])):return False
+        rc=command.get("exit_code")
+        if rc is not None and (isinstance(rc,bool) or not isinstance(rc,int)):return False
+        for key in ("stdout","stderr"):
+            value=command.get(key)
+            if value is not None and not bounded_bytes(value,caps[row["label"]]+1):return False
+        transport=command.get("capture_transport")
+        if transport is not None and (not isinstance(transport,Mapping) or set(transport)!={"stdout","stderr"} or not bounded_bytes(transport["stdout"],65536) or not bounded_bytes(transport["stderr"],65536)):return False
+        meta=command.get("capture_metadata")
+        if meta is not None and (not isinstance(meta,Mapping) or set(meta)!={"path","exit_code","timed_out","size","sha256"} or not isinstance(meta.get("path"),str) or isinstance(meta.get("size"),bool) or not isinstance(meta.get("size"),int) or meta["size"]<0 or not SHA_RE.fullmatch(str(meta.get("sha256",""))) or meta.get("timed_out") is not (meta.get("exit_code")==124)):return False
+        return True
+    for row in sources:
+        if not isinstance(row,Mapping) or row.get("label") not in caps or not isinstance(row.get("argv"),list): raise NestedCuttlefishError("native crash source invalid")
+        label=row["label"]
+        if label in expected:
+            argv=expected[label]
+            if label=="capability-run-as":argv=["shell","run-as",str(receipt.get("package","")),"id"]
+            if row["argv"]!=argv:raise NestedCuttlefishError("native crash argv binding invalid")
+        elif label in ("tombstone-bytes","tombstone-rejected"):
+            metadata=row.get("metadata");path=metadata.get("path") if isinstance(metadata,Mapping) else None
+            read_script='exec 3<"$1" || exit 40; stat -Lc "AMNEZIA_FD|%F|%d|%i|%u|%g|%a|%s|%Y" /proc/self/fd/3 || exit 41; cat <&3'
+            if not re.fullmatch(r"/data/tombstones/tombstone_\d+",str(path)) or row["argv"]!=["shell","sh","-c",read_script,"amnezia-tombstone",path]:raise NestedCuttlefishError("native crash tombstone argv invalid")
+        output=row.get("output")
+        if output is not None:
+            allowed={"label","argv","exit_code","timed_out","output"}|({"metadata"} if label=="tombstone-bytes" else set())
+            if set(row)!=allowed:raise NestedCuttlefishError("native crash source fields invalid")
+            if set(output)!={"origin","transport","path","size","sha256","bytes_b64"} or output.get("origin")!="guest" or output.get("transport")!="qga-adb" or output.get("path")!="adb:native-crash-"+label or not isinstance(output.get("size"),int) or isinstance(output.get("size"),bool) or not 0<=output["size"]<=caps[row["label"]] or not SHA_RE.fullmatch(str(output.get("sha256",""))): raise NestedCuttlefishError("native crash raw bound invalid")
+            try: raw=base64.b64decode(output.get("bytes_b64",""),validate=True)
+            except Exception as exc: raise NestedCuttlefishError("native crash raw encoding invalid") from exc
+            rc=row.get("exit_code")
+            if len(raw)!=output["size"] or hashlib.sha256(raw).hexdigest()!=output["sha256"] or isinstance(rc,bool) or not isinstance(rc,int) or not 0<=rc<=255 or row.get("timed_out") is not (rc==124): raise NestedCuttlefishError("native crash source outcome invalid")
+        elif label=="tombstone-rejected":
+            if set(row)!={"label","argv","exit_code","timed_out","metadata","raw_size","raw_sha256","reason"} or row.get("reason")!="fd-identity-or-pid-mismatch" or isinstance(row.get("raw_size"),bool) or not isinstance(row.get("raw_size"),int) or not 0<=row["raw_size"]<=caps[label] or not SHA_RE.fullmatch(str(row.get("raw_sha256",""))):raise NestedCuttlefishError("native crash tombstone rejection invalid")
+        else:
+            error=row.get("capture_error")
+            allowed={"label","argv","capture_error","bounded_command"}|({"metadata"} if label=="tombstone-bytes" else set())
+            if set(row)!=allowed or not isinstance(error,Mapping) or set(error)!={"type","sha256"} or not isinstance(error.get("type"),str) or not error["type"] or not SHA_RE.fullmatch(str(error.get("sha256",""))) or not bounded_command(row): raise NestedCuttlefishError("native crash capture failure durability invalid")
+    tomb=[x for x in sources if x.get("label") in ("tombstone-bytes","tombstone-rejected")]
+    if len(tomb)>1:raise NestedCuttlefishError("multiple tombstone outcomes")
+    if tomb:
+        metadata=tomb[0].get("metadata")
+        if not isinstance(metadata,Mapping) or set(metadata)!={"path","dev","inode","uid","gid","mode","reported_size","mtime","expected_pid"} or metadata.get("expected_pid")!=receipt["expected_pid"] or any(isinstance(metadata.get(k),bool) or not isinstance(metadata.get(k),int) or metadata[k]<(1 if k in ("dev","inode") else 0) for k in ("dev","inode","reported_size","mtime")) or not re.fullmatch(r"\d+",str(metadata.get("uid",""))) or not re.fullmatch(r"\d+",str(metadata.get("gid",""))) or not re.fullmatch(r"[0-7]{3,4}",str(metadata.get("mode",""))) or metadata["mtime"]<int(float(epoch)):raise NestedCuttlefishError("native crash tombstone binding invalid")
+        metadata_output=sources[2].get("output")
+        if not isinstance(metadata_output,Mapping):raise NestedCuttlefishError("native crash tombstone metadata unavailable")
+        metadata_text=base64.b64decode(metadata_output["bytes_b64"],validate=True).decode("utf-8","replace").splitlines()
+        expected_line="|".join((metadata["path"],"regular file",str(metadata["dev"]),str(metadata["inode"]),str(metadata["uid"]),str(metadata["gid"]),str(metadata["mode"]),str(metadata["reported_size"]),str(metadata["mtime"]),"1"))
+        if metadata_text.count(expected_line)!=1:raise NestedCuttlefishError("native crash selected tombstone not metadata-bound")
+        if tomb[0]["label"]=="tombstone-bytes" and "output" in tomb[0]:
+            raw=base64.b64decode(tomb[0]["output"]["bytes_b64"]);first,sep,body=raw.partition(b"\n");identity=first.decode("utf-8","replace").split("|")
+            expected_identity=["AMNEZIA_FD","regular file",str(metadata["dev"]),str(metadata["inode"]),str(metadata["uid"]),str(metadata["gid"]),str(metadata["mode"]),str(metadata["reported_size"]),str(metadata["mtime"])]
+            if not sep or identity!=expected_identity or metadata["mtime"]<int(float(epoch)) or re.search(rb"(?m)^pid:\s*"+str(receipt["expected_pid"]).encode()+rb",",body) is None:raise NestedCuttlefishError("native crash tombstone identity/PID invalid")
+    return dict(receipt)
+
 def validate_stage_receipt(plan: InnerPlan, receipt: Mapping) -> dict:
     _common(plan,receipt,"nested-cuttlefish-stage")
     root_identity=receipt.get("guest_root_identity")
@@ -561,8 +644,20 @@ def _validate_monkey_command(value: Any,package: str,path: str) -> None:
 def validate_baseline_receipt(plan: InnerPlan, baseline: ApkSpec, receipt: Mapping) -> dict:
     _common(plan,receipt,"nested-baseline-setup")
     if receipt.get("artifact")!=asdict(baseline) or receipt.get("direct_install_is_update_evidence") is not False or receipt.get("passed") is not True:raise NestedCuttlefishError("baseline artifact receipt invalid")
-    ui=receipt.get("ui");focus=ui.get("focus_observations") if isinstance(ui,Mapping) else None
-    if not isinstance(ui,Mapping) or ui.get("version_code")!=baseline.version_code or not isinstance(focus,list) or not 1<=len(focus)<=32:raise NestedCuttlefishError("baseline UI receipt invalid")
+    install=receipt.get("adb_install");ui=receipt.get("ui");focus=ui.get("focus_observations") if isinstance(ui,Mapping) else None
+    if not isinstance(install,Mapping) or install.get("argv")!=["install","-r",receipt.get("guest_path")] or install.get("exit_code") not in (0,124) or isinstance(install.get("exit_code"),bool) or install.get("timed_out") is not (install.get("exit_code")==124) or install.get("requested_command_cap")!=180 or install.get("effective_child_timeout")!=180 or install.get("outer_transport_timeout")!=185 or isinstance(install.get("elapsed_seconds"),bool) or not isinstance(install.get("elapsed_seconds"),(int,float)) or not 0<=install["elapsed_seconds"]<=185:raise NestedCuttlefishError("baseline install command receipt invalid")
+    install_bytes={}
+    for key,path in (("output","adb:baseline-install"),("stderr","adb:baseline-install-stderr")):
+        raw=install.get(key)
+        if not isinstance(raw,Mapping) or raw.get("path")!=path or raw.get("origin")!="guest" or raw.get("transport")!="qga-adb" or not isinstance(raw.get("size"),int) or isinstance(raw.get("size"),bool) or not 0<=raw["size"]<=65536 or not SHA_RE.fullmatch(str(raw.get("sha256",""))) or not isinstance(raw.get("bytes_b64"),str):raise NestedCuttlefishError("baseline install raw receipt invalid")
+        try:data=base64.b64decode(raw["bytes_b64"],validate=True)
+        except Exception as exc:raise NestedCuttlefishError("baseline install raw bytes invalid") from exc
+        if len(data)!=raw["size"] or hashlib.sha256(data).hexdigest()!=raw["sha256"]:raise NestedCuttlefishError("baseline install raw bytes mismatch")
+        install_bytes[key]=data
+    if install["exit_code"]==0 and (install.get("postcondition") is not None or b"Success" not in install_bytes["output"]):raise NestedCuttlefishError("baseline install success receipt invalid")
+    post=install.get("postcondition")
+    if install["exit_code"]==124 and (not isinstance(post,Mapping) or post.get("accepted_after_timeout") is not True or post.get("conflicts")!={} or not isinstance(post.get("sessions"),Mapping) or not isinstance(post.get("rows"),list) or len(post["rows"])!=2 or post["rows"][0].get("kind")!="package" or post["rows"][0].get("version_code")!=baseline.version_code or post["rows"][1].get("kind")!="sessions" or (post["rows"][1].get("receipt") or {}).get("argv")!=["shell","dumpsys","package","installs"] or (post["rows"][1].get("receipt") or {}).get("exit_code")!=0):raise NestedCuttlefishError("baseline timeout postcondition missing")
+    if not isinstance(ui,Mapping) or ui.get("version_code")!=baseline.version_code or not isinstance(focus,list) or not 1<=len(focus)<=32 or (install["exit_code"]==124 and post["rows"][0].get("uid")!=ui.get("package_uid")):raise NestedCuttlefishError("baseline UI receipt invalid")
     _validate_monkey_command(ui.get("launch_probe"),baseline.package,"adb:baseline-monkey")
     row=focus[-1];raw=row.get("raw") if isinstance(row,Mapping) else None
     if (not isinstance(row,Mapping) or row.get("exit_code")!=0 or not isinstance(raw,Mapping) or raw.get("path")!="adb:activity-top-resumed" or raw.get("origin")!="guest" or raw.get("transport")!="qga-adb"
@@ -581,25 +676,30 @@ def validate_app_update_receipt(plan: InnerPlan, boot: Mapping, receipt: Mapping
     if receipt.get("boot_binding_sha256")!=receipt_sha(boot): raise NestedCuttlefishError("app receipt not bound to boot")
     preflight=receipt.get("diagnostic_preflight");endpoint="10.8.1.0";port="17865"
     request_text=f"GET /healthz HTTP/1.1\r\nHost: {endpoint}:{port}\r\nConnection: close\r\n\r\n"
-    health_script=f"printf 'GET /healthz HTTP/1.1\\r\\nHost: {endpoint}:{port}\\r\\nConnection: close\\r\\n\\r\\n' | toybox nc -w 8 {endpoint} {port}"
+    request_b64=base64.b64encode(request_text.encode("ascii")).decode("ascii")
+    health_script=shlex.quote(f"echo {request_b64} | toybox base64 -d | toybox nc -w 3 {endpoint} {port}")
     expected_preflight={"link":["shell","ip","-details","link","show"],"address":["shell","ip","-4","addr","show"],"routes":["shell","ip","-4","route","show"],"route":["shell","ip","-4","route","get",endpoint],"connect":["shell","toybox","nc","-z","-w","5",endpoint,port],"capability":["shell","toybox","nc","--help"],"ril_state":["shell","getprop","init.svc.vendor.ril-daemon"],"ril_log":["shell","logcat","-d","-t","200","-v","threadtime","-b","main","-b","system","-b","events","RIL*:V","libcuttlefish-rild:V","init:I","*:S"],"healthz":["shell","sh","-c",health_script]}
-    if not isinstance(preflight,Mapping) or set(preflight)!=set(expected_preflight)|{"fixture_request","health_body"}:raise NestedCuttlefishError("fixture diagnostic preflight missing")
-    for label,argv in expected_preflight.items():
-        row=preflight[label]
-        if not isinstance(row,Mapping) or set(row)!={"argv","exit_code","timed_out","output","stderr"} or row.get("argv")!=argv or isinstance(row.get("exit_code"),bool) or not isinstance(row.get("exit_code"),int) or row.get("timed_out") is not (row["exit_code"]==124):raise NestedCuttlefishError("fixture diagnostic preflight invalid")
-        for stream,path in (("output",f"adb:fixture-preflight-{label}"),("stderr",f"adb:fixture-preflight-{label}-stderr")):
-            output=row.get(stream)
-            if not isinstance(output,Mapping) or set(output)!={"origin","transport","path","size","sha256","bytes_b64"} or output.get("origin")!="guest" or output.get("transport")!="qga-adb" or output.get("path")!=path or isinstance(output.get("size"),bool) or not isinstance(output.get("size"),int) or not 0<=output["size"]<=65536 or not SHA_RE.fullmatch(str(output.get("sha256",""))) or not isinstance(output.get("bytes_b64"),str):raise NestedCuttlefishError("fixture diagnostic preflight invalid")
-            try:data=base64.b64decode(output["bytes_b64"],validate=True)
-            except Exception as exc:raise NestedCuttlefishError("fixture diagnostic preflight bytes invalid") from exc
-            if len(data)!=output.get("size") or hashlib.sha256(data).hexdigest()!=output["sha256"]:raise NestedCuttlefishError("fixture diagnostic preflight bytes mismatch")
+    if not isinstance(preflight,Mapping) or set(preflight)!={"window_seconds","attempt_limit","attempts","selected_attempt","commands","fixture_request","health_body"} or preflight.get("window_seconds")!=35 or preflight.get("attempt_limit")!=3 or not isinstance(preflight.get("attempts"),list) or not 1<=len(preflight["attempts"])<=3 or preflight.get("selected_attempt")!=len(preflight["attempts"]):raise NestedCuttlefishError("fixture diagnostic preflight missing")
+    for index,attempt in enumerate(preflight["attempts"],1):
+        if not isinstance(attempt,Mapping) or set(attempt)!={"index","commands","capture_error","health_result","health_body","fixture_request","ready"} or attempt.get("index")!=index or not isinstance(attempt.get("commands"),Mapping) or not set(attempt["commands"]).issubset(expected_preflight) or (index==len(preflight["attempts"]) and set(attempt["commands"])!=set(expected_preflight)):raise NestedCuttlefishError("fixture diagnostic attempt invalid")
+        for label,row in attempt["commands"].items():
+            argv=expected_preflight[label]
+            if not isinstance(row,Mapping) or set(row)!={"argv","exit_code","timed_out","output","stderr"} or row.get("argv")!=argv or isinstance(row.get("exit_code"),bool) or not isinstance(row.get("exit_code"),int) or row.get("timed_out") is not (row["exit_code"]==124):raise NestedCuttlefishError("fixture diagnostic preflight invalid")
+            for stream,path in (("output",f"adb:fixture-preflight-{label}"),("stderr",f"adb:fixture-preflight-{label}-stderr")):
+                output=row.get(stream)
+                if not isinstance(output,Mapping) or set(output)!={"origin","transport","path","size","sha256","bytes_b64"} or output.get("origin")!="guest" or output.get("transport")!="qga-adb" or output.get("path")!=path or isinstance(output.get("size"),bool) or not isinstance(output.get("size"),int) or not 0<=output["size"]<=65536 or not SHA_RE.fullmatch(str(output.get("sha256",""))) or not isinstance(output.get("bytes_b64"),str):raise NestedCuttlefishError("fixture diagnostic preflight invalid")
+                try:data=base64.b64decode(output["bytes_b64"],validate=True)
+                except Exception as exc:raise NestedCuttlefishError("fixture diagnostic preflight bytes invalid") from exc
+                if len(data)!=output.get("size") or hashlib.sha256(data).hexdigest()!=output["sha256"]:raise NestedCuttlefishError("fixture diagnostic preflight bytes mismatch")
+    selected=preflight["attempts"][-1]
+    if selected.get("ready") is not True or selected.get("capture_error") is not None or preflight.get("commands")!=selected.get("commands") or preflight.get("fixture_request")!=selected.get("fixture_request") or preflight.get("health_body")!=selected.get("health_body"):raise NestedCuttlefishError("fixture diagnostic selected attempt invalid")
     body_record=preflight["health_body"]
     if not isinstance(body_record,Mapping) or set(body_record)!={"origin","transport","path","size","sha256","bytes_b64"}:raise NestedCuttlefishError("fixture health body missing")
     try:health_bytes=base64.b64decode(body_record["bytes_b64"],validate=True);health_value=json.loads(health_bytes.decode())
     except Exception as exc:raise NestedCuttlefishError("fixture health body invalid") from exc
     if body_record.get("path")!="adb:fixture-preflight-health-body" or body_record.get("size")!=len(health_bytes) or body_record.get("sha256")!=hashlib.sha256(health_bytes).hexdigest():raise NestedCuttlefishError("fixture health body mismatch")
     request=preflight["fixture_request"]
-    if preflight["healthz"]["exit_code"]!=0 or health_value!={"status":"ok","run_id":plan.ownership.run_id,"role":"consumer-fixture"} or not isinstance(request,Mapping) or set(request)!={"method","path","status","sha256","bytes","content_length","eof","peer","observed_at","run_id","attempt_nonce"} or request.get("run_id")!=plan.ownership.run_id or request.get("attempt_nonce")!=plan.ownership.attempt_nonce or request.get("method")!="GET" or request.get("path")!="/healthz" or request.get("status")!=200 or request.get("eof") is not True or not request.get("peer") or request.get("bytes")!=len(health_bytes) or request.get("content_length")!=len(health_bytes) or request.get("sha256")!=hashlib.sha256(health_bytes).hexdigest():raise NestedCuttlefishError("fixture diagnostic preflight semantic mismatch")
+    if preflight["commands"]["healthz"]["exit_code"]!=0 or health_value!={"status":"ok","run_id":plan.ownership.run_id,"role":"consumer-fixture"} or not isinstance(request,Mapping) or set(request)!={"method","path","status","sha256","bytes","content_length","eof","peer","observed_at","run_id","attempt_nonce"} or request.get("run_id")!=plan.ownership.run_id or request.get("attempt_nonce")!=plan.ownership.attempt_nonce or request.get("method")!="GET" or request.get("path")!="/healthz" or request.get("status")!=200 or request.get("eof") is not True or not request.get("peer") or request.get("bytes")!=len(health_bytes) or request.get("content_length")!=len(health_bytes) or request.get("sha256")!=hashlib.sha256(health_bytes).hexdigest():raise NestedCuttlefishError("fixture diagnostic preflight semantic mismatch")
     package=receipt.get("package_installer"); exact={"package":plan.apk.package,"version_code":plan.apk.version_code,"artifact_sha256":plan.apk.sha256,"artifact_size":plan.apk.size}
     if not isinstance(package,Mapping) or any(package.get(k)!=v for k,v in exact.items()) or package.get("download_sha256")!=plan.apk.sha256 or not isinstance(package.get("session_id"),int) or isinstance(package.get("session_id"),bool) or package["session_id"]<0 or package.get("status")!="STATUS_SUCCESS" or package.get("method")!="PackageInstaller" or package.get("snapshot_argv")!=["shell","dumpsys","package","installs"]: raise NestedCuttlefishError("exact PackageInstaller evidence missing")
     def session_raw(row):

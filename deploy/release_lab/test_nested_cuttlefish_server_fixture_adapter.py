@@ -29,7 +29,7 @@ class Q:
   if code==IDENTITY:return {"stdout":json.dumps({"pid":44,"start_ticks":55,"exe":"/usr/bin/python3","cmdline_sha256":"d"*64,"identity_rechecked":True})}
   if code==RESET:
    health=b'{"status":"ok","run_id":"run","role":"consumer-fixture"}'
-   return {"stdout":json.dumps({"reset_token":args[5],"log_inode":9,"offset":0,"empty_sha256":hashlib.sha256(b"").hexdigest(),"reset_at":100.0,"run_id":"run","attempt_nonce":"1"*48,"cleared_health_request":{"method":"GET","path":"/healthz","status":200,"sha256":hashlib.sha256(health).hexdigest(),"bytes":len(health),"content_length":len(health),"eof":True,"peer":"10.0.2.15","observed_at":99.0,"run_id":"run","attempt_nonce":"1"*48}})}
+   return {"stdout":json.dumps({"ok":True,"reset_token":args[5],"log_inode":9,"offset":0,"empty_sha256":hashlib.sha256(b"").hexdigest(),"reset_at":100.0,"run_id":"run","attempt_nonce":"1"*48,"pre_reset":{"size":1,"sha256":"a"*64,"bytes_b64":"eA==","rows":[]},"cleared_health_request":{"method":"GET","path":"/healthz","status":200,"sha256":hashlib.sha256(health).hexdigest(),"bytes":len(health),"content_length":len(health),"eof":True,"peer":"10.0.2.15","observed_at":99.0,"run_id":"run","attempt_nonce":"1"*48}})}
   if "/__lab__/health" in code:return {"stdout":json.dumps({"status":"bad"} if self.health_bad else {"status":"ok","run_id":"run","role":"consumer-fixture"})}
   if code==READ_LOG:
    rows=[{"method":"GET","path":"/manifest.json","status":200,"sha256":"b"*64,"bytes":20,"content_length":20,"eof":True,"peer":"10.0.2.15","observed_at":101.0},{"method":"GET","path":f"/files/artifacts/{'c'*64}/app.apk","status":200,"sha256":"c"*64,"bytes":30,"content_length":30,"eof":True,"peer":"10.0.2.15","observed_at":102.0}]
@@ -51,6 +51,20 @@ def test_outer_change_and_payload_forgery_fail_before_guest_call():
  with pytest.raises(NestedCuttlefishError,match="outer ownership"):a.callback("start",{"run_id":"run","attempt_nonce":"1"*48},20)
  a=ServerRouterFixtureAdapter(q,p,lambda:dict(p.outer_ownership))
  with pytest.raises(NestedCuttlefishError,match="payload"):a.callback("reset",{"run_id":"other","attempt_nonce":"1"*48},20)
+
+def test_reset_failure_retains_bounded_raw_and_pre_reset_log(monkeypatch):
+ p=plan();q=Q();raw=b"HTTP reset failed";pre=b'{"path":"/healthz"}\n'
+ original=q.guest_exec_wait
+ def failed(path,args,timeout):
+  if args[1]==RESET:
+   q.calls.append(("wait",args,timeout))
+   return {"stdout":json.dumps({"ok":False,"run_id":"run","attempt_nonce":"1"*48,"pre_reset":{"size":len(pre),"sha256":hashlib.sha256(pre).hexdigest(),"bytes_b64":__import__('base64').b64encode(pre).decode(),"rows":[{"path":"/healthz"}]},"error":{"type":"URLError","size":len(raw),"sha256":hashlib.sha256(raw).hexdigest(),"bytes_b64":__import__('base64').b64encode(raw).decode()}})}
+  return original(path,args,timeout)
+ q.guest_exec_wait=failed;a=ServerRouterFixtureAdapter(q,p,lambda:dict(p.outer_ownership));a.pid=44;a.start_ticks=55
+ with pytest.raises(NestedCuttlefishError,match="fixture reset failed") as caught:a.reset_log()
+ evidence=caught.value.fixture_control_evidence
+ assert evidence["pre_reset"]["bytes_b64"]==__import__('base64').b64encode(pre).decode() and evidence["error"]["bytes_b64"]==__import__('base64').b64encode(raw).decode()
+ assert sum(1 for x in q.calls if x[0]=="wait" and x[1][1]==RESET)==1
 def test_plan_rejects_nonowned_paths_or_wrong_manifest_artifact_path():
  p=plan();bad=ServerFixturePlan(**{**p.__dict__,"request_log":"/tmp/log"})
  with pytest.raises(NestedCuttlefishError,match="path ownership"):bad.validate()

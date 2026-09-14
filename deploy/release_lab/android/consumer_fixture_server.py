@@ -55,6 +55,7 @@ def artifact_path_from_manifest(document: dict, expected_sha256: str) -> str:
 
 class FixtureHandler(BaseHTTPRequestHandler):
     server_version = "AmneziaConsumerFixture/1"
+    protocol_version = "HTTP/1.1"
 
     def do_HEAD(self) -> None:  # noqa: N802
         self._serve(False)
@@ -81,6 +82,20 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 with fixture["request_lock"]:
                     if fixture["reset_used"]:
                         self.send_error(409, "attempt reset already consumed")
+                        return
+                    try:
+                        raw = fixture["request_log"].read_bytes()
+                        rows = [json.loads(line) for line in raw.splitlines()]
+                    except (OSError, json.JSONDecodeError):
+                        self.send_error(409, "invalid pre-reset request log")
+                        return
+                    if (len(raw) > MAX_REQUEST_LOG_BYTES or len(rows) != 1
+                            or rows[0].get("run_id") != fixture["run_id"]
+                            or rows[0].get("attempt_nonce") != fixture["attempt_nonce"]
+                            or rows[0].get("method") != "GET" or rows[0].get("path") != "/healthz"
+                            or rows[0].get("status") != 200
+                            or rows[0].get("bytes") != rows[0].get("content_length")):
+                        self.send_error(409, "unexpected pre-reset request log")
                         return
                     fixture["request_log"].write_text("", encoding="utf-8")
                     fixture["request_count"] = 0

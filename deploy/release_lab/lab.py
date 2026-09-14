@@ -107,6 +107,8 @@ SEMANTIC_HELPER_RELATIVES = (
     "deploy/release_lab/nested_cuttlefish_runner.py",
     "deploy/release_lab/nested_cuttlefish_qga_bridge.py",
     "deploy/release_lab/nested_cuttlefish_app_executor.py",
+    "deploy/release_lab/nested_cuttlefish_lldb.py",
+    "deploy/release_lab/nested_cuttlefish_lldb_controller.py",
     "deploy/release_lab/android_visual_handshake.py",
     "deploy/release_lab/nested_cuttlefish_server_fixture_adapter.py",
     "deploy/release_lab/nested_cuttlefish_common_adapter.py",
@@ -3493,9 +3495,47 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                         or not isinstance(row.get("stdout"),str) or len(row["stdout"])>4096
                         or not isinstance(row.get("stderr"),str) or len(row["stderr"])>4096):
                     raise LabError("nested network boot failure command bound")
-        failure_bound=786432 if app_focus else (196608 if network_failure else 16384)
-        if len(data)>failure_bound:raise LabError("nested boot failure record exceeds bound")
         directory=ensure_owned_child(self.root,self.root/"runs"/run_id/"controller","nested boot failure archive");directory.mkdir(parents=True,exist_ok=True)
+        failure_bound=786432 if app_focus else (196608 if network_failure else 16384)
+        sidecars=[]
+        if app_focus and len(data)>failure_bound:
+            compact=json.loads(json.dumps(record));aggregate=0
+            def externalize(value,context=None):
+                nonlocal aggregate
+                if isinstance(value,list):
+                    for item in value:externalize(item,context)
+                    return
+                if not isinstance(value,dict):return
+                next_context=context
+                if isinstance(value.get("argv"),list):next_context={"argv":value["argv"],"exit_code":value.get("exit_code"),"timed_out":value.get("timed_out")}
+                if value.get("origin")=="guest" and value.get("transport")=="qga-adb" and isinstance(value.get("bytes_b64"),str) and isinstance(value.get("size"),int) and not isinstance(value.get("size"),bool) and re.fullmatch(r"[0-9a-f]{64}",str(value.get("sha256",""))):
+                    try:raw=base64.b64decode(value["bytes_b64"],validate=True)
+                    except Exception as exc:raise LabError("nested app sidecar encoding") from exc
+                    if len(raw)!=value["size"] or hashlib.sha256(raw).hexdigest()!=value["sha256"]:raise LabError("nested app sidecar source readback")
+                    if len(raw)>2097152:raise LabError("nested app sidecar source exceeds cap")
+                    aggregate+=len(raw)
+                    if aggregate>8388608 or len(sidecars)>=256:raise LabError("nested app sidecar aggregate exceeds cap")
+                    order=len(sidecars)+1;path=ensure_owned_child(self.root,directory/f"nested-app-failure-{record['attempt_nonce']}-{order:03d}.bin","nested app failure sidecar")
+                    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_BINARY",0),0o600)
+                    try:
+                        view=memoryview(raw)
+                        while view:
+                            count=os.write(fd,view)
+                            if count<=0:raise OSError("short nested app sidecar write")
+                            view=view[count:]
+                        os.fsync(fd)
+                    finally:os.close(fd)
+                    observed=path.read_bytes()
+                    if observed!=raw:raise LabError("nested app sidecar readback differs")
+                    excerpt=raw[:4096];meta={"order":order,"label":value.get("path"),"argv":(next_context or {}).get("argv"),"exit_code":(next_context or {}).get("exit_code"),"timed_out":(next_context or {}).get("timed_out"),"original_size":len(raw),"original_sha256":hashlib.sha256(raw).hexdigest(),"excerpt_size":len(excerpt),"excerpt_sha256":hashlib.sha256(excerpt).hexdigest(),"excerpt_b64":base64.b64encode(excerpt).decode(),"archive":{"path":str(path),"sha256":hashlib.sha256(observed).hexdigest(),"size":len(observed),"immutable":True},"run_id":run_id,"attempt_nonce":record["attempt_nonce"],"outer_ownership":expected}
+                    sidecars.append(meta);value["bytes_b64"]=None;value["sidecar"]=meta
+                    return
+                for child in value.values():externalize(child,next_context)
+            externalize(compact)
+            manifest_sha=hashlib.sha256(json.dumps(sidecars,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+            compact["overflow"]={"count":len(sidecars),"aggregate_size":aggregate,"order":[x["order"] for x in sidecars],"sha256":[x["original_sha256"] for x in sidecars],"manifest_sha256":manifest_sha}
+            data=(json.dumps(compact,sort_keys=True,separators=(",",":"))+"\n").encode()
+        if len(data)>failure_bound:raise LabError("nested boot failure record exceeds bound")
         screenshot_ack=None
         if app_focus:
             shot=(record.get("last_probe") or {}).get("screencap")
@@ -3529,8 +3569,22 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
         observed=out.read_bytes()
         if observed!=data:raise LabError("nested boot archive readback differs")
         ack={"origin":"controller","immutable":True,"path":str(out),"sha256":hashlib.sha256(observed).hexdigest(),"size":len(observed)}
+        if sidecars:ack.update(sidecars=sidecars,sidecar_manifest_sha256=hashlib.sha256(json.dumps(sidecars,sort_keys=True,separators=(",",":")).encode()).hexdigest(),compact_archive_sha256=ack["sha256"])
         if screenshot_ack is not None:ack["screenshot"]=screenshot_ack
         return ack
+
+    def archive_nested_lldb_diagnostic(self,run_id:str,record:Mapping[str,Any])->dict[str,Any]:
+        """Persist diagnostic-only evidence before the owned guest is cleaned."""
+        self.assert_mutation_context();run=self.get_run(run_id);vm=((run.get("profiles") or {}).get("linux-headless-x64") or {}).get("vm") or {}
+        expected={"run_id":run_id,"profile":"linux-headless-x64","attempt_nonce":record.get("attempt_nonce"),"pid":vm.get("pid"),"start_ticks":int(vm.get("proc_start_time",0)),"uuid":vm.get("uuid"),"qmp_socket":vm.get("qmp_socket"),"qga_socket":vm.get("qga_socket")}
+        if (not isinstance(record,Mapping) or record.get("schema")!=1 or record.get("operation")!="nested-android-lldb-diagnostic" or record.get("acceptance") is not False or record.get("run_id")!=run_id or record.get("outer_ownership")!=expected or not re.fullmatch(r"[0-9a-f]{48}",str(record.get("attempt_nonce","")))):raise LabError("nested LLDB diagnostic identity")
+        data=(json.dumps(dict(record),sort_keys=True,separators=(",",":"))+"\n").encode()
+        if len(data)>4*1024*1024:raise LabError("nested LLDB diagnostic archive exceeds bound")
+        directory=ensure_owned_child(self.root,self.root/"runs"/run_id/"controller","nested LLDB diagnostic archive");directory.mkdir(parents=True,exist_ok=True)
+        out=ensure_owned_child(self.root,directory/f"nested-lldb-diagnostic-{record['attempt_nonce']}.json","nested LLDB diagnostic archive")
+        immutable_bytes_dump(out,data);observed=out.read_bytes()
+        if observed!=data:raise LabError("nested LLDB diagnostic archive readback differs")
+        return {"origin":"controller","immutable":True,"path":str(out),"sha256":hashlib.sha256(observed).hexdigest(),"size":len(observed)}
 
     def archive_nested_host_dependency_failure(self, run_id: str, record: Mapping[str, Any]) -> dict[str, Any]:
         self.assert_mutation_context();run=self.get_run(run_id)
@@ -3737,6 +3791,21 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
         """External decision API; input only and intentionally outside mutation state."""
         self.get_run(run_id)
         return AndroidVisualHandshakeStore(self.root).decide(run_id, attempt_nonce, request_id, request_sha256, decision, bounds)
+
+    @mutation_operation
+    def run_nested_android_lldb_diagnostic(self,run_id:str,controller:Any,launch:Any,epoch:str)->dict[str,Any]:
+        """Run an acceptance-false diagnostic path without registering a release gate."""
+        self.assert_mutation_context();self.get_run(run_id)
+        try:from .nested_cuttlefish_lldb_controller import NestedAndroidLldbController
+        except ImportError:from nested_cuttlefish_lldb_controller import NestedAndroidLldbController
+        if not isinstance(controller,NestedAndroidLldbController) or controller.plan.ownership.run_id!=run_id or not callable(launch):raise LabError("nested LLDB controller binding")
+        result=controller.run(launch,epoch)
+        if result.get("acceptance") is not False or result.get("operation")!="nested-android-lldb-diagnostic":raise LabError("debugger result cannot enter release acceptance")
+        cleanup=result.get("cleanup")
+        if not isinstance(cleanup,Mapping) or cleanup.get("passed") is not True or not isinstance(result.get("controller_archive"),Mapping):raise LabError("nested LLDB cleanup receipt incomplete")
+        out=ensure_owned_child(self.root,self.root/"runs"/run_id/"controller"/f"nested-lldb-cleanup-{controller.plan.ownership.attempt_nonce}.json","nested LLDB cleanup receipt")
+        immutable_json_dump(out,result)
+        return result
 
     @mutation_operation
     def run_nested_android_semantic(self, run_id: str, plan: Any, bridge: Any, fixture_adapter: Any, private_link: Any, baseline: Any, outer_live_snapshot: Any, visual_request: Any, visual_poll: Any) -> dict[str, Any]:

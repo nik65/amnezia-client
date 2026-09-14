@@ -75,19 +75,26 @@ if ticks is not None and start!=ticks: raise SystemExit('start changed')
 if str(script) not in argv or marker not in '\0'.join(argv) or hashlib.sha256(script.read_bytes()).hexdigest()!=expected: raise SystemExit('identity')
 print(json.dumps({'pid':pid,'start_ticks':start,'exe':str(p.joinpath('exe').resolve(strict=True)),'cmdline_sha256':hashlib.sha256(cmd).hexdigest(),'identity_rechecked':True},separators=(',',':')))
 '''
-RESET=r'''import hashlib,json,os,pathlib,sys,time,urllib.request
-url,log,cursor,token,run,nonce=sys.argv[1:]; p=pathlib.Path(log); before=p.read_bytes(); data=urllib.request.urlopen(url,timeout=10).read(); response=json.loads(data)
-if response!={'status':'reset','run_id':run}: raise SystemExit('reset response')
+RESET=r'''import base64,hashlib,json,os,pathlib,sys,time,urllib.request
+url,log,cursor,token,run,nonce=sys.argv[1:]; p=pathlib.Path(log); before=p.read_bytes()
+if len(before)>1048576: raise SystemExit('pre-reset log size')
 pairs=[]
 for line in before.splitlines():
  x=json.loads(line)
  if x.get('run_id')!=run or x.get('attempt_nonce')!=nonce: raise SystemExit('pre-reset row identity')
  pairs.append(x)
 if len(pairs)!=1 or pairs[0].get('method')!='GET' or pairs[0].get('path')!='/healthz' or pairs[0].get('status')!=200 or pairs[0].get('bytes')!=pairs[0].get('content_length'): raise SystemExit('health request row')
+pre={'size':len(before),'sha256':hashlib.sha256(before).hexdigest(),'bytes_b64':base64.b64encode(before).decode(),'rows':pairs}
+try:
+ data=urllib.request.urlopen(url,timeout=10).read(); response=json.loads(data)
+ if response!={'status':'reset','run_id':run}: raise ValueError('reset response')
+except BaseException as exc:
+ raw=str(exc).encode()[:65536]
+ print(json.dumps({'ok':False,'run_id':run,'attempt_nonce':nonce,'pre_reset':pre,'error':{'type':type(exc).__name__,'size':len(raw),'sha256':hashlib.sha256(raw).hexdigest(),'bytes_b64':base64.b64encode(raw).decode()}},separators=(',',':')));raise SystemExit(0)
 s=p.stat(); b=p.read_bytes()
 if b: raise SystemExit('log not empty')
 x=pairs[0]; health={'method':x['method'],'path':x['path'],'status':x['status'],'sha256':x['sha256'],'bytes':x['bytes'],'content_length':x['content_length'],'eof':True,'peer':x['client'],'observed_at':x['timestamp'],'run_id':x['run_id'],'attempt_nonce':x['attempt_nonce']}
-value={'reset_token':token,'log_inode':s.st_ino,'offset':0,'empty_sha256':hashlib.sha256(b).hexdigest(),'reset_at':time.time(),'run_id':run,'attempt_nonce':nonce,'cleared_health_request':health}
+value={'ok':True,'reset_token':token,'log_inode':s.st_ino,'offset':0,'empty_sha256':hashlib.sha256(b).hexdigest(),'reset_at':time.time(),'run_id':run,'attempt_nonce':nonce,'cleared_health_request':health,'pre_reset':pre}
 q=pathlib.Path(cursor); fd=os.open(q,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
 with os.fdopen(fd,'w') as f: json.dump(value,f,separators=(',',':'));f.flush();os.fsync(f.fileno())
 print(json.dumps(value,separators=(',',':')))
@@ -172,7 +179,10 @@ class ServerRouterFixtureAdapter:
  def reset_log(self,timeout=20):
   if self.pid is None:raise NestedCuttlefishError("fixture not started")
   token=secrets.token_hex(24);cursor=self.plan.request_log+f".{self.plan.attempt_nonce}.cursor"
-  value=self._json(RESET,[f"http://127.0.0.1:{self.plan.port}/__lab__/attempt/reset?nonce={self.plan.attempt_nonce}&run_id={self.plan.run_id}",self.plan.request_log,cursor,token,self.plan.run_id,self.plan.attempt_nonce],timeout);self.reset={**self._common(),**value};return dict(self.reset)
+  value=self._json(RESET,[f"http://127.0.0.1:{self.plan.port}/__lab__/attempt/reset?nonce={self.plan.attempt_nonce}&run_id={self.plan.run_id}",self.plan.request_log,cursor,token,self.plan.run_id,self.plan.attempt_nonce],timeout)
+  if value.get("ok") is not True:
+   error=NestedCuttlefishError("fixture reset failed");setattr(error,"fixture_control_evidence",{**self._common(),**value});raise error
+  self.reset={**self._common(),**value};return dict(self.reset)
  def read_log(self,timeout=20):
   if self.reset is None:raise NestedCuttlefishError("fixture log was not reset")
   cursor=self.plan.request_log+f".{self.plan.attempt_nonce}.cursor";v=self._json(READ_LOG,[self.plan.request_log,cursor,str(MAX_LOG)],timeout);rows=v.pop("rows")

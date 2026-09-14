@@ -1,9 +1,12 @@
+import base64
+import copy
 import hashlib
 import json
 import pytest
+from dataclasses import asdict
 from urllib.parse import quote
 from deploy.release_lab.nested_cuttlefish_app_executor import AppFixture,NestedAppExecutor,PNG_MAX,_parse_focus_text as producer_focus_parser
-from deploy.release_lab.nested_cuttlefish_runner import ApkSpec,AssetSpec,InnerPlan,NestedCuttlefishError,OuterOwnership,receipt_sha,validate_app_update_receipt,_parse_focus_text as consumer_focus_parser
+from deploy.release_lab.nested_cuttlefish_runner import ApkSpec,AssetSpec,InnerPlan,NestedCuttlefishError,OuterOwnership,receipt_sha,validate_app_update_receipt,validate_native_crash_evidence,_parse_focus_text as consumer_focus_parser
 from deploy.release_lab.test_nested_cuttlefish_runner import wayland_dependency
 
 def setup():
@@ -35,11 +38,11 @@ class Clock:
  def __init__(self):self.v=100
  def __call__(self):return self.v
 class Q:
- def __init__(self):self.calls=[];self.request_timeouts=[];self.version=38;self.extra_version="";self.uid_output="package:org.amnezia.vpn uid:10123";self.focus="org.amnezia.vpn/MainActivity";self.focus_delay=0;self.splash_count=0;self.window_empty=False;self.activity_timeouts=0;self.policy_timeouts=0;self.ui_cat_timeouts=0;self.timeout_partial=b"partial activity output";self.big=False;self.evil=False;self.timeout=30;self.pending=None;self.close_error=False;self.read_error=False;self.locked=True;self.stubborn_lock=False;self.policy_raw=None;self.ui_actions=("Update","Install","Done");self.no_session=False;self.route_rc=0;self.health_bad=False
+ def __init__(self):self.calls=[];self.request_timeouts=[];self.version=38;self.install_timeout=False;self.session_output=None;self.extra_version="";self.uid_output="package:org.amnezia.vpn uid:10123";self.focus="org.amnezia.vpn/MainActivity";self.focus_delay=0;self.splash_count=0;self.window_empty=False;self.activity_timeouts=0;self.policy_timeouts=0;self.ui_cat_timeouts=0;self.timeout_partial=b"partial activity output";self.big=False;self.evil=False;self.timeout=30;self.pending=None;self.close_error=False;self.read_error=False;self.locked=True;self.stubborn_lock=False;self.policy_raw=None;self.ui_actions=("Update","Install","Done");self.no_session=False;self.route_rc=0;self.health_bad=False
  def guest_exec_wait(self,path,args,timeout=30):
   self.calls.append((args,timeout))
   if path=="/usr/bin/python3" and "RLIMIT_FSIZE" in args[1]:
-   argv=json.loads(args[2]);activity_timed=self.activity_timeouts>0 and argv[-2:]==["activity","top-resumed"];policy_timed=self.policy_timeouts>0 and argv[-2:]==["window","policy"];ui_timed=self.ui_cat_timeouts>0 and len(argv)>=2 and argv[-2]=="cat" and str(argv[-1]).endswith(".xml");timed=activity_timed or policy_timed or ui_timed
+   argv=json.loads(args[2]);activity_timed=self.activity_timeouts>0 and argv[-2:]==["activity","top-resumed"];policy_timed=self.policy_timeouts>0 and argv[-2:]==["window","policy"];ui_timed=self.ui_cat_timeouts>0 and len(argv)>=2 and argv[-2]=="cat" and str(argv[-1]).endswith(".xml");install_timed=self.install_timeout and argv[-3:-1]==["install","-r"];timed=activity_timed or policy_timed or ui_timed or install_timed
    if timed:
     if activity_timed:self.activity_timeouts-=1
     elif policy_timed:self.policy_timeouts-=1
@@ -56,6 +59,7 @@ class Q:
    if not self.stubborn_lock:self.locked=False
   elif args[-3:]==["input","keyevent","82"]:
    if not self.stubborn_lock:self.locked=False
+  elif args[-2:]==["package","installs"] and self.session_output is not None:s=self.session_output
   elif args[-2:]==["package","installs"]:s="Session 77:\n  mAppPackageName=org.amnezia.vpn\n  mFinalStatus=1\n" if self.version==39 and not self.no_session else ""
   elif args[-2:]==["activity","top-resumed"]:
    if self.focus_delay>0:self.focus_delay-=1;s="ACTIVITY MANAGER ACTIVITIES"
@@ -74,7 +78,7 @@ class Q:
   elif args[-4:]==["ip","-4","route","show"]:s="default via 10.0.2.2 dev eth0\n10.0.2.0/24 dev eth0\n"
   elif args[-6:-3]==["shell","ip","-4"]:s="10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"
   elif args[-3:]==["toybox","nc","--help"]:s="usage: nc [-46ELlntUuvz] [-w SEC] HOST PORT\n"
-  elif "GET /healthz HTTP/1.1" in " ".join(args):
+  elif "GET /healthz HTTP/1.1" in " ".join(args) or "toybox base64 -d" in " ".join(args):
    body='{"status":"bad"}' if self.health_bad else '{"status":"ok","run_id":"run","role":"consumer-fixture"}';s=f"HTTP/1.1 200 OK\r\nContent-Length: {len(body.encode())}\r\nConnection: close\r\n\r\n{body}"
   elif "nc" in args:s=""
   elif "wget" in args:s='{"status":"bad"}' if self.health_bad else '{"status":"ok","run_id":"run","role":"consumer-fixture"}'
@@ -114,13 +118,84 @@ def make(forged=False,boot_value=None):
  e=NestedAppExecutor(q,p,boot_value or boot(p),b,fx,lambda:p.ownership,lambda:dict(fx.outer_ownership),fixture_for(fx,ev,forged),failure_archive=archive_failure,visual_request=request,visual_poll=lambda ack:decisions.get(ack["request_id"]),clock=Clock(),sleep=lambda _:None);return p,b,fx,q,ev,e
 def test_happy_path_matches_semantic_validator_and_uses_proven_adb():
  p,b,fx,q,ev,e=make();e.install_baseline("/input/b.apk");r=e.run_update();validate_app_update_receipt(p,boot(p),r);assert all(c[0][:4]==["-P","5053","-s","127.0.0.1:6520"] for c in q.calls if c[0] and c[0][0]=="-P");assert ev[-1][0]=="stop"
+
+def test_dh_reset_failure_archives_exact_control_raw_once_before_cleanup():
+ p,b,fx,q,ev,e=make();health=b'{"status":"ok","run_id":"run","role":"consumer-fixture"}';pre=b'{"method":"GET","path":"/healthz"}\n';raw=b'HTTP Error 409: unexpected pre-reset request log';common={"schema":1,"run_id":fx.run_id,"profile":fx.profile,"attempt_nonce":fx.attempt_nonce,"marker":fx.marker,"origin":"guest","transport":"qga","injected":False,"outer_ownership":dict(fx.outer_ownership),"pid":fx.pid,"start_ticks":fx.start_ticks,"listener":fx.endpoint,"manifest_sha256":fx.manifest_sha256,"manifest_size":fx.manifest_size,"artifact_sha256":p.apk.sha256,"artifact_size":p.apk.size}
+ control={**common,"ok":False,"pre_reset":{"size":len(pre),"sha256":hashlib.sha256(pre).hexdigest(),"bytes_b64":base64.b64encode(pre).decode(),"rows":[{"run_id":"run","attempt_nonce":fx.attempt_nonce,"method":"GET","path":"/healthz"}]},"error":{"type":"HTTPError","size":len(raw),"sha256":hashlib.sha256(raw).hexdigest(),"bytes_b64":base64.b64encode(raw).decode()}}
+ def callback(action,data,timeout):
+  ev.append(action)
+  if action=="start":return {**common,"ready":True,"identity_rechecked":True}
+  if action=="reset":
+   error=NestedCuttlefishError("fixture reset failed");error.fixture_control_evidence=control;raise error
+  if action=="stop":return {**common,"identity_rechecked":True,"stopped":True,"listener_closed":True,"unknown_survivors":[],"request_log_sha256":hashlib.sha256(pre).hexdigest(),"request_log_size":len(pre)}
+  raise AssertionError(action)
+ archived=[]
+ def archive(record,screenshot=None):archived.append(copy.deepcopy(record));ev.append("archive");return archive_failure(record,screenshot)
+ e.fixture_call=callback;e.failure_archive=archive
+ with pytest.raises(NestedCuttlefishError,match="app precondition failed"):e.run_update()
+ assert ev.count("reset")==1 and ev.index("archive")<ev.index("stop")
+ attempt=archived[0]["last_probe"]["attempts"][0]
+ assert base64.b64decode(attempt["capture_error"]["control"]["pre_reset"]["bytes_b64"])==pre
+ assert base64.b64decode(attempt["capture_error"]["control"]["error"]["bytes_b64"])==raw
+
+def test_baseline_install_timeout_accepts_exact_postcondition_without_retry():
+ p,b,fx,q,ev,e=make();q.install_timeout=True;receipt=e.install_baseline("/input/b.apk")
+ install=receipt["adb_install"];assert install["exit_code"]==124 and install["timed_out"] is True and install["postcondition"]["accepted_after_timeout"] is True
+ captured=[json.loads(args[2]) for args,_ in q.calls if len(args)>2 and args[0]=="-c" and "RLIMIT_FSIZE" in args[1]]
+ assert sum(argv[-3:-1]==["install","-r"] for argv in captured)==1
+
+def test_baseline_install_uses_cap180_inside_absolute420_with_transport_margin():
+ p,b,fx,q,ev,e=make();seen=[];original=e._capture_result
+ def capture(argv,d,label,limit,command_cap=None):
+  if label=="baseline-install":seen.append((d-e.clock(),command_cap))
+  return original(argv,d,label,limit,command_cap)
+ e._capture_result=capture;receipt=e.install_baseline("/input/b.apk")
+ wrappers=[(args,timeout) for args,timeout in q.calls if len(args)>5 and args[0]=="-c" and "RLIMIT_FSIZE" in args[1] and json.loads(args[2])[-3:-1]==["install","-r"]]
+ assert seen==[(420,180)] and len(wrappers)==1 and float(wrappers[0][0][-1])==180 and wrappers[0][1]==185
+ assert {k:receipt["adb_install"][k] for k in ("requested_command_cap","effective_child_timeout","outer_transport_timeout","elapsed_seconds")}=={"requested_command_cap":180,"effective_child_timeout":180,"outer_transport_timeout":185,"elapsed_seconds":0}
+
+@pytest.mark.parametrize('cap',[5,7,10,20,30,180])
+def test_explicit_capture_caps_keep_exact_child_and_five_second_transport_margin(cap):
+ p,b,fx,q,ev,e=make();e._capture_result(["shell","true"],e.clock()+420,f"cap-{cap}",4096,cap)
+ args,outer=q.calls[0]
+ assert float(args[-1])==cap and outer==cap+5
+
+def test_baseline_timeout_android16_historical_status_one_is_success():
+ p,b,fx,q,ev,e=make();q.install_timeout=True;q.session_output="Session 77:\n  mAppPackageName=org.amnezia.vpn\n  mFinalStatus=1\n"
+ receipt=e.install_baseline("/input/b.apk")
+ assert receipt["adb_install"]["postcondition"]["sessions"]=={77:{"kind":"historical","package":"org.amnezia.vpn","final_status":1}}
+ captured=[json.loads(args[2]) for args,_ in q.calls if len(args)>2 and args[0]=="-c" and "RLIMIT_FSIZE" in args[1]]
+ assert sum(argv[-3:-1]==["install","-r"] for argv in captured)==1
+
+@pytest.mark.parametrize('status',[0,-1])
+def test_baseline_timeout_historical_non_success_status_archives_without_retry(status):
+ p,b,fx,q,ev,e=make();q.install_timeout=True;q.session_output=f"Session 77:\n  mAppPackageName=org.amnezia.vpn\n  mFinalStatus={status}\n";archives=[];e.failure_archive=lambda record,screenshot=None:(archives.append(record) or archive_failure(record,screenshot))
+ with pytest.raises(NestedCuttlefishError):e.install_baseline("/input/b.apk")
+ captured=[json.loads(args[2]) for args,_ in q.calls if len(args)>2 and args[0]=="-c" and "RLIMIT_FSIZE" in args[1]]
+ assert sum(argv[-3:-1]==["install","-r"] for argv in captured)==1
+ assert archives[0]["last_probe"]["reason"]=="baseline-install-timeout-postcondition-failed"
+
+@pytest.mark.parametrize('prefix',["Active Session","Orphaned Session"])
+def test_baseline_timeout_active_or_orphaned_session_rejected_without_retry(prefix):
+ p,b,fx,q,ev,e=make();q.install_timeout=True;q.session_output=f"{prefix} 77:\n  appPackageName = org.amnezia.vpn\n";archives=[];e.failure_archive=lambda record,screenshot=None:(archives.append(record) or archive_failure(record,screenshot))
+ with pytest.raises(NestedCuttlefishError):e.install_baseline("/input/b.apk")
+ captured=[json.loads(args[2]) for args,_ in q.calls if len(args)>2 and args[0]=="-c" and "RLIMIT_FSIZE" in args[1]]
+ assert sum(argv[-3:-1]==["install","-r"] for argv in captured)==1
+ assert archives[0]["last_probe"]["reason"]=="baseline-install-timeout-postcondition-failed"
+
+def test_baseline_install_timeout_mismatch_archives_and_never_retries():
+ p,b,fx,q,ev,e=make();q.install_timeout=True;q.version=37;archives=[];e.failure_archive=lambda record,screenshot=None:(archives.append(record) or archive_failure(record,screenshot))
+ with pytest.raises(NestedCuttlefishError):e.install_baseline("/input/b.apk")
+ captured=[json.loads(args[2]) for args,_ in q.calls if len(args)>2 and args[0]=="-c" and "RLIMIT_FSIZE" in args[1]]
+ assert sum(argv[-3:-1]==["install","-r"] for argv in captured)==1
+ assert archives and archives[0]["last_probe"]["reason"]=="baseline-install-timeout-postcondition-failed" and archives[0]["last_probe"]["install"]["exit_code"]==124
 def test_update_visual_request_is_never_emitted_before_product_timer_60_seconds():
  p,b,fx,q,ev,e=make();clock=e.clock;seen=[];original=e.visual_request;e.sleep=lambda seconds:setattr(clock,"v",clock.v+seconds)
  e.visual_request=lambda record,png:(seen.append(clock.v),original(record,png))[1]
  e.install_baseline("/input/b.apk");restart_floor=clock.v;e.run_update();assert seen and seen[0]>=restart_floor+60
 def test_route_rc2_is_diagnostic_health_succeeds_and_reset_clears_health_row():
  p,b,fx,q,ev,e=make();q.route_rc=2;e.install_baseline("/input/b.apk");receipt=e.run_update();pre=receipt["diagnostic_preflight"]
- assert pre["route"]["exit_code"]==2 and pre["route"]["timed_out"] is False and pre["healthz"]["exit_code"]==0 and pre["fixture_request"]["path"]=="/healthz"
+ assert pre["commands"]["route"]["exit_code"]==2 and pre["commands"]["route"]["timed_out"] is False and pre["commands"]["healthz"]["exit_code"]==0 and pre["fixture_request"]["path"]=="/healthz" and pre["selected_attempt"]==1
  assert [x[0] for x in ev[:3]]==["start","reset","read-log"]
 def test_health_failure_attempts_all_diagnostics_and_archives_health_result_without_reset():
  p,b,fx,q,ev,e=make();q.route_rc=2;q.health_bad=True;archives=[]
@@ -128,15 +203,15 @@ def test_health_failure_attempts_all_diagnostics_and_archives_health_result_with
   archives.append(record);return archive_failure(record,screenshot)
  e.failure_archive=archive
  with pytest.raises(NestedCuttlefishError):e.run_update()
- probe=archives[0]["last_probe"];assert set(probe["preflight"])=={"link","address","routes","route","connect","capability","ril_state","ril_log","healthz"} and probe["preflight"]["route"]["exit_code"]==2 and probe["health_result"]=={"status":"bad"}
- assert not any(action=="reset" for action,_ in ev)
+ probe=archives[0]["last_probe"];attempt=probe["attempts"][0];assert set(attempt["commands"])=={"link","address","routes","route","connect","capability","ril_state","ril_log","healthz"} and attempt["commands"]["route"]["exit_code"]==2 and attempt["health_result"]=={"status":"bad"}
+ assert [action for action,_ in ev].count("reset")==1
 def test_cz_link_permission_diagnostic_reaches_decisive_http_failure_archive():
  p,b,fx=setup();boot_value=boot(p);link=boot_value["network"]["guest_network"]["link"];link["exit_code"]=1;link["stderr"]="ip: Permission denied\n";link["stderr_size"]=len(link["stderr"]);link["stderr_sha256"]=hashlib.sha256(link["stderr"].encode()).hexdigest()
  p,b,fx,q,ev,e=make(boot_value=boot_value);q.health_bad=True;archives=[]
  e.failure_archive=lambda record,screenshot=None:(archives.append(record) or archive_failure(record,screenshot))
  with pytest.raises(NestedCuttlefishError):e.run_update()
- assert archives[0]["phase"]=="app-update" and archives[0]["last_probe"]["preflight"]["healthz"]["exit_code"]==0
- assert archives[0]["last_probe"]["health_result"]=={"status":"bad"}
+ assert archives[0]["phase"]=="app-update" and archives[0]["last_probe"]["attempts"][0]["commands"]["healthz"]["exit_code"]==0
+ assert archives[0]["last_probe"]["attempts"][0]["health_result"]=={"status":"bad"}
 def test_three_not_visible_refreshes_share_one_window_and_produce_zero_input():
  p,b,fx,q,ev,e=make();e._unlock=lambda d:{"passed":True};e._focus=lambda *a,**k:("1234","10123","org.amnezia.vpn","MainActivity",[]);e._ui_xml=lambda *a,**k:b"<hierarchy/>";e._package=lambda *a,**k:({"version_code":38},10123)
  e._capture_result=lambda argv,d,label,limit,command_cap=None:(b"",{"rc":0});e._adb=lambda *a,**k:{};e._read_file=lambda *a,**k:b"\x89PNG\r\n\x1a\nfixture"
@@ -220,24 +295,68 @@ def test_native_pid_change_collects_actual_shaped_sigsegv_module_offset_and_tomb
  p,b,fx,q,ev,e=make();calls=[]
  crash=b"09-14 08:00:00.000  1234  1234 F DEBUG : signal 11 (SIGSEGV), code 1\n09-14 08:00:00.001 F DEBUG : #00 pc 0000000000123abc  /data/app/lib/arm64/libAmneziaVPN.so (Updater::apply+84)\n"
  tomb=b"*** *** ***\npid: 1234, tid: 1234, name: org.amnezia.vpn\n#00 pc 00123abc libAmneziaVPN.so\n"
+ metadata=b"/data/tombstones/tombstone_00|regular file|2049|77|0|1000|640|99|1726185601|1\n";fd=b"AMNEZIA_FD|regular file|2049|77|0|1000|640|99|1726185601\n"+tomb
  def capture(argv,d,label,limit,command_cap=None):
-  calls.append(list(argv));data=tomb if "dropbox" in argv else b"total 4 tombstone_00\n" if "tombstones" in argv else crash;return data,{"rc":0}
+  calls.append(list(argv));data=fd if label.endswith("tombstone-bytes") else tomb if "dropbox" in argv else metadata if label.endswith("metadata") else crash;return data,{"rc":0}
  e._capture_result=capture;receipt=e._collect_native_crash("1234","2345","1726185600.000",500)
- assert receipt["expected_pid"]==1234 and receipt["observed_pid"]==2345 and len(receipt["sources"])==4
+ assert receipt["schema"]==2 and receipt["expected_pid"]==1234 and receipt["observed_pid"]==2345 and len(receipt["sources"])==15
  decoded=b"\n".join(__import__("base64").b64decode(x["output"]["bytes_b64"]) for x in receipt["sources"]);assert b"SIGSEGV" in decoded and b"libAmneziaVPN.so" in decoded and b"00123abc" in decoded
- assert sum(1 for x in calls if "dropbox" in x)==1
+ assert sum(1 for x in calls if "dropbox" in x)==5 and sum(1 for x in calls if x[:3]==["shell","sh","-c"] and x[-1].endswith("tombstone_00"))==1
 def test_native_crash_absent_tombstone_and_capture_errors_are_durable_in_failure_archive():
  p,b,fx,q,ev,e=make();archives=[];count=0
  def capture(argv,d,label,limit,command_cap=None):
   nonlocal count
   count+=1
-  if "dropbox" in argv:raise NestedCuttlefishError("dropbox unavailable")
-  return (b"No tombstones.\n" if "tombstones" in argv else b"Fatal signal 11 (SIGSEGV) in tid 1234\n"),{"rc":1 if "tombstones" in argv else 0}
+  if "dropbox" in argv:
+   err=b"permission denied\n";e.last_command={"argv":[e.adb,"-P","5053","-s",e.serial,*argv],"exit_code":2,"stdout":{"size":0,"sha256":hashlib.sha256(b"").hexdigest(),"bytes_b64":"","excerpt_b64":""},"stderr":{"size":len(err),"sha256":hashlib.sha256(err).hexdigest(),"bytes_b64":base64.b64encode(err).decode(),"excerpt_b64":base64.b64encode(err).decode()}};raise NestedCuttlefishError("dropbox unavailable")
+  return (b"" if label.endswith("metadata") else b"Fatal signal 11 (SIGSEGV) in tid 1234\n"),{"rc":0}
  def archive(record,screenshot=None):archives.append(record);return archive_failure(record,screenshot)
  e._capture_result=capture;e.failure_archive=archive;e._collect_native_crash("1234",None,"1726185600.000",500)
  with pytest.raises(NestedCuttlefishError):e._app_failure("process-died",{},500,"app-focus")
- native=archives[0]["last_probe"]["native_crash"];assert len(native["sources"])==4 and native["observed_pid"] is None and any("capture_error" in x for x in native["sources"])
- assert count==5  # four native sources plus the independently attempted failure screenshot
+ native=archives[0]["last_probe"]["native_crash"];assert len(native["sources"])==14 and native["observed_pid"] is None and sum("capture_error" in x for x in native["sources"])==5
+ assert count==15  # fourteen native sources plus the independently attempted failure screenshot
+def test_native_crash_ignores_old_unreadable_and_nonregular_tombstones():
+ p,b,fx,q,ev,e=make();calls=[]
+ metadata=b"/data/tombstones/tombstone_00|regular file|2049|70|0|1000|640|99|1726185599|1\n/data/tombstones/tombstone_01|regular file|2049|71|0|1000|600|99|1726185601|0\n/data/tombstones/tombstone_02|directory|2049|72|0|1000|750|99|1726185601|1\n"
+ def capture(argv,d,label,limit,command_cap=None):calls.append(list(argv));return (metadata if label.endswith("metadata") else b""),{"rc":0}
+ e._capture_result=capture;r=e._collect_native_crash("1234",None,"1726185600.000",500)
+ assert len(r["sources"])==14 and not any("grep" in x for x in calls) and not any(x[:2]==["shell","cat"] for x in calls)
+def test_native_crash_owner_nonzero_prevents_tombstone_bytes_but_is_durable():
+ p,b,fx,q,ev,e=make();calls=[];metadata=b"/data/tombstones/tombstone_00|regular file|2049|77|0|1000|640|99|1726185601|1\n"
+ def capture(argv,d,label,limit,command_cap=None):
+  calls.append(list(argv));return (metadata if label.endswith("metadata") else b""),{"rc":1 if label.endswith("tombstone-bytes") else 0}
+ e._capture_result=capture;r=e._collect_native_crash("1234",None,"1726185600.000",500)
+ owner=r["sources"][-1];assert owner["label"]=="tombstone-rejected" and owner["exit_code"]==1 and owner["reason"]=="fd-identity-or-pid-mismatch"
+def test_native_crash_oversize_tombstone_capture_error_keeps_bounded_command():
+ p,b,fx,q,ev,e=make();metadata=b"/data/tombstones/tombstone_00|regular file|2049|77|0|1000|640|600000|1726185601|1\n"
+ def capture(argv,d,label,limit,command_cap=None):
+  if label.endswith("metadata"):return metadata,{"rc":0}
+  if label.endswith("tombstone-bytes"):
+   empty=hashlib.sha256(b"").hexdigest();e.last_command={"argv":[e.adb,"-P","5053","-s",e.serial,*argv],"exit_code":1,"stdout":{"size":524289,"sha256":"0"*64,"bytes_b64":None,"excerpt_b64":"","excerpt_size":0,"excerpt_sha256":empty,"complete":False},"stderr":{"size":0,"sha256":empty,"bytes_b64":"","excerpt_b64":""}};raise NestedCuttlefishError("bounded command output exceeds limit")
+  return b"",{"rc":0}
+ e._capture_result=capture;r=e._collect_native_crash("1234",None,"1726185600.000",500);row=r["sources"][-1]
+ assert row["label"]=="tombstone-bytes" and row["metadata"]["reported_size"]==600000 and row["capture_error"]["type"]=="NestedCuttlefishError" and row["bounded_command"]["argv"][-1].endswith("tombstone_00")
+def test_native_crash_validator_rejects_forged_argv_package_and_capture_error_command():
+ p,b,fx,q,ev,e=make()
+ def capture(argv,d,label,limit,command_cap=None):return b"",{"rc":0}
+ e._capture_result=capture;valid=e._collect_native_crash("1234",None,"1726185600.000",500)
+ forged=copy.deepcopy(valid);forged["sources"][0]["argv"][5]="1726185601.000"
+ with pytest.raises(NestedCuttlefishError,match="argv binding"):validate_native_crash_evidence(forged)
+ forged=copy.deepcopy(valid);forged["package"]="org.other.app"
+ with pytest.raises(NestedCuttlefishError,match="argv binding"):validate_native_crash_evidence(forged)
+ forged=copy.deepcopy(valid);row=forged["sources"][0];row.pop("output");row.pop("exit_code");row.pop("timed_out");row["capture_error"]={"type":"NestedCuttlefishError","sha256":"0"*64};row["bounded_command"]={"argv":["evil"],"exit_code":1}
+ with pytest.raises(NestedCuttlefishError,match="capture failure durability"):validate_native_crash_evidence(forged)
+def test_native_crash_validator_rejects_unrelated_pid_and_fd_identity_swap():
+ p,b,fx,q,ev,e=make();metadata=b"/data/tombstones/tombstone_00|regular file|2049|77|0|1000|640|99|1726185601|1\n";body=b"pid: 1234, tid: 1234\n#00 pc 123 libAmneziaVPN.so\n"
+ def capture(argv,d,label,limit,command_cap=None):
+  if label.endswith("metadata"):return metadata,{"rc":0}
+  if label.endswith("tombstone-bytes"):return b"AMNEZIA_FD|regular file|2049|77|0|1000|640|99|1726185601\n"+body,{"rc":0}
+  return b"",{"rc":0}
+ e._capture_result=capture;valid=e._collect_native_crash("1234",None,"1726185600.000",500)
+ for replacement in (b"pid: 9999, tid: 9999\n",b"AMNEZIA_FD|regular file|2049|88|0|1000|640|99|1726185601\n"+body):
+  forged=copy.deepcopy(valid);row=forged["sources"][-1];raw=base64.b64decode(row["output"]["bytes_b64"]);raw=replacement if replacement.startswith(b"AMNEZIA_FD") else raw.split(b"\n",1)[0]+b"\n"+replacement
+  row["output"].update(size=len(raw),sha256=hashlib.sha256(raw).hexdigest(),bytes_b64=base64.b64encode(raw).decode())
+  with pytest.raises(NestedCuttlefishError,match="identity/PID"):validate_native_crash_evidence(forged)
 def test_update_restart_waits_for_strict_drawn_visible_state_before_update_and_persistent_nonvisible_fails():
  p,b,fx,q,ev,e=make();e.install_baseline("/input/b.apk");q.splash_count=4;r=e.run_update();ready=r["ui"]["update_check_restart"]["readiness"]
  assert len(ready)==5 and ready[-1]["matches"][0]["visible"] is True and ready[-1]["matches"][0]["drawn"] is True
@@ -408,6 +527,14 @@ def test_focus_polls_actual_key_value_splash_until_drawn_and_rejects_persistent_
  assert rows[1]["matches"][0]["drawn"] is True and rows[1]["matches"][0]["starting_displayed"] is False
  p,b,fx,q,ev,e=make();q.splash_count=9
  with pytest.raises(NestedCuttlefishError,match="foreground activity-top mismatch"):e._focus((p.apk.package,),e.clock()+30)
+def test_same_pid_splash_fatal_remains_immediate_failure_without_tombstone_claim():
+ p,b,fx,q,ev,e=make();q.splash_count=2;archived=[];e.failure_archive=lambda record,screenshot=None:(archived.append(record) or archive_failure(record,screenshot));original=e._capture_result
+ def capture(argv,d,label,maximum,command_cap=None):
+  if label=="focus-progress-logcat":return b"Fatal signal 11 (SIGSEGV), pid 1234 (org.amnezia.vpn)\n",{"rc":0}
+  return original(argv,d,label,maximum,command_cap)
+ e._capture_result=capture
+ with pytest.raises(NestedCuttlefishError,match="foreground activity-top mismatch"):e._focus((p.apk.package,),e.clock()+30,lifecycle_epoch="1726185600.000")
+ assert archived[-1]["last_probe"]["reason"]=="splash-process-fatal" and "native_crash" not in archived[-1]["last_probe"]
 def test_splash_pid_change_remains_fatal_and_archives_each_lifecycle_snapshot():
  p,b,fx,q,ev,e=make();archived=[];e.failure_archive=lambda record,screenshot=None:(archived.append(record) or archive_failure(record,screenshot));original=e._capture_result
  activity=iter((
@@ -498,7 +625,7 @@ def test_focus_rejects_key_value_record_without_explicit_starting_displayed():
 def test_baseline_budget_reserves_focus_after_slow_install_and_expiry_is_diagnostic():
  p,b,fx=setup();q=Q();ev=[];clock=Clock();original=q.guest_exec_wait
  def slow(path,args,timeout=30):
-  if "install" in args:clock.v+=250
+  if "install" in args:clock.v+=170
   return original(path,args,timeout)
  q.guest_exec_wait=slow;e=NestedAppExecutor(q,p,boot(p),b,fx,lambda:p.ownership,lambda:dict(fx.outer_ownership),fixture_for(fx,ev),failure_archive=archive_failure,clock=clock,sleep=lambda _:None)
  receipt=e.install_baseline("/input/b.apk");assert receipt["passed"] and receipt["ui"]["focus_observations"]
@@ -669,6 +796,33 @@ def test_nonfocus_update_failure_archives_before_stop_and_bad_ack_retains():
 def test_nc_capability_and_http_failure_archive_all_network_rows_before_reset():
  p,b,fx,q,ev,e=make();archives=[];q.health_bad=True;e.failure_archive=lambda record,screenshot=None:(archives.append(record) or archive_failure(record,screenshot))
  with pytest.raises(NestedCuttlefishError):e.run_update()
- probe=archives[0]["last_probe"];assert probe["fixture_log"]=={"state":"not-reset","reason":"health-preflight-failed"}
- assert set(probe["preflight"])=={"link","address","routes","route","connect","capability","ril_state","ril_log","healthz"}
- assert all(set(row)=={"argv","exit_code","timed_out","output","stderr"} for row in probe["preflight"].values()) and not any(action=="reset" for action,_ in ev)
+ probe=archives[0]["last_probe"];attempt=probe["attempts"][0]
+ assert set(attempt["commands"])=={"link","address","routes","route","connect","capability","ril_state","ril_log","healthz"}
+ assert all(set(row)=={"argv","exit_code","timed_out","output","stderr"} for row in attempt["commands"].values()) and [action for action,_ in ev].count("reset")==1
+
+@pytest.mark.parametrize("tamper",["missing","order","label","argv","rc","timed_out","size","hash","archive-size","excerpt-size","excerpt-hash","excerpt-bytes","manifest","compact"])
+def test_failure_sidecar_ack_tamper_retains_guest_before_cleanup(tamper):
+ p,b,fx,q,ev,e=make();data=b"DF";digest=hashlib.sha256(data).hexdigest();row={"order":1,"label":"adb:df","argv":["shell","df"],"exit_code":0,"timed_out":False,"original_size":len(data),"original_sha256":digest,"excerpt_size":len(data),"excerpt_sha256":digest,"excerpt_b64":base64.b64encode(data).decode(),"archive":{"path":"/archive/df.bin","sha256":digest,"size":len(data),"immutable":True},"run_id":p.ownership.run_id,"attempt_nonce":p.ownership.attempt_nonce,"outer_ownership":asdict(p.ownership)}
+ if tamper=="order":row["order"]=2
+ if tamper=="label":row["label"]="adb:other"
+ if tamper=="argv":row["argv"]=["shell","id"]
+ if tamper=="rc":row["exit_code"]=True
+ if tamper=="timed_out":row["timed_out"]=0
+ if tamper=="size":row["original_size"]+=1
+ if tamper=="hash":row["archive"]["sha256"]="0"*64
+ if tamper=="archive-size":row["archive"]["size"]+=1
+ if tamper=="excerpt-size":row["excerpt_size"]+=1
+ if tamper=="excerpt-hash":row["excerpt_sha256"]="0"*64
+ if tamper=="excerpt-bytes":row["excerpt_b64"]=base64.b64encode(b"DX").decode()
+ def archive(record,screenshot=None):
+  ack=archive_failure(record,screenshot)
+  if tamper!="missing":ack["sidecars"]=[row]
+  else:ack["sidecars"]=[{**row,"archive":None}]
+  ack["sidecar_manifest_sha256"]=hashlib.sha256(json.dumps(ack["sidecars"],sort_keys=True,separators=(",",":")).encode()).hexdigest();ack["compact_archive_sha256"]=ack["sha256"]
+  if tamper=="manifest":ack["sidecar_manifest_sha256"]="0"*64
+  if tamper=="compact":ack["compact_archive_sha256"]="0"*64
+  return ack
+ e.failure_archive=archive
+ raw={"origin":"guest","transport":"qga-adb","path":"adb:df","size":len(data),"sha256":digest,"bytes_b64":base64.b64encode(data).decode()};diagnostic={"df":{"argv":["shell","df"],"exit_code":0,"timed_out":False,"output":raw}}
+ with pytest.raises(NestedCuttlefishError,match="archive rejected") as caught:e._app_failure("df-overflow",diagnostic,e.clock()+20,"app-update")
+ assert getattr(caught.value,"retain_owned_evidence",False) is True and not any(action=="stop" for action,_ in ev)
