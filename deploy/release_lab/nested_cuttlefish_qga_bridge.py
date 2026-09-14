@@ -518,12 +518,6 @@ except ValueError:
  print(json.dumps({'ready':False,'fatal':True,'reason':'invalid-android-boot-id','phase':'android-boot','qemu_seen':True,'serial':serial.replace(':','_'),'boot_id_sha256':hashlib.sha256(boot_id.encode()).hexdigest(),'adb_probes':probes,'processes':processes,'cgroup':p['cgroup']})); raise SystemExit
 network_commands={'link':['shell','ip','-details','link','show'],'address':['shell','ip','-4','addr','show'],'rules':['shell','ip','-4','rule','show'],'routes':['shell','ip','-4','route','show'],'routes_all':['shell','ip','-4','route','show','table','all'],'endpoint_route':['shell','ip','-4','route','get','10.8.1.0'],'ril_state':['shell','getprop','init.svc.vendor.ril-daemon'],'ril_log':['shell','logcat','-d','-t','200','-v','threadtime','-b','main','-b','system','-b','events','RIL*:V','libcuttlefish-rild:V','init:I','*:S']}
 network_evidence={name:command([adb,'-P',port,'-s',serial,*argv]) for name,argv in network_commands.items()}
-def fail_network(reason):
- print(json.dumps({'ready':False,'fatal':False,'reason':reason,'phase':'android-network','qemu_seen':True,'network_argv':netdev,'frontend_argv':frontends,'native_config':native,'guest_network':network_evidence,'processes':processes,'cgroup':p['cgroup']}));raise SystemExit
-if any(network_evidence[name]['exit_code']!=0 for name in ('link','address','rules','routes_all')): fail_network('guest-network-capture-pending')
-addr=network_evidence['address']['stdout']
-addresses=re.findall(r'\binet ([0-9.]+)/(\d+)',addr)
-if not any(not ipaddress.ip_address(ip).is_loopback for ip,_ in addresses): fail_network('guest-nonloopback-ipv4-missing')
 r={'schema':2,'operation':'nested-cuttlefish-boot','run_id':p['run_id'],'profile':p['profile'],'attempt_nonce':p['attempt_nonce'],
  'marker':p['marker'],'guest_root':p['guest_root'],'outer_ownership':p['outer_ownership'],'origin':'guest','transport':'qga','injected':False,
  'containment':{'kind':'cgroup-v2','path':p['cgroup'],'member_pids':pids,'stable_reads':p['stable_reads']},'processes':processes,'roles':{'cvd':roles['cvd'],'adb':roles['adb'],'qemu':roles['qemu']},

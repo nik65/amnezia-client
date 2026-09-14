@@ -441,9 +441,15 @@ def validate_boot_receipt(plan: InnerPlan, receipt: Mapping) -> dict:
     if (adapter_records[0]["before_dev"],adapter_records[0]["before_inode"])!=(adapter_records[1]["before_dev"],adapter_records[1]["before_inode"]) or (adapter_records[2]["before_dev"],adapter_records[2]["before_inode"])==(adapter_records[0]["before_dev"],adapter_records[0]["before_inode"]) or (adapter_records[0]["after_dev"],adapter_records[0]["after_inode"])!=(adapter_records[1]["after_dev"],adapter_records[1]["after_inode"]) or (adapter_records[2]["after_dev"],adapter_records[2]["after_inode"])==(adapter_records[0]["after_dev"],adapter_records[0]["after_inode"]): raise NestedCuttlefishError("network adapter alias topology invalid")
     if not isinstance(guest_network,Mapping) or set(guest_network)!={"link","address","rules","routes","routes_all","endpoint_route","ril_state","ril_log"}: raise NestedCuttlefishError("guest network proof missing")
     for row in guest_network.values():
-        if not isinstance(row,Mapping) or not isinstance(row.get("exit_code"),int) or isinstance(row.get("exit_code"),bool) or any(not SHA_RE.fullmatch(str(row.get(k,""))) for k in ("stdout_sha256","stderr_sha256")) or any(not isinstance(row.get(k),int) or isinstance(row.get(k),bool) or not 0<=row[k]<=1048576 for k in ("stdout_size","stderr_size")): raise NestedCuttlefishError("guest network command evidence invalid")
-    if any(guest_network[name].get("exit_code")!=0 for name in ("link","address","rules","routes_all")): raise NestedCuttlefishError("guest network capture failed")
-    if not re.search(r"\binet (?!127\.)[0-9.]+/\d+",guest_network["address"].get("stdout","")): raise NestedCuttlefishError("guest network semantic proof invalid")
+        if (not isinstance(row,Mapping) or set(row)!={"argv","exit_code","stdout","stdout_size","stdout_sha256","stderr","stderr_size","stderr_sha256"}
+                or not isinstance(row.get("argv"),list) or not row["argv"] or len(row["argv"])>32 or any(not isinstance(x,str) or len(x)>4096 for x in row["argv"])
+                or not isinstance(row.get("exit_code"),int) or isinstance(row.get("exit_code"),bool)
+                or not isinstance(row.get("stdout"),str) or len(row["stdout"])>4096 or not isinstance(row.get("stderr"),str) or len(row["stderr"])>4096
+                or any(not SHA_RE.fullmatch(str(row.get(k,""))) for k in ("stdout_sha256","stderr_sha256"))
+                or any(not isinstance(row.get(k),int) or isinstance(row.get(k),bool) or not 0<=row[k]<=1048576 for k in ("stdout_size","stderr_size"))
+                or row["stdout_size"]<len(row["stdout"]) or row["stderr_size"]<len(row["stderr"])): raise NestedCuttlefishError("guest network command evidence invalid")
+        for stream in ("stdout","stderr"):
+            if row[f"{stream}_size"]<=4096 and (row[f"{stream}_size"]!=len(row[stream]) or row[f"{stream}_sha256"]!=hashlib.sha256(row[stream].encode()).hexdigest()): raise NestedCuttlefishError("guest network command evidence invalid")
     connection=network.get("adb_connection"); binding=connection.get("binding") if isinstance(connection,Mapping) else None
     if not isinstance(binding,Mapping) or not isinstance(binding.get("endpoint"),str) or not re.fullmatch(r"127\.0\.0\.1:([1-9][0-9]{3,4})",binding["endpoint"]): raise NestedCuttlefishError("derived ADB endpoint binding missing")
     endpoint=binding["endpoint"]; guest_port=int(endpoint.rsplit(":",1)[1])

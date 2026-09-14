@@ -107,11 +107,11 @@ def fixture_for(fx,events,forged=False):
   reset={**common,"log_inode":5,"offset":0,"reset_token":"5"*48,"reset_at":100.0,"empty_sha256":hashlib.sha256(b"").hexdigest(),"cleared_health_request":health_row};rs=receipt_sha(reset)
   return {**common,"requests":rows,"reset_receipt_sha256":rs,"reset_token":"5"*48,"log_inode":5,"start_offset":0,"transcript_sha256":receipt_sha({"reset_receipt_sha256":rs,"requests":rows}),"finished_at":103.0,"request_log_sha256":"4"*64,"request_log_size":4}
  return call
-def make(forged=False):
+def make(forged=False,boot_value=None):
  p,b,fx=setup();q=Q();ev=[];decisions={}
  def request(record,png):
   bound={**record,"created_at":1000.0,"expires_at":1000.0+record["review_seconds"],"request_id":str(record["sequence"]),"png":{"path":"/image","sha256":hashlib.sha256(png).hexdigest(),"size":len(png),"width":100,"height":200}};ack={"origin":"controller","immutable":True,"run_id":record["run_id"],"attempt_nonce":record["attempt_nonce"],"request_id":bound["request_id"],"request_path":"/request","request_sha256":"a"*64,"png_path":"/image","png_sha256":hashlib.sha256(png).hexdigest(),"png_size":len(png),"png_width":100,"png_height":200,"created_at":bound["created_at"],"expires_at":bound["expires_at"],"request_record":bound};decisions[ack["request_id"]]={"origin":"controller","immutable":True,"input_only":True,"run_id":record["run_id"],"attempt_nonce":record["attempt_nonce"],"request_id":ack["request_id"],"request_sha256":ack["request_sha256"],"decision":"approve","bounds":[0,0,10,10],"sha256":"b"*64};return ack
- e=NestedAppExecutor(q,p,boot(p),b,fx,lambda:p.ownership,lambda:dict(fx.outer_ownership),fixture_for(fx,ev,forged),failure_archive=archive_failure,visual_request=request,visual_poll=lambda ack:decisions.get(ack["request_id"]),clock=Clock(),sleep=lambda _:None);return p,b,fx,q,ev,e
+ e=NestedAppExecutor(q,p,boot_value or boot(p),b,fx,lambda:p.ownership,lambda:dict(fx.outer_ownership),fixture_for(fx,ev,forged),failure_archive=archive_failure,visual_request=request,visual_poll=lambda ack:decisions.get(ack["request_id"]),clock=Clock(),sleep=lambda _:None);return p,b,fx,q,ev,e
 def test_happy_path_matches_semantic_validator_and_uses_proven_adb():
  p,b,fx,q,ev,e=make();e.install_baseline("/input/b.apk");r=e.run_update();validate_app_update_receipt(p,boot(p),r);assert all(c[0][:4]==["-P","5053","-s","127.0.0.1:6520"] for c in q.calls if c[0] and c[0][0]=="-P");assert ev[-1][0]=="stop"
 def test_update_visual_request_is_never_emitted_before_product_timer_60_seconds():
@@ -130,6 +130,13 @@ def test_health_failure_attempts_all_diagnostics_and_archives_health_result_with
  with pytest.raises(NestedCuttlefishError):e.run_update()
  probe=archives[0]["last_probe"];assert set(probe["preflight"])=={"link","address","routes","route","connect","capability","ril_state","ril_log","healthz"} and probe["preflight"]["route"]["exit_code"]==2 and probe["health_result"]=={"status":"bad"}
  assert not any(action=="reset" for action,_ in ev)
+def test_cz_link_permission_diagnostic_reaches_decisive_http_failure_archive():
+ p,b,fx=setup();boot_value=boot(p);link=boot_value["network"]["guest_network"]["link"];link["exit_code"]=1;link["stderr"]="ip: Permission denied\n";link["stderr_size"]=len(link["stderr"]);link["stderr_sha256"]=hashlib.sha256(link["stderr"].encode()).hexdigest()
+ p,b,fx,q,ev,e=make(boot_value=boot_value);q.health_bad=True;archives=[]
+ e.failure_archive=lambda record,screenshot=None:(archives.append(record) or archive_failure(record,screenshot))
+ with pytest.raises(NestedCuttlefishError):e.run_update()
+ assert archives[0]["phase"]=="app-update" and archives[0]["last_probe"]["preflight"]["healthz"]["exit_code"]==0
+ assert archives[0]["last_probe"]["health_result"]=={"status":"bad"}
 def test_three_not_visible_refreshes_share_one_window_and_produce_zero_input():
  p,b,fx,q,ev,e=make();e._unlock=lambda d:{"passed":True};e._focus=lambda *a,**k:("1234","10123","org.amnezia.vpn","MainActivity",[]);e._ui_xml=lambda *a,**k:b"<hierarchy/>";e._package=lambda *a,**k:({"version_code":38},10123)
  e._capture_result=lambda argv,d,label,limit,command_cap=None:(b"",{"rc":0});e._adb=lambda *a,**k:{};e._read_file=lambda *a,**k:b"\x89PNG\r\n\x1a\nfixture"

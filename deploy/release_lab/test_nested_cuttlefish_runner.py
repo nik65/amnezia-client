@@ -421,12 +421,14 @@ def test_boot_rejects_minimal_or_environment_drifted_wayland_proof():
             validate_boot_receipt(p,candidate)
 
 
-def test_native_network_accepts_policy_table_without_main_default_and_keeps_diagnostics_nonfatal():
+def test_native_network_introspection_is_diagnostic_and_keeps_http_gate_authoritative():
     p=plan();value=boot();assert validate_boot_receipt(p,value)["passed"]
     value=boot();value["network"]["qemu_frontend_argv"]=[]
     with pytest.raises(NestedCuttlefishError,match="hostnet0"):validate_boot_receipt(p,value)
-    value=boot();value["network"]["guest_network"]["address"]["stdout"]="1: lo inet 127.0.0.1/8\n"
-    with pytest.raises(NestedCuttlefishError,match="semantic"):validate_boot_receipt(p,value)
-    value=boot();value["network"]["guest_network"]["endpoint_route"]["exit_code"]=2;value["network"]["guest_network"]["endpoint_route"]["stdout"]=""
+    value=boot();link=value["network"]["guest_network"]["link"];link["exit_code"]=1;link["stderr"]="ip: Permission denied\n";link["stderr_size"]=len(link["stderr"]);link["stderr_sha256"]=hashlib.sha256(link["stderr"].encode()).hexdigest()
+    value["network"]["guest_network"]["address"]["stdout"]="2: eth0 inet 10.0.2.15/24 scope global eth0\n"
+    route=value["network"]["guest_network"]["endpoint_route"];route["exit_code"]=2;route["stdout"]="";route["stdout_size"]=0;route["stdout_sha256"]=hashlib.sha256(b"").hexdigest()
     value["network"]["guest_network"]["ril_state"]["exit_code"]=1;value["network"]["guest_network"]["ril_log"]["exit_code"]=1
     assert validate_boot_receipt(p,value)["passed"]
+    value=boot();value["network"]["guest_network"]["link"]["stdout_sha256"]="0"*64
+    with pytest.raises(NestedCuttlefishError,match="command evidence"):validate_boot_receipt(p,value)
