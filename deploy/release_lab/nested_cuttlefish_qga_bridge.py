@@ -516,16 +516,14 @@ if not abi or complete!='1' or not boot_id:
 try: uuid.UUID(boot_id)
 except ValueError:
  print(json.dumps({'ready':False,'fatal':True,'reason':'invalid-android-boot-id','phase':'android-boot','qemu_seen':True,'serial':serial.replace(':','_'),'boot_id_sha256':hashlib.sha256(boot_id.encode()).hexdigest(),'adb_probes':probes,'processes':processes,'cgroup':p['cgroup']})); raise SystemExit
-network_commands={'link':['shell','ip','-details','link','show'],'address':['shell','ip','-4','addr','show'],'routes':['shell','ip','-4','route','show'],'endpoint_route':['shell','ip','-4','route','get','10.8.1.0'],'ril_state':['shell','getprop','init.svc.vendor.ril-daemon'],'ril_log':['shell','logcat','-d','-t','200','-v','threadtime','-b','main','-b','system','-b','events','RIL*:V','libcuttlefish-rild:V','init:I','*:S']}
+network_commands={'link':['shell','ip','-details','link','show'],'address':['shell','ip','-4','addr','show'],'rules':['shell','ip','-4','rule','show'],'routes':['shell','ip','-4','route','show'],'routes_all':['shell','ip','-4','route','show','table','all'],'endpoint_route':['shell','ip','-4','route','get','10.8.1.0'],'ril_state':['shell','getprop','init.svc.vendor.ril-daemon'],'ril_log':['shell','logcat','-d','-t','200','-v','threadtime','-b','main','-b','system','-b','events','RIL*:V','libcuttlefish-rild:V','init:I','*:S']}
 network_evidence={name:command([adb,'-P',port,'-s',serial,*argv]) for name,argv in network_commands.items()}
 def fail_network(reason):
- print(json.dumps({'ready':False,'fatal':True,'reason':reason,'phase':'android-network','qemu_seen':True,'network_argv':netdev,'frontend_argv':frontends,'native_config':native,'guest_network':network_evidence,'processes':processes,'cgroup':p['cgroup']}));raise SystemExit
-if any(row['exit_code']!=0 for row in network_evidence.values()): fail_network('guest-network-capability-failed')
-addr=network_evidence['address']['stdout']; routes=network_evidence['routes']['stdout']; route=network_evidence['endpoint_route']['stdout']
+ print(json.dumps({'ready':False,'fatal':False,'reason':reason,'phase':'android-network','qemu_seen':True,'network_argv':netdev,'frontend_argv':frontends,'native_config':native,'guest_network':network_evidence,'processes':processes,'cgroup':p['cgroup']}));raise SystemExit
+if any(network_evidence[name]['exit_code']!=0 for name in ('link','address','rules','routes_all')): fail_network('guest-network-capture-pending')
+addr=network_evidence['address']['stdout']
 addresses=re.findall(r'\binet ([0-9.]+)/(\d+)',addr)
 if not any(not ipaddress.ip_address(ip).is_loopback for ip,_ in addresses): fail_network('guest-nonloopback-ipv4-missing')
-defaults=re.findall(r'(?m)^default(?: via ([0-9.]+))? dev (\S+)',routes)
-if len(defaults)!=1 or not defaults[0][1] or not re.search(r'\bdev '+re.escape(defaults[0][1])+r'\b.*\bsrc ([0-9.]+)',route): fail_network('guest-default-or-endpoint-route-missing')
 r={'schema':2,'operation':'nested-cuttlefish-boot','run_id':p['run_id'],'profile':p['profile'],'attempt_nonce':p['attempt_nonce'],
  'marker':p['marker'],'guest_root':p['guest_root'],'outer_ownership':p['outer_ownership'],'origin':'guest','transport':'qga','injected':False,
  'containment':{'kind':'cgroup-v2','path':p['cgroup'],'member_pids':pids,'stable_reads':p['stable_reads']},'processes':processes,'roles':{'cvd':roles['cvd'],'adb':roles['adb'],'qemu':roles['qemu']},
@@ -798,13 +796,10 @@ class NestedCuttlefishQgaBridge:
         qemu_seen=False;assembly_seen=False;assembly_missing_polls=0;progress_key=None
         expected_cgroup=f"/amnezia-release-lab/{self.plan.ownership.run_id}/{self.plan.ownership.attempt_nonce}"
         def fail_boot(reason:str,observed:Mapping[str,Any],primary_error:BaseException|None=None)->None:
-            raw=json.dumps(dict(observed),sort_keys=True,separators=(",",":"));logs=observed.get("logs") if isinstance(observed.get("logs"),Mapping) else {}
-            probe_summary={k:observed.get(k) for k in ("ready","fatal","reason","phase","launcher_pid","launcher_alive","valid_progress","qemu_network_fatal","exact_log_fatal","qemu_disappeared","assembly_elapsed_seconds","assembly_missing_polls","roles","process_count","cgroup")}
-            if isinstance(observed.get("probe_error"),Mapping):probe_summary["probe_error"]={k:observed["probe_error"].get(k) for k in ("type","sha256")}
-            network_argv=observed.get("network_argv")
-            if isinstance(network_argv,list):probe_summary["network_argv"]=[str(x)[:1024] for x in network_argv[:8]]
-            probe_summary.update({"raw_sha256":hashlib.sha256(raw.encode()).hexdigest(),"raw_size":len(raw),"processes_sha256":hashlib.sha256(json.dumps(observed.get("processes",[]),sort_keys=True,separators=(",",":")).encode()).hexdigest(),
-              "launch_stderr":str(logs.get("launch_stderr",''))[-2048:],"adb_stderr":str(logs.get("adb_stderr",''))[-1024:]})
+            raw=json.dumps(dict(observed),sort_keys=True,separators=(",",":"))
+            if len(raw)>131072:raise NestedCuttlefishTransportError("boot probe failure payload exceeds bound")
+            probe_summary=dict(observed)
+            probe_summary.update({"raw_sha256":hashlib.sha256(raw.encode()).hexdigest(),"raw_size":len(raw),"processes_sha256":hashlib.sha256(json.dumps(observed.get("processes",[]),sort_keys=True,separators=(",",":")).encode()).hexdigest()})
             record={"schema":1,"outer_failure":"nested-boot","run_id":self.plan.ownership.run_id,
               "attempt_nonce":self.plan.ownership.attempt_nonce,"outer_ownership":asdict(self.plan.ownership),
               "phase":str(observed.get("phase") or "unknown"),"qemu_seen":qemu_seen,"poll_count":poll_count,

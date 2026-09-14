@@ -3475,7 +3475,25 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                 try:raw_bytes=base64.b64decode(raw["bytes_b64"],validate=True)
                 except Exception as exc:raise LabError("nested app focus raw encoding") from exc
                 if len(raw_bytes)!=raw["size"] or hashlib.sha256(raw_bytes).hexdigest()!=raw["sha256"]:raise LabError("nested app focus raw readback")
-        failure_bound=786432 if app_focus else 16384
+        network_failure=str(record.get("phase",""))=="android-network"
+        if network_failure:
+            probe=record.get("last_probe") or {};guest_network=probe.get("guest_network")
+            if (not isinstance(guest_network,Mapping) or len(guest_network)>12
+                    or isinstance(probe.get("raw_size"),bool) or not isinstance(probe.get("raw_size"),int)
+                    or not 0<probe["raw_size"]<=131072 or not re.fullmatch(r"[0-9a-f]{64}",str(probe.get("raw_sha256","")))):
+                raise LabError("nested network boot failure payload identity")
+            raw_probe={key:value for key,value in probe.items() if key not in {"raw_size","raw_sha256","processes_sha256"}}
+            raw_bytes=json.dumps(raw_probe,sort_keys=True,separators=(",",":")).encode()
+            if len(raw_bytes)!=probe["raw_size"] or hashlib.sha256(raw_bytes).hexdigest()!=probe["raw_sha256"]:
+                raise LabError("nested network boot failure raw binding")
+            for row in guest_network.values():
+                if (not isinstance(row,Mapping) or not isinstance(row.get("argv"),list) or len(row["argv"])>32
+                        or any(not isinstance(arg,str) or len(arg)>4096 for arg in row["argv"])
+                        or isinstance(row.get("exit_code"),bool) or not isinstance(row.get("exit_code"),int)
+                        or not isinstance(row.get("stdout"),str) or len(row["stdout"])>4096
+                        or not isinstance(row.get("stderr"),str) or len(row["stderr"])>4096):
+                    raise LabError("nested network boot failure command bound")
+        failure_bound=786432 if app_focus else (196608 if network_failure else 16384)
         if len(data)>failure_bound:raise LabError("nested boot failure record exceeds bound")
         directory=ensure_owned_child(self.root,self.root/"runs"/run_id/"controller","nested boot failure archive");directory.mkdir(parents=True,exist_ok=True)
         screenshot_ack=None

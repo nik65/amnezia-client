@@ -49,7 +49,7 @@ def boot_receipt(plan:InnerPlan)->dict:
       "vsock_cid":37,"adb_endpoint":"127.0.0.1:5053","cvdnetwork_gid":4242,"kvm_gid":993,"vhost_vsock":{"path":"/dev/vhost-vsock","dev":7,"inode":8,"uid":0,"gid":993,"mode":"0660","rdev":9,"char":True},"vhost_access":{"exit_code":0,"result":{"egid":999,"euid":999,"groups":[993,4242],"read":True,"write":True}},"runtime_dependency":dependency,"network":{"adb_listen":"127.0.0.1:5053","host_mutation":False,"host_mounts":[],"qemu_netdev_argv":["user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"],"qemu_frontend_argv":["virtio-net-pci,netdev=hostnet0"],"native_config":{"schema":1,"records":[{"path":path,"sha256":"3"*64,"size":100,"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"} for path in paths],"adapter":{"path":f"{plan.root}/runtime/network-config-adapter.json","sha256":"4"*64,"size":500,"receipt":adapter}}}}
     paths=[x["path"] for x in result["network"]["native_config"]["records"]];adb=f"{plan.root}/runtime/host/bin/adb";empty="List of devices attached\n";connected="List of devices attached\n127.0.0.1:6520\tdevice\n"
     def cmd(argv,out): return {"argv":argv,"exit_code":0,"stdout":out,"stdout_size":len(out),"stdout_sha256":hashlib.sha256(out.encode()).hexdigest(),"stderr":"","stderr_size":0,"stderr_sha256":hashlib.sha256(b"").hexdigest()}
-    result["network"]["guest_network"]={"link":cmd(["adb"],"2: eth0: UP\n"),"address":cmd(["adb"],"2: eth0 inet 10.0.2.15/24 scope global eth0\n"),"routes":cmd(["adb"],"default via 10.0.2.2 dev eth0\n"),"endpoint_route":cmd(["adb"],"10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"),"ril_state":cmd(["adb"],"stopped\n"),"ril_log":cmd(["adb"],"restart diagnostic\n")}
+    result["network"]["guest_network"]={"link":cmd(["adb"],"2: eth0: UP\n"),"address":cmd(["adb"],"2: eth0 inet 10.0.2.15/24 scope global eth0\n"),"rules":cmd(["adb"],"10000: from all fwmark 0x0/0x10000 lookup 1002\n"),"routes":cmd(["adb"],""),"routes_all":cmd(["adb"],"default via 10.0.2.2 dev eth0 table 1002\n"),"endpoint_route":cmd(["adb"],"10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"),"ril_state":cmd(["adb"],"stopped\n"),"ril_log":cmd(["adb"],"restart diagnostic\n")}
     result["network"]["adb_connection"]={"endpoint":"127.0.0.1:6520","before":cmd([adb,"-P","5053","devices"],empty),"connect":cmd([adb,"-P","5053","connect","127.0.0.1:6520"],"connected"),"after":cmd([adb,"-P","5053","devices"],connected),"binding":{"endpoint":"127.0.0.1:6520","config_rows":[{"path":x,"sha256":"3"*64,"size":100,"adb_host_port":6520,"adb_ip_and_port":"0.0.0.0:6520"} for x in paths],"connector_pid":204,"proxy_pid":205,"connector_argv":processes[3]["argv"],"proxy_argv":processes[4]["argv"]}}
     return result
 
@@ -300,7 +300,9 @@ def test_boot_probe_without_run_cvd_executes_adb_property_gate(tmp_path,capsys):
       joined=" ".join(args)
       if "ip -details link show" in joined:return "2: eth0: UP\n"
       if "ip -4 addr show" in joined:return "2: eth0 inet 10.0.2.15/24 scope global eth0\n"
-      if "ip -4 route show" in joined:return "default via 10.0.2.2 dev eth0\n"
+      if "ip -4 rule show" in joined:return "10000: from all fwmark 0x0/0x10000 lookup 1002\n"
+      if "ip -4 route show table all" in joined:return "default via 10.0.2.2 dev eth0 table 1002\n"
+      if "ip -4 route show" in joined:return ""
       if "ip -4 route get" in joined:return "10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"
       if "init.svc.vendor.ril-daemon" in joined:return "restarting\n"
       if "logcat" in joined:return "ril diagnostic\n"
@@ -401,6 +403,42 @@ def test_network_binding_failure_archive_keeps_bounded_qemu_argv():
     with pytest.raises(NestedCuttlefishTransportError,match="qemu-config-binding-mismatch"):
       b.launch_boot(b.stage(opener))
     assert archived[0]["last_probe"]["network_argv"]==[argv]
+
+def test_cy_shaped_network_failure_archives_full_probe_before_cleanup():
+    plan=make_plan();fake=FakeQga(plan);original=fake.guest_exec_wait;events=[];captured=[]
+    cgroup=f"/amnezia-release-lab/{plan.ownership.run_id}/{plan.ownership.attempt_nonce}"
+    def row(name,rc=0):
+      out=(name+"-stdout-")*300;err=(name+"-stderr-")*250
+      return {"argv":["adb","shell",name],"exit_code":rc,"stdout":out[:4096],"stdout_size":len(out),"stdout_sha256":hashlib.sha256(out.encode()).hexdigest(),"stderr":err[:4096],"stderr_size":len(err),"stderr_sha256":hashlib.sha256(err.encode()).hexdigest()}
+    observed={"ready":False,"fatal":True,"reason":"guest-network-capability-failed","phase":"android-network","qemu_seen":True,
+      "network_argv":["user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"],"guest_network":{name:row(name,1 if name=="ril_log" else 0) for name in ("link","address","rules","routes","routes_all","endpoint_route","ril_state","ril_log")},"processes":[],"cgroup":cgroup}
+    raw=json.dumps(observed,sort_keys=True,separators=(",",":"))
+    assert 30000<len(raw)<131072
+    def execute(path,args,timeout):
+      if len(args)>1 and args[1]==BOOT_PROBE:return {"stdout":json.dumps(observed)}
+      if len(args)>1 and args[1]==FAILED_LAUNCH_CLEANUP:events.append("cleanup");return {"stdout":json.dumps({"terminated_pids":[],"all_stopped":True})}
+      return original(path,args,timeout)
+    fake.guest_exec_wait=execute
+    def archive(record):
+      events.append("archive");captured.append(json.loads(json.dumps(record)))
+      return {"origin":"controller","immutable":True,"path":"/owned/cy.json","sha256":"a"*64,"size":len(json.dumps(record))}
+    b=NestedCuttlefishQgaBridge(fake,plan,lambda:plan.ownership,channel_factory=fake.channel,boot_failure_archive=archive)
+    with pytest.raises(NestedCuttlefishTransportError):b.launch_boot(b.stage(opener))
+    probe=captured[0]["last_probe"]
+    assert events==["archive","cleanup"] and probe["guest_network"]==observed["guest_network"]
+    assert probe["raw_size"]==len(raw) and probe["raw_sha256"]==hashlib.sha256(raw.encode()).hexdigest()
+
+def test_boot_failure_rejects_oversize_probe_before_archive_or_cleanup():
+    plan=make_plan();fake=FakeQga(plan);original=fake.guest_exec_wait;events=[]
+    observed={"ready":False,"fatal":True,"reason":"oversize","phase":"android-network","qemu_seen":True,"blob":"x"*131073,"processes":[],"cgroup":f"/amnezia-release-lab/{plan.ownership.run_id}/{plan.ownership.attempt_nonce}"}
+    def execute(path,args,timeout):
+      if len(args)>1 and args[1]==BOOT_PROBE:return {"stdout":json.dumps(observed)}
+      if len(args)>1 and args[1]==FAILED_LAUNCH_CLEANUP:events.append("cleanup")
+      return original(path,args,timeout)
+    fake.guest_exec_wait=execute
+    b=NestedCuttlefishQgaBridge(fake,plan,lambda:plan.ownership,channel_factory=fake.channel,boot_failure_archive=lambda record:events.append("archive"))
+    with pytest.raises(NestedCuttlefishTransportError,match="exceeds bound"):b.launch_boot(b.stage(opener))
+    assert events==[]
 
 def test_launch_boot_treats_live_assemble_as_progress_then_fails_if_seen_qemu_disappears():
     plan=make_plan();fake=FakeQga(plan);original=fake.guest_exec_wait;polls=[]

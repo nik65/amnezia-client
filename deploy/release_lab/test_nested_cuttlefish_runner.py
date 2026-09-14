@@ -99,7 +99,7 @@ def boot()->dict:
         "network":{"adb_listen":"127.0.0.1:5053","host_mutation":False,"host_mounts":[],"qemu_netdev_argv":["user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"],"qemu_frontend_argv":["virtio-net-pci,netdev=hostnet0"],"native_config":native}})
     paths=[x["path"] for x in result["network"]["native_config"]["records"]];adb=f"{p.root}/runtime/host/bin/adb";empty="List of devices attached\n";connected="List of devices attached\n127.0.0.1:6520\tdevice\n"
     def cmd(argv,out): return {"argv":argv,"exit_code":0,"stdout":out,"stdout_size":len(out),"stdout_sha256":hashlib.sha256(out.encode()).hexdigest(),"stderr":"","stderr_size":0,"stderr_sha256":hashlib.sha256(b"").hexdigest()}
-    result["network"]["guest_network"]={"link":cmd(["adb"],"2: eth0: UP\n"),"address":cmd(["adb"],"2: eth0 inet 10.0.2.15/24 scope global eth0\n"),"routes":cmd(["adb"],"default via 10.0.2.2 dev eth0\n"),"endpoint_route":cmd(["adb"],"10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"),"ril_state":cmd(["adb"],"running\n"),"ril_log":cmd(["adb"],"")}
+    result["network"]["guest_network"]={"link":cmd(["adb"],"2: eth0: UP\n"),"address":cmd(["adb"],"2: eth0 inet 10.0.2.15/24 scope global eth0\n"),"rules":cmd(["adb"],"10000: from all fwmark 0x0/0x10000 lookup 1002\n"),"routes":cmd(["adb"],""),"routes_all":cmd(["adb"],"default via 10.0.2.2 dev eth0 table 1002\n"),"endpoint_route":cmd(["adb"],"10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"),"ril_state":cmd(["adb"],"running\n"),"ril_log":cmd(["adb"],"")}
     result["network"]["adb_connection"]={"endpoint":"127.0.0.1:6520","before":cmd([adb,"-P","5053","devices"],empty),"connect":cmd([adb,"-P","5053","connect","127.0.0.1:6520"],"connected"),"after":cmd([adb,"-P","5053","devices"],connected),"binding":{"endpoint":"127.0.0.1:6520","config_rows":[{"path":x,"sha256":"3"*64,"size":100,"adb_host_port":6520,"adb_ip_and_port":"0.0.0.0:6520"} for x in paths],"connector_pid":205,"proxy_pid":206,"connector_argv":procs[4]["argv"],"proxy_argv":procs[5]["argv"]}}
     return result
 
@@ -421,13 +421,12 @@ def test_boot_rejects_minimal_or_environment_drifted_wayland_proof():
             validate_boot_receipt(p,candidate)
 
 
-def test_native_network_requires_frontend_nonloopback_default_and_endpoint_route_but_ril_is_diagnostic():
+def test_native_network_accepts_policy_table_without_main_default_and_keeps_diagnostics_nonfatal():
     p=plan();value=boot();assert validate_boot_receipt(p,value)["passed"]
     value=boot();value["network"]["qemu_frontend_argv"]=[]
     with pytest.raises(NestedCuttlefishError,match="hostnet0"):validate_boot_receipt(p,value)
     value=boot();value["network"]["guest_network"]["address"]["stdout"]="1: lo inet 127.0.0.1/8\n"
     with pytest.raises(NestedCuttlefishError,match="semantic"):validate_boot_receipt(p,value)
-    value=boot();value["network"]["guest_network"]["routes"]["stdout"]="10.0.2.0/24 dev eth0\n"
-    with pytest.raises(NestedCuttlefishError,match="semantic"):validate_boot_receipt(p,value)
-    value=boot();value["network"]["guest_network"]["ril_state"]["stdout"]="restarting\n";value["network"]["guest_network"]["ril_log"]["stdout"]="Sending SIGKILL to service 'vendor.ril-daemon'\n"*8
+    value=boot();value["network"]["guest_network"]["endpoint_route"]["exit_code"]=2;value["network"]["guest_network"]["endpoint_route"]["stdout"]=""
+    value["network"]["guest_network"]["ril_state"]["exit_code"]=1;value["network"]["guest_network"]["ril_log"]["exit_code"]=1
     assert validate_boot_receipt(p,value)["passed"]
