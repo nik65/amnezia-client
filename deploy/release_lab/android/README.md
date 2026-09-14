@@ -1,5 +1,11 @@
 # Android release lab
 
+> **Disabled by user policy.** Do not start, probe, install into, or run this
+> emulator/CVD sandbox. The implementation and historical receipts are retained
+> for reference and guarded cleanup of an already-owned guest. Future Android
+> validation uses a real smartphone supplied by the user and remains pending
+> until that evidence exists.
+
 This profile runs an official Google APIs `x86_64` emulator inside the existing
 WSL2 KVM environment. The APK under test is `arm64-v8a`; the emulator must use
 Android Native Bridge (`libndk_translation.so`). An x86 or x86_64 APK is never a
@@ -45,9 +51,10 @@ real app update UI, and reads back the fixture log after restoring control
 access. It requires manifest and APK GETs from the app, signed artifact hash
 readback, PackageInstaller completion and candidate version/native evidence.
 For the published N-1 ARM64 baseline, a manifest GET without an APK GET is an
-explicit `baseline-abi-blocked` outcome; it is retained as evidence and cannot
-be promoted to a candidate pass. A direct `adb install -r` is not accepted by
-this scenario.
+explicit `baseline-abi-blocked` outcome only when live native-loader or Native
+Bridge failure evidence is also present. A manifest-only result is classified
+as an unknown app/manifest failure and cannot be promoted to a candidate pass.
+A direct `adb install -r` is not accepted by this scenario.
 
 The baseline/update scenario also writes a marker in the app's external lab
 state directory and checks it after the update. This checks persistence that is
@@ -75,5 +82,7 @@ run, `AMNEZIA_ANDROID_FIXTURE_GUEST_ENDPOINT`, and a fresh
 baseline/candidate versions, app UID and nonce-bound request-log readback,
 `observed_at`, a boolean `steps` list, `device_identity`, `origin=guest`,
 `injected=false`, `transport=android-adapter`, and guest network policy.
-The published N-1 baseline may produce `baseline-abi-blocked` (manifest GET
-without APK GET); this is expected evidence and never a candidate pass.
+The published N-1 baseline may produce `baseline-abi-blocked` only with live
+native-loader or Native Bridge failure evidence alongside the manifest GET and
+missing APK GET; a manifest-only result remains an unknown failure and never a
+candidate pass.

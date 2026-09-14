@@ -1,5 +1,6 @@
 {
   "id": "android-arm64-v8a",
+  "description": "DISABLED BY USER POLICY: historical sandbox retained for reference and guarded cleanup; real-device validation pending",
   "platform": "android",
   "backend": "android-adapter",
   "adapter_script": "deploy/release_lab/android/android-lab.sh",

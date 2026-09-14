@@ -80,6 +80,9 @@ except ImportError:  # pragma: no cover - Linux runtime
 SCHEMA_VERSION = 1
 DEFAULT_STATE_ROOT = "/var/lib/amnezia-release-lab"
 PROFILE_IDS = ("windows-x64", "android-arm64-v8a", "linux-x64-gui", "linux-headless-x64")
+AUTOMATED_PROFILE_IDS = ("windows-x64", "linux-x64-gui", "linux-headless-x64")
+ANDROID_PROFILE_ID = "android-arm64-v8a"
+ANDROID_SANDBOX_DISABLED_REASON = "android sandbox disabled by user; real-device validation pending"
 ALL_PROFILE_IDS = PROFILE_IDS + ("server-router",)
 PROFILE_ARTIFACT_IDS = {
     "windows-x64": "windows-x64",
@@ -1503,15 +1506,16 @@ class LabController:
         expected_profiles = []
         for artifact_id in records:
             mapped = "linux-x64-gui" if artifact_id == "linux-x64" else artifact_id
-            if mapped in profiles:
+            if mapped in profiles and mapped in AUTOMATED_PROFILE_IDS:
                 expected_profiles.append(mapped)
         if lane == "release":
-            expected_profiles = list(PROFILE_IDS)
+            expected_profiles = list(AUTOMATED_PROFILE_IDS)
         elif lane == "publisher-diagnostic":
             expected_profiles = ["windows-x64"]
         state.setdefault("runs", {})[run_id] = {
             "run_id": run_id, "lane": lane, "dry_run": self.dry_run, "test_mode": self.test_mode,
             "created_at": utc_now(), "artifacts": records, "baseline_artifacts": baseline_records, "outer_artifact": outer, "baseline_outer_artifact": baseline_outer_record,
+            "pending_external_profiles": [ANDROID_PROFILE_ID], "android_evidence_mode": "real-device-required",
             "baseline_version": baseline_version, "candidate_version": candidate_version,
             "manifest": manifest_record,
             "baseline_manifest": baseline_manifest_record,
@@ -1712,6 +1716,8 @@ class LabController:
         profiles = load_profiles()
         if profile_id not in profiles:
             raise LabError(f"unknown lab profile: {profile_id}")
+        if profile_id == ANDROID_PROFILE_ID:
+            raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         run = self.get_run(run_id)
         if self.dry_run or run.get("dry_run"):
             raise LabError("dry-run cannot start a VM")
@@ -1884,6 +1890,11 @@ class LabController:
         return vm
 
     def _run_android_adapter(self, run_id: str, profile_id: str, command: str, *args: str) -> dict[str, Any]:
+        if command != "reset":
+            raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
+        existing = ((self.get_run(run_id).get("profiles") or {}).get(profile_id) or {}).get("vm")
+        if not isinstance(existing, Mapping) or existing.get("backend") not in {"android-adapter", "android-windows-adapter"}:
+            raise LabError("android cleanup requires an already-owned guest")
         profile = load_profiles()[profile_id]
         run = self.get_run(run_id)
         native_windows = self.android_backend == "windows"
@@ -2108,6 +2119,8 @@ class LabController:
 
     @mutation_operation
     def guest_probe(self, run_id: str, profile_id: str) -> dict[str, Any]:
+        if profile_id == ANDROID_PROFILE_ID:
+            raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         profile = load_profiles()[profile_id]
         if profile.get("backend") == "android-adapter":
             return self._run_android_adapter(run_id, profile_id, "probe")
@@ -2135,6 +2148,7 @@ class LabController:
 
     @mutation_operation
     def nested_android_probe(self, run_id: str) -> dict[str, Any]:
+        raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         """Probe nested Android prerequisites in an owned Linux guest only.
 
         This deliberately stops at an OS capability check.  It does not stage
@@ -2224,6 +2238,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
 
     @mutation_operation
     def start_consumer_fixture(self, run_id: str, manifest_path: Path, apk_path: Path) -> dict[str, Any]:
+        raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         """Upload the planned signed candidate to an owned server-router guest."""
         self.assert_mutation_context()
         profile = load_profiles().get("server-router")
@@ -2424,6 +2439,8 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
     @mutation_operation
     def run_steps(self, run_id: str, profile_id: str, selected: Iterable[str] | None = None, preserve_failed_guest: bool = False) -> dict[str, Any]:
         self.assert_mutation_context()
+        if profile_id == ANDROID_PROFILE_ID:
+            raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         profiles = load_profiles(); profile = profiles[profile_id]
         artifact_id = artifact_id_for_profile(profile_id)
         planned_run = self.get_run(run_id)
@@ -2939,6 +2956,8 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
 
     @mutation_operation
     def collect(self, run_id: str, profile_id: str, case_id: str | None = None) -> dict[str, Any]:
+        if profile_id == ANDROID_PROFILE_ID:
+            raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         profile = load_profiles()[profile_id]
         if profile.get("backend") == "android-adapter":
             vm = self.get_run(run_id)["profiles"][profile_id].get("vm") or {}
@@ -3116,23 +3135,10 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
         """Create and execute every selected real guest, then return evidence summary."""
         run = self.create(lane, artifacts, outer_artifact, run_id, manifest, baseline_artifacts, baseline_version, candidate_version, manifest_public_key, baseline_manifest, headless_baseline_receipt, headless_candidate_receipt, baseline_outer_artifact)
         run_id = run["run_id"]
-        expected = run.get("expected_profiles") or list(PROFILE_IDS)
+        expected = run.get("expected_profiles")
+        if not isinstance(expected, list) or not expected or any(profile not in AUTOMATED_PROFILE_IDS for profile in expected):
+            raise LabError("automatic suite requires a non-empty Windows/Linux profile set")
         completed: list[str] = []
-        if "android-arm64-v8a" in expected:
-            try:
-                manifest_record = run.get("manifest") or {}
-                android_artifact = run.get("artifacts", {}).get("android-arm64-v8a") or {}
-                if not isinstance(manifest_record, dict) or not android_artifact.get("path"):
-                    raise LabError("Android fixture startup requires the planned signed manifest and APK")
-                self.start(run_id, "server-router")
-                self.guest_probe(run_id, "server-router")
-                self.start_consumer_fixture(run_id, Path(manifest_record["path"]), Path(android_artifact["path"]))
-            except Exception as exc:
-                try:
-                    self.cleanup_auxiliary_resources(run_id, "android-arm64-v8a")
-                except Exception as cleanup_exc:
-                    raise LabError(f"Android fixture startup failed and cleanup was incomplete: {cleanup_exc}") from exc
-                raise
         for profile_id in expected:
             archive_error: Exception | None = None
             try:
@@ -3159,18 +3165,6 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                     raise LabError(f"guest evidence archive failed; preserving owned guest: {archive_exc}") from archive_exc
             finally:
                 current = self.get_run(run_id)["profiles"][profile_id]
-                if profile_id == "android-arm64-v8a":
-                    # The server fixture is an auxiliary owned resource.  Its
-                    # cleanup must run even when Android failed before the
-                    # adapter recorded a VM or its evidence archive failed.
-                    try:
-                        self.cleanup_auxiliary_resources(run_id, profile_id)
-                    except Exception as auxiliary_exc:
-                        run = self.get_run(run_id)
-                        run["profiles"][profile_id]["cleanup_error"] = str(auxiliary_exc)
-                        state = self.load_state(); state["runs"][run_id] = run; self.save_state(state)
-                        if archive_error is None:
-                            raise LabError(f"auxiliary server cleanup failed; preserving owned guests: {auxiliary_exc}") from auxiliary_exc
                 if archive_error is None or current.get("evidence_archive"):
                     try:
                         self.reset(run_id, profile_id)
@@ -3215,6 +3209,15 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                 run["profiles"][current] = prior
                 removed.append(f"hyperv-child:{run_id}:{current}")
                 continue
+            existing_vm = (run["profiles"].get(current) or {}).get("vm")
+            if current == ANDROID_PROFILE_ID:
+                if not isinstance(existing_vm, Mapping) or existing_vm.get("backend") not in {"android-adapter", "android-windows-adapter"}:
+                    raise LabError("android cleanup requires an already-owned guest")
+                self._run_android_adapter(run_id, current, "reset")
+                run = self.get_run(run_id)
+                prior = dict(run["profiles"].get(current, {})); prior.update(status="reset", vm=None)
+                run["profiles"][current] = prior; removed.append(f"android-owned:{run_id}:{current}")
+                continue
             profile_dir = ensure_owned_child(self.root, self.root / "runs" / run_id / current, "profile directory")
             marker = profile_dir / ".owned-overlay.json"
             overlay = profile_dir / "overlay.qcow2"
@@ -3229,8 +3232,6 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
             # encountered.
             self._recover_qemu_spawn_intent(run_id, current)
             vm = run["profiles"][current].get("vm")
-            if isinstance(vm, dict) and vm.get("backend") in {"android-adapter", "android-windows-adapter"}:
-                self._run_android_adapter(run_id, current, "reset")
             if isinstance(vm, dict) and vm.get("backend") not in {"android-adapter", "android-windows-adapter"}:
                 try:
                     owned = self.owned_vm(run_id, current)
@@ -3313,6 +3314,8 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
         run.setdefault("full4_semantic", {})[kind] = record; state=self.load_state();state["runs"][run_id]=run;self.save_state(state);return record
 
     def register_android_semantic(self, run_id: str, plan: Any, boot: Mapping[str, Any], app: Mapping[str, Any], cleanup: Mapping[str, Any], link: Mapping[str, Any], link_cleanup: Mapping[str, Any]) -> dict[str, Any]:
+        raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
+        # Historical implementation remains below for evidence readability.
         run=self.get_run(run_id);planned=(run.get("artifacts") or {}).get("android-arm64-v8a") or {};owner=getattr(plan,"ownership",None);apk=getattr(plan,"apk",None);vm=((run.get("profiles") or {}).get("linux-headless-x64") or {}).get("vm") or {}
         if (getattr(owner,"run_id",None)!=run_id or getattr(owner,"profile",None)!="linux-headless-x64" or getattr(apk,"sha256",None)!=planned.get("sha256") or getattr(apk,"size",None)!=planned.get("size") or getattr(owner,"pid",None)!=vm.get("pid") or str(getattr(owner,"start_ticks",None))!=str(vm.get("proc_start_time")) or getattr(owner,"uuid",None)!=vm.get("uuid") or getattr(owner,"qmp_socket",None)!=vm.get("qmp_socket") or getattr(owner,"qga_socket",None)!=vm.get("qga_socket")):raise LabError("Android semantic plan differs from current run/artifact/outer binding")
         validate_boot_receipt(plan, boot); validate_app_update_receipt(plan, boot, app); validate_cleanup_receipt(plan, cleanup, boot)
@@ -3632,6 +3635,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
 
     @mutation_operation
     def install_nested_android_host_dependencies(self, run_id: str, installer: Any, timeout: float = 1200) -> dict[str, Any]:
+        raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         """Install the frozen signed Noble dependency closure before large Android staging."""
         self.assert_mutation_context();run=self.get_run(run_id);validate_semantic_helper_records(run.get("semantic_helper_records"));validate_android_host_dependency_records(run.get("android_host_dependency_records"))
         try:from .nested_cuttlefish_host_dependencies import HostDependencyInstaller
@@ -3676,6 +3680,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
 
     @mutation_operation
     def install_nested_android_wayland_dependency(self,run_id:str,installer:Any,timeout:float=300)->dict[str,Any]:
+        raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         self.assert_mutation_context();run=self.get_run(run_id);validate_semantic_helper_records(run.get("semantic_helper_records"));validate_android_wayland_records(run.get("android_wayland_records"))
         try:from .nested_cuttlefish_wayland_dependency import WaylandDependencyInstaller
         except ImportError:from nested_cuttlefish_wayland_dependency import WaylandDependencyInstaller
@@ -3689,6 +3694,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
 
     @mutation_operation
     def stage_nested_android_fixture(self, run_id: str, plan: Any, fixture_adapter: Any, private_link: Any, baseline: Any, timeout: float = 900) -> dict[str, Any]:
+        raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         """Stage exact fixture bytes only after authoritative controller preflight."""
         self.assert_mutation_context(); ctx=self._preflight_nested_android_inputs(run_id,plan,fixture_adapter,private_link,baseline);fp=ctx["fixture_plan"];qga=fixture_adapter.qga
         if isinstance(timeout,bool) or not isinstance(timeout,(int,float)) or not math.isfinite(timeout) or timeout<=0 or timeout>1800:raise LabError("invalid nested fixture staging deadline")
@@ -3769,6 +3775,7 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
         run=self.get_run(run_id);run["nested_android_fixture_stage"]={**record,"attempt_nonce":plan.ownership.attempt_nonce};state=self.load_state();state["runs"][run_id]=run;self.save_state(state);return payload
 
     def request_nested_android_visual(self, run_id: str, record: Mapping[str, Any], png: bytes) -> dict[str, Any]:
+        raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         """Publish immutable visual evidence while the semantic run owns the mutation lock."""
         self.get_run(run_id)
         if record.get("run_id") != run_id:
@@ -3782,18 +3789,21 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
         return ack
 
     def poll_nested_android_visual(self, run_id: str, ack: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         """Read an operator decision without acquiring or nesting the mutation lock."""
         self.get_run(run_id)
         return AndroidVisualHandshakeStore(self.root).poll(ack)
 
     def decide_nested_android_visual(self, run_id: str, attempt_nonce: str, request_id: str,
                                      request_sha256: str, decision: str, bounds: Sequence[int] | None = None) -> dict[str, Any]:
+        raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         """External decision API; input only and intentionally outside mutation state."""
         self.get_run(run_id)
         return AndroidVisualHandshakeStore(self.root).decide(run_id, attempt_nonce, request_id, request_sha256, decision, bounds)
 
     @mutation_operation
     def run_nested_android_lldb_diagnostic(self,run_id:str,controller:Any,launch:Any,epoch:str)->dict[str,Any]:
+        raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         """Run an acceptance-false diagnostic path without registering a release gate."""
         self.assert_mutation_context();self.get_run(run_id)
         try:from .nested_cuttlefish_lldb_controller import NestedAndroidLldbController
@@ -3809,6 +3819,7 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
 
     @mutation_operation
     def run_nested_android_semantic(self, run_id: str, plan: Any, bridge: Any, fixture_adapter: Any, private_link: Any, baseline: Any, outer_live_snapshot: Any, visual_request: Any, visual_poll: Any) -> dict[str, Any]:
+        raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         """Run the reviewed nested lifecycle and durably archive its canonical receipt."""
         self.assert_mutation_context()
         run = self.get_run(run_id)
@@ -3925,7 +3936,7 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
         if not isinstance(expected_profiles, list) or not expected_profiles or any(profile_id not in PROFILE_IDS for profile_id in expected_profiles):
             raise LabError("gate requires an explicit non-empty release profile set")
         if lane == "release":
-            if set(expected_profiles) != set(PROFILE_IDS) or set(run.get("artifacts", {})) != set(RELEASE_PLATFORM_IDS) or set(run.get("baseline_artifacts", {})) != set(RELEASE_PLATFORM_IDS):
+            if set(expected_profiles) != set(AUTOMATED_PROFILE_IDS) or run.get("pending_external_profiles") != [ANDROID_PROFILE_ID] or run.get("android_evidence_mode") != "real-device-required" or set(run.get("artifacts", {})) != set(RELEASE_PLATFORM_IDS) or set(run.get("baseline_artifacts", {})) != set(RELEASE_PLATFORM_IDS):
                 raise LabError("release gate requires all release profiles and candidate/baseline artifact records")
         for profile_id in expected_profiles:
             artifact_id = artifact_id_for_profile(profile_id)
@@ -3939,6 +3950,8 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
         profile_records = run.get("profile_records")
         if lane == "release" and (not isinstance(profile_records, Mapping) or set(profile_records) != set(ALL_PROFILE_IDS)):
             raise LabError("release gate requires immutable records for every lab profile")
+        if run.get("pending_external_profiles"):
+            return {"run_id": run_id, "lane": lane, "automated_profiles": {profile: (profiles.get(profile) or {}).get("status") for profile in expected_profiles}, "automated_platforms_passed": False, "android_real_device_pending": True, "candidate_passed": False, "release_passed": False, "reason": ANDROID_SANDBOX_DISABLED_REASON}
         if lane == "release":
             try:
                 publication = run.get("publication_evidence")
@@ -4176,7 +4189,7 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
             return {"run_id": run_id, "lane": lane, "candidate_passed": False, "release_passed": False, "reason": "missing real guest evidence", "missing_profiles": missing}
         if lane == "release":
             semantic = run.get("full4_semantic") or {}
-            for kind in ("android", "headless", "linux-visual"):
+            for kind in ("headless", "linux-visual"):
                 record = semantic.get(kind) if isinstance(semantic, Mapping) else None
                 if not isinstance(record, Mapping): raise LabError(f"release gate lacks {kind} semantic evidence")
                 path=ensure_owned_child(self.root,Path(str(record.get("path",""))),f"{kind} semantic evidence");digest,size=sha256_file(path)
@@ -4210,7 +4223,7 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
                     update=semantic_value.get("update") or {};after=update.get("after") or {};planned=(run.get("artifacts") or {}).get("linux-headless-x64") or {}
                     if update.get("run_id")!=run_id or after.get("version")!=run.get("candidate_version") or (semantic_value.get("cleanup") or {}).get("stopped") is not True:raise LabError("release gate headless semantic payload differs from current plan")
                 elif (semantic_value.get("ack") or {}).get("run_id")!=run_id:raise LabError("release gate visual ACK differs from current run")
-        result = {"run_id": run_id, "lane": lane, "candidate_passed": True, "release_passed": lane == "release", "artifact_sha256": (run.get("outer_artifact") or {}).get("sha256"), "tested_at": utc_now()}
+        result = {"run_id": run_id, "lane": lane, "candidate_passed": True, "release_passed": False, "artifact_sha256": (run.get("outer_artifact") or {}).get("sha256"), "tested_at": utc_now()}
         if lane == "release":
             marker = ensure_owned_child(self.root, self.root / "exports" / run_id / "publishable.json", "publication marker")
             json_dump(marker, {"schema": 1, "run_id": run_id, "release_passed": True, "artifact_sha256": result["artifact_sha256"], "created_at": utc_now(), "evidence": "qga-real-guest"})

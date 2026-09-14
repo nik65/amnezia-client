@@ -6,13 +6,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import pytest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 try:
-    from .lab import SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
+    from .lab import ANDROID_SANDBOX_DISABLED_REASON, AUTOMATED_PROFILE_IDS, SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
 except ImportError:  # direct invocation from this directory
-    from lab import SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
+    from lab import ANDROID_SANDBOX_DISABLED_REASON, AUTOMATED_PROFILE_IDS, SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
 
 
 class ReleaseLabContractTests(unittest.TestCase):
@@ -147,7 +148,7 @@ class ReleaseLabContractTests(unittest.TestCase):
             controller.save_state({"schema": 1, "lab_id": "lab", "runs": {run_id: run}})
             calls = []
             with patch.object(controller, "_run_android_adapter", side_effect=lambda *args: calls.append(args)):
-                with self.assertRaisesRegex(LabError, "blocked by failed baseline"):
+                with self.assertRaisesRegex(LabError, "android sandbox disabled by user"):
                     controller.run_steps(run_id, "android-arm64-v8a", ["update"])
             self.assertEqual(calls, [])
 
@@ -500,12 +501,9 @@ class ReleaseLabContractTests(unittest.TestCase):
 
     def test_android_failure_still_cleans_auxiliary_server(self):
         controller = LabController(Path(tempfile.mkdtemp()), test_mode=True)
-        run = {"run_id": "android-cleanup-on-failure", "expected_profiles": ["android-arm64-v8a"], "manifest": {"path": "manifest.json"}, "artifacts": {"android-arm64-v8a": {"path": "candidate.apk"}}, "profiles": {"android-arm64-v8a": {"status": "created"}, "server-router": {"status": "started", "vm": {}}}}
-        events = []
-        with patch.object(controller, "create", return_value=run), patch.object(controller, "get_run", return_value=run), patch.object(controller, "start", side_effect=lambda run_id, profile: events.append(f"start:{profile}")), patch.object(controller, "guest_probe", side_effect=lambda run_id, profile: events.append(f"probe:{profile}")), patch.object(controller, "start_consumer_fixture", side_effect=lambda *args: events.append("fixture-start")), patch.object(controller, "archive_guest_evidence", side_effect=LabError("adapter archive unavailable")), patch.object(controller, "cleanup_auxiliary_resources", side_effect=lambda *args: events.append("aux-cleanup")), patch.object(controller, "reset", side_effect=lambda *args: events.append(f"reset:{args[1]}")):
-            with self.assertRaisesRegex(LabError, "evidence archive failed"):
-                controller.run_suite("candidate", {}, None)
-        self.assertIn("aux-cleanup", events)
+        with patch.object(controller, "get_run", return_value={"profiles": {"android-arm64-v8a": {"vm": None}}}):
+            with self.assertRaisesRegex(LabError, "already-owned guest"):
+                controller._run_android_adapter("old", "android-arm64-v8a", "reset")
 
     def test_guest_evidence_archive_survives_reset_and_keeps_raw_failure_log(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -584,11 +582,12 @@ class ReleaseLabContractTests(unittest.TestCase):
 
     def test_android_run_suite_starts_fixture_before_adapter_update_and_cleans_it(self):
         controller = LabController(Path(tempfile.mkdtemp()), test_mode=True)
-        run = {"run_id": "android-fixture-order", "expected_profiles": ["android-arm64-v8a"], "manifest": {"path": "manifest.json"}, "artifacts": {"android-arm64-v8a": {"path": "candidate.apk"}}, "profiles": {"android-arm64-v8a": {"status": "created"}, "server-router": {"status": "created"}}}
+        run = {"run_id": "automatic-no-android", "expected_profiles": list(AUTOMATED_PROFILE_IDS), "profiles": {profile: {"status": "created"} for profile in AUTOMATED_PROFILE_IDS}}
         events = []
-        with patch.object(controller, "create", return_value=run), patch.object(controller, "get_run", return_value=run), patch.object(controller, "start", side_effect=lambda run_id, profile: events.append(f"start:{profile}")), patch.object(controller, "guest_probe", side_effect=lambda run_id, profile: events.append(f"probe:{profile}")), patch.object(controller, "start_consumer_fixture", side_effect=lambda *args: events.append("fixture-start")), patch.object(controller, "run_steps", side_effect=lambda *args: events.append("steps")), patch.object(controller, "collect", side_effect=lambda *args: events.append("collect")), patch.object(controller, "archive_guest_evidence", side_effect=lambda *args: (events.append("archive"), run["profiles"][args[1]].update(evidence_archive="archive.json"))[1]), patch.object(controller, "cleanup_auxiliary_resources", side_effect=lambda *args: events.append("aux-cleanup")), patch.object(controller, "reset", side_effect=lambda *args: events.append(f"reset:{args[1]}")):
+        with patch.object(controller, "create", return_value=run), patch.object(controller, "get_run", return_value=run), patch.object(controller, "start", side_effect=lambda run_id, profile: events.append(f"start:{profile}")), patch.object(controller, "guest_probe", side_effect=lambda run_id, profile: events.append(f"probe:{profile}")), patch.object(controller, "start_consumer_fixture", side_effect=AssertionError("Android fixture must not start")), patch.object(controller, "run_steps", side_effect=lambda *args: events.append(f"steps:{args[1]}")), patch.object(controller, "collect", side_effect=lambda *args: events.append(f"collect:{args[1]}")), patch.object(controller, "archive_guest_evidence", side_effect=lambda *args: run["profiles"][args[1]].update(evidence_archive="archive.json")), patch.object(controller, "cleanup_auxiliary_resources", side_effect=AssertionError("Android cleanup must not be entered")), patch.object(controller, "reset", side_effect=lambda *args: events.append(f"reset:{args[1]}")):
             controller.run_suite("candidate", {}, None)
-        self.assertEqual(events, ["start:server-router", "probe:server-router", "fixture-start", "start:android-arm64-v8a", "probe:android-arm64-v8a", "steps", "collect", "archive", "aux-cleanup", "reset:android-arm64-v8a"])
+        self.assertFalse(any("android" in event for event in events))
+        self.assertEqual({event.split(":", 1)[1] for event in events if event.startswith("start:")}, set(AUTOMATED_PROFILE_IDS))
 
     def test_run_suite_preserves_guest_when_archive_fails(self):
         controller = LabController(Path(tempfile.mkdtemp()), test_mode=True)
@@ -1059,3 +1058,108 @@ def test_nested_app_focus_failure_archives_viewable_png_separately(tmp_path):
       ack=c.archive_nested_boot_failure(run,rec,png);image=Path(ack["screenshot"]["path"])
       assert image.read_bytes()==png and ack["screenshot"]["sha256"]==hashlib.sha256(png).hexdigest() and ack["screenshot"]["size"]==len(png)
     finally:c.release_mutation_lock()
+
+def test_nested_app_failure_full_focus_raw_is_bounded_and_rehashed(tmp_path):
+    import base64,hashlib,pytest
+    c=LabController(tmp_path,test_mode=True);run="appraw";vm={"pid":11,"proc_start_time":"22","uuid":"u","qmp_socket":"qmp","qga_socket":"qga"}
+    c.save_state({"schema":1,"lab_id":"x","runs":{run:{"run_id":run,"profiles":{"linux-headless-x64":{"vm":vm}}}}});c.acquire_mutation_lock("test")
+    def record(nonce,data):
+        raw={"origin":"guest","transport":"qga-adb","path":"adb:activity-top-resumed","size":len(data),"sha256":hashlib.sha256(data).hexdigest(),"bytes_b64":base64.b64encode(data).decode()}
+        outer={"run_id":run,"profile":"linux-headless-x64","attempt_nonce":nonce,"pid":11,"start_ticks":22,"uuid":"u","qmp_socket":"qmp","qga_socket":"qga"}
+        return {"schema":1,"outer_failure":"nested-boot","run_id":run,"attempt_nonce":nonce,"outer_ownership":outer,"phase":"app-update","qemu_seen":True,"last_probe":{"focus_observations":[{"raw":raw}]}}
+    try:
+        data=b"state=RESUMED finishing=false";ack=c.archive_nested_boot_failure(run,record("e"*48,data));assert Path(ack["path"]).read_bytes()
+        bad=record("f"*48,data);bad["last_probe"]["focus_observations"][0]["raw"]["sha256"]="0"*64
+        with pytest.raises(LabError,match="readback"):c.archive_nested_boot_failure(run,bad)
+        with pytest.raises(LabError,match="identity"):c.archive_nested_boot_failure(run,record("1"*48,b"x"*6145))
+    finally:c.release_mutation_lock()
+
+def test_nested_app_failure_overflow_sidecars_are_exact_ordered_and_immutable(tmp_path):
+    import base64,hashlib,json,pytest
+    c=LabController(tmp_path,test_mode=True);run="appoverflow";nonce="9"*48;vm={"pid":11,"proc_start_time":"22","uuid":"u","qmp_socket":"qmp","qga_socket":"qga"}
+    c.save_state({"schema":1,"lab_id":"x","runs":{run:{"run_id":run,"profiles":{"linux-headless-x64":{"vm":vm}}}}});c.acquire_mutation_lock("test")
+    outer={"run_id":run,"profile":"linux-headless-x64","attempt_nonce":nonce,"pid":11,"start_ticks":22,"uuid":"u","qmp_socket":"qmp","qga_socket":"qga"};rows=[]
+    for index in range(70):
+        data=(f"DF-{index:03d}:".encode()+b"x"*12000);raw={"origin":"guest","transport":"qga-adb","path":f"adb:df-{index}","size":len(data),"sha256":hashlib.sha256(data).hexdigest(),"bytes_b64":base64.b64encode(data).decode()}
+        rows.append({"argv":["shell","df","-k",str(index)],"exit_code":0,"timed_out":False,"output":raw})
+    rec={"schema":1,"outer_failure":"nested-boot","run_id":run,"attempt_nonce":nonce,"outer_ownership":outer,"phase":"app-update","qemu_seen":True,"last_probe":{"preflight_rows":rows}}
+    assert len(json.dumps(rec,separators=(",",":")))>786432
+    try:
+        ack=c.archive_nested_boot_failure(run,rec);main=json.loads(Path(ack["path"]).read_text());sidecars=ack["sidecars"]
+        manifest=hashlib.sha256(json.dumps(sidecars,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+        assert len(sidecars)==70 and [x["order"] for x in sidecars]==list(range(1,71)) and main["overflow"]["count"]==70 and main["overflow"]["manifest_sha256"]==ack["sidecar_manifest_sha256"]==manifest and ack["compact_archive_sha256"]==ack["sha256"]
+        for index,row in enumerate(sidecars):
+            expected=(f"DF-{index:03d}:".encode()+b"x"*12000);actual=Path(row["archive"]["path"]).read_bytes()
+            assert actual==expected and row["original_sha256"]==hashlib.sha256(expected).hexdigest()==row["archive"]["sha256"] and row["argv"]==["shell","df","-k",str(index)]
+        with pytest.raises(FileExistsError):c.archive_nested_boot_failure(run,rec)
+    finally:c.release_mutation_lock()
+def test_android_sandbox_entrypoints_fail_before_backend_calls(tmp_path):
+    c = LabController(tmp_path, test_mode=True)
+    reason = ANDROID_SANDBOX_DISABLED_REASON
+    calls = [
+        lambda: c.start("absent", "android-arm64-v8a"),
+        lambda: c.guest_probe("absent", "android-arm64-v8a"),
+        lambda: c.run_steps("absent", "android-arm64-v8a"),
+        lambda: c.collect("absent", "android-arm64-v8a"),
+        lambda: c._run_android_adapter("absent", "android-arm64-v8a", "start"),
+        lambda: c.nested_android_probe("absent"),
+        lambda: c.start_consumer_fixture("absent", Path("manifest"), Path("apk")),
+        lambda: c.install_nested_android_host_dependencies("absent", None),
+        lambda: c.install_nested_android_wayland_dependency("absent", None),
+        lambda: c.stage_nested_android_fixture("absent", None, None, None, None),
+        lambda: c.request_nested_android_visual("absent", {}, b""),
+        lambda: c.poll_nested_android_visual("absent", {}),
+        lambda: c.decide_nested_android_visual("absent", "n", "r", "0" * 64, "reject"),
+        lambda: c.run_nested_android_lldb_diagnostic("absent", None, None, "0"),
+        lambda: c.run_nested_android_semantic("absent", None, None, None, None, None, None, None, None),
+        lambda: c.register_android_semantic("absent", None, {}, {}, {}, {}, {}),
+    ]
+    with c.mutation_session("android-disabled-test"):
+        c.save_state({"schema": 1, "lab_id": "disabled", "runs": {"cleanup": {"run_id": "cleanup", "profiles": {"android-arm64-v8a": {"vm": None}}}}})
+        for call in calls:
+            with pytest.raises(LabError, match="android sandbox disabled by user; real-device validation pending"):
+                call()
+        with pytest.raises(LabError, match="android cleanup requires an already-owned guest"):
+            c._run_android_adapter("cleanup", "android-arm64-v8a", "reset")
+    assert reason == "android sandbox disabled by user; real-device validation pending"
+    assert AUTOMATED_PROFILE_IDS == ("windows-x64", "linux-x64-gui", "linux-headless-x64")
+
+def test_automatic_suite_rejects_empty_or_android_profile_set_without_backend_calls(tmp_path):
+    c = LabController(tmp_path, test_mode=True)
+    for expected in ([], ["android-arm64-v8a"]):
+        run = {"run_id": "disabled", "expected_profiles": expected, "profiles": {}}
+        with c.mutation_session("empty-automatic-test"), patch.object(c, "create", return_value=run), patch.object(c, "start") as start:
+            with pytest.raises(LabError, match="non-empty Windows/Linux"):
+                c.run_suite("candidate", {}, None)
+            start.assert_not_called()
+
+def test_public_reset_allows_only_recorded_owned_android_cleanup(tmp_path):
+    c = LabController(tmp_path, test_mode=True)
+    vm = {"backend": "android-adapter", "root": "/owned/android"}
+    state = {"schema": 1, "lab_id": "disabled", "runs": {"old": {"run_id": "old", "profiles": {"android-arm64-v8a": {"status": "started", "vm": vm}}}}}
+    with c.mutation_session("owned-android-cleanup"):
+        c.save_state(state)
+        with patch.object(c, "_run_android_adapter", return_value={"reset": True}) as adapter:
+            result = c.reset("old", "android-arm64-v8a")
+        adapter.assert_called_once_with("old", "android-arm64-v8a", "reset")
+    assert result["release_passed"] is False
+    assert c.get_run("old")["profiles"]["android-arm64-v8a"]["vm"] is None
+
+def test_pending_real_device_gate_returns_before_publication_validation(tmp_path):
+    c = LabController(tmp_path, test_mode=True)
+    artifact = {"path": "frozen", "sha256": "a" * 64, "size": 1}
+    profiles = {profile: {"status": "evidence-collected"} for profile in AUTOMATED_PROFILE_IDS}
+    run = {"run_id": "pending", "lane": "release", "dry_run": False, "test_mode": False,
+           "expected_profiles": list(AUTOMATED_PROFILE_IDS), "pending_external_profiles": ["android-arm64-v8a"],
+           "android_evidence_mode": "real-device-required", "profiles": profiles,
+           "artifacts": {key: dict(artifact) for key in ("windows-x64", "android-arm64-v8a", "linux-x64", "linux-headless-x64")},
+           "baseline_artifacts": {key: dict(artifact) for key in ("windows-x64", "android-arm64-v8a", "linux-x64", "linux-headless-x64")},
+           "outer_artifact": dict(artifact), "baseline_outer_artifact": dict(artifact),
+           "profile_records": {key: dict(artifact) for key in (*AUTOMATED_PROFILE_IDS, "android-arm64-v8a", "server-router")}}
+    with c.mutation_session("pending-gate"):
+        c.save_state({"schema": 1, "lab_id": "disabled", "runs": {"pending": run}})
+        result = c.gate("pending", "release")
+    assert result["android_real_device_pending"] is True
+    assert result["automated_platforms_passed"] is False
+    assert result["candidate_passed"] is False and result["release_passed"] is False
+    assert "publication_evidence" not in run

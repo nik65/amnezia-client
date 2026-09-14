@@ -1,8 +1,10 @@
 # Disposable release lab
 
 `lab.py` controls four release product lanes from the existing Ubuntu 24 WSL
-instance: Windows x64 through an explicit QEMU or Hyper-V backend, two Linux x64 QEMU guests through QMP/QGA, plus the
-Android arm64-v8a adapter/emulator lane. The isolated `server-router` QEMU
+instance: Windows x64 through an explicit QEMU or Hyper-V backend and two Linux x64 QEMU guests through QMP/QGA. The
+historical Android arm64-v8a adapter/emulator lane is disabled by user policy,
+retained for reference and guarded cleanup only; Android validation is pending
+on a user-supplied real smartphone. The isolated `server-router` QEMU
 guest is an auxiliary consumer-fixture lane, not a fifth product artifact.
 The host boundary is QMP/QGA or the owned Android adapter. The controller never
 runs an Amnezia binary, installer, service command, VPN command, route
@@ -30,10 +32,10 @@ guest-origin receipt bound to the child VM and parent hash. The
 reviewed TCG software experiment is recorded separately and is not silently
 substituted for KVM. The server-router consumer fixture is the one explicit exception: it uses
 QEMU user networking with `restrict=on` and a loopback-only hostfwd to guest
-port `17865`. Android uses the owned `android/android-lab.sh` adapter and its
-dedicated ADB/emulator; it is not treated as a Linux/QGA guest. If an adapter
-cannot emit the common receipt, the controller stops rather than inferring
-success.
+port `17865`. Historical Android receipts used the owned
+`android/android-lab.sh` adapter and dedicated ADB/emulator. Operational
+Android entrypoints are now fail-closed; only guarded cleanup of an already
+owned guest remains available.
 
 Each QEMU profile must have a prepared golden and a guest-side runner. The
 runner is responsible for platform-specific install/update/service checks. The
@@ -63,8 +65,16 @@ VM Off, 128 GiB self-contained disk, 0 DVD/0 NIC/0 checkpoints, Secure Boot
 release candidate passes final review and a user-authorized child-guest run is
 performed. Android's
 installer and lavapipe UI receipts do not yet prove the
-real application update on the current x86 guest. The server-router fixture
-has health/manifest traffic only and is not publication evidence. Then the
+real application update on the current x86 guest. The active server-router OS
+golden is sealed at
+`/var/lib/amnezia-release-lab/guests/server-router/golden-disk.qcow2` with
+SHA-256 `3cea338c1ad54d8288f17ae9752c101df2a63d1c7ad16682d0a94a43d6c90734`.
+An owned disposable-overlay probe read back the guest marker, Docker/QGA
+active state, passwordless `lab` sudo, and the pinned BusyBox digest; its
+receipt is OS capability evidence only. The server-router fixture has
+health/manifest traffic only and is not publication evidence. The Windows
+readable probe receipt is `Testing/server-router-capability-cp2049.json`.
+Then the
 pipeline uses `plan`/`create`, starts and probes each selected lane, runs
 reinstall/update/health steps, collects each receipt, and calls `gate`.
 
