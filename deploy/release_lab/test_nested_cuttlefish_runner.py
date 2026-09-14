@@ -101,22 +101,33 @@ def boot()->dict:
 def app()->dict:
     b=boot(); result=base("nested-cuttlefish-app-update"); result["boot_binding_sha256"]=hashlib.sha256(json.dumps(b,sort_keys=True,separators=(",",":")).encode()).hexdigest()
     result["package_installer"]={"package":"org.amnezia.vpn","version_code":2187,"artifact_sha256":"c"*64,
-      "artifact_size":5,"download_sha256":"c"*64,"session_id":7,"status":"STATUS_SUCCESS","method":"PackageInstaller"}
+      "artifact_size":5,"download_sha256":"c"*64,"session_id":7,"status":"STATUS_SUCCESS","method":"PackageInstaller","snapshot_argv":["shell","dumpsys","package","installs"]}
     result["http"]={"fixture_nonce":"fixture-1","manifest_sha256":"f"*64,"requests":[
       {"path":"/manifest.json","method":"GET","status":200,"eof":True,"bytes":100,"sha256":"f"*64},
       {"path":f"/files/artifacts/{'c'*64}/candidate.apk","method":"GET","status":200,"eof":True,"bytes":5,"sha256":"c"*64}]}
     result["ui"]={"package":"org.amnezia.vpn","activity":"MainActivity","window_id":"activity-top:301","window_title":"AmneziaVPN",
       "package_pid":301,"package_uid":10123,"version_code":2187,"screenshot_sha256":"1"*64,"completion_action":"Done"}
-    focus_line="ACTIVITY org.amnezia.vpn/MainActivity 123 pid=301 uid=10123"
-    result["ui"]["focus_observations"]=[{"argv":["shell","dumpsys","activity","top-resumed"],"exit_code":0,"timed_out":False,"size":len(focus_line),"sha256":hashlib.sha256(focus_line.encode()).hexdigest(),"relevant_lines":focus_line,"matches":[{"package":"org.amnezia.vpn","component":"MainActivity","pid":301,"uid":10123}]}]
-    empty=hashlib.sha256(b"").hexdigest();result["ui"]["launch_probe"]={"argv":["shell","monkey","-p","org.amnezia.vpn","1"],"exit_code":0,"output":{"origin":"guest","transport":"qga-adb","path":"adb:candidate-monkey","size":0,"sha256":empty,"bytes_b64":""}}
+    focus_line="packageName=org.amnezia.vpn\napp=ProcessRecord{37a499b 301:org.amnezia.vpn/u0a123}\nmActivityComponent=org.amnezia.vpn/MainActivity\nstate=RESUMED finishing=false\nmVisibleRequested=true mVisible=true mClientVisible=true reportedVisible=true\nfirstWindowDrawn=true reportedDrawn=true\nstartingData=null"
+    focus_bytes=focus_line.encode();focus_raw={"origin":"guest","transport":"qga-adb","path":"adb:activity-top-resumed","size":len(focus_bytes),"sha256":hashlib.sha256(focus_bytes).hexdigest(),"bytes_b64":base64.b64encode(focus_bytes).decode()}
+    epoch="1726185600.000";empty_raw={"origin":"guest","transport":"qga-adb","size":0,"sha256":hashlib.sha256(b"").hexdigest(),"bytes_b64":""}
+    pidof={"argv":["shell","pidof","org.amnezia.vpn"],"exit_code":0,"timed_out":False,"output":{**empty_raw,"path":"adb:focus-pidof"}}
+    lifecycle_argv=["shell","logcat","-d","-T",epoch,"-t","200","-v","threadtime","-b","main","-b","system","-b","events","-b","crash","ActivityManager:I","ActivityTaskManager:I","AndroidRuntime:E","lmkd:I","lowmemorykiller:I","*:S"]
+    lifecycle={"argv":lifecycle_argv,"exit_code":0,"timed_out":False,"output":{**empty_raw,"path":"adb:focus-lifecycle"}}
+    result["ui"]["focus_observations"]=[{"argv":["shell","dumpsys","activity","top-resumed"],"exit_code":0,"timed_out":False,"size":len(focus_line),"sha256":hashlib.sha256(focus_line.encode()).hexdigest(),"raw":focus_raw,"relevant_lines":focus_line,"matches":[{"package":"org.amnezia.vpn","component":"MainActivity","pid":301,"uid":10123,"format":"key-value","state":"RESUMED","finishing":False,"visible":True,"drawn":True,"starting_displayed":False}],"elapsed_ms":100,"pidof":pidof,"lifecycle":lifecycle,"logcat":None}]
+    empty=hashlib.sha256(b"").hexdigest();result["ui"]["launch_probe"]={"argv":["shell","monkey","-p","org.amnezia.vpn","1"],"exit_code":0,"timed_out":False,"output":{"origin":"guest","transport":"qga-adb","path":"adb:candidate-monkey","size":0,"sha256":empty,"bytes_b64":""}}
     def raw(path,value):
       data=value.encode();return {"origin":"guest","transport":"qga-adb","path":path,"size":len(data),"sha256":hashlib.sha256(data).hexdigest(),"bytes_b64":base64.b64encode(data).decode()}
+    result["package_installer"]["session_evidence"]={"before":raw("adb:dumpsys-package-installs",""),"after":[raw("adb:dumpsys-package-installs","Session 7:\n  mAppPackageName=org.amnezia.vpn\n  mFinalStatus=1\n")]}
     policy=["shell","dumpsys","window","policy"]
-    guard={"before":{"argv":policy,"showing":True,"secure":False,"raw":raw("adb:keyguard-policy","showing=true\nsecure=false")},"commands":[{"argv":["shell","wm","dismiss-keyguard"],"exit_code":0,"raw":raw("adb:keyguard-command","")},{"argv":["shell","input","keyevent","82"],"exit_code":0,"raw":raw("adb:keyguard-command","")}],"after":{"argv":policy,"showing":False,"secure":False,"raw":raw("adb:keyguard-policy","showing=false\nsecure=false")},"passed":True}
+    before_raw=raw("adb:keyguard-policy","KeyguardServiceDelegate:\n  showing=true\n  inputRestricted=true\n  simSecure=false");after_raw=raw("adb:keyguard-policy","KeyguardServiceDelegate:\n  showing=false\n  inputRestricted=false\n  simSecure=false")
+    middle={"argv":policy,"showing":True,"input_restricted":True,"raw":before_raw,"attempts":[{"exit_code":0,"timed_out":False,"raw":before_raw}]}
+    guard={"before":{"argv":policy,"showing":True,"input_restricted":True,"raw":before_raw,"attempts":[{"exit_code":0,"timed_out":False,"raw":before_raw}]},"after_dismiss":middle,"commands":[{"argv":["shell","wm","dismiss-keyguard"],"exit_code":0,"timed_out":False,"raw":raw("adb:keyguard-command","")},{"argv":["shell","input","keyevent","82"],"exit_code":0,"timed_out":False,"raw":raw("adb:keyguard-command","")}],"after":{"argv":policy,"showing":False,"input_restricted":False,"raw":after_raw,"attempts":[{"exit_code":0,"timed_out":False,"raw":after_raw}]},"passed":True}
     result["ui"]["keyguard"]=[{"phase":x,"receipt":json.loads(json.dumps(guard))} for x in ("installer-monkey","update-tap","install-tap","completion-tap","launch-monkey")]
+    result["timeout_seconds"]=300
+    result["ui"]["update_check_restart"]={"force_stop":{"argv":["shell","am","force-stop","org.amnezia.vpn"],"exit_code":0,"output":raw("adb:update-check-force-stop","")},"keyguard":json.loads(json.dumps(guard)),"monkey":{"argv":["shell","monkey","-p","org.amnezia.vpn","1"],"exit_code":0,"timed_out":False,"output":raw("adb:update-check-monkey","")},"readiness":json.loads(json.dumps(result["ui"]["focus_observations"]))}
+    remote="/data/local/tmp/amz-nonce-1.xml";result["ui"]["ui_capture_observations"]=[{"label":"ui-update","remote":remote,"attempts":[{"dump":{"argv":["shell","uiautomator","dump","--compressed",remote],"exit_code":0,"timed_out":False,"output":raw("adb:ui-dump","")},"cat":{"argv":["shell","cat",remote],"exit_code":0,"timed_out":False,"output":raw("adb:ui-xml",'<node package="com.android.permissioncontroller" text="Update" bounds="[0,0][1,1]"/>')}}]}]
     result["ui"]["package_state"]={"version_code":2187,"uid":10123,"dumpsys":{"argv":["shell","dumpsys","package","org.amnezia.vpn"],"exit_code":0,"output":raw("adb:dumpsys-package","versionCode=2187 minSdk=28 targetSdk=36")},"uid_lookup":{"argv":["shell","cmd","package","list","packages","-U","org.amnezia.vpn"],"exit_code":0,"output":raw("adb:cmd-package-list-U","package:org.amnezia.vpn uid:10123")}}
-    result["logcat"]={"started_at":"2026-09-13T00:00:00Z","finished_at":"2026-09-13T00:00:10Z","sha256":"2"*64,"crashes":[]}
+    result["logcat"]={"started_at":epoch,"finished_at":"2026-09-13T00:00:10Z","sha256":"2"*64,"crashes":[]}
     return result
 
 def test_stream_is_size_deadline_offset_and_eof_bound():
@@ -207,14 +218,54 @@ def test_boot_is_only_boot_and_requires_complete_stable_cgroup_inventory():
 
 def test_app_pass_needs_exact_apk_http_packageinstaller_ui_and_logcat():
     assert validate_app_update_receipt(plan(),boot(),app())["passed"]
-    value=app();empty_sha=hashlib.sha256(b"").hexdigest();timeout={"argv":["shell","dumpsys","activity","top-resumed"],"exit_code":124,"timed_out":True,"size":0,"sha256":empty_sha,"relevant_lines":"","matches":[]};value["ui"]["focus_observations"].insert(0,timeout)
+
+def test_cm_android16_installs_raw_replays_through_consumer_field_bound_parser():
+    from pathlib import Path
+    raw_bytes=(Path(__file__).parent/"test_fixtures"/"android16_installs"/"installer-before.raw").read_bytes();assert len(raw_bytes)==2002 and hashlib.sha256(raw_bytes).hexdigest()=="c6005b716590e53b94cb82e27815bc308a007cbc4ee591c74362374149e16427"
+    value=app();data=value["package_installer"]["session_evidence"];data["before"]={"origin":"guest","transport":"qga-adb","path":"adb:dumpsys-package-installs","size":len(raw_bytes),"sha256":hashlib.sha256(raw_bytes).hexdigest(),"bytes_b64":base64.b64encode(raw_bytes).decode()}
+    assert validate_app_update_receipt(plan(),boot(),value)["passed"]
+    active=b"Active Session 7:\n  sizeBytes=5 appPackageName=n\n    ull appIcon=false\n";active_row={"origin":"guest","transport":"qga-adb","path":"adb:dumpsys-package-installs","size":len(active),"sha256":hashlib.sha256(active).hexdigest(),"bytes_b64":base64.b64encode(active).decode()}
+    value=app();value["package_installer"]["session_evidence"]["after"].insert(0,active_row);assert validate_app_update_receipt(plan(),boot(),value)["passed"]
+    value=app();empty_sha=hashlib.sha256(b"").hexdigest();template=value["ui"]["focus_observations"][0];timeout={"argv":["shell","dumpsys","activity","top-resumed"],"exit_code":124,"timed_out":True,"size":0,"sha256":empty_sha,"raw":{"origin":"guest","transport":"qga-adb","path":"adb:activity-top-resumed","size":0,"sha256":empty_sha,"bytes_b64":""},"relevant_lines":"","matches":[],"elapsed_ms":0,"pidof":template["pidof"],"lifecycle":template["lifecycle"],"logcat":None};value["ui"]["focus_observations"].insert(0,timeout)
     assert validate_app_update_receipt(plan(),boot(),value)["passed"]
     value["ui"]["focus_observations"][0]["timed_out"]=False
     with pytest.raises(NestedCuttlefishError,match="foreground observation"):validate_app_update_receipt(plan(),boot(),value)
     value=app();value["ui"]["keyguard"][-1]["receipt"]["after"]["showing"]=True
     with pytest.raises(NestedCuttlefishError,match="keyguard"):validate_app_update_receipt(plan(),boot(),value)
-    value=app();value["ui"]["focus_observations"][-1]["matches"].append({"package":"com.android.launcher3","component":".Launcher","pid":201,"uid":10101})
-    with pytest.raises(NestedCuttlefishError,match="activity-top binding"):validate_app_update_receipt(plan(),boot(),value)
+    value=app();value["ui"]["update_check_restart"]["force_stop"]["argv"][-1]="other.package"
+    with pytest.raises(NestedCuttlefishError,match="restart"):validate_app_update_receipt(plan(),boot(),value)
+    value=app();value["ui"]["update_check_restart"]["readiness"][-1]["matches"][0]["visible"]=False
+    with pytest.raises(NestedCuttlefishError,match="semantic evidence|readiness phase"):validate_app_update_receipt(plan(),boot(),value)
+    value=app();value["ui"]["update_check_restart"]["monkey"].update(exit_code=124,timed_out=True);value["ui"]["launch_probe"].update(exit_code=124,timed_out=True)
+    assert validate_app_update_receipt(plan(),boot(),value)["passed"]
+    value["ui"]["launch_probe"]["timed_out"]=False
+    with pytest.raises(NestedCuttlefishError,match="launch command"):validate_app_update_receipt(plan(),boot(),value)
+    def session_row(text):
+        data=text.encode();return {"origin":"guest","transport":"qga-adb","path":"adb:dumpsys-package-installs","size":len(data),"sha256":hashlib.sha256(data).hexdigest(),"bytes_b64":base64.b64encode(data).decode()}
+    value=app();pending="Active Session 7:\n  appPackageName = org.amnezia.vpn\n";value["package_installer"]["session_evidence"]["after"].insert(0,session_row(pending));assert validate_app_update_receipt(plan(),boot(),value)["passed"]
+    value=app();duplicate="Session 7:\n  mAppPackageName=org.amnezia.vpn\n  mFinalStatus=1\nSession 7:\n  mAppPackageName=org.amnezia.vpn\n  mFinalStatus=1\n";value["package_installer"]["session_evidence"]["after"]=[session_row(duplicate)]
+    with pytest.raises(NestedCuttlefishError,match="ambiguous"):validate_app_update_receipt(plan(),boot(),value)
+    value=app();foreign="Active Child Session 8:\n  appPackageName = other.package\nSession 7:\n  mAppPackageName=org.amnezia.vpn\n  mFinalStatus=1\n";value["package_installer"]["session_evidence"]["after"]=[session_row(foreign)]
+    with pytest.raises(NestedCuttlefishError,match="foreign"):validate_app_update_receipt(plan(),boot(),value)
+    for mutation in ("string-bool","extra-key","oversized"):
+        value=app();row=value["ui"]["keyguard"][0]["receipt"]["before"]
+        if mutation=="string-bool":row["showing"]="true"
+        elif mutation=="extra-key":row["secure"]=False
+        else:
+            data=("showing=true\ninputRestricted=true\n"+("x"*6145)).encode()
+            row["raw"]={"origin":"guest","transport":"qga-adb","path":"adb:keyguard-policy","size":len(data),"sha256":hashlib.sha256(data).hexdigest(),"bytes_b64":base64.b64encode(data).decode()}
+        with pytest.raises(NestedCuttlefishError,match="keyguard"):validate_app_update_receipt(plan(),boot(),value)
+    value=app();value["ui"]["focus_observations"][-1]["matches"].append({"package":"com.android.launcher3","component":".Launcher","pid":201,"uid":10101,"format":"key-value","state":"RESUMED","finishing":False,"visible":True,"drawn":True,"starting_displayed":False})
+    with pytest.raises(NestedCuttlefishError,match="activity-top"):validate_app_update_receipt(plan(),boot(),value)
+    def replace_focus(row,text):
+        data=text.encode();row["relevant_lines"]=text;row["size"]=len(data);row["sha256"]=hashlib.sha256(data).hexdigest();row["raw"].update(size=len(data),sha256=row["sha256"],bytes_b64=base64.b64encode(data).decode())
+    value=app();row=value["ui"]["focus_observations"][-1];replace_focus(row,row["relevant_lines"].replace("startingData=null","startingData=SplashScreenStartingData{org.amnezia.vpn}\nstartingWindow=Window{Splash Screen org.amnezia.vpn}"))
+    with pytest.raises(NestedCuttlefishError,match="activity-top semantic"):validate_app_update_receipt(plan(),boot(),value)
+    value=app();row=value["ui"]["focus_observations"][-1];replace_focus(row,row["relevant_lines"]+"\nstartingWindow=Window{Splash Screen org.amnezia.vpn} startingDisplayed=false")
+    with pytest.raises(NestedCuttlefishError,match="activity-top semantic"):validate_app_update_receipt(plan(),boot(),value)
+    for state_line in ("state=RESUMED finishing=true","state=RESUMED","state=RESUMED finishing=false\nstate=RESUMED finishing=false"):
+        value=app();row=value["ui"]["focus_observations"][-1];replace_focus(row,row["relevant_lines"].replace("state=RESUMED finishing=false",state_line))
+        with pytest.raises(NestedCuttlefishError,match="activity-top semantic"):validate_app_update_receipt(plan(),boot(),value)
     for group,key,bad in (("package_installer","artifact_sha256","9"*64),("package_installer","method","adb install"),
       ("http","fixture_nonce",""),("ui","window_id",""),("logcat","crashes",["FATAL EXCEPTION"])):
         value=app(); value[group][key]=bad

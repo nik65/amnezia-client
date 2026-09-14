@@ -1,0 +1,32 @@
+Active install sessions:
+  
+Finalized install sessions:
+  
+Historical install sessions:
+  Session 409819962:
+    userId=0 mOriginalInstallerUid=2000 mOriginalInstallerPackageName=null installerPackageName=null 
+    installInitiatingPackageName=com.android.shell installOriginatingPackageName=null mInstallerUid=2000 
+    createdMillis=1789353589829 updatedMillis=1789353702733 committedMillis=1789353626352 
+    stageDir=/data/app/vmdl409819962.tmp stageCid=null 
+    mode=1 installFlags=0x500072 installLocation=1 installReason=0 installScenario=0 sizeBytes=75602546 appPackageName=n
+    ull appIcon=false appLabel=null originatingUri=null originatingUid=-1 referrerUri=null abiOverride=null volumeUuid=n
+    ull mPermissionStates={} packageSource=1 whitelistedRestrictedPermissions=null autoRevokePermissions=3 installerPack
+    ageName=null isMultiPackage=false isStaged=false forceQueryable=false requireUserAction=UNSPECIFIED requiredInstalle
+    dVersionCode=-1 dataLoaderParams=null rollbackDataPolicy=0 rollbackLifetimeMillis=0 rollbackImpactLevel=0 applicatio
+    nEnabledSettingPersistent=false developmentInstallFlags=0x0 unarchiveId=-1 dexoptCompilerFilter=null forceVerificati
+    on=false isAutoInstallDependenciesEnabled=true extensionParams=null 
+    mClientProgress=1.0 mProgress=0.90000004 mCommitted=true mPreapprovalRequested=false mSealed=true 
+    mPermissionsManuallyAccepted=false mStageDirInUse=true mDestroyed=true mFds=0 mBridges=0 mFinalStatus=1 
+    mFinalMessage=Session installed mParentSessionId=-1 mChildSessionIds=[] mSessionApplied=true mSessionFailed=false 
+    mSessionReady=false mSessionErrorCode=1 mSessionErrorMessage= mPreapprovalDetails=null mPreVerifiedDomains=null 
+    mAppPackageName=org.amnezia.vpn mInitialVerificationPolicy=0 mCurrentVerificationPolicy=0 
+  
+  
+Legacy install sessions:
+  {}
+  
+Gentle update with constraints info:
+  hasPendingIdleJob=false 
+  Num of PendingIdleFutures=0 
+  Num of PendingChecks=0 
+    VerificationPolicyPerUser={0=0} 

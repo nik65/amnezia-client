@@ -5,12 +5,23 @@ from dataclasses import asdict,dataclass
 from typing import Any,Callable,Mapping
 from urllib.parse import quote,urlparse
 try:
- from .nested_cuttlefish_runner import ApkSpec,InnerPlan,NestedCuttlefishError,OuterOwnership,receipt_sha,validate_app_update_receipt,validate_boot_receipt
+ from .nested_cuttlefish_runner import ApkSpec,InnerPlan,NestedCuttlefishError,OuterOwnership,receipt_sha,validate_app_update_receipt,validate_baseline_receipt,validate_boot_receipt
 except ImportError:  # direct lab.py execution
- from nested_cuttlefish_runner import ApkSpec,InnerPlan,NestedCuttlefishError,OuterOwnership,receipt_sha,validate_app_update_receipt,validate_boot_receipt
+ from nested_cuttlefish_runner import ApkSpec,InnerPlan,NestedCuttlefishError,OuterOwnership,receipt_sha,validate_app_update_receipt,validate_baseline_receipt,validate_boot_receipt
 
 SHA=re.compile(r"[0-9a-f]{64}"); XML_MAX=1<<20; LOG_MAX=2<<20; PNG_MAX=16<<20
 INSTALLERS=("com.android.packageinstaller","com.google.android.packageinstaller","com.android.permissioncontroller")
+
+def _parse_focus_text(text):
+ matches=[];legacy=re.findall(r"(?m)^\s*ACTIVITY ([^/ \t]+)/([^ \t]+).*?\bpid=([1-9]\d*)\b.*?\buid=([1-9]\d*)\b",text)
+ packages=re.findall(r"\bpackageName=([^\s]+)",text);components=re.findall(r"\bmActivityComponent=([^/\s]+)/([^\s]+)",text);processes=re.findall(r"(?m)^\s*app=ProcessRecord\{[^}]*\s([1-9]\d*):([^/\s]+)/u(\d+)a(\d+)\}\s*$",text)
+ states=re.findall(r"(?m)^\s*state=([A-Z_]+)\s+finishing=(true|false)\s*$",text);visible_requested=re.findall(r"\bmVisibleRequested=(true|false)\b",text);visible_now=re.findall(r"\bmVisible=(true|false)\b",text);client_visible=re.findall(r"\bmClientVisible=(true|false)\b",text);reported_visible=re.findall(r"\breportedVisible=(true|false)\b",text)
+ first=re.findall(r"\bfirstWindowDrawn=(true|false)\b",text);reported=re.findall(r"\breportedDrawn=(true|false)\b",text);starting=re.findall(r"\bstartingDisplayed=(true|false)\b",text);starting_data=re.findall(r"\bstartingData=([^\s]+)",text);starting_objects=bool(re.search(r"\bstarting(?:Window|Surface)=",text))
+ if legacy:return [{"package":x[0],"component":x[1],"pid":int(x[2]),"uid":int(x[3]),"format":"activity","state":"RESUMED","finishing":False,"visible":True,"drawn":False,"starting_displayed":False} for x in legacy[:32]]
+ if all(len(x)==1 for x in (packages,components,processes,states,visible_requested,visible_now,client_visible,reported_visible,first,reported,starting_data)) and ((starting_data==["null"] and not starting_objects and not starting) or (starting_data!=["null"] and starting_objects and len(starting)==1)):
+  package=packages[0];component_package,component=components[0];pid,process_package,user,app_id=processes[0]
+  if package==component_package==process_package:matches=[{"package":package,"component":component,"pid":int(pid),"uid":int(user)*100000+10000+int(app_id),"format":"key-value","state":states[0][0],"finishing":states[0][1]=="true","visible":visible_requested==visible_now==client_visible==reported_visible==["true"],"drawn":first[0]==reported[0]=="true","starting_displayed":starting==["true"]}]
+ return matches
 
 @dataclass(frozen=True)
 class AppFixture:
@@ -33,7 +44,7 @@ class NestedAppExecutor:
   plan.validate();validate_boot_receipt(plan,boot_receipt);baseline.validate();fixture.validate(plan)
   if baseline.package!=plan.apk.package or baseline.sha256==plan.apk.sha256:raise NestedCuttlefishError("baseline identity")
   self.qga,self.plan,self.boot,self.baseline,self.fixture,self.snapshot,self.fixture_snapshot,self.fixture_call=qga,plan,dict(boot_receipt),baseline,fixture,outer_live_snapshot,fixture_outer_snapshot,fixture_call
-  self.clock,self.sleep,self.failure_archive=clock,sleep,failure_archive;self.adb=f"{plan.root}/runtime/host/bin/adb";self.serial=self.boot["network"]["adb_connection"]["endpoint"];self.capture_seq=0;self.last_command=None
+  self.clock,self.sleep,self.failure_archive=clock,sleep,failure_archive;self.adb=f"{plan.root}/runtime/host/bin/adb";self.serial=self.boot["network"]["adb_connection"]["endpoint"];self.capture_seq=0;self.last_command=None;self.focus_observation_history=[];self.ui_capture_history=[]
   if not callable(failure_archive):raise NestedCuttlefishError("app failure archive callback missing")
   if self.boot["boot"]["serial"]!=self.serial.replace(":","_"):raise NestedCuttlefishError("ADB serial is not boot-bound")
  def _check(self):
@@ -44,6 +55,10 @@ class NestedAppExecutor:
   n=d-self.clock()
   if n<=0:raise NestedCuttlefishError("total update deadline expired")
   return min(cap,n)
+ def _launch_once(self,package,d,label,path):
+  argv=["shell","monkey","-p",package,"1"];data,meta=self._capture_result(argv,d,label,65536,30)
+  if meta["rc"] not in (0,124):raise NestedCuttlefishError("single app launch command failed")
+  return {"argv":argv,"exit_code":meta["rc"],"timed_out":meta["rc"]==124,"output":self._raw(path,data)}
  def _adb(self,args,d,cap=30):
   self._check();r=self.qga.guest_exec_wait(self.adb,["-P",self.plan.adb_endpoint.rsplit(":",1)[1],"-s",self.serial,*args],timeout=self._left(d,cap));self._check()
   rc=r.get("exitcode",r.get("exit_code")) if isinstance(r,Mapping) else None
@@ -86,6 +101,20 @@ class NestedAppExecutor:
   common={"schema":1,"run_id":self.fixture.run_id,"profile":self.fixture.profile,"attempt_nonce":self.fixture.attempt_nonce,"marker":self.fixture.marker,"origin":"guest","transport":"qga","injected":False,"outer_ownership":dict(self.fixture.outer_ownership),"pid":self.fixture.pid,"start_ticks":self.fixture.start_ticks,"listener":self.fixture.endpoint,"manifest_sha256":self.fixture.manifest_sha256,"manifest_size":self.fixture.manifest_size,"artifact_sha256":self.plan.apk.sha256,"artifact_size":self.plan.apk.size}
   if any(r.get(k)!=v for k,v in common.items()):raise NestedCuttlefishError(f"fixture {action} provenance")
   return dict(r)
+ def _read_prefix(self,path,d,limit=4096):
+  opened=self._request("guest-file-open",{"path":path,"mode":"r"},d);handle=opened.get("return") if isinstance(opened,Mapping) else None
+  if isinstance(handle,bool) or not isinstance(handle,int):raise NestedCuttlefishError("QGA evidence prefix open failed")
+  primary=None
+  try:
+   r=self._request("guest-file-read",{"handle":handle,"count":limit},d);v=r.get("return",{}) if isinstance(r,Mapping) else {}
+   try:return base64.b64decode(v.get("buf-b64",""),validate=True)[:limit]
+   except Exception as exc:raise NestedCuttlefishError("QGA evidence prefix invalid") from exc
+  except BaseException as exc:primary=exc;raise
+  finally:
+   try:self._request("guest-file-close",{"handle":handle},self.clock()+10)
+   except BaseException as close_error:
+    if primary is None:raise
+    primary.add_note(f"QGA evidence prefix close also failed: {close_error}")
  def _capture_result(self,args,d,label,limit,command_cap=None):
   self.capture_seq+=1;path=f"{self.plan.root}/evidence/{self.plan.ownership.attempt_nonce[:12]}-{self.capture_seq:02d}-{label}"
   code="""import hashlib,json,os,pathlib,resource,subprocess,sys
@@ -100,12 +129,21 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
 """
   remaining=self._left(d);inner=max(.1,remaining-5) if command_cap is None else min(float(command_cap),max(.1,remaining-5));outer=min(remaining,inner+5)
   argv=[self.adb,"-P",self.plan.adb_endpoint.rsplit(":",1)[1],"-s",self.serial,*args];self._check();r=self.qga.guest_exec_wait("/usr/bin/python3",["-c",code,json.dumps(argv,separators=(",",":")),path,str(limit),str(inner)],timeout=outer);self._check()
-  try:m=json.loads(r.get("stdout",""))
+  transport_stdout=str(r.get("stdout","")).encode() if isinstance(r,Mapping) else b"";transport_stderr=str(r.get("stderr","")).encode() if isinstance(r,Mapping) else b"";transport_rc=r.get("exitcode",r.get("exit_code")) if isinstance(r,Mapping) else None
+  self.last_command={"argv":argv,"exit_code":transport_rc,"capture_transport":{"stdout":self._bounded_command_bytes(transport_stdout),"stderr":self._bounded_command_bytes(transport_stderr)}}
+  try:m=json.loads(transport_stdout.decode("utf-8","replace"))
   except Exception as e:raise NestedCuttlefishError("bounded capture receipt missing") from e
-  if m.get("path")!=path or m.get("rc") not in (0,124) or not isinstance(m.get("size"),int) or m["size"]>limit or not SHA.fullmatch(str(m.get("sha256",""))):raise NestedCuttlefishError("bounded capture failed")
+  if (not isinstance(m,Mapping) or m.get("path")!=path or not isinstance(m.get("size"),int) or isinstance(m.get("size"),bool) or m["size"]<0 or not SHA.fullmatch(str(m.get("sha256","")))):raise NestedCuttlefishError("bounded capture metadata invalid")
+  self.last_command["capture_metadata"]={"path":path,"exit_code":m.get("rc"),"timed_out":m.get("rc")==124,"size":m["size"],"sha256":m["sha256"]}
+  if m["size"]>limit:
+   prefix=self._read_prefix(path,d);self.last_command["stdout"]={"size":m["size"],"sha256":m["sha256"],"bytes_b64":None,"excerpt_b64":base64.b64encode(prefix).decode(),"excerpt_size":len(prefix),"excerpt_sha256":hashlib.sha256(prefix).hexdigest(),"complete":False};self.last_command["stderr"]=self._bounded_command_bytes(b"")
+   raise NestedCuttlefishError("bounded capture output exceeds limit")
   b=self._read_file(path,d,limit)
+  self.last_command.update(exit_code=m.get("rc"),stdout=self._bounded_command_bytes(b),stderr=self._bounded_command_bytes(b""))
   if len(b)!=m["size"] or hashlib.sha256(b).hexdigest()!=m["sha256"]:raise NestedCuttlefishError("bounded capture readback mismatch")
-  self.last_command={"argv":argv,"exit_code":m["rc"],"stdout":self._bounded_command_bytes(b),"stderr":self._bounded_command_bytes(b"")};return b,m
+  if isinstance(transport_rc,bool) or not isinstance(transport_rc,int) or transport_rc!=0:raise NestedCuttlefishError("bounded capture transport exit invalid")
+  if isinstance(m.get("rc"),bool) or not isinstance(m.get("rc"),int) or m["rc"] not in (0,124):raise NestedCuttlefishError("bounded capture command exit invalid")
+  return b,m
  def _capture(self,args,d,label,limit,command_cap=None):
   b,m=self._capture_result(args,d,label,limit,command_cap)
   if m["rc"]!=0:raise NestedCuttlefishError("bounded capture command timed out")
@@ -116,19 +154,36 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
  def _bounded_command_bytes(data):
   return {"size":len(data),"sha256":hashlib.sha256(data).hexdigest(),"bytes_b64":base64.b64encode(data).decode() if len(data)<=6144 else None,"excerpt_b64":base64.b64encode(data[:4096]).decode()}
  def _keyguard(self,d):
-  argv=["shell","dumpsys","window","policy"];raw=self._capture(argv,d,"keyguard-policy",6144,10);text=raw.decode(errors="replace")
-  showing=re.findall(r"(?m)^\s*showing=(true|false)\s*$",text);secure=re.findall(r"(?m)^\s*secure=(true|false)\s*$",text)
-  if len(showing)!=1 or len(secure)!=1:self._app_failure("keyguard-state-ambiguous",{"keyguard_raw":{"argv":argv,"size":len(raw),"sha256":hashlib.sha256(raw).hexdigest(),"bytes_b64":base64.b64encode(raw).decode(),"showing_candidates":showing[:32],"secure_candidates":secure[:32]}},d,"app-precondition")
-  return {"argv":argv,"showing":showing[0]=="true","secure":secure[0]=="true","raw":self._raw("adb:keyguard-policy",raw)}
+  argv=["shell","dumpsys","window","policy"];attempts=[]
+  for index in range(3):
+   raw,meta=self._capture_result(argv,d,"keyguard-policy",6144,10);attempts.append({"exit_code":meta["rc"],"timed_out":meta["rc"]==124,"raw":self._raw("adb:keyguard-policy",raw)})
+   if meta["rc"]==0:break
+   if meta["rc"]!=124:self._app_failure("keyguard-policy-command-failed",{"keyguard_attempts":attempts},d,"app-precondition")
+   if index<2 and self.clock()<d:self.sleep(min(.5,max(0,d-self.clock())))
+  if attempts[-1]["exit_code"]!=0:self._app_failure("keyguard-policy-timeout",{"keyguard_attempts":attempts},d,"app-precondition")
+  text=raw.decode(errors="replace")
+  showing=re.findall(r"(?m)^\s*showing=(true|false)\s*$",text);restricted=re.findall(r"(?m)^\s*inputRestricted=(true|false)\s*$",text)
+  if len(showing)!=1 or len(restricted)!=1:self._app_failure("keyguard-state-ambiguous",{"keyguard_raw":{"argv":argv,"size":len(raw),"sha256":hashlib.sha256(raw).hexdigest(),"bytes_b64":base64.b64encode(raw).decode(),"showing_candidates":showing[:32],"input_restricted_candidates":restricted[:32]}},d,"app-precondition")
+  return {"argv":argv,"showing":showing[0]=="true","input_restricted":restricted[0]=="true","raw":self._raw("adb:keyguard-policy",raw),"attempts":attempts}
  def _unlock(self,d):
   before=self._keyguard(d);commands=[]
-  if before["secure"]:raise NestedCuttlefishError("test guest keyguard is secure")
+  after_dismiss=None;after=before
   if before["showing"]:
-   for argv in (["shell","wm","dismiss-keyguard"],["shell","input","keyevent","82"]):
-    raw=self._capture(argv,d,"keyguard-command",65536,10);commands.append({"argv":argv,"exit_code":0,"raw":self._raw("adb:keyguard-command",raw)})
-  after=self._keyguard(d)
-  if after["secure"] or after["showing"]:raise NestedCuttlefishError("test guest keyguard remained locked")
-  return {"before":before,"commands":commands,"after":after,"passed":True}
+   if d-self.clock()<43:raise NestedCuttlefishError("insufficient deadline for dismiss and policy proof")
+   dismiss=["shell","wm","dismiss-keyguard"];raw,meta=self._capture_result(dismiss,d,"keyguard-command",65536,10);commands.append({"argv":dismiss,"exit_code":meta["rc"],"timed_out":meta["rc"]==124,"raw":self._raw("adb:keyguard-command",raw)})
+   if meta["rc"] not in (0,124):raise NestedCuttlefishError("keyguard dismiss command invalid")
+   after_deadline=min(d,self.clock()+32);after_dismiss=self._keyguard(after_deadline);after=after_dismiss
+   if after["showing"] or after["input_restricted"]:
+    if d-self.clock()<63:raise NestedCuttlefishError("insufficient deadline for menu and policy proof")
+    menu=["shell","input","keyevent","82"];raw,meta=self._capture_result(menu,d,"keyguard-command",65536,30);commands.append({"argv":menu,"exit_code":meta["rc"],"timed_out":meta["rc"]==124,"raw":self._raw("adb:keyguard-command",raw)})
+    if meta["rc"] not in (0,124):raise NestedCuttlefishError("keyguard menu command invalid")
+    after_deadline=min(d,self.clock()+32);after=self._keyguard(after_deadline)
+  after_deadline=min(d,self.clock()+32)
+  for _ in range(9):
+   if not after["showing"] and not after["input_restricted"]:break
+   self.sleep(min(.5,max(0,after_deadline-self.clock())));after=self._keyguard(after_deadline)
+  if after["showing"] or after["input_restricted"]:raise NestedCuttlefishError("test guest keyguard remained locked")
+  return {"before":before,"after_dismiss":after_dismiss,"commands":commands,"after":after,"passed":True}
  def _package(self,version,d):
   dumpsys_argv=["shell","dumpsys","package",self.plan.apk.package]
   b=self._capture(dumpsys_argv,d,"package",XML_MAX)
@@ -150,7 +205,7 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
  def install_baseline(self,path,timeout=420):
   if path==f"{self.plan.root}/input/{self.plan.apk.name}":raise NestedCuttlefishError("candidate direct install forbidden")
   if isinstance(timeout,bool) or not isinstance(timeout,int) or not 300<=timeout<=600:raise NestedCuttlefishError("baseline timeout")
-  try:return self._install_baseline(path,timeout)
+  try:return validate_baseline_receipt(self.plan,self.baseline,self._install_baseline(path,timeout))
   except BaseException as exc:
    if getattr(exc,"archive_durable",False) or getattr(exc,"retain_owned_evidence",False):raise
    self._app_failure("baseline-exception",{"error_type":type(exc).__name__,"error_sha256":hashlib.sha256(str(exc).encode()).hexdigest(),"last_command":self.last_command},self.clock()+20,"app-baseline")
@@ -163,8 +218,10 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
   installed=self._adb(["install","-r",path],d,180)
   if "Success" not in str(installed.get("stdout","")):raise NestedCuttlefishError("baseline install failed")
   package,uid=self._package(self.baseline.version_code,d)
-  unlock=self._unlock(d);monkey_argv=["shell","monkey","-p",self.baseline.package,"1"];monkey_bytes=self._capture(monkey_argv,d,"baseline-monkey",65536);monkey={"argv":monkey_argv,"exit_code":0,"output":self._raw("adb:baseline-monkey",monkey_bytes)}
-  top_pid,top_uid,pkg,activity,focus=self._focus((self.baseline.package,),d);pid=str(self._adb(["shell","pidof",self.baseline.package],d).get("stdout","")).strip()
+  unlock=self._unlock(d);launch_epoch=str(self._adb(["shell","date","+%s.%3N"],d).get("stdout","")).strip()
+  if not re.fullmatch(r"\d{10,}(?:\.\d{3})?",launch_epoch):raise NestedCuttlefishError("baseline launch epoch missing")
+  monkey=self._launch_once(self.baseline.package,d,"baseline-monkey","adb:baseline-monkey")
+  top_pid,top_uid,pkg,activity,focus=self._focus((self.baseline.package,),d,initial_draw=True,lifecycle_epoch=launch_epoch);pid=str(self._adb(["shell","pidof",self.baseline.package],d).get("stdout","")).strip()
   if not re.fullmatch(r"[1-9]\d*",pid) or pid!=top_pid or uid!=int(top_uid):raise NestedCuttlefishError("baseline package PID/UID differs from activity top")
   wid="activity-top:"+top_pid
   return {"schema":2,"operation":"nested-baseline-setup","run_id":self.plan.ownership.run_id,"profile":self.plan.ownership.profile,
@@ -172,31 +229,71 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
    "outer_ownership":asdict(self.plan.ownership),"origin":"guest","transport":"qga","injected":False,
    "artifact":asdict(self.baseline),"guest_path":path,"guest_rehash":i,"adb_install":{"exit_code":0,"stdout_success":True},
    "package_state":package,"ui":{"package":pkg,"activity":activity,"window_id":wid,"package_pid":int(pid),"package_uid":uid,
-   "version_code":self.baseline.version_code,"keyguard":unlock,"launch_probe":monkey,"focus_observations":focus},"direct_install_is_update_evidence":False,"passed":True}
- def _focus(self,allowed,d):
-  argv=["shell","dumpsys","activity","top-resumed"];deadline=min(d,self.clock()+45);observations=[]
-  for _ in range(3):
+   "version_code":self.baseline.version_code,"keyguard":unlock,"launch_started_at":launch_epoch,"launch_probe":monkey,"focus_observations":focus},"direct_install_is_update_evidence":False,"passed":True}
+ def _focus(self,allowed,d,initial_draw=False,lifecycle_epoch=None,max_observations=None,reserve_seconds=30):
+  if lifecycle_epoch is None:lifecycle_epoch=str(self._adb(["shell","date","+%s.%3N"],d).get("stdout","")).strip()
+  if not re.fullmatch(r"\d{10,}(?:\.\d{3})?",str(lifecycle_epoch)):raise NestedCuttlefishError("focus lifecycle epoch missing")
+  argv=["shell","dumpsys","activity","top-resumed"];started=self.clock();deadline=d-reserve_seconds if initial_draw else min(d,started+45);observations=[];splash_pid=None
+  limit=max_observations if max_observations is not None else (32 if initial_draw else 3)
+  if not isinstance(limit,int) or isinstance(limit,bool) or not 1<=limit<=32 or deadline<=started:raise NestedCuttlefishError("insufficient deadline for foreground readiness proof")
+  for _ in range(limit):
    try:
     raw,meta=self._capture_result(argv,deadline,"activity-top",6144,10);text=raw.decode(errors="replace")
    except BaseException as exc:
     diagnostic={"allowed":list(allowed),"observation_count":len(observations),"last":observations[-1] if observations else None,"capture_error":{"type":type(exc).__name__,"sha256":hashlib.sha256(str(exc).encode()).hexdigest()}}
     raise NestedCuttlefishError("foreground activity-top mismatch: "+json.dumps(diagnostic,sort_keys=True,separators=(",",":"))) from exc
-   relevant="\n".join(line[:1024] for line in text.splitlines() if line.lstrip().startswith("ACTIVITY "))[:4096]
-   matches=re.findall(r"(?m)^\s*ACTIVITY ([^/ \t]+)/([^ \t]+).*?\bpid=([1-9]\d*)\b.*?\buid=([1-9]\d*)\b",text) if meta["rc"]==0 else []
-   row={"argv":argv,"exit_code":meta["rc"],"timed_out":meta["rc"]==124,"size":len(raw),"sha256":hashlib.sha256(raw).hexdigest(),"relevant_lines":relevant,"matches":[{"package":x[0],"component":x[1],"pid":int(x[2]),"uid":int(x[3])} for x in matches[:32]]}
-   observations.append(row)
+   keep=("ACTIVITY ","packageName=","app=ProcessRecord{","Intent {","mActivityComponent=","state=","mVisibleRequested=","firstWindowDrawn=","reportedDrawn=","startingData=","startingWindow=","startingSurface=","startingDisplayed=","Splash Screen")
+   relevant="\n".join(line[:1024] for line in text.splitlines() if any(token in line.lstrip() for token in keep))[:4096]
+   matches=_parse_focus_text(text) if meta["rc"]==0 else []
+   def diagnostic(argv,label,maximum,cap):
+    try:
+     data,result=self._capture_result(argv,deadline,label,maximum,cap);return {"argv":argv,"exit_code":result["rc"],"timed_out":result["rc"]==124,"output":self._raw("adb:"+label,data)}
+    except BaseException as exc:
+     command=json.loads(json.dumps(self.last_command));return {"argv":argv,"capture_error":{"type":type(exc).__name__,"sha256":hashlib.sha256(str(exc).encode()).hexdigest()},"command":command}
+   pidof_argv=["shell","pidof",allowed[0]];pidof=diagnostic(pidof_argv,"focus-pidof",4096,5)
+   lifecycle_argv=["shell","logcat","-d","-T",str(lifecycle_epoch),"-t","200","-v","threadtime","-b","main","-b","system","-b","events","-b","crash","ActivityManager:I","ActivityTaskManager:I","AndroidRuntime:E","lmkd:I","lowmemorykiller:I","*:S"];lifecycle=diagnostic(lifecycle_argv,"focus-lifecycle",65536,5)
+   row={"argv":argv,"exit_code":meta["rc"],"timed_out":meta["rc"]==124,"size":len(raw),"sha256":hashlib.sha256(raw).hexdigest(),"raw":self._raw("adb:activity-top-resumed",raw),"relevant_lines":relevant,"matches":matches,"elapsed_ms":max(0,int((self.clock()-started)*1000)),"pidof":pidof,"lifecycle":lifecycle,"logcat":None}
+   if len(self.focus_observation_history)>=56:raise NestedCuttlefishError("focus observation history exceeds bound")
+   observations.append(row);self.focus_observation_history.append(row)
    if len(matches)>1:return self._focus_failure("ambiguous",allowed,observations,raw,d)
    if len(matches)==1:
-    package,component,pid,uid=matches[0]
+    match=matches[0];package,component,pid,uid=match["package"],match["component"],str(match["pid"]),str(match["uid"])
     if package not in allowed:return self._focus_failure("package-mismatch",allowed,observations,raw,d)
+    if match["state"]!="RESUMED" or match["finishing"] is not False:return self._focus_failure("foreground-state-loss",allowed,observations,raw,d)
+    active_start=re.findall(r"\bstartingData=([^\s]+)",text)!=["null"]
+    if active_start:
+     if match["drawn"] is not False:return self._focus_failure("starting-window-already-drawn",allowed,observations,raw,d)
+    elif match["drawn"] is not True or match["starting_displayed"] is not False:return self._focus_failure("non-drawn-without-starting-window",allowed,observations,raw,d)
+    if active_start or match["visible"] is not True:
+     if splash_pid is None:splash_pid=match["pid"]
+     elif splash_pid!=match["pid"]:return self._focus_failure("splash-process-changed",allowed,observations,raw,d)
+     largv=["shell","logcat","-d","-t","40"]
+     try:
+      log,logmeta=self._capture_result(largv,deadline,"focus-progress-logcat",32768,5);logtext=log.decode("utf-8","replace");fatal=any(token in logtext for token in ("FATAL EXCEPTION","Fatal signal","Process org.amnezia.vpn has died"))
+      row["logcat"]={"argv":largv,"exit_code":logmeta["rc"],"size":len(log),"sha256":hashlib.sha256(log).hexdigest(),"fatal":fatal,"relevant_lines":"\n".join(line[:1024] for line in logtext.splitlines() if any(token in line for token in (*allowed,"FATAL EXCEPTION","Fatal signal")))[:4096]}
+     except BaseException as exc:return self._focus_failure("splash-logcat-capture-failed",allowed,observations,raw,d)
+     if fatal:return self._focus_failure("splash-process-fatal",allowed,observations,raw,d)
+     if self.clock()>=deadline:break
+     self.sleep(min(1,self._left(deadline,1)));continue
     return pid,uid,package,component,observations
    if self.clock()>=deadline:break
    self.sleep(min(1,self._left(deadline,1)))
   return self._focus_failure("no-authoritative-record",allowed,observations,raw if 'raw' in locals() else b"",d)
  def _focus_failure(self,reason,allowed,observations,raw,d):
-  diagnostic={"allowed":list(allowed),"observation_count":len(observations),"last":observations[-1] if observations else None,"top_resumed_raw":{"size":len(raw),"sha256":hashlib.sha256(raw).hexdigest(),"bytes_b64":base64.b64encode(raw).decode()}}
+  logcat={"attempted":True};argv=["shell","logcat","-d","-t","200"]
+  try:
+   data,meta=self._capture_result(argv,min(d,self.clock()+15),"focus-failure-logcat",65536,10);text=data.decode("utf-8","replace")
+   relevant="\n".join(line[:1024] for line in text.splitlines() if any(token in line for token in (*allowed,"ActivityManager","ActivityTaskManager","AndroidRuntime")))[:4096]
+   logcat={"attempted":True,"argv":argv,"exit_code":meta["rc"],"size":len(data),"sha256":hashlib.sha256(data).hexdigest(),"relevant_lines":relevant}
+  except BaseException as exc:logcat={"attempted":True,"error_type":type(exc).__name__,"error_sha256":hashlib.sha256(str(exc).encode()).hexdigest()}
+  diagnostic={"allowed":list(allowed),"observation_count":len(observations),"last":observations[-1] if observations else None,"focus_observations":self.focus_observation_history,"top_resumed_raw":{"size":len(raw),"sha256":hashlib.sha256(raw).hexdigest(),"bytes_b64":base64.b64encode(raw).decode()},"logcat":logcat}
   return self._app_failure(reason,diagnostic,d,"app-focus")
  def _app_failure(self,reason,diagnostic,d,phase):
+  if phase=="app-update" and "fixture_log" not in diagnostic:
+   try:
+    fixture_log=self._fx("read-log",self.clock()+10);encoded=json.dumps(fixture_log,sort_keys=True,separators=(",",":"))
+    diagnostic={**diagnostic,"fixture_log":fixture_log if len(encoded)<=65536 else {"oversized":True,"size":len(encoded.encode()),"sha256":hashlib.sha256(encoded.encode()).hexdigest(),"request_count":len(fixture_log.get("requests",[])) if isinstance(fixture_log.get("requests"),list) else None}}
+   except BaseException as exc:diagnostic={**diagnostic,"fixture_log":{"error_type":type(exc).__name__,"error_sha256":hashlib.sha256(str(exc).encode()).hexdigest()}}
   shot={"attempted":True};remaining=max(0,d-self.clock())
   try:
    png,meta=self._capture_result(["exec-out","screencap","-p"],self.clock()+min(15,max(1,remaining)),"focus-failure-screen",4194304,10)
@@ -211,33 +308,66 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
   if (not isinstance(ack,Mapping) or ack.get("origin")!="controller" or ack.get("immutable") is not True or not SHA.fullmatch(str(ack.get("sha256",""))) or not isinstance(ack.get("size"),int) or ack["size"]<=0
       or (shot.get("png_signature") is True and (not isinstance(image,Mapping) or image.get("sha256")!=shot["sha256"] or image.get("size")!=shot["size"] or not image.get("path")))):
    error=NestedCuttlefishError("app focus failure archive rejected");setattr(error,"retain_owned_evidence",True);error.add_note("inner cleanup pending because no durable app-focus archive");raise error
-  error=NestedCuttlefishError(("foreground activity-top mismatch: " if phase=="app-focus" else "app precondition failed: ")+json.dumps(diagnostic,sort_keys=True,separators=(",",":")));setattr(error,"archive_durable",True);raise error
- def _tap(self,text,allowed,d):
+  message_diagnostic={k:v for k,v in diagnostic.items() if k not in ("focus_observations","top_resumed_raw")}
+  if isinstance(message_diagnostic.get("last"),Mapping):message_diagnostic["last"]={k:v for k,v in message_diagnostic["last"].items() if k!="raw"}
+  error=NestedCuttlefishError(("foreground activity-top mismatch: " if phase=="app-focus" else "app precondition failed: ")+json.dumps(message_diagnostic,sort_keys=True,separators=(",",":"))[:4096]);setattr(error,"archive_durable",True);raise error
+ def _tap(self,text,allowed,d,focus_allowed=None):
   remote=f"/data/local/tmp/amz-{self.plan.ownership.attempt_nonce[:12]}.xml"
   while self.clock()<d:
-   unlock=self._unlock(d);self._focus(allowed,d);self._adb(["shell","uiautomator","dump","--compressed",remote],d,20);x=self._capture(["shell","cat",remote],d,f"ui-{text.lower()}",XML_MAX).decode(errors="replace")
+   unlock=self._unlock(d);self._focus(focus_allowed or allowed,d);x=self._ui_xml(remote,d,f"ui-{text.lower()}").decode(errors="replace")
    nodes=[n for n in re.findall(r"<node\b[^>]+>",x) if f'text="{text}"' in n and any(f'package="{p}"' in n for p in allowed)]
    m=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',nodes[0]) if len(nodes)==1 else None
    if m:
     a,b,c,e=map(int,m.groups());self._adb(["shell","input","tap",str((a+c)//2),str((b+e)//2)],d);return unlock
    self.sleep(min(1,self._left(d,1)))
   raise NestedCuttlefishError(f"bounded UI wait expired: {text}")
- def _tap_any(self,texts,allowed,d):
-  remote=f"/data/local/tmp/amz-{self.plan.ownership.attempt_nonce[:12]}.xml";deadline=min(d,self.clock()+30)
+ def _tap_any(self,texts,allowed,d,focus_allowed=None):
+  remote=f"/data/local/tmp/amz-{self.plan.ownership.attempt_nonce[:12]}.xml";deadline=min(d,self.clock()+90)
   while self.clock()<deadline:
-   unlock=self._unlock(deadline);self._focus(allowed,deadline);self._adb(["shell","uiautomator","dump","--compressed",remote],deadline,20);x=self._capture(["shell","cat",remote],deadline,"ui-completion",XML_MAX).decode(errors="replace")
+   unlock=self._unlock(deadline);self._focus(focus_allowed or allowed,deadline);x=self._ui_xml(remote,deadline,"ui-completion").decode(errors="replace")
    found=[]
    for text in texts:
     nodes=[n for n in re.findall(r"<node\b[^>]+>",x) if f'text="{text}"' in n and any(f'package="{p}"' in n for p in allowed)]
+    if len(nodes)>1:raise NestedCuttlefishError("ambiguous completion action")
     if len(nodes)==1:found.append((text,nodes[0]))
-   if len(found)>1:raise NestedCuttlefishError("ambiguous completion action")
-   m=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',found[0][1]) if len(found)==1 else None
+   m=re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',found[0][1]) if found else None
    if m:
     a,b,c,e=map(int,m.groups());self._adb(["shell","input","tap",str((a+c)//2),str((b+e)//2)],deadline);return found[0][0],unlock
    self.sleep(min(1,self._left(deadline,1)))
   raise NestedCuttlefishError("bounded UI completion wait expired")
+ def _ui_xml(self,remote,d,label):
+  dump_argv=["shell","uiautomator","dump","--compressed",remote];cat_argv=["shell","cat",remote];attempts=[]
+  for index in range(3):
+   dump,dump_meta=self._capture_result(dump_argv,d,label+"-dump",65536,20);attempt={"dump":{"argv":dump_argv,"exit_code":dump_meta["rc"],"timed_out":dump_meta["rc"]==124,"output":self._raw("adb:ui-dump",dump)},"cat":None};attempts.append(attempt)
+   if dump_meta["rc"] not in (0,124):raise NestedCuttlefishError("UI dump command failed")
+   if dump_meta["rc"]==124:
+    if index<2 and self.clock()<d:self.sleep(min(.5,max(0,d-self.clock())));continue
+    break
+   xml,cat_meta=self._capture_result(cat_argv,d,label+"-cat",XML_MAX,10);attempt["cat"]={"argv":cat_argv,"exit_code":cat_meta["rc"],"timed_out":cat_meta["rc"]==124,"output":self._raw("adb:ui-xml",xml)}
+   if cat_meta["rc"] not in (0,124):raise NestedCuttlefishError("UI XML command failed")
+   if cat_meta["rc"]==0:
+    if len(self.ui_capture_history)>=64:raise NestedCuttlefishError("UI capture history exceeds bound")
+    self.ui_capture_history.append({"label":label,"remote":remote,"attempts":attempts});return xml
+   if index<2 and self.clock()<d:self.sleep(min(.5,max(0,d-self.clock())))
+  if len(self.ui_capture_history)<64:self.ui_capture_history.append({"label":label,"remote":remote,"attempts":attempts})
+  self._app_failure("ui-xml-capture-timeout",{"ui_capture_observations":self.ui_capture_history},d,"app-update")
  @staticmethod
- def _sessions(s):return {int(x) for x in re.findall(r"(?:sessionId=|Session\{[^#]*#)(\d+)",s)}
+ def _sessions(s):
+  rows={}
+  header=r"(?:(Active Child|Active|Orphaned|Finalized) )?Session ([1-9]\d*):"
+  for match in re.finditer(rf"(?ms)^\s*{header}\s*$\n(.*?)(?=^\s*{header}\s*$|\Z)",s):
+   prefix=match.group(1);session=int(match.group(2));body=match.group(3)
+   if session in rows:raise NestedCuttlefishError("ambiguous PackageInstaller session dump")
+   if prefix is None:
+    packages=re.findall(r"(?<![A-Za-z0-9_])mAppPackageName=([^\s]+)",body);statuses=re.findall(r"(?<![A-Za-z0-9_])mFinalStatus=(-?\d+)\b",body)
+    if len(packages)!=1 or len(statuses)!=1:raise NestedCuttlefishError("ambiguous PackageInstaller historical session")
+    rows[session]={"kind":"historical","package":packages[0],"final_status":int(statuses[0])}
+   else:
+    packages=re.findall(r"(?<![A-Za-z0-9_])appPackageName\s*=\s*([^\s]+)",body)
+    if len(packages)>1:raise NestedCuttlefishError("ambiguous PackageInstaller active package")
+    active_package=packages[0] if packages and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+",packages[0]) else None
+    rows[session]={"kind":prefix.lower().replace(" ","-"),"package":active_package,"final_status":None}
+  return rows
  def _stop(self,d):
   errors=[]
   for a in (["shell","am","force-stop",self.plan.apk.package],["shell","rm","-f",f"/data/local/tmp/amz-{self.plan.ownership.attempt_nonce[:12]}.xml",f"/data/local/tmp/amz-{self.plan.ownership.attempt_nonce[:12]}.png"]):
@@ -246,7 +376,7 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
   r=self._fx("stop",d)
   if errors or r.get("identity_rechecked") is not True or r.get("stopped") is not True or r.get("listener_closed") is not True or r.get("unknown_survivors")!=[] or not SHA.fullmatch(str(r.get("request_log_sha256",""))):raise NestedCuttlefishError("app/fixture cleanup uncertain")
   return r
- def run_update(self,timeout=180):
+ def run_update(self,timeout=300):
   if isinstance(timeout,bool) or not 60<=timeout<=300:raise NestedCuttlefishError("update timeout")
   d=self.clock()+timeout;started=False;primary=None
   try:
@@ -257,16 +387,27 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
        or not re.fullmatch(r"[0-9a-f]{48}",str(z.get("reset_token",""))) or z.get("empty_sha256")!=hashlib.sha256(b"").hexdigest()
        or not isinstance(z.get("reset_at"),(int,float)) or isinstance(z.get("reset_at"),bool) or not math.isfinite(z["reset_at"])):raise NestedCuttlefishError("fixture reset receipt")
    reset_sha=receipt_sha(z)
+   force_argv=["shell","am","force-stop",self.plan.apk.package];force_bytes=self._capture(force_argv,d,"update-check-force-stop",65536,10);restart_unlock=self._unlock(d)
    epoch=str(self._adb(["shell","date","+%s.%3N"],d).get("stdout","")).strip()
    if not re.fullmatch(r"\d{10,}(?:\.\d{3})?",epoch):raise NestedCuttlefishError("logcat start time missing")
-   before=self._sessions(self._capture(["shell","dumpsys","package","installer"],d,"installer-before",XML_MAX).decode(errors="replace"));installer_unlock=self._unlock(d);self._adb(["shell","monkey","-p",self.plan.apk.package,"1"],d)
-   update_unlock=self._tap("Update",(self.plan.apk.package,),d);install_unlock=self._tap("Install",INSTALLERS,d)
-   completion_action,completion_unlock=self._tap_any(("Done","Open"),INSTALLERS,d)
-   package,uid=self._package(self.plan.apk.version_code,d);ins=self._capture(["shell","dumpsys","package","installer"],d,"installer-after",XML_MAX).decode(errors="replace")
+   restart_monkey=self._launch_once(self.plan.apk.package,d,"update-check-monkey","adb:update-check-monkey")
+   if d-self.clock()<210:raise NestedCuttlefishError("insufficient update budget after fixture restart")
+   _,_,_,_,restart_focus=self._focus((self.plan.apk.package,),d,lifecycle_epoch=epoch,max_observations=12)
+   update_restart={"force_stop":{"argv":force_argv,"exit_code":0,"output":self._raw("adb:update-check-force-stop",force_bytes)},"keyguard":restart_unlock,"monkey":restart_monkey,"readiness":restart_focus}
+   installer_snapshot_argv=["shell","dumpsys","package","installs"];before_bytes=self._capture(installer_snapshot_argv,d,"installer-before",XML_MAX);before=self._sessions(before_bytes.decode(errors="replace"));installer_unlock=restart_unlock
+   update_unlock=self._tap("Update",(self.plan.apk.package,),d);install_action,install_unlock=self._tap_any(("Install","Settings"),INSTALLERS,d,focus_allowed=(self.plan.apk.package,*INSTALLERS))
+   if install_action=="Settings":
+    remote=f"/data/local/tmp/amz-{self.plan.ownership.attempt_nonce[:12]}.xml";settings_xml=self._ui_xml(remote,d,"ui-unknown-sources-settings");self._app_failure("unknown-sources-settings-unverified",{"ui_xml":self._raw("adb:unknown-sources-settings",settings_xml),"focus_observations":self.focus_observation_history,"ui_capture_observations":self.ui_capture_history},d,"app-update")
+   completion_action,completion_unlock=self._tap_any(("Open","Done"),INSTALLERS,d)
+   package,uid=self._package(self.plan.apk.version_code,d);session_observations=[];sessions=set()
+   for poll in range(10):
+    ins_bytes=self._capture(installer_snapshot_argv,d,f"installer-after-{poll}",XML_MAX);after=self._sessions(ins_bytes.decode(errors="replace"));session_observations.append(self._raw("adb:dumpsys-package-installs",ins_bytes));new=set(after)-set(before)
+    sessions={sid for sid in new if after[sid]=={"kind":"historical","package":self.plan.apk.package,"final_status":1}}
+    if len(new)==1 and len(sessions)==1:break
+    self.sleep(min(1,self._left(d,1)))
    log=self._capture(["logcat","-d","-T",epoch,"-v","threadtime","PackageInstaller:I","PackageManager:I","AndroidRuntime:E","*:S"],d,"logcat",LOG_MAX)
-   created=self._sessions(ins+log.decode(errors="replace"))-before;ok={int(x) for x in re.findall(r"session(?:Id)?[ =:#]+(\d+).*?(?:STATUS_SUCCESS|INSTALL_SUCCEEDED|success)",log.decode(errors="replace"),re.I)};sessions=created&ok
    if len(sessions)!=1 or re.search(rb"FATAL EXCEPTION|Fatal signal.*amnezia",log,re.I):raise NestedCuttlefishError("unique successful PackageInstaller session missing")
-   launch_unlock=self._unlock(d);monkey_argv=["shell","monkey","-p",self.plan.apk.package,"1"];monkey_bytes=self._capture(monkey_argv,d,"candidate-monkey",65536);monkey={"argv":monkey_argv,"exit_code":0,"output":self._raw("adb:candidate-monkey",monkey_bytes)};top_pid,top_uid,pkg,activity,focus=self._focus((self.plan.apk.package,),d);pid=str(self._adb(["shell","pidof",self.plan.apk.package],d).get("stdout","")).strip()
+   launch_unlock=self._unlock(d);monkey=self._launch_once(self.plan.apk.package,d,"candidate-monkey","adb:candidate-monkey");top_pid,top_uid,pkg,activity,focus=self._focus((self.plan.apk.package,),d,lifecycle_epoch=epoch,max_observations=12);pid=str(self._adb(["shell","pidof",self.plan.apk.package],d).get("stdout","")).strip()
    if not re.fullmatch(r"[1-9]\d*",pid) or pid!=top_pid or uid!=int(top_uid):raise NestedCuttlefishError("package PID/UID differs from activity top")
    wid="activity-top:"+top_pid
    remote=f"/data/local/tmp/amz-{self.plan.ownership.attempt_nonce[:12]}.png";local=f"{self.plan.root}/evidence/app.png";self._adb(["shell","screencap","-p",remote],d);self._adb(["pull",remote,local],d,60);png=self._read_file(local,d,PNG_MAX)
@@ -280,11 +421,11 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
        or times!=sorted(times) or not (z["reset_at"]<=times[0]<=times[-1]<=h["finished_at"])
        or h.get("transcript_sha256")!=receipt_sha({"reset_receipt_sha256":reset_sha,"requests":rows})):raise NestedCuttlefishError("exact app HTTP transcript missing")
    keyguards=[{"phase":phase,"receipt":value} for phase,value in (("installer-monkey",installer_unlock),("update-tap",update_unlock),("install-tap",install_unlock),("completion-tap",completion_unlock),("launch-monkey",launch_unlock))]
-   v={"schema":2,"operation":"nested-cuttlefish-app-update","run_id":self.plan.ownership.run_id,"profile":self.plan.ownership.profile,"attempt_nonce":self.plan.ownership.attempt_nonce,"marker":self.plan.marker,"guest_root":self.plan.root,"outer_ownership":asdict(self.plan.ownership),"origin":"guest","transport":"qga","injected":False,"boot_binding_sha256":receipt_sha(self.boot),"package_installer":{"package":self.plan.apk.package,"version_code":self.plan.apk.version_code,"artifact_sha256":self.plan.apk.sha256,"artifact_size":self.plan.apk.size,"download_sha256":self.plan.apk.sha256,"session_id":next(iter(sessions)),"status":"STATUS_SUCCESS","method":"PackageInstaller"},"http":{"fixture_nonce":self.fixture.attempt_nonce,"manifest_sha256":self.fixture.manifest_sha256,"requests":rows,"fixture_receipt_sha256":receipt_sha(h)},"ui":{"package":pkg,"activity":activity,"window_id":wid,"window_title":pkg,"package_pid":int(pid),"package_uid":uid,"version_code":self.plan.apk.version_code,"screenshot_sha256":hashlib.sha256(png).hexdigest(),"package_state":package,"keyguard":keyguards,"completion_action":completion_action,"launch_probe":monkey,"focus_observations":focus},"logcat":{"started_at":epoch,"finished_at":str(h.get("finished_at","")),"sha256":hashlib.sha256(log).hexdigest(),"size":len(log),"crashes":[]},"passed":True}
+   v={"schema":2,"operation":"nested-cuttlefish-app-update","timeout_seconds":timeout,"run_id":self.plan.ownership.run_id,"profile":self.plan.ownership.profile,"attempt_nonce":self.plan.ownership.attempt_nonce,"marker":self.plan.marker,"guest_root":self.plan.root,"outer_ownership":asdict(self.plan.ownership),"origin":"guest","transport":"qga","injected":False,"boot_binding_sha256":receipt_sha(self.boot),"package_installer":{"package":self.plan.apk.package,"version_code":self.plan.apk.version_code,"artifact_sha256":self.plan.apk.sha256,"artifact_size":self.plan.apk.size,"download_sha256":self.plan.apk.sha256,"session_id":next(iter(sessions)),"status":"STATUS_SUCCESS","method":"PackageInstaller","snapshot_argv":installer_snapshot_argv,"session_evidence":{"before":self._raw("adb:dumpsys-package-installs",before_bytes),"after":session_observations}},"http":{"fixture_nonce":self.fixture.attempt_nonce,"manifest_sha256":self.fixture.manifest_sha256,"requests":rows,"fixture_receipt_sha256":receipt_sha(h)},"ui":{"package":pkg,"activity":activity,"window_id":wid,"window_title":pkg,"package_pid":int(pid),"package_uid":uid,"version_code":self.plan.apk.version_code,"screenshot_sha256":hashlib.sha256(png).hexdigest(),"package_state":package,"update_check_restart":update_restart,"keyguard":keyguards,"completion_action":completion_action,"launch_probe":monkey,"focus_observations":focus,"ui_capture_observations":self.ui_capture_history},"logcat":{"started_at":epoch,"finished_at":str(h.get("finished_at","")),"sha256":hashlib.sha256(log).hexdigest(),"size":len(log),"crashes":[]},"passed":True}
    return validate_app_update_receipt(self.plan,self.boot,v)
   except BaseException as e:
    if getattr(e,"archive_durable",False) or getattr(e,"retain_owned_evidence",False):primary=e;raise
-   try:self._app_failure("update-exception",{"error_type":type(e).__name__,"error_sha256":hashlib.sha256(str(e).encode()).hexdigest(),"last_command":self.last_command},self.clock()+20,"app-update")
+   try:self._app_failure("update-exception",{"error_type":type(e).__name__,"error_sha256":hashlib.sha256(str(e).encode()).hexdigest(),"last_command":self.last_command,"focus_observations":self.focus_observation_history,"ui_capture_observations":self.ui_capture_history},self.clock()+20,"app-update")
    except BaseException as archived:primary=archived;raise
   finally:
    if started and not getattr(primary,"retain_owned_evidence",False):

@@ -481,11 +481,78 @@ def validate_boot_receipt(plan: InnerPlan, receipt: Mapping) -> dict:
 def receipt_sha(receipt: Mapping) -> str:
     return hashlib.sha256(json.dumps(dict(receipt),sort_keys=True,separators=(",",":")).encode()).hexdigest()
 
+def _parse_focus_text(text: str) -> list[dict]:
+ matches=[];legacy=re.findall(r"(?m)^\s*ACTIVITY ([^/ \t]+)/([^ \t]+).*?\bpid=([1-9]\d*)\b.*?\buid=([1-9]\d*)\b",text)
+ packages=re.findall(r"\bpackageName=([^\s]+)",text);components=re.findall(r"\bmActivityComponent=([^/\s]+)/([^\s]+)",text);processes=re.findall(r"(?m)^\s*app=ProcessRecord\{[^}]*\s([1-9]\d*):([^/\s]+)/u(\d+)a(\d+)\}\s*$",text)
+ states=re.findall(r"(?m)^\s*state=([A-Z_]+)\s+finishing=(true|false)\s*$",text);visible_requested=re.findall(r"\bmVisibleRequested=(true|false)\b",text);visible_now=re.findall(r"\bmVisible=(true|false)\b",text);client_visible=re.findall(r"\bmClientVisible=(true|false)\b",text);reported_visible=re.findall(r"\breportedVisible=(true|false)\b",text)
+ first=re.findall(r"\bfirstWindowDrawn=(true|false)\b",text);reported=re.findall(r"\breportedDrawn=(true|false)\b",text);starting=re.findall(r"\bstartingDisplayed=(true|false)\b",text);starting_data=re.findall(r"\bstartingData=([^\s]+)",text);starting_objects=bool(re.search(r"\bstarting(?:Window|Surface)=",text))
+ if legacy:return [{"package":x[0],"component":x[1],"pid":int(x[2]),"uid":int(x[3]),"format":"activity","state":"RESUMED","finishing":False,"visible":True,"drawn":False,"starting_displayed":False} for x in legacy[:32]]
+ if all(len(x)==1 for x in (packages,components,processes,states,visible_requested,visible_now,client_visible,reported_visible,first,reported,starting_data)) and ((starting_data==["null"] and not starting_objects and not starting) or (starting_data!=["null"] and starting_objects and len(starting)==1)):
+  package=packages[0];component_package,component=components[0];pid,process_package,user,app_id=processes[0]
+  if package==component_package==process_package:matches=[{"package":package,"component":component,"pid":int(pid),"uid":int(user)*100000+10000+int(app_id),"format":"key-value","state":states[0][0],"finishing":states[0][1]=="true","visible":visible_requested==visible_now==client_visible==reported_visible==["true"],"drawn":first[0]==reported[0]=="true","starting_displayed":starting==["true"]}]
+ return matches
+
+
+def _validate_monkey_command(value: Any,package: str,path: str) -> None:
+    output=value.get("output") if isinstance(value,Mapping) else None;argv=["shell","monkey","-p",package,"1"]
+    if (not isinstance(value,Mapping) or set(value)!={"argv","exit_code","timed_out","output"} or value.get("argv")!=argv or value.get("exit_code") not in (0,124)
+            or value.get("timed_out") is not (value["exit_code"]==124) or not isinstance(output,Mapping) or set(output)!={"origin","transport","path","size","sha256","bytes_b64"}
+            or output.get("origin")!="guest" or output.get("transport")!="qga-adb" or output.get("path")!=path or not isinstance(output.get("size"),int) or isinstance(output.get("size"),bool)
+            or not 0<=output["size"]<=65536 or not SHA_RE.fullmatch(str(output.get("sha256",""))) or not isinstance(output.get("bytes_b64"),str)):raise NestedCuttlefishError("bounded app launch command evidence missing")
+    try:data=base64.b64decode(output["bytes_b64"],validate=True)
+    except Exception as exc:raise NestedCuttlefishError("app launch command bytes invalid") from exc
+    if len(data)!=output["size"] or hashlib.sha256(data).hexdigest()!=output["sha256"]:raise NestedCuttlefishError("app launch command bytes mismatch")
+
+def validate_baseline_receipt(plan: InnerPlan, baseline: ApkSpec, receipt: Mapping) -> dict:
+    _common(plan,receipt,"nested-baseline-setup")
+    if receipt.get("artifact")!=asdict(baseline) or receipt.get("direct_install_is_update_evidence") is not False or receipt.get("passed") is not True:raise NestedCuttlefishError("baseline artifact receipt invalid")
+    ui=receipt.get("ui");focus=ui.get("focus_observations") if isinstance(ui,Mapping) else None
+    if not isinstance(ui,Mapping) or ui.get("version_code")!=baseline.version_code or not isinstance(focus,list) or not 1<=len(focus)<=32:raise NestedCuttlefishError("baseline UI receipt invalid")
+    _validate_monkey_command(ui.get("launch_probe"),baseline.package,"adb:baseline-monkey")
+    row=focus[-1];raw=row.get("raw") if isinstance(row,Mapping) else None
+    if (not isinstance(row,Mapping) or row.get("exit_code")!=0 or not isinstance(raw,Mapping) or raw.get("path")!="adb:activity-top-resumed" or raw.get("origin")!="guest" or raw.get("transport")!="qga-adb"
+            or not isinstance(raw.get("size"),int) or isinstance(raw.get("size"),bool) or not 0<raw["size"]<=6144 or not SHA_RE.fullmatch(str(raw.get("sha256",""))) or not isinstance(raw.get("bytes_b64"),str)):raise NestedCuttlefishError("baseline final focus evidence invalid")
+    try:data=base64.b64decode(raw["bytes_b64"],validate=True)
+    except Exception as exc:raise NestedCuttlefishError("baseline focus bytes invalid") from exc
+    matches=_parse_focus_text(data.decode("utf-8","replace"));top=matches[0] if len(matches)==1 else None
+    if (len(data)!=raw["size"] or hashlib.sha256(data).hexdigest()!=raw["sha256"] or row.get("matches")!=matches or not isinstance(top,Mapping) or top.get("package")!=baseline.package
+            or top.get("state")!="RESUMED" or top.get("finishing") is not False or top.get("visible") is not True or top.get("drawn") is not True or top.get("starting_displayed") is not False
+            or ui.get("package_pid")!=top.get("pid") or ui.get("package_uid")!=top.get("uid") or ui.get("window_id")!=f"activity-top:{top.get('pid')}"):raise NestedCuttlefishError("baseline launch postcondition invalid")
+    return dict(receipt)
+
 def validate_app_update_receipt(plan: InnerPlan, boot: Mapping, receipt: Mapping) -> dict:
     validate_boot_receipt(plan,boot); _common(plan,receipt,"nested-cuttlefish-app-update")
+    if receipt.get("timeout_seconds")!=300:raise NestedCuttlefishError("app update timeout contract missing")
     if receipt.get("boot_binding_sha256")!=receipt_sha(boot): raise NestedCuttlefishError("app receipt not bound to boot")
     package=receipt.get("package_installer"); exact={"package":plan.apk.package,"version_code":plan.apk.version_code,"artifact_sha256":plan.apk.sha256,"artifact_size":plan.apk.size}
-    if not isinstance(package,Mapping) or any(package.get(k)!=v for k,v in exact.items()) or package.get("download_sha256")!=plan.apk.sha256 or not isinstance(package.get("session_id"),int) or isinstance(package.get("session_id"),bool) or package["session_id"]<0 or package.get("status")!="STATUS_SUCCESS" or package.get("method")!="PackageInstaller": raise NestedCuttlefishError("exact PackageInstaller evidence missing")
+    if not isinstance(package,Mapping) or any(package.get(k)!=v for k,v in exact.items()) or package.get("download_sha256")!=plan.apk.sha256 or not isinstance(package.get("session_id"),int) or isinstance(package.get("session_id"),bool) or package["session_id"]<0 or package.get("status")!="STATUS_SUCCESS" or package.get("method")!="PackageInstaller" or package.get("snapshot_argv")!=["shell","dumpsys","package","installs"]: raise NestedCuttlefishError("exact PackageInstaller evidence missing")
+    def session_raw(row):
+        if (not isinstance(row,Mapping) or set(row)!={"origin","transport","path","size","sha256","bytes_b64"} or row.get("origin")!="guest" or row.get("transport")!="qga-adb" or row.get("path")!="adb:dumpsys-package-installs" or not isinstance(row.get("size"),int) or isinstance(row.get("size"),bool) or not 0<=row["size"]<=1048576 or not SHA_RE.fullmatch(str(row.get("sha256",""))) or not isinstance(row.get("bytes_b64"),str)):raise NestedCuttlefishError("PackageInstaller session raw invalid")
+        try:data=base64.b64decode(row["bytes_b64"],validate=True)
+        except Exception as exc:raise NestedCuttlefishError("PackageInstaller session bytes invalid") from exc
+        if len(data)!=row["size"] or hashlib.sha256(data).hexdigest()!=row["sha256"]:raise NestedCuttlefishError("PackageInstaller session bytes mismatch")
+        parsed={};header=r"(?:(Active Child|Active|Orphaned|Finalized) )?Session ([1-9]\d*):"
+        for match in re.finditer(rf"(?ms)^\s*{header}\s*$\n(.*?)(?=^\s*{header}\s*$|\Z)",data.decode("utf-8","replace")):
+            prefix=match.group(1);sid=int(match.group(2));body=match.group(3)
+            if sid in parsed:raise NestedCuttlefishError("ambiguous PackageInstaller session dump")
+            if prefix is None:
+                packages=re.findall(r"(?<![A-Za-z0-9_])mAppPackageName=([^\s]+)",body);statuses=re.findall(r"(?<![A-Za-z0-9_])mFinalStatus=(-?\d+)\b",body)
+                if len(packages)!=1 or len(statuses)!=1:raise NestedCuttlefishError("ambiguous PackageInstaller historical session")
+                parsed[sid]={"kind":"historical","package":packages[0],"final_status":int(statuses[0])}
+            else:
+                packages=re.findall(r"(?<![A-Za-z0-9_])appPackageName\s*=\s*([^\s]+)",body)
+                if len(packages)>1:raise NestedCuttlefishError("ambiguous PackageInstaller active package")
+                active_package=packages[0] if packages and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+",packages[0]) else None
+                parsed[sid]={"kind":prefix.lower().replace(" ","-"),"package":active_package,"final_status":None}
+        return parsed
+    session_evidence=package.get("session_evidence")
+    if not isinstance(session_evidence,Mapping) or set(session_evidence)!={"before","after"} or not isinstance(session_evidence.get("after"),list) or not 1<=len(session_evidence["after"])<=10:raise NestedCuttlefishError("PackageInstaller session evidence missing")
+    before_sessions=session_raw(session_evidence["before"]);final_sessions=None
+    for observation in session_evidence["after"]:
+        final_sessions=session_raw(observation);new=set(final_sessions)-set(before_sessions)
+        if not new.issubset({package["session_id"]}) or (package["session_id"] in new and final_sessions[package["session_id"]]["package"] not in (None,plan.apk.package)):raise NestedCuttlefishError("foreign PackageInstaller session appeared")
+    new_sessions=set(final_sessions)-set(before_sessions)
+    if new_sessions!={package["session_id"]} or final_sessions[package["session_id"]]!={"kind":"historical","package":plan.apk.package,"final_status":1}:raise NestedCuttlefishError("exact PackageInstaller finalized session missing")
     http=receipt.get("http")
     if not isinstance(http,Mapping) or not ID_RE.fullmatch(str(http.get("fixture_nonce",""))) or not SHA_RE.fullmatch(str(http.get("manifest_sha256",""))): raise NestedCuttlefishError("authenticated HTTP evidence missing")
     requests=http.get("requests"); paths=["/manifest.json",f"/files/artifacts/{plan.apk.sha256}/{quote(plan.apk.name,safe='-._~')}"]
@@ -495,58 +562,151 @@ def validate_app_update_receipt(plan: InnerPlan, boot: Mapping, receipt: Mapping
     if requests[1]["bytes"]!=plan.apk.size or requests[1]["sha256"]!=plan.apk.sha256: raise NestedCuttlefishError("HTTP APK differs from plan")
     ui=receipt.get("ui"); keys=("activity","window_id","window_title","package_pid","package_uid","version_code","screenshot_sha256")
     if not isinstance(ui,Mapping) or any(not ui.get(k) for k in keys) or ui.get("package")!=plan.apk.package or ui.get("version_code")!=plan.apk.version_code or not SHA_RE.fullmatch(str(ui.get("screenshot_sha256",""))): raise NestedCuttlefishError("semantic UI evidence incomplete")
+    ui_captures=ui.get("ui_capture_observations");ui_remote=f"/data/local/tmp/amz-{plan.ownership.attempt_nonce[:12]}.xml"
+    def ui_command(row,argv,path,maximum):
+        output=row.get("output") if isinstance(row,Mapping) else None
+        if (not isinstance(row,Mapping) or set(row)!={"argv","exit_code","timed_out","output"} or row.get("argv")!=argv or row.get("exit_code") not in (0,124) or row.get("timed_out") is not (row["exit_code"]==124)
+                or not isinstance(output,Mapping) or set(output)!={"origin","transport","path","size","sha256","bytes_b64"} or output.get("origin")!="guest" or output.get("transport")!="qga-adb" or output.get("path")!=path
+                or not isinstance(output.get("size"),int) or isinstance(output.get("size"),bool) or not 0<=output["size"]<=maximum or not SHA_RE.fullmatch(str(output.get("sha256",""))) or not isinstance(output.get("bytes_b64"),str)):raise NestedCuttlefishError("UI capture attempt invalid")
+        try:data=base64.b64decode(output["bytes_b64"],validate=True)
+        except Exception as exc:raise NestedCuttlefishError("UI capture attempt bytes invalid") from exc
+        if len(data)!=output["size"] or hashlib.sha256(data).hexdigest()!=output["sha256"]:raise NestedCuttlefishError("UI capture attempt bytes mismatch")
+    if not isinstance(ui_captures,list) or not 1<=len(ui_captures)<=64:raise NestedCuttlefishError("UI capture history missing")
+    for capture in ui_captures:
+        attempts=capture.get("attempts") if isinstance(capture,Mapping) else None
+        if (not isinstance(capture,Mapping) or set(capture)!={"label","remote","attempts"} or not re.fullmatch(r"ui-[a-z-]+",str(capture.get("label",""))) or capture.get("remote")!=ui_remote
+                or not isinstance(attempts,list) or not 1<=len(attempts)<=3):raise NestedCuttlefishError("UI capture history invalid")
+        for index,attempt in enumerate(attempts):
+            if not isinstance(attempt,Mapping) or set(attempt)!={"dump","cat"}:raise NestedCuttlefishError("UI capture pair invalid")
+            ui_command(attempt["dump"],["shell","uiautomator","dump","--compressed",ui_remote],"adb:ui-dump",65536)
+            if attempt["dump"]["exit_code"]==124:
+                if attempt["cat"] is not None:raise NestedCuttlefishError("timed-out UI dump has cat evidence")
+            else:
+                ui_command(attempt["cat"],["shell","cat",ui_remote],"adb:ui-xml",1048576)
+            if index<len(attempts)-1 and not (attempt["dump"]["exit_code"]==124 or (isinstance(attempt["cat"],Mapping) and attempt["cat"].get("exit_code")==124)):raise NestedCuttlefishError("UI capture retried without timeout")
+        final=attempts[-1]
+        if final["dump"]["exit_code"]!=0 or not isinstance(final["cat"],Mapping) or final["cat"].get("exit_code")!=0:raise NestedCuttlefishError("successful UI receipt ended in timeout")
     if ui.get("completion_action") not in ("Done","Open"):raise NestedCuttlefishError("exact completion action missing")
+    restart=ui.get("update_check_restart")
+    if not isinstance(restart,Mapping) or set(restart)!={"force_stop","keyguard","monkey","readiness"}:raise NestedCuttlefishError("update check restart evidence missing")
+    for name,argv,path in (("force_stop",["shell","am","force-stop",plan.apk.package],"adb:update-check-force-stop"),):
+        command=restart.get(name);output=command.get("output") if isinstance(command,Mapping) else None
+        if (not isinstance(command,Mapping) or set(command)!={"argv","exit_code","output"} or command.get("argv")!=argv or command.get("exit_code")!=0
+                or not isinstance(output,Mapping) or set(output)!={"origin","transport","path","size","sha256","bytes_b64"} or output.get("origin")!="guest" or output.get("transport")!="qga-adb" or output.get("path")!=path
+                or not isinstance(output.get("size"),int) or isinstance(output.get("size"),bool) or not 0<=output["size"]<=65536 or not SHA_RE.fullmatch(str(output.get("sha256",""))) or not isinstance(output.get("bytes_b64"),str)):raise NestedCuttlefishError("update check restart command invalid")
+        try:command_bytes=base64.b64decode(output["bytes_b64"],validate=True)
+        except Exception as exc:raise NestedCuttlefishError("update check restart bytes invalid") from exc
+        if len(command_bytes)!=output["size"] or hashlib.sha256(command_bytes).hexdigest()!=output["sha256"]:raise NestedCuttlefishError("update check restart bytes mismatch")
+    _validate_monkey_command(restart.get("monkey"),plan.apk.package,"adb:update-check-monkey")
     keyguards=ui.get("keyguard");policy_argv=["shell","dumpsys","window","policy"];phases=["installer-monkey","update-tap","install-tap","completion-tap","launch-monkey"]
     if not isinstance(keyguards,list) or len(keyguards)!=len(phases) or [x.get("phase") for x in keyguards if isinstance(x,Mapping)]!=phases:raise NestedCuttlefishError("keyguard readiness evidence missing")
     def policy(row):
         raw=row.get("raw") if isinstance(row,Mapping) else None
-        if (not isinstance(row,Mapping) or row.get("argv")!=policy_argv or not isinstance(row.get("showing"),bool) or not isinstance(row.get("secure"),bool)
+        attempts=row.get("attempts") if isinstance(row,Mapping) else None
+        if (not isinstance(row,Mapping) or set(row)!={"argv","showing","input_restricted","raw","attempts"} or row.get("argv")!=policy_argv or not isinstance(row.get("showing"),bool) or not isinstance(row.get("input_restricted"),bool)
+                or not isinstance(attempts,list) or not 1<=len(attempts)<=3
                 or not isinstance(raw,Mapping) or raw.get("origin")!="guest" or raw.get("transport")!="qga-adb" or raw.get("path")!="adb:keyguard-policy"
-                or not isinstance(raw.get("size"),int) or isinstance(raw.get("size"),bool) or not 0<raw["size"]<=65536 or not SHA_RE.fullmatch(str(raw.get("sha256",""))) or not isinstance(raw.get("bytes_b64"),str)):raise NestedCuttlefishError("keyguard policy evidence invalid")
+                or not isinstance(raw.get("size"),int) or isinstance(raw.get("size"),bool) or not 0<raw["size"]<=6144 or not SHA_RE.fullmatch(str(raw.get("sha256",""))) or not isinstance(raw.get("bytes_b64"),str)):raise NestedCuttlefishError("keyguard policy evidence invalid")
         try:data=base64.b64decode(raw["bytes_b64"],validate=True)
         except Exception as exc:raise NestedCuttlefishError("keyguard policy bytes invalid") from exc
         if len(data)!=raw["size"] or hashlib.sha256(data).hexdigest()!=raw["sha256"]:raise NestedCuttlefishError("keyguard policy bytes mismatch")
-        text=data.decode("utf-8","replace");showing=re.findall(r"(?m)^\s*showing=(true|false)\s*$",text);secure=re.findall(r"(?m)^\s*secure=(true|false)\s*$",text)
-        if showing!=[str(row["showing"]).lower()] or secure!=[str(row["secure"]).lower()]:raise NestedCuttlefishError("keyguard policy semantic mismatch")
+        for index,attempt in enumerate(attempts):
+            attempt_raw=attempt.get("raw") if isinstance(attempt,Mapping) else None
+            if (not isinstance(attempt,Mapping) or set(attempt)!={"exit_code","timed_out","raw"} or attempt.get("exit_code") not in (0,124) or attempt.get("timed_out") is not (attempt["exit_code"]==124)
+                    or (index<len(attempts)-1 and attempt["exit_code"]!=124) or (index==len(attempts)-1 and attempt["exit_code"]!=0)
+                    or not isinstance(attempt_raw,Mapping) or set(attempt_raw)!={"origin","transport","path","size","sha256","bytes_b64"} or attempt_raw.get("origin")!="guest" or attempt_raw.get("transport")!="qga-adb" or attempt_raw.get("path")!="adb:keyguard-policy"
+                    or not isinstance(attempt_raw.get("size"),int) or isinstance(attempt_raw.get("size"),bool) or not 0<=attempt_raw["size"]<=6144 or not SHA_RE.fullmatch(str(attempt_raw.get("sha256",""))) or not isinstance(attempt_raw.get("bytes_b64"),str)):raise NestedCuttlefishError("keyguard policy attempt invalid")
+            try:attempt_data=base64.b64decode(attempt_raw["bytes_b64"],validate=True)
+            except Exception as exc:raise NestedCuttlefishError("keyguard policy attempt bytes invalid") from exc
+            if len(attempt_data)!=attempt_raw["size"] or hashlib.sha256(attempt_data).hexdigest()!=attempt_raw["sha256"]:raise NestedCuttlefishError("keyguard policy attempt bytes mismatch")
+        if attempts[-1]["raw"]!=raw:raise NestedCuttlefishError("keyguard final policy attempt differs")
+        text=data.decode("utf-8","replace");showing=re.findall(r"(?m)^\s*showing=(true|false)\s*$",text);restricted=re.findall(r"(?m)^\s*inputRestricted=(true|false)\s*$",text)
+        if showing!=[str(row["showing"]).lower()] or restricted!=[str(row["input_restricted"]).lower()]:raise NestedCuttlefishError("keyguard policy semantic mismatch")
     for entry in keyguards:
         if set(entry)!={"phase","receipt"}:raise NestedCuttlefishError("keyguard readiness evidence missing")
         keyguard=entry["receipt"]
-        if not isinstance(keyguard,Mapping) or set(keyguard)!={"before","commands","after","passed"} or keyguard.get("passed") is not True:raise NestedCuttlefishError("keyguard readiness evidence missing")
+        if not isinstance(keyguard,Mapping) or set(keyguard)!={"before","after_dismiss","commands","after","passed"} or keyguard.get("passed") is not True:raise NestedCuttlefishError("keyguard readiness evidence missing")
         policy(keyguard["before"]);policy(keyguard["after"])
-        expected_commands=[] if keyguard["before"]["showing"] is False else [["shell","wm","dismiss-keyguard"],["shell","input","keyevent","82"]]
-        if keyguard["before"]["secure"] or keyguard["after"]["secure"] or keyguard["after"]["showing"] or [x.get("argv") for x in keyguard["commands"] if isinstance(x,Mapping)]!=expected_commands:raise NestedCuttlefishError("keyguard was not safely dismissed")
+        if keyguard["before"]["showing"] is False:
+            expected_commands=[]
+            if keyguard["after_dismiss"] is not None or keyguard["after"]!=keyguard["before"]:raise NestedCuttlefishError("unlocked keyguard receipt mutated")
+        else:
+            policy(keyguard["after_dismiss"]);intermediate=keyguard["after_dismiss"]
+            expected_commands=[["shell","wm","dismiss-keyguard"]] if not intermediate["showing"] and not intermediate["input_restricted"] else [["shell","wm","dismiss-keyguard"],["shell","input","keyevent","82"]]
+            if len(expected_commands)==1 and keyguard["after"]!=intermediate:raise NestedCuttlefishError("dismiss-only proof differs from intermediate")
+        if keyguard["after"]["showing"] or keyguard["after"]["input_restricted"] or [x.get("argv") for x in keyguard["commands"] if isinstance(x,Mapping)]!=expected_commands:raise NestedCuttlefishError("keyguard was not safely dismissed")
         for command in keyguard["commands"]:
             raw=command.get("raw") if isinstance(command,Mapping) else None
-            if (set(command)!={"argv","exit_code","raw"} or command.get("exit_code")!=0 or not isinstance(raw,Mapping) or raw.get("origin")!="guest" or raw.get("transport")!="qga-adb"
+            if (set(command)!={"argv","exit_code","timed_out","raw"} or command.get("exit_code") not in (0,124) or command.get("timed_out") is not (command["exit_code"]==124) or not isinstance(raw,Mapping) or raw.get("origin")!="guest" or raw.get("transport")!="qga-adb"
                     or raw.get("path")!="adb:keyguard-command" or not isinstance(raw.get("size"),int) or isinstance(raw.get("size"),bool) or not 0<=raw["size"]<=65536 or not SHA_RE.fullmatch(str(raw.get("sha256",""))) or not isinstance(raw.get("bytes_b64"),str)):raise NestedCuttlefishError("keyguard command evidence invalid")
             try:data=base64.b64decode(raw["bytes_b64"],validate=True)
             except Exception as exc:raise NestedCuttlefishError("keyguard command bytes invalid") from exc
             if len(data)!=raw["size"] or hashlib.sha256(data).hexdigest()!=raw["sha256"]:raise NestedCuttlefishError("keyguard command bytes mismatch")
-    focus=ui.get("focus_observations");focus_argv=["shell","dumpsys","activity","top-resumed"]
-    if (not isinstance(focus,list) or not 1<=len(focus)<=3
-            or any(not isinstance(row,Mapping) or set(row)!={"argv","exit_code","timed_out","size","sha256","relevant_lines","matches"} or row.get("argv")!=focus_argv
+    if restart["keyguard"]!=keyguards[0]["receipt"]:raise NestedCuttlefishError("update restart keyguard differs from launch-adjacent proof")
+    candidate_focus=ui.get("focus_observations");restart_focus=restart.get("readiness");focus=(restart_focus+candidate_focus) if isinstance(restart_focus,list) and isinstance(candidate_focus,list) else None;focus_argv=["shell","dumpsys","activity","top-resumed"];receipt_log=receipt.get("logcat");lifecycle_epoch=str(receipt_log.get("started_at","")) if isinstance(receipt_log,Mapping) else ""
+    if (not isinstance(restart_focus,list) or not 1<=len(restart_focus)<=12 or not isinstance(candidate_focus,list) or not 1<=len(candidate_focus)<=12 or not isinstance(focus,list) or not 2<=len(focus)<=24
+            or any(not isinstance(row,Mapping) or set(row)!={"argv","exit_code","timed_out","size","sha256","raw","relevant_lines","matches","elapsed_ms","pidof","lifecycle","logcat"} or row.get("argv")!=focus_argv
                    or row.get("exit_code") not in (0,124) or row.get("timed_out") is not (row.get("exit_code")==124)
                    or not isinstance(row.get("size"),int) or isinstance(row.get("size"),bool) or not 0<=row["size"]<=6144 or (row["exit_code"]==0 and row["size"]==0)
                    or not SHA_RE.fullmatch(str(row.get("sha256",""))) or not isinstance(row.get("relevant_lines"),str) or len(row["relevant_lines"])>4096
-                   or not isinstance(row.get("matches"),list) or len(row["matches"])>32 for row in focus)):
+                   or not isinstance(row.get("matches"),list) or len(row["matches"])>32 or not isinstance(row.get("elapsed_ms"),int) or isinstance(row.get("elapsed_ms"),bool) or not 0<=row["elapsed_ms"]<=300000 for row in focus)):
         raise NestedCuttlefishError("bounded foreground observation missing")
-    final_matches=focus[-1]["matches"]
+    for row in focus:
+        raw=row["raw"]
+        if (not isinstance(raw,Mapping) or set(raw)!={"origin","transport","path","size","sha256","bytes_b64"} or raw.get("origin")!="guest" or raw.get("transport")!="qga-adb" or raw.get("path")!="adb:activity-top-resumed"
+                or raw.get("size")!=row["size"] or raw.get("sha256")!=row["sha256"] or not isinstance(raw.get("bytes_b64"),str)):raise NestedCuttlefishError("foreground raw evidence invalid")
+        try:raw_bytes=base64.b64decode(raw["bytes_b64"],validate=True)
+        except Exception as exc:raise NestedCuttlefishError("foreground raw bytes invalid") from exc
+        if len(raw_bytes)!=raw["size"] or hashlib.sha256(raw_bytes).hexdigest()!=raw["sha256"]:raise NestedCuttlefishError("foreground raw bytes mismatch")
+        def diagnostic_command(value,path,maximum,expected_argv):
+            if isinstance(value,Mapping) and set(value)=={"argv","capture_error","command"}:
+                error=value.get("capture_error");command=value.get("command")
+                if (value.get("argv")!=expected_argv or not isinstance(error,Mapping) or set(error)!={"type","sha256"} or not isinstance(error.get("type"),str) or not error["type"] or not SHA_RE.fullmatch(str(error.get("sha256","")))
+                        or not isinstance(command,Mapping) or len(json.dumps(command,sort_keys=True,separators=(",",":")))>32768 or not isinstance(command.get("argv"),list) or command["argv"][-len(expected_argv):]!=expected_argv):raise NestedCuttlefishError("foreground lifecycle diagnostic failure invalid")
+                return
+            output=value.get("output") if isinstance(value,Mapping) else None
+            if (not isinstance(value,Mapping) or set(value)!={"argv","exit_code","timed_out","output"} or value.get("argv")!=expected_argv
+                    or not isinstance(value.get("exit_code"),int) or isinstance(value.get("exit_code"),bool) or not -255<=value["exit_code"]<=255
+                    or value.get("timed_out") is not (value["exit_code"]==124) or not isinstance(output,Mapping)
+                    or set(output)!={"origin","transport","path","size","sha256","bytes_b64"} or output.get("origin")!="guest" or output.get("transport")!="qga-adb" or output.get("path")!=path
+                    or not isinstance(output.get("size"),int) or isinstance(output.get("size"),bool) or not 0<=output["size"]<=maximum
+                    or not SHA_RE.fullmatch(str(output.get("sha256",""))) or not isinstance(output.get("bytes_b64"),str)):raise NestedCuttlefishError("foreground lifecycle diagnostic invalid")
+            try:data=base64.b64decode(output["bytes_b64"],validate=True)
+            except Exception as exc:raise NestedCuttlefishError("foreground lifecycle diagnostic bytes invalid") from exc
+            if len(data)!=output["size"] or hashlib.sha256(data).hexdigest()!=output["sha256"]:raise NestedCuttlefishError("foreground lifecycle diagnostic bytes mismatch")
+        diagnostic_command(row["pidof"],"adb:focus-pidof",4096,["shell","pidof",plan.apk.package])
+        lifecycle_argv=row["lifecycle"].get("argv") if isinstance(row["lifecycle"],Mapping) else None
+        if (not isinstance(lifecycle_argv,list) or len(lifecycle_argv)!=23 or lifecycle_argv[:4]!=["shell","logcat","-d","-T"]
+                or lifecycle_argv[4]!=lifecycle_epoch or not re.fullmatch(r"\d{10,}(?:\.\d{3})?",lifecycle_epoch) or lifecycle_argv[5:]!=["-t","200","-v","threadtime","-b","main","-b","system","-b","events","-b","crash","ActivityManager:I","ActivityTaskManager:I","AndroidRuntime:E","lmkd:I","lowmemorykiller:I","*:S"]):raise NestedCuttlefishError("foreground lifecycle argv invalid")
+        diagnostic_command(row["lifecycle"],"adb:focus-lifecycle",65536,lifecycle_argv)
+        raw_text=raw_bytes.decode("utf-8","replace");keep=("ACTIVITY ","packageName=","app=ProcessRecord{","Intent {","mActivityComponent=","state=","mVisibleRequested=","firstWindowDrawn=","reportedDrawn=","startingData=","startingWindow=","startingSurface=","startingDisplayed=","Splash Screen")
+        expected_relevant="\n".join(line[:1024] for line in raw_text.splitlines() if any(token in line.lstrip() for token in keep))[:4096]
+        if row["relevant_lines"]!=expected_relevant:raise NestedCuttlefishError("foreground relevant lines differ from raw")
+        logcat=row["logcat"]
+        if logcat is not None and (not isinstance(logcat,Mapping) or set(logcat)!={"argv","exit_code","size","sha256","fatal","relevant_lines"}
+                or logcat.get("argv")!=["shell","logcat","-d","-t","40"] or logcat.get("exit_code") not in (0,124)
+                or not isinstance(logcat.get("size"),int) or isinstance(logcat.get("size"),bool) or not 0<=logcat["size"]<=32768
+                or not SHA_RE.fullmatch(str(logcat.get("sha256",""))) or not isinstance(logcat.get("fatal"),bool) or logcat["fatal"]
+                or not isinstance(logcat.get("relevant_lines"),str) or len(logcat["relevant_lines"])>4096):raise NestedCuttlefishError("bounded foreground logcat evidence invalid")
+        if row["exit_code"]!=0:
+            if row["matches"] or logcat is not None:raise NestedCuttlefishError("timed-out foreground row has semantic claims")
+            continue
+        text=row["relevant_lines"];derived=_parse_focus_text(text)
+        if derived!=row["matches"]:raise NestedCuttlefishError("activity-top semantic evidence mismatch")
+    for phase_rows in (restart_focus,candidate_focus):
+        phase_top=phase_rows[-1]["matches"][0] if phase_rows[-1]["exit_code"]==0 and len(phase_rows[-1]["matches"])==1 else None
+        if (not isinstance(phase_top,Mapping) or phase_top.get("package")!=plan.apk.package or phase_top.get("state")!="RESUMED" or phase_top.get("finishing") is not False
+                or phase_top.get("visible") is not True or phase_top.get("drawn") is not True or phase_top.get("starting_displayed") is not False):raise NestedCuttlefishError("readiness phase did not reach exact drawn foreground")
+    final_matches=candidate_focus[-1]["matches"]
     top=final_matches[0] if len(final_matches)==1 else None
-    if (focus[-1]["exit_code"]!=0 or not isinstance(top,Mapping) or set(top)!={"package","component","pid","uid"}
+    if (focus[-1]["exit_code"]!=0 or not isinstance(top,Mapping) or set(top)!={"package","component","pid","uid","format","state","finishing","visible","drawn","starting_displayed"}
             or top.get("package")!=plan.apk.package or not isinstance(top.get("component"),str) or not top["component"]
             or not isinstance(top.get("pid"),int) or isinstance(top.get("pid"),bool) or top["pid"]<=0
-            or not isinstance(top.get("uid"),int) or isinstance(top.get("uid"),bool) or top["uid"]<=0
+            or not isinstance(top.get("uid"),int) or isinstance(top.get("uid"),bool) or top["uid"]<=0 or top.get("format") not in ("activity","key-value")
+            or top.get("state")!="RESUMED" or top.get("finishing") is not False or top.get("visible") is not True or top.get("drawn") is not True or top.get("starting_displayed") is not False
             or ui.get("package_pid")!=top["pid"] or ui.get("package_uid")!=top["uid"] or ui.get("window_id")!=f"activity-top:{top['pid']}"):
         raise NestedCuttlefishError("exact activity-top binding missing")
-    launch=ui.get("launch_probe");launch_output=launch.get("output") if isinstance(launch,Mapping) else None;launch_argv=["shell","monkey","-p",plan.apk.package,"1"]
-    if (not isinstance(launch,Mapping) or launch.get("argv")!=launch_argv or launch.get("exit_code")!=0 or not isinstance(launch_output,Mapping)
-            or launch_output.get("origin")!="guest" or launch_output.get("transport")!="qga-adb" or launch_output.get("path")!="adb:candidate-monkey"
-            or not isinstance(launch_output.get("size"),int) or isinstance(launch_output.get("size"),bool) or not 0<=launch_output["size"]<=65536
-            or not SHA_RE.fullmatch(str(launch_output.get("sha256",""))) or not isinstance(launch_output.get("bytes_b64"),str)):
-        raise NestedCuttlefishError("bounded app launch command evidence missing")
-    try: launch_bytes=base64.b64decode(launch_output["bytes_b64"],validate=True)
-    except Exception as exc: raise NestedCuttlefishError("app launch command bytes invalid") from exc
-    if len(launch_bytes)!=launch_output["size"] or hashlib.sha256(launch_bytes).hexdigest()!=launch_output["sha256"]: raise NestedCuttlefishError("app launch command bytes mismatch")
+    _validate_monkey_command(ui.get("launch_probe"),plan.apk.package,"adb:candidate-monkey")
     state=ui.get("package_state");dumpsys=state.get("dumpsys") if isinstance(state,Mapping) else None;uid_lookup=state.get("uid_lookup") if isinstance(state,Mapping) else None
     expected_dumpsys=["shell","dumpsys","package",plan.apk.package];expected_uid=["shell","cmd","package","list","packages","-U",plan.apk.package]
     if (not isinstance(state,Mapping) or state.get("version_code")!=plan.apk.version_code or state.get("uid")!=ui.get("package_uid")

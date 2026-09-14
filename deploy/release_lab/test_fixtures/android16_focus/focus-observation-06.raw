@@ -1,0 +1,45 @@
+ACTIVITY MANAGER TOP-RESUMED (dumpsys activity top-resumed)
+packageName=org.amnezia.vpn processName=org.amnezia.vpn
+launchedFromUid=2000 launchedFromPackage=com.android.shell launchedFromFeature=null userId=0
+app=ProcessRecord{b5f12b5 4724:org.amnezia.vpn/u0a122}
+Intent { act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 cmp=org.amnezia.vpn/.AmneziaActivity }
+rootOfTask=true task=Task{1850e45 #9 type=standard A=10122:org.amnezia.vpn}
+taskAffinity=10122:org.amnezia.vpn
+mActivityComponent=org.amnezia.vpn/.AmneziaActivity
+baseDir=/data/app/~~cSg_bnXWoOk5yMkEkkjuVA==/org.amnezia.vpn-82ucOqskWmU0Byddw50y3Q==/base.apk
+dataDir=/data/user/0/org.amnezia.vpn
+stateNotNeeded=false componentSpecified=true mActivityType=standard
+compat={320dpi} theme=0x7f0f00a1
+mLastReportedConfigurations:
+  mGlobalConfig={1.0 ?mcc0mnc [en_US] ldltr sw360dp w360dp h640dp 320dpi nrml long compactNeeded port -touch qwerty/v/v -nav/h winConfig={ mBounds=Rect(0, 0 - 720, 1280) mAppBounds=Rect(0, 0 - 720, 1280) mMaxBounds=Rect(0, 0 - 720, 1280) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=undefined mAlwaysOnTop=undefined mRotation=ROTATION_0} as.2 s.119 fontWeightAdjustment=0}
+  mOverrideConfig={1.0 ?mcc0mnc [en_US] ldltr sw360dp w360dp h640dp 320dpi nrml long compactNeeded port -touch qwerty/v/v -nav/h winConfig={ mBounds=Rect(0, 0 - 720, 1280) mAppBounds=Rect(0, 0 - 720, 1280) mMaxBounds=Rect(0, 0 - 720, 1280) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0} as.2 s.3 fontWeightAdjustment=0}
+mLastReportedActivityWindowInfo=ActivityWindowInfo{isEmbedded=false, taskBounds=Rect(0, 0 - 720, 1280), taskFragmentBounds=Rect(0, 0 - 720, 1280)}
+CurrentConfiguration={1.0 ?mcc0mnc [en_US] ldltr sw360dp w360dp h640dp 320dpi nrml long compactNeeded port -touch qwerty/v/v -nav/h winConfig={ mBounds=Rect(0, 0 - 720, 1280) mAppBounds=Rect(0, 0 - 720, 1280) mMaxBounds=Rect(0, 0 - 720, 1280) mDisplayRotation=ROTATION_0 mWindowingMode=fullscreen mActivityType=standard mAlwaysOnTop=undefined mRotation=ROTATION_0} as.2 s.3 fontWeightAdjustment=0}
+RequestedOverrideConfiguration={0.0 ?mcc0mnc ?localeList ?layoutDir ?swdp ?wdp ?hdp ?density ?lsize ?long ?round ?ldr ?wideColorGamut ?orien ?uimode ?night ?touch ?keyb/?/? ?nav/? winConfig={ mBounds=Rect(0, 0 - 0, 0) mAppBounds=null mMaxBounds=Rect(0, 0 - 0, 0) mDisplayRotation=undefined mWindowingMode=undefined mActivityType=standard mAlwaysOnTop=undefined mRotation=undefined} ?fontWeightAdjustment}
+taskDescription: label="null" icon=null iconResource=/0 iconFilename=null primaryColor=ff1a1b20
+  backgroundColor=ff0e0e11 statusBarColor=ff1a1b20 navigationBarColor=808080
+ backgroundColorFloating=fff2f0f6
+launchFailed=false launchCount=1 lastLaunchTime=-13s709ms
+mHaveState=false mIcicle=null
+state=RESUMED finishing=false
+keysPaused=false inHistory=true idle=true
+occludesParent=true mNoDisplay=false immersive=false launchMode=3
+mActivityType=standard
+windows=[Window{9c20729 u0 org.amnezia.vpn/org.amnezia.vpn.AmneziaActivity}, Window{b69f416 u0 Splash Screen org.amnezia.vpn}]
+windowType=2
+mOccludesParent=true
+overrideOrientation=SCREEN_ORIENTATION_UNSPECIFIED
+requestedOrientation=SCREEN_ORIENTATION_UNSPECIFIED
+mVisibleRequested=true mVisible=true mClientVisible=true reportedDrawn=true reportedVisible=false
+mNumInterestingWindows=1 mNumDrawnWindows=1 allDrawn=true)
+startingData=null firstWindowDrawn=true
+resizeMode=RESIZE_MODE_RESIZEABLE_VIA_SDK_VERSION
+mLastReportedMultiWindowMode=false mLastReportedPictureInPictureMode=false
+supportsSizeChanges=SIZE_CHANGES_UNSUPPORTED_METADATA
+configChanges=0x40007fff
+neverSandboxDisplayApis=false
+alwaysSandboxDisplayApis=false
+isTransparentPolicyRunning=false
+areBoundsLetterboxed=false
+isLetterboxRunning=false
+mRecreateConfigMask=0

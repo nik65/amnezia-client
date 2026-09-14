@@ -1,0 +1,194 @@
+[
+  {
+    "index": 0,
+    "path": "focus-observation-00.raw",
+    "size": 3817,
+    "sha256": "2992998a53eaeee0978a84103e6e5c642176c06d7cbe4fc5d5048be85efc4bec"
+  },
+  {
+    "index": 1,
+    "path": "focus-observation-01.raw",
+    "size": 4022,
+    "sha256": "d3577403c72b95316914c411275809b29b748140702db1fbf166ce85bfced81e"
+  },
+  {
+    "index": 2,
+    "path": "focus-observation-02.raw",
+    "size": 4022,
+    "sha256": "accc57d02a77dcced8558872aab4c0c42a5b2920417842cbad84dc1f94af93bb"
+  },
+  {
+    "index": 3,
+    "path": "focus-observation-03.raw",
+    "size": 4022,
+    "sha256": "08a5424bde5c731842c1dd0da0058b30fc9b1810683a3ae7cd4f9b7890d2c6b0"
+  },
+  {
+    "index": 4,
+    "path": "focus-observation-04.raw",
+    "size": 3851,
+    "sha256": "f3955b1976021118dd4f5e0a5e13a0a098fda65c6621c779434f3708e2f498a6"
+  },
+  {
+    "index": 5,
+    "path": "focus-observation-05.raw",
+    "size": 3852,
+    "sha256": "a634d82136b144b5f181a8030c2d5fbeb1038f1b1ef45d24fb692100cf5373fa"
+  },
+  {
+    "index": 6,
+    "path": "focus-observation-06.raw",
+    "size": 3852,
+    "sha256": "37a5e0bae0fabed198a2d840b1aa8150aab8c2b153277d362ca36169f06b9bf9"
+  },
+  {
+    "index": 7,
+    "path": "focus-observation-07.raw",
+    "size": 3851,
+    "sha256": "4f8277b178fde808d842709b1f546cd29290186ac547a3cbfb06e8c3a43e3de5"
+  },
+  {
+    "index": 8,
+    "path": "focus-observation-08.raw",
+    "size": 3840,
+    "sha256": "bc7a7ab1acb91648c804a8573d7cf3a0a9adc70d92c10bc55678aa1bff936949"
+  },
+  {
+    "index": 9,
+    "path": "focus-observation-09.raw",
+    "size": 3842,
+    "sha256": "40162a5509d30065e56603e2e39255c0acc3c869ebd094dfc7abbed059b6f9cb"
+  },
+  {
+    "index": 10,
+    "path": "focus-observation-10.raw",
+    "size": 3842,
+    "sha256": "5a6e5866d77d91bc99660d2448bd29eb03ce63290978a1101c0ddb662b39bbbc"
+  },
+  {
+    "index": 11,
+    "path": "focus-observation-11.raw",
+    "size": 3842,
+    "sha256": "09add16894f2a9ac655ee13cb6381c011616cbf3986fe88367c9f8392abf2847"
+  },
+  {
+    "index": 12,
+    "path": "focus-observation-12.raw",
+    "size": 3842,
+    "sha256": "8531b763839f28bbca9e2efdf42abc7565a6180d3f9141de322dae03013396d1"
+  },
+  {
+    "index": 13,
+    "path": "focus-observation-13.raw",
+    "size": 3843,
+    "sha256": "39bec04d8d0d39cc6dc140bdb118a7b5ccf431f99f9390c74723c9908064812b"
+  },
+  {
+    "index": 14,
+    "path": "focus-observation-14.raw",
+    "size": 3843,
+    "sha256": "1612c340848d3ce5e39cb9de72746986b3ab347a7a0b86ae80d2265cdf8825ec"
+  },
+  {
+    "index": 15,
+    "path": "focus-observation-15.raw",
+    "size": 3843,
+    "sha256": "c0ae91fcdbf7c6332840b7b6573c314fb5610f69e04e6f67b306e194409711e9"
+  },
+  {
+    "index": 16,
+    "path": "focus-observation-16.raw",
+    "size": 3843,
+    "sha256": "81482a0e0513b703f0e68aa04ce0fdb03b9a19ec72636ceacb7cfb8b375a498a"
+  },
+  {
+    "index": 17,
+    "path": "focus-observation-17.raw",
+    "size": 3843,
+    "sha256": "4261c0cf67ec3d9af377d1fcfd06ba0001d5ef104c8a888db559d96cb9989fc3"
+  },
+  {
+    "index": 18,
+    "path": "focus-observation-18.raw",
+    "size": 3843,
+    "sha256": "e73e27a83b7d24431e1789a6cbec8e62717a25b46f3939d9b2b96f24ee4a7599"
+  },
+  {
+    "index": 19,
+    "path": "focus-observation-19.raw",
+    "size": 3843,
+    "sha256": "89e6d621254c3f2b5078af0058994752c5119d971ed2917011c333bf69a453fa"
+  },
+  {
+    "index": 20,
+    "path": "focus-observation-20.raw",
+    "size": 3843,
+    "sha256": "e8f189e8d72e94dd5a1f0984a05c301fa5e69d41435bdc15ae917daf94ba7ca0"
+  },
+  {
+    "index": 21,
+    "path": "focus-observation-21.raw",
+    "size": 3843,
+    "sha256": "2d00588f706407339b03063852b756b2d18b41e0c0d7e07baf6aa7273d5e2b74"
+  },
+  {
+    "index": 22,
+    "path": "focus-observation-22.raw",
+    "size": 3843,
+    "sha256": "f562db3a5665a5ab4cabc40ae9e2065b55b3743ea97cf8f3992490afc2cc9bd9"
+  },
+  {
+    "index": 23,
+    "path": "focus-observation-23.raw",
+    "size": 3843,
+    "sha256": "0a968c9496c0e24896da9294a51f9e950a9a5c015f2d874e5b782a100ce23baa"
+  },
+  {
+    "index": 24,
+    "path": "focus-observation-24.raw",
+    "size": 3843,
+    "sha256": "8ca7fb1ba6df6f69875d1c4608994723e6bd19f2884a1f949ef858f2c80f0aca"
+  },
+  {
+    "index": 25,
+    "path": "focus-observation-25.raw",
+    "size": 3843,
+    "sha256": "2d97349a7c1e7d0fa77ffad866252938824cae8ad1856ffdb1bd0c50cba3d741"
+  },
+  {
+    "index": 26,
+    "path": "focus-observation-26.raw",
+    "size": 3843,
+    "sha256": "21342e19d73d22c17acdfbd7770aac18958456559fc02aadfb4dd9b5b2fc614b"
+  },
+  {
+    "index": 27,
+    "path": "focus-observation-27.raw",
+    "size": 3842,
+    "sha256": "db8aa78531f9646aa7613706035e91090320bb3cb6b04f9b0fff28898bcdcd46"
+  },
+  {
+    "index": 28,
+    "path": "focus-observation-28.raw",
+    "size": 3843,
+    "sha256": "94775f5de3332414f74a24c1012f2ae686b43e40999b60e065fc7a2bb90c20d5"
+  },
+  {
+    "index": 29,
+    "path": "focus-observation-29.raw",
+    "size": 3844,
+    "sha256": "d50d73c2db55ef4fb8b5e6c4cb1301c51b533690f087af434c9ad2cee3a8a517"
+  },
+  {
+    "index": 30,
+    "path": "focus-observation-30.raw",
+    "size": 3844,
+    "sha256": "0455dd2fe451df4a3c5bdad039777e6f7b20d554b76908771f5a06e82c2c5a81"
+  },
+  {
+    "index": 31,
+    "path": "focus-observation-31.raw",
+    "size": 3844,
+    "sha256": "8afc314310e58f5ad5000b3bf676a736216a0943a949e6f3802635948d58945b"
+  }
+]

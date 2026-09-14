@@ -3460,7 +3460,20 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
             raise LabError("nested boot failure identity")
         data=(json.dumps(dict(record),sort_keys=True,separators=(",",":"))+"\n").encode()
         app_focus=str(record.get("phase","")).startswith("app-")
-        if len(data)>16384:raise LabError("nested boot failure record exceeds bound")
+        observations=(record.get("last_probe") or {}).get("focus_observations")
+        if app_focus and observations is not None:
+            if not isinstance(observations,list) or len(observations)>56:raise LabError("nested app focus observation bound")
+            for observation in observations:
+                raw=observation.get("raw") if isinstance(observation,Mapping) else None
+                if (not isinstance(raw,Mapping) or raw.get("origin")!="guest" or raw.get("transport")!="qga-adb" or raw.get("path")!="adb:activity-top-resumed"
+                        or not isinstance(raw.get("size"),int) or isinstance(raw.get("size"),bool) or not 0<=raw["size"]<=6144
+                        or not re.fullmatch(r"[0-9a-f]{64}",str(raw.get("sha256",""))) or not isinstance(raw.get("bytes_b64"),str)):
+                    raise LabError("nested app focus raw identity")
+                try:raw_bytes=base64.b64decode(raw["bytes_b64"],validate=True)
+                except Exception as exc:raise LabError("nested app focus raw encoding") from exc
+                if len(raw_bytes)!=raw["size"] or hashlib.sha256(raw_bytes).hexdigest()!=raw["sha256"]:raise LabError("nested app focus raw readback")
+        failure_bound=786432 if app_focus else 16384
+        if len(data)>failure_bound:raise LabError("nested boot failure record exceeds bound")
         directory=ensure_owned_child(self.root,self.root/"runs"/run_id/"controller","nested boot failure archive");directory.mkdir(parents=True,exist_ok=True)
         screenshot_ack=None
         if app_focus:
