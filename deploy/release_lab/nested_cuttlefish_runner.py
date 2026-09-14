@@ -352,6 +352,8 @@ cd "$root/runtime"
 cat >"$root/runtime/start-cvd.sh" <<'AMNEZIA_CVD_START'
 #!/bin/sh
 set -eu
+root={shlex.quote(plan.root)}
+cd "$root/runtime"
 {assemble_argv}
 python3 -c "import base64;exec(compile(base64.b64decode('{adapter_b64}'),'network-config-adapter','exec'))" "$root"
 exec {run_cvd}

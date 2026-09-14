@@ -212,6 +212,36 @@ same=[p.read_bytes()==source for p in paths if p.exists() and not p.is_symlink()
     if mode=="success": assert row["ok"] is True and row["receipt"] is True and row["same"]==[False,False,False]
     else: assert row["ok"] is False and row["receipt"] is False and (mode!="partial" or row["same"]==[True,True,True])
 
+@pytest.mark.skipif(sys.platform!="win32" or not shutil.which("wsl.exe"),reason="WSL required for generated POSIX start script")
+@pytest.mark.parametrize("mode",["success","adapter-failure"])
+def test_entire_generated_start_script_binds_root_and_runs_consumer_only_after_adapter(mode):
+    p=plan(); outer=build_launch_script(p); start=re.search(r"<<'AMNEZIA_CVD_START'\n(.*?)\nAMNEZIA_CVD_START",outer,re.S).group(1); encoded=base64.b64encode(start.encode()).decode()
+    wrapper=r"""import base64,json,os,pathlib,shutil,subprocess,sys
+start=base64.b64decode(sys.argv[1]);mode=sys.argv[2];root=pathlib.Path(sys.argv[3]);shutil.rmtree(root,ignore_errors=True)
+for rel in ('runtime/host/bin','runtime/assembly','runtime/instance/assembly','runtime/instance/instances/cvd-1','runtime/home','runtime/tmp','runtime/images','runtime/qemu','logs'):(root/rel).mkdir(parents=True,exist_ok=True)
+assemble=root/'runtime/host/bin/assemble_cvd';run=root/'runtime/host/bin/run_cvd'
+assemble.write_text('''#!/usr/bin/python3
+import json,os,pathlib,sys
+root=pathlib.Path(os.environ['AMZ_TEST_ROOT']); mode=os.environ['AMZ_TEST_MODE']; row={'argv':sys.argv,'cwd':os.getcwd(),'HOME':os.environ.get('HOME'),'TMPDIR':os.environ.get('TMPDIR')}; (root/'assemble.json').write_text(json.dumps(row))
+cfg={'instances':{'1':{'adb_host_port':6520,'adb_ip_and_port':'0.0.0.0:6520','external_network_mode':'slirp','enable_modem_simulator':True,'ril_ipaddr':'','ril_gateway':'','ril_prefixlen':255,'ril_dns':''}},'fragments':{'AdbConfigFragmentImpl':{'connector_enabled':True,'mode':['vsock_half_tunnel']}}}
+if mode=='adapter-failure':cfg['instances']['1']['ril_gateway']='192.0.2.1'
+raw=json.dumps(cfg,separators=(',',':')).encode()
+for rel in ('runtime/assembly/cuttlefish_config.json','runtime/instance/assembly/cuttlefish_config.json','runtime/instance/instances/cvd-1/cuttlefish_config.json'):(root/rel).write_bytes(raw)
+''');run.write_text('''#!/usr/bin/python3
+import json,os,pathlib,sys
+root=pathlib.Path(os.environ['AMZ_TEST_ROOT']); receipt=json.loads((root/'runtime/network-config-adapter.json').read_text()); (root/'run.json').write_text(json.dumps({'argv':sys.argv,'receipt':receipt}))
+''')
+assemble.chmod(0o700);run.chmod(0o700);start_path=root/'runtime/start-cvd-e2e.sh';start_path.write_bytes(start);start_path.chmod(0o700);env=dict(os.environ,AMZ_TEST_ROOT=str(root),AMZ_TEST_MODE=mode,HOME=str(root/'runtime/home'),TMPDIR=str(root/'runtime/tmp'),ANDROID_HOST_OUT=str(root/'runtime/host'),ANDROID_PRODUCT_OUT=str(root/'runtime/images'));proc=subprocess.run(['/bin/sh',str(start_path)],env=env,capture_output=True,text=True)
+assemble_path=root/'assemble.json';assemble_row=json.loads(assemble_path.read_text()) if assemble_path.exists() else None;run_path=root/'run.json';run_row=json.loads(run_path.read_text()) if run_path.exists() else None;print(json.dumps({'rc':proc.returncode,'stderr':proc.stderr,'assemble':assemble_row,'run':run_row}));shutil.rmtree(root)
+"""
+    row=json.loads(subprocess.run(["wsl.exe","-u","root","python3","-c",wrapper,encoded,mode,p.root],check=True,capture_output=True,text=True).stdout)
+    assert row["assemble"] is not None,row
+    assert row["assemble"]["cwd"]==f"{p.root}/runtime" and row["assemble"]["HOME"]==f"{p.root}/runtime/home" and row["assemble"]["TMPDIR"]==f"{p.root}/runtime/tmp"
+    assert row["assemble"]["argv"]==[f"{p.root}/runtime/host/bin/assemble_cvd",*p.launch_argv[1:]]
+    if mode=="success":
+        assert row["rc"]==0 and row["run"]["argv"]==[f"{p.root}/runtime/host/bin/run_cvd"] and [x["order"] for x in row["run"]["receipt"]["records"]]==[1,2,3]
+    else: assert row["rc"]!=0 and row["run"] is None and "network-config-adapter:ValueError" in row["stderr"]
+
 def test_boot_is_only_boot_and_requires_complete_stable_cgroup_inventory():
     assert validate_boot_receipt(plan(),boot())["passed"]
     symlink_exec=boot(); symlink_exec["processes"][0]["exe"]=f"{plan().root}/runtime/host/bin/cvd_internal_start"
