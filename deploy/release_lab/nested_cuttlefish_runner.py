@@ -148,7 +148,7 @@ def _validate_launch(plan: InnerPlan) -> None:
     required = {"instance_dir":f"{plan.root}/runtime/instance", "assembly_dir":f"{plan.root}/runtime/assembly",
         "system_image_dir":f"{plan.root}/runtime/images", "early_tmp_dir":f"{plan.root}/runtime/tmp",
         "vm_manager":"qemu_cli", "device_external_network":"slirp", "enable_tap_devices":"false",
-        "enable_modem_simulator":"false", "start_gnss_proxy":"false", "enable_host_bluetooth":"false",
+        "enable_modem_simulator":"true", "start_gnss_proxy":"false", "enable_host_bluetooth":"false",
         "enable_host_nfc":"false", "enable_host_uwb":"false",
         "start_webrtc":"false", "report_anonymous_usage_stats":"n", "gpu_mode":"guest_swiftshader",
         "adb_mode":"vsock_half_tunnel", "run_adb_connector":"true", "cpus":"2", "memory_mb":"4096",
@@ -266,30 +266,60 @@ def build_launch_script(plan: InnerPlan) -> str:
     assemble=[f"{plan.root}/runtime/host/bin/assemble_cvd",*plan.launch_argv[1:]]
     assemble_argv=" ".join(shlex.quote(x) for x in assemble)
     run_cvd=shlex.quote(f"{plan.root}/runtime/host/bin/run_cvd")
-    config_patch=shlex.quote(r'''import hashlib,json,os,pathlib,stat,sys
-root=pathlib.Path(sys.argv[1]).resolve(strict=True); paths=(root/'runtime/assembly/cuttlefish_config.json',root/'runtime/instance/assembly/cuttlefish_config.json',root/'runtime/instance/instances/cvd-1/cuttlefish_config.json'); snapshots=[]; groups={}
-for p in paths:
- try: target=p.resolve(strict=True); target.relative_to(root)
- except (OSError,ValueError): raise SystemExit('generated config escaped owned root')
- s=target.stat()
- if not stat.S_ISREG(s.st_mode) or target.is_symlink(): raise SystemExit('generated config missing')
- before=p.read_bytes(); d=json.loads(before); inst=d.get('instances',{}).get('1')
- if not isinstance(inst,dict) or inst.get('external_network_mode')!='slirp' or (inst.get('ril_ipaddr'),inst.get('ril_gateway'),inst.get('ril_prefixlen'))!=('', '', 255): raise SystemExit('unexpected generated RIL config')
- inst.update(ril_ipaddr='10.0.2.15',ril_gateway='10.0.2.2',ril_prefixlen=24,ril_dns='10.0.2.3')
- after=(json.dumps(d,sort_keys=True,separators=(',',':'))+'\n').encode(); key=(s.st_dev,s.st_ino); snapshots.append((p,target,before,after,key)); groups.setdefault(key,(target,after,s))
-for target,after,s in groups.values():
- tmp=target.with_name(target.name+'.ril-new'); fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,stat.S_IMODE(s.st_mode))
- with os.fdopen(fd,'wb') as f:f.write(after);f.flush();os.fchmod(f.fileno(),stat.S_IMODE(s.st_mode));os.fchown(f.fileno(),s.st_uid,s.st_gid);os.fsync(f.fileno())
- os.replace(tmp,target);d=os.open(target.parent,os.O_RDONLY|os.O_DIRECTORY);os.fsync(d);os.close(d)
-records=[]; corrected=None
-for p,target,before,after,key in snapshots:
- observed=p.read_bytes(); digest=hashlib.sha256(observed).hexdigest(); corrected=corrected or digest
- if observed!=after or digest!=corrected: raise SystemExit('generated config copies diverged after correction')
- records.append({'path':str(p),'alias_target':str(target),'before_sha256':hashlib.sha256(before).hexdigest(),'after_sha256':digest,'size':len(observed),'ril_ipaddr':'10.0.2.15','ril_gateway':'10.0.2.2','ril_prefixlen':24,'ril_dns':'10.0.2.3'})
-receipt=(json.dumps({'schema':1,'records':records},sort_keys=True,separators=(',',':'))+'\n').encode(); rp=root/'runtime/ril-config-receipt.json'
-fd=os.open(rp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-with os.fdopen(fd,'wb') as f:f.write(receipt);f.flush();os.fsync(f.fileno())
-''')
+    adapter_code=r'''import hashlib,json,os,pathlib,stat,sys
+root=pathlib.Path(sys.argv[1]); paths=(root/'runtime/assembly/cuttlefish_config.json',root/'runtime/instance/assembly/cuttlefish_config.json',root/'runtime/instance/instances/cvd-1/cuttlefish_config.json'); originals=[]
+expected={'external_network_mode':'slirp','enable_modem_simulator':True,'ril_ipaddr':'','ril_gateway':'','ril_prefixlen':255,'ril_dns':''}; replacement={'ril_ipaddr':'10.0.2.15','ril_gateway':'10.0.2.2','ril_prefixlen':24,'ril_dns':'10.0.2.3'}
+def atomic(path,data,mode):
+ tmp=path.with_name(path.name+'.amnezia-network.tmp'); fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,mode)
+ try:
+  view=memoryview(data)
+  while view:
+   n=os.write(fd,view); view=view[n:]
+  os.fsync(fd)
+ finally: os.close(fd)
+ os.replace(tmp,path); d=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW); os.fsync(d); os.close(d)
+try:
+ for index,path in enumerate(paths):
+  s=path.lstat()
+  if not stat.S_ISREG(s.st_mode) or path.is_symlink(): raise ValueError('config identity')
+  fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW); held=os.fstat(fd); chunks=[]
+  try:
+   while True:
+    chunk=os.read(fd,1048576)
+    if not chunk: break
+    chunks.append(chunk)
+  finally: os.close(fd)
+  raw=b''.join(chunks)
+  if (held.st_dev,held.st_ino,held.st_size)!=(s.st_dev,s.st_ino,len(raw)): raise ValueError('config changed')
+  cfg=json.loads(raw); inst=cfg['instances']['1']
+  if any(inst.get(k)!=v for k,v in expected.items()): raise ValueError('unexpected native network shape')
+  originals.append((path,raw,stat.S_IMODE(s.st_mode),cfg))
+ if len({raw for _,raw,_,_ in originals})!=1: raise ValueError('config bytes differ')
+ updated=[]
+ for _,_,_,cfg in originals:
+  inst=cfg['instances']['1']; inst.update(replacement); updated.append((json.dumps(cfg,sort_keys=True,separators=(',',':'))+'\n').encode())
+ if len(set(updated))!=1: raise ValueError('adapter output differs')
+ written=[]
+ try:
+  for (path,raw,mode,_),data in zip(originals,updated): written.append((path,raw,mode)); atomic(path,data,mode)
+ except BaseException:
+  rollback=[]
+  for path,raw,mode in reversed(written):
+   try: atomic(path,raw,mode); rollback.append(str(path))
+   except BaseException: pass
+  if len(rollback)!=len(written): raise RuntimeError('network adapter rollback incomplete')
+  raise
+ records=[]
+ for order,((path,raw,_,_),data) in enumerate(zip(originals,updated),1):
+  check=path.read_bytes()
+  if check!=data: raise RuntimeError('network adapter readback mismatch')
+  records.append({'order':order,'path':str(path),'before_sha256':hashlib.sha256(raw).hexdigest(),'before_size':len(raw),'after_sha256':hashlib.sha256(check).hexdigest(),'after_size':len(check)})
+ receipt={'schema':1,'records':records,'before_identical':True,'after_identical':len({x['after_sha256'] for x in records})==1,'source_shape':expected,'applied':replacement}
+ out=root/'runtime/network-config-adapter.json'; atomic(out,(json.dumps(receipt,sort_keys=True,separators=(',',':'))+'\n').encode(),0o600)
+except BaseException as exc:
+ print('network-config-adapter:'+type(exc).__name__,file=sys.stderr); raise
+'''
+    adapter_b64=base64.b64encode(adapter_code.encode()).decode()
     return f'''#!/bin/sh
 set -eu
 umask 077
@@ -323,7 +353,7 @@ cat >"$root/runtime/start-cvd.sh" <<'AMNEZIA_CVD_START'
 #!/bin/sh
 set -eu
 {assemble_argv}
-/usr/bin/python3 -c {config_patch} {shlex.quote(plan.root)}
+python3 -c "import base64;exec(compile(base64.b64decode('{adapter_b64}'),'network-config-adapter','exec'))" "$root"
 exec {run_cvd}
 AMNEZIA_CVD_START
 chmod 0700 "$root/runtime/start-cvd.sh"
@@ -381,30 +411,36 @@ def validate_boot_receipt(plan: InnerPlan, receipt: Mapping) -> dict:
     except ValueError as exc: raise NestedCuttlefishError("invalid boot ID") from exc
     network=receipt.get("network")
     if not isinstance(network,Mapping) or {k:network.get(k) for k in ("adb_listen","host_mutation","host_mounts")}!={"adb_listen":plan.adb_endpoint,"host_mutation":False,"host_mounts":[]}: raise NestedCuttlefishError("private transport mismatch")
-    netargv=network.get("qemu_netdev_argv"); ril=network.get("ril_config")
-    if not isinstance(netargv,list) or not netargv or any(not isinstance(x,str) or "net=/255" in x or "host=," in x for x in netargv): raise NestedCuttlefishError("QEMU network argv was not proven")
+    netargv=network.get("qemu_netdev_argv"); frontends=network.get("qemu_frontend_argv"); native=network.get("native_config"); guest_network=network.get("guest_network")
+    if not isinstance(netargv,list) or any(not isinstance(x,str) or "net=/255" in x or "host=," in x for x in netargv): raise NestedCuttlefishError("QEMU network argv was not proven")
     hostnet=[x for x in netargv if x.startswith("user,id=hostnet0,")]
-    if hostnet!=["user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"]: raise NestedCuttlefishError("QEMU hostnet0 differs from corrected config")
-    if not isinstance(ril,Mapping) or ril.get("schema")!=1 or not isinstance(ril.get("records"),list) or len(ril["records"])!=3: raise NestedCuttlefishError("RIL config receipt missing")
-    expected_paths={f"{plan.root}/runtime/assembly/cuttlefish_config.json",f"{plan.root}/runtime/instance/assembly/cuttlefish_config.json",f"{plan.root}/runtime/instance/instances/cvd-1/cuttlefish_config.json"}
-    if {x.get("path") for x in ril["records"] if isinstance(x,Mapping)}!=expected_paths: raise NestedCuttlefishError("RIL config paths are not exact")
-    for item in ril["records"]:
-        if (not isinstance(item,Mapping) or not SHA_RE.fullmatch(str(item.get("before_sha256","")))
-                or not SHA_RE.fullmatch(str(item.get("after_sha256",""))) or item.get("before_sha256")==item.get("after_sha256")
-                or not isinstance(item.get("size"),int) or isinstance(item.get("size"),bool) or item["size"]<=0
-                or not _under(str(item.get("alias_target","")),PurePosixPath(plan.root))
-                or (item.get("ril_ipaddr"),item.get("ril_gateway"),item.get("ril_prefixlen"),item.get("ril_dns"))!=("10.0.2.15","10.0.2.2",24,"10.0.2.3")): raise NestedCuttlefishError("RIL config binding invalid")
-    if len({x["before_sha256"] for x in ril["records"]})!=1 or len({x["after_sha256"] for x in ril["records"]})!=1: raise NestedCuttlefishError("generated config copies diverged")
+    if hostnet!="user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1".splitlines() or not isinstance(frontends,list) or len(frontends)!=1 or "netdev=hostnet0" not in frontends[0]: raise NestedCuttlefishError("native QEMU hostnet0 slirp wiring missing")
+    if not isinstance(native,Mapping) or set(native)!={"schema","records","adapter"} or native.get("schema")!=1 or not isinstance(native.get("records"),list) or len(native["records"])!=3: raise NestedCuttlefishError("native config receipt missing")
+    expected_order=[f"{plan.root}/runtime/assembly/cuttlefish_config.json",f"{plan.root}/runtime/instance/assembly/cuttlefish_config.json",f"{plan.root}/runtime/instance/instances/cvd-1/cuttlefish_config.json"]
+    if [x.get("path") for x in native["records"] if isinstance(x,Mapping)]!=expected_order: raise NestedCuttlefishError("native config paths are not exact")
+    for item in native["records"]:
+        if not isinstance(item,Mapping) or set(item)!={"path","sha256","size","external_network_mode","enable_modem_simulator","ril_ipaddr","ril_gateway","ril_prefixlen","ril_dns"} or not SHA_RE.fullmatch(str(item.get("sha256",""))) or not isinstance(item.get("size"),int) or isinstance(item.get("size"),bool) or item["size"]<=0 or item.get("external_network_mode")!="slirp" or item.get("enable_modem_simulator") is not True or {k:item.get(k) for k in ("ril_ipaddr","ril_gateway","ril_prefixlen","ril_dns")}!={"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}: raise NestedCuttlefishError("native config binding invalid")
+    if len({x["sha256"] for x in native["records"]})!=1: raise NestedCuttlefishError("native config bytes differ")
+    adapter=native["adapter"]; adapter_receipt=adapter.get("receipt") if isinstance(adapter,Mapping) else None
+    if not isinstance(adapter,Mapping) or set(adapter)!={"path","sha256","size","receipt"} or adapter.get("path")!=f"{plan.root}/runtime/network-config-adapter.json" or not SHA_RE.fullmatch(str(adapter.get("sha256",""))) or not isinstance(adapter.get("size"),int) or isinstance(adapter.get("size"),bool) or adapter["size"]<=0 or not isinstance(adapter_receipt,Mapping) or adapter_receipt.get("schema")!=1 or adapter_receipt.get("before_identical") is not True or adapter_receipt.get("after_identical") is not True or adapter_receipt.get("source_shape")!={"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"","ril_gateway":"","ril_prefixlen":255,"ril_dns":""} or adapter_receipt.get("applied")!={"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}: raise NestedCuttlefishError("network adapter receipt invalid")
+    adapter_records=adapter_receipt.get("records")
+    if not isinstance(adapter_records,list) or len(adapter_records)!=3 or [x.get("path") for x in adapter_records if isinstance(x,Mapping)]!=expected_order: raise NestedCuttlefishError("network adapter paths invalid")
+    for index,(row,config) in enumerate(zip(adapter_records,native["records"]),1):
+        if not isinstance(row,Mapping) or set(row)!={"order","path","before_sha256","before_size","after_sha256","after_size"} or row.get("order")!=index or not SHA_RE.fullmatch(str(row.get("before_sha256",""))) or not isinstance(row.get("before_size"),int) or isinstance(row.get("before_size"),bool) or row["before_size"]<=0 or row.get("after_sha256")!=config["sha256"] or row.get("after_size")!=config["size"]: raise NestedCuttlefishError("network adapter binding invalid")
+    if not isinstance(guest_network,Mapping) or set(guest_network)!={"link","address","routes","endpoint_route","ril_state","ril_log"}: raise NestedCuttlefishError("guest network proof missing")
+    for row in guest_network.values():
+        if not isinstance(row,Mapping) or row.get("exit_code")!=0 or isinstance(row.get("exit_code"),bool) or any(not SHA_RE.fullmatch(str(row.get(k,""))) for k in ("stdout_sha256","stderr_sha256")) or any(not isinstance(row.get(k),int) or isinstance(row.get(k),bool) or not 0<=row[k]<=1048576 for k in ("stdout_size","stderr_size")): raise NestedCuttlefishError("guest network command evidence invalid")
+    if not re.search(r"\binet (?!127\.)[0-9.]+/\d+",guest_network["address"].get("stdout","")) or not re.search(r"(?m)^default(?: via [0-9.]+)? dev \S+",guest_network["routes"].get("stdout","")) or not re.search(r"\bdev \S+.*\bsrc (?!127\.)[0-9.]+",guest_network["endpoint_route"].get("stdout","")): raise NestedCuttlefishError("guest network semantic proof invalid")
     connection=network.get("adb_connection"); binding=connection.get("binding") if isinstance(connection,Mapping) else None
     if not isinstance(binding,Mapping) or not isinstance(binding.get("endpoint"),str) or not re.fullmatch(r"127\.0\.0\.1:([1-9][0-9]{3,4})",binding["endpoint"]): raise NestedCuttlefishError("derived ADB endpoint binding missing")
     endpoint=binding["endpoint"]; guest_port=int(endpoint.rsplit(":",1)[1])
     if guest_port>65535 or connection.get("endpoint")!=endpoint or boot.get("serial")!=endpoint.replace(":","_"): raise NestedCuttlefishError("derived ADB endpoint differs from boot")
     config_rows=binding.get("config_rows")
-    if not isinstance(config_rows,list) or len(config_rows)!=3 or {x.get("path") for x in config_rows if isinstance(x,Mapping)}!=expected_paths: raise NestedCuttlefishError("ADB generated config bindings missing")
-    ril_by_path={x["path"]:x for x in ril["records"]}
+    if not isinstance(config_rows,list) or len(config_rows)!=3 or {x.get("path") for x in config_rows if isinstance(x,Mapping)}!=set(expected_order): raise NestedCuttlefishError("ADB generated config bindings missing")
+    native_by_path={x["path"]:x for x in native["records"]}
     for item in config_rows:
-        source=ril_by_path.get(item.get("path"))
-        if (not isinstance(item,Mapping) or source is None or item.get("sha256")!=source.get("after_sha256") or item.get("size")!=source.get("size")
+        source=native_by_path.get(item.get("path"))
+        if (not isinstance(item,Mapping) or source is None or item.get("sha256")!=source.get("sha256") or item.get("size")!=source.get("size")
                 or item.get("adb_host_port")!=guest_port or item.get("adb_ip_and_port")!=f"0.0.0.0:{guest_port}"): raise NestedCuttlefishError("ADB generated config binding invalid")
     connector=by_pid.get(binding.get("connector_pid")); proxy=by_pid.get(binding.get("proxy_pid"))
     connector_argv=[f"{plan.root}/runtime/host/bin/adb_connector",f"--addresses=0.0.0.0:{guest_port}"]
@@ -522,8 +558,29 @@ def validate_baseline_receipt(plan: InnerPlan, baseline: ApkSpec, receipt: Mappi
 
 def validate_app_update_receipt(plan: InnerPlan, boot: Mapping, receipt: Mapping) -> dict:
     validate_boot_receipt(plan,boot); _common(plan,receipt,"nested-cuttlefish-app-update")
-    if receipt.get("timeout_seconds")!=300:raise NestedCuttlefishError("app update timeout contract missing")
+    if receipt.get("timeout_seconds")!=600:raise NestedCuttlefishError("interactive app update timeout contract missing")
     if receipt.get("boot_binding_sha256")!=receipt_sha(boot): raise NestedCuttlefishError("app receipt not bound to boot")
+    preflight=receipt.get("diagnostic_preflight");endpoint="10.8.1.0";port="17865"
+    request_text=f"GET /healthz HTTP/1.1\r\nHost: {endpoint}:{port}\r\nConnection: close\r\n\r\n"
+    health_script=f"printf 'GET /healthz HTTP/1.1\\r\\nHost: {endpoint}:{port}\\r\\nConnection: close\\r\\n\\r\\n' | toybox nc -w 8 {endpoint} {port}"
+    expected_preflight={"link":["shell","ip","-details","link","show"],"address":["shell","ip","-4","addr","show"],"routes":["shell","ip","-4","route","show"],"route":["shell","ip","-4","route","get",endpoint],"connect":["shell","toybox","nc","-z","-w","5",endpoint,port],"capability":["shell","toybox","nc","--help"],"ril_state":["shell","getprop","init.svc.vendor.ril-daemon"],"ril_log":["shell","logcat","-d","-t","200","-v","threadtime","-b","main","-b","system","-b","events","RIL*:V","libcuttlefish-rild:V","init:I","*:S"],"healthz":["shell","sh","-c",health_script]}
+    if not isinstance(preflight,Mapping) or set(preflight)!=set(expected_preflight)|{"fixture_request","health_body"}:raise NestedCuttlefishError("fixture diagnostic preflight missing")
+    for label,argv in expected_preflight.items():
+        row=preflight[label]
+        if not isinstance(row,Mapping) or set(row)!={"argv","exit_code","timed_out","output","stderr"} or row.get("argv")!=argv or isinstance(row.get("exit_code"),bool) or not isinstance(row.get("exit_code"),int) or row.get("timed_out") is not (row["exit_code"]==124):raise NestedCuttlefishError("fixture diagnostic preflight invalid")
+        for stream,path in (("output",f"adb:fixture-preflight-{label}"),("stderr",f"adb:fixture-preflight-{label}-stderr")):
+            output=row.get(stream)
+            if not isinstance(output,Mapping) or set(output)!={"origin","transport","path","size","sha256","bytes_b64"} or output.get("origin")!="guest" or output.get("transport")!="qga-adb" or output.get("path")!=path or isinstance(output.get("size"),bool) or not isinstance(output.get("size"),int) or not 0<=output["size"]<=65536 or not SHA_RE.fullmatch(str(output.get("sha256",""))) or not isinstance(output.get("bytes_b64"),str):raise NestedCuttlefishError("fixture diagnostic preflight invalid")
+            try:data=base64.b64decode(output["bytes_b64"],validate=True)
+            except Exception as exc:raise NestedCuttlefishError("fixture diagnostic preflight bytes invalid") from exc
+            if len(data)!=output.get("size") or hashlib.sha256(data).hexdigest()!=output["sha256"]:raise NestedCuttlefishError("fixture diagnostic preflight bytes mismatch")
+    body_record=preflight["health_body"]
+    if not isinstance(body_record,Mapping) or set(body_record)!={"origin","transport","path","size","sha256","bytes_b64"}:raise NestedCuttlefishError("fixture health body missing")
+    try:health_bytes=base64.b64decode(body_record["bytes_b64"],validate=True);health_value=json.loads(health_bytes.decode())
+    except Exception as exc:raise NestedCuttlefishError("fixture health body invalid") from exc
+    if body_record.get("path")!="adb:fixture-preflight-health-body" or body_record.get("size")!=len(health_bytes) or body_record.get("sha256")!=hashlib.sha256(health_bytes).hexdigest():raise NestedCuttlefishError("fixture health body mismatch")
+    request=preflight["fixture_request"]
+    if preflight["healthz"]["exit_code"]!=0 or health_value!={"status":"ok","run_id":plan.ownership.run_id,"role":"consumer-fixture"} or not isinstance(request,Mapping) or set(request)!={"method","path","status","sha256","bytes","content_length","eof","peer","observed_at","run_id","attempt_nonce"} or request.get("run_id")!=plan.ownership.run_id or request.get("attempt_nonce")!=plan.ownership.attempt_nonce or request.get("method")!="GET" or request.get("path")!="/healthz" or request.get("status")!=200 or request.get("eof") is not True or not request.get("peer") or request.get("bytes")!=len(health_bytes) or request.get("content_length")!=len(health_bytes) or request.get("sha256")!=hashlib.sha256(health_bytes).hexdigest():raise NestedCuttlefishError("fixture diagnostic preflight semantic mismatch")
     package=receipt.get("package_installer"); exact={"package":plan.apk.package,"version_code":plan.apk.version_code,"artifact_sha256":plan.apk.sha256,"artifact_size":plan.apk.size}
     if not isinstance(package,Mapping) or any(package.get(k)!=v for k,v in exact.items()) or package.get("download_sha256")!=plan.apk.sha256 or not isinstance(package.get("session_id"),int) or isinstance(package.get("session_id"),bool) or package["session_id"]<0 or package.get("status")!="STATUS_SUCCESS" or package.get("method")!="PackageInstaller" or package.get("snapshot_argv")!=["shell","dumpsys","package","installs"]: raise NestedCuttlefishError("exact PackageInstaller evidence missing")
     def session_raw(row):
@@ -586,6 +643,37 @@ def validate_app_update_receipt(plan: InnerPlan, boot: Mapping, receipt: Mapping
             if index<len(attempts)-1 and not (attempt["dump"]["exit_code"]==124 or (isinstance(attempt["cat"],Mapping) and attempt["cat"].get("exit_code")==124)):raise NestedCuttlefishError("UI capture retried without timeout")
         final=attempts[-1]
         if final["dump"]["exit_code"]!=0 or not isinstance(final["cat"],Mapping) or final["cat"].get("exit_code")!=0:raise NestedCuttlefishError("successful UI receipt ended in timeout")
+    visual=ui.get("visual_handshake")
+    if not isinstance(visual,list) or not 1<=len(visual)<=32:raise NestedCuttlefishError("visual handshake evidence missing")
+    approved_update=False
+    for sequence,row in enumerate(visual,1):
+        request=row.get("request") if isinstance(row,Mapping) else None;controller=row.get("controller") if isinstance(row,Mapping) else None;decision=row.get("decision") if isinstance(row,Mapping) else None;input_row=row.get("input") if isinstance(row,Mapping) else None;display=request.get("display_owner") if isinstance(request,Mapping) else None;target=request.get("action_target") if isinstance(request,Mapping) else None
+        if (not isinstance(row,Mapping) or set(row) not in ({"request","controller","decision","keyguard"},{"request","controller","decision","keyguard","freshness"},{"request","controller","decision","keyguard","freshness","input"},{"request","controller","decision","keyguard","freshness","input","back"})
+                or not isinstance(request,Mapping) or request.get("run_id")!=plan.ownership.run_id or request.get("attempt_nonce")!=plan.ownership.attempt_nonce or request.get("sequence")!=sequence
+                or request.get("artifact_sha256")!=plan.apk.sha256 or request.get("artifact_size")!=plan.apk.size or request.get("origin")!="guest" or request.get("transport")!="qga-adb"
+                or request.get("kind") not in ("update","unknown-sources") or request.get("action")!={"update":"Update","unknown-sources":"Allow from this source"}.get(request.get("kind")) or request.get("state")!="operator-unclassified" or request.get("bounds") is not None
+                or not isinstance(display,Mapping) or set(display)!={"package","activity","pid","uid"} or display.get("package") not in ((plan.apk.package,) if request.get("kind")=="update" else ("com.android.settings",)) or any(isinstance(display.get(x),bool) or not isinstance(display.get(x),int) or display.get(x)<=0 for x in ("pid","uid"))
+                or target!={"package":plan.apk.package,"version_code":plan.apk.version_code-1,"artifact_sha256":plan.apk.sha256,"artifact_size":plan.apk.size}
+                or not isinstance(request.get("created_at"),(int,float)) or not isinstance(request.get("expires_at"),(int,float)) or not 5<=request["expires_at"]-request["created_at"]<=90
+                or not isinstance(controller,Mapping) or controller.get("origin")!="controller" or controller.get("immutable") is not True or controller.get("expires_at")!=request["expires_at"]
+                or not SHA_RE.fullmatch(str(controller.get("request_sha256",""))) or not SHA_RE.fullmatch(str(controller.get("png_sha256",""))) or not isinstance(controller.get("png_width"),int) or not isinstance(controller.get("png_height"),int)
+                or not isinstance(decision,Mapping) or decision.get("origin")!="controller" or decision.get("immutable") is not True or decision.get("input_only") is not True
+                or decision.get("request_id")!=controller.get("request_id") or decision.get("request_sha256")!=controller.get("request_sha256") or decision.get("run_id")!=request["run_id"] or decision.get("attempt_nonce")!=request["attempt_nonce"]):
+            raise NestedCuttlefishError("visual handshake binding invalid")
+        bounds=decision.get("bounds");choice=decision.get("decision")
+        if choice=="refresh":
+            if bounds is not None or input_row is not None:raise NestedCuttlefishError("visual refresh caused input")
+            continue
+        freshness=row.get("freshness")
+        if freshness!={"accepted":True,"max_seconds":45}:raise NestedCuttlefishError("visual approval freshness invalid")
+        if (not isinstance(bounds,list) or len(bounds)!=4 or any(isinstance(x,bool) or not isinstance(x,int) for x in bounds) or not (0<=bounds[0]<bounds[2]<=controller["png_width"] and 0<=bounds[1]<bounds[3]<=controller["png_height"])
+                or choice!="approve" or not isinstance(input_row,Mapping) or input_row.get("x")!=(bounds[0]+bounds[2])//2 or input_row.get("y")!=(bounds[1]+bounds[3])//2
+                or input_row.get("argv")!=["shell","input","tap",str(input_row["x"]),str(input_row["y"])] or input_row.get("exit_code") not in (0,124) or input_row.get("timed_out") is not (input_row.get("exit_code")==124)):
+            raise NestedCuttlefishError("approved visual input differs from exact bounds")
+        back=row.get("back")
+        if back is not None and (request["kind"]!="unknown-sources" or back.get("argv")!=["shell","input","keyevent","4"] or back.get("exit_code") not in (0,124) or back.get("timed_out") is not (back.get("exit_code")==124)):raise NestedCuttlefishError("Settings Back outcome invalid")
+        if request["kind"]=="update":approved_update=True
+    if not approved_update:raise NestedCuttlefishError("approved Update visual handshake missing")
     if ui.get("completion_action") not in ("Done","Open"):raise NestedCuttlefishError("exact completion action missing")
     restart=ui.get("update_check_restart")
     if not isinstance(restart,Mapping) or set(restart)!={"force_stop","keyguard","monkey","readiness"}:raise NestedCuttlefishError("update check restart evidence missing")

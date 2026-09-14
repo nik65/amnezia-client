@@ -44,32 +44,32 @@ def test_controller_runs_and_archives_authentic_nested_common_lifecycle(tmp_path
   c.register_android_semantic=register_after_archive
   boot_archive=bridge.boot_failure_archive;bridge.boot_failure_archive=None
   with pytest.raises(LabError,match="lacks controller boot failure archive"):
-   c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership)
+   c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership,lambda *a:None,lambda *a:None)
   assert bridge.calls==[] and fx.events==[] and link.events==[]
   bridge.boot_failure_archive=boot_archive
   original_qemu=bridge.wayland_installer.plan.qemu_sha256;bridge.wayland_installer.plan.qemu_sha256="0"*64
   with pytest.raises(LabError,match="Wayland receipt"):
-   c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership)
+   c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership,lambda *a:None,lambda *a:None)
   assert bridge.calls==[] and fx.events==[] and link.events==[]
   bridge.wayland_installer.plan.qemu_sha256=original_qemu
   saved_way_success=way_success.read_bytes();way_success.write_text('{"tampered":true}',encoding="utf-8")
   with pytest.raises(LabError,match="Wayland success archive"):
-   c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership)
+   c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership,lambda *a:None,lambda *a:None)
   assert bridge.calls==[] and fx.events==[] and link.events==[]
   way_success.write_bytes(saved_way_success)
   way_success.unlink()
   with pytest.raises((LabError,FileNotFoundError),match="Wayland success archive|artifact does not exist"):
-   c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership)
+   c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership,lambda *a:None,lambda *a:None)
   assert bridge.calls==[] and fx.events==[] and link.events==[]
   way_success.write_bytes(saved_way_success)
-  result=c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership)
+  result=c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership,lambda *a:None,lambda *a:None)
   current=c.get_run(p.ownership.run_id)["profiles"]["android-arm64-v8a"]
   assert current["status"]=="evidence-collected" and current["nested_transport"]=="qga"
   assert [x["id"] for x in current["steps"]]==["probe","reinstall","update","service-health"]
   assert result["archive"]["guest_binding"]["outer_ownership"]["uuid"]==p.ownership.uuid
   assert artifact_record(Path(current["evidence_archive"]))["size"]>0
   before=list(bridge.calls)
-  with pytest.raises(LabError,match="already exists"):c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership)
+  with pytest.raises(LabError,match="already exists"):c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership,lambda *a:None,lambda *a:None)
   assert bridge.calls==before
  finally:pass
 
@@ -97,7 +97,7 @@ def test_frozen_baseline_and_fixture_script_rejected_before_mutation(tmp_path,mo
  c=LabController(tmp_path,test_mode=True);c.assert_mutation_context=lambda:None;c.save_state({"schema":1,"lab_id":"test","runs":{p.ownership.run_id:{"run_id":p.ownership.run_id,"baseline_version":"5.0.1.38","candidate_version":"5.0.1.39","artifacts":{"android-arm64-v8a":{"path":p.apk.source_path,"sha256":p.apk.sha256,"size":p.apk.size}},"baseline_artifacts":{"android-arm64-v8a":{"path":b.source_path,"sha256":b.sha256,"size":b.size}},"outer_artifact":{"sha256":"1"*64},"manifest":{"path":str(manifest_file),"sha256":"2"*64,"size":8},"semantic_helper_records":{"deploy/release_lab/android/consumer_fixture_server.py":{"path":"/source/consumer_fixture_server.py","sha256":"3"*64,"size":99}},"android_vulkan_records":{"deb":{"path":p.vulkan_deb_path,"sha256":p.vulkan_deb_sha256,"size":p.vulkan_deb_size}},"profiles":{"android-arm64-v8a":{"status":"created","vm":None},"linux-headless-x64":{"status":"running","vm":vm},"server-router":{"status":"running","vm":server}}}}})
  if tamper=="baseline":b=ApkSpec(b.name,b.source_path,b.size,"8"*64,b.package,b.version_code)
  else:fx.plan.script_sha256="4"*64
- with pytest.raises(LabError,match="fixture/private-link plan"):c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership)
+ with pytest.raises(LabError,match="fixture/private-link plan"):c.run_nested_android_semantic(p.ownership.run_id,p,bridge,fx,link,b,lambda:p.ownership,lambda *a:None,lambda *a:None)
  assert bridge.calls==[] and fx.events==[] and link.events==[]
  assert archive_calls==[]
 

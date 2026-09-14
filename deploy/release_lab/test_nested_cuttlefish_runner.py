@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64, hashlib, io, json, shlex, subprocess, sys, shutil
+import base64, hashlib, io, json, re, shlex, subprocess, sys, shutil
 from dataclasses import replace
 import pytest
 try:
@@ -20,7 +20,7 @@ def plan()->InnerPlan:
     argv=(f"{root}/runtime/host/bin/launch_cvd",f"-instance_dir={root}/runtime/instance",
         f"-assembly_dir={root}/runtime/assembly",f"-system_image_dir={root}/runtime/images",
         f"-early_tmp_dir={root}/runtime/tmp","-vm_manager=qemu_cli","-device_external_network=slirp",
-        "-enable_tap_devices=false","-enable_modem_simulator=false","-start_gnss_proxy=false",
+        "-enable_tap_devices=false","-enable_modem_simulator=true","-start_gnss_proxy=false",
         "-enable_host_bluetooth=false","-enable_host_nfc=false","-enable_host_uwb=false",
         "-start_webrtc=false","-report_anonymous_usage_stats=n",
         "-gpu_mode=guest_swiftshader","-adb_mode=vsock_half_tunnel","-run_adb_connector=true",
@@ -85,6 +85,10 @@ def wayland_dependency(p:InnerPlan,gid:int=999)->tuple[dict,dict]:
 
 def boot()->dict:
     p=plan();result=base("nested-cuttlefish-boot")
+    paths=[f"{p.root}/runtime/assembly/cuttlefish_config.json",f"{p.root}/runtime/instance/assembly/cuttlefish_config.json",f"{p.root}/runtime/instance/instances/cvd-1/cuttlefish_config.json"]
+    adapter_records=[{"order":i,"path":path,"before_sha256":"2"*64,"before_size":90,"after_sha256":"3"*64,"after_size":100} for i,path in enumerate(paths,1)]
+    adapter_receipt={"schema":1,"records":adapter_records,"before_identical":True,"after_identical":True,"source_shape":{"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"","ril_gateway":"","ril_prefixlen":255,"ril_dns":""},"applied":{"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}}
+    native={"schema":1,"records":[{"path":path,"sha256":"3"*64,"size":100,"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"} for path in paths],"adapter":{"path":f"{p.root}/runtime/network-config-adapter.json","sha256":"4"*64,"size":500,"receipt":adapter_receipt}}
     procs=[process("run_cvd",201),process("adb",202),process("qemu-system-aarch64",203),process("kernel_log_monitor",204),process("adb_connector",205),process("socket_vsock_proxy",206)]
     result.update({"containment":{"kind":"cgroup-v2","path":"/amnezia-release-lab/run-1/nonce-1",
         "member_pids":[201,202,203,204,205,206],"stable_reads":2},"processes":procs,
@@ -92,9 +96,10 @@ def boot()->dict:
         "serial":"127.0.0.1_6520","boot_id":"22222222-2222-2222-2222-222222222222"},
         "vsock_cid":37,"adb_endpoint":"127.0.0.1:5053","cvdnetwork_gid":4242,"kvm_gid":993,"vhost_vsock":{"path":"/dev/vhost-vsock","dev":7,"inode":8,"uid":0,"gid":993,"mode":"0660","rdev":9,"char":True},
         "runtime_dependency":{"wayland_install":wayland_dependency(p)[0],"wayland_runtime":wayland_dependency(p)[1],"group_provisioning":{"schema":1,"uid":p.runtime_uid,"user":"lab","primary_gid":999,"cvdnetwork_gid":4242,"created":True,"member":True,"resolved_groups":[999,4242],"files":[{"path":x,"before_sha256":"3"*64,"after_sha256":"4"*64} for x in ("/etc/group","/etc/gshadow")],"commands":[{"argv":a,"exe_sha256":"5"*64,"exit_code":0,"stdout_size":0,"stderr_size":0} for a in (["/usr/sbin/groupadd","--system","cvdnetwork"],["/usr/sbin/usermod","-aG","cvdnetwork","lab"])],"kvm_modified":False,"vhost_modified":False,"origin":"guest","transport":"qga","injected":False},"stage":{"sha256":p.vulkan_deb_sha256,"size":p.vulkan_deb_size,"guest_root_identity":{"dev":1,"inode":2,"uid":0,"gid":0,"mode":"0711"}},"installed":{"run_id":p.ownership.run_id,"attempt_nonce":p.ownership.attempt_nonce,"origin":"guest","transport":"qga","injected":False,"loader":{"path":f"{p.root}/runtime/private-libs/libvulkan.so.1.3.275","soname_path":f"{p.root}/runtime/private-libs/libvulkan.so.1","sha256":p.vulkan_loader_sha256,"size":p.vulkan_loader_size,"uid":0,"mode":"0644","directory_uid":0,"directory_mode":"0755"},"dlopen":True,"vkGetInstanceProcAddr":True,"graphics_detector":{"exit_code":0,"assertion":False,"uid":p.runtime_uid,"groups":[4242],"stdout_sha256":"0"*64,"stdout_size":0,"stderr_sha256":"1"*64,"stderr_size":0,"output_file":{"path":f"{p.root}/runtime/graphics-probe/availability.pbtxt","kind":"regular","dev":1,"inode":2,"uid":p.runtime_uid,"gid":1000,"mode":"0600","sha256":"2"*64,"size":26091,"eof":True}}}},
-        "network":{"adb_listen":"127.0.0.1:5053","host_mutation":False,"host_mounts":[],"qemu_netdev_argv":["user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"],"ril_config":{"schema":1,"records":[{"path":path,"before_sha256":"2"*64,"after_sha256":"3"*64,"size":100,"alias_target":path,"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"} for path in (f"{plan().root}/runtime/assembly/cuttlefish_config.json",f"{plan().root}/runtime/instance/assembly/cuttlefish_config.json",f"{plan().root}/runtime/instance/instances/cvd-1/cuttlefish_config.json")]}}})
-    paths=[x["path"] for x in result["network"]["ril_config"]["records"]];adb=f"{p.root}/runtime/host/bin/adb";empty="List of devices attached\n";connected="List of devices attached\n127.0.0.1:6520\tdevice\n"
+        "network":{"adb_listen":"127.0.0.1:5053","host_mutation":False,"host_mounts":[],"qemu_netdev_argv":["user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"],"qemu_frontend_argv":["virtio-net-pci,netdev=hostnet0"],"native_config":native}})
+    paths=[x["path"] for x in result["network"]["native_config"]["records"]];adb=f"{p.root}/runtime/host/bin/adb";empty="List of devices attached\n";connected="List of devices attached\n127.0.0.1:6520\tdevice\n"
     def cmd(argv,out): return {"argv":argv,"exit_code":0,"stdout":out,"stdout_size":len(out),"stdout_sha256":hashlib.sha256(out.encode()).hexdigest(),"stderr":"","stderr_size":0,"stderr_sha256":hashlib.sha256(b"").hexdigest()}
+    result["network"]["guest_network"]={"link":cmd(["adb"],"2: eth0: UP\n"),"address":cmd(["adb"],"2: eth0 inet 10.0.2.15/24 scope global eth0\n"),"routes":cmd(["adb"],"default via 10.0.2.2 dev eth0\n"),"endpoint_route":cmd(["adb"],"10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"),"ril_state":cmd(["adb"],"running\n"),"ril_log":cmd(["adb"],"")}
     result["network"]["adb_connection"]={"endpoint":"127.0.0.1:6520","before":cmd([adb,"-P","5053","devices"],empty),"connect":cmd([adb,"-P","5053","connect","127.0.0.1:6520"],"connected"),"after":cmd([adb,"-P","5053","devices"],connected),"binding":{"endpoint":"127.0.0.1:6520","config_rows":[{"path":x,"sha256":"3"*64,"size":100,"adb_host_port":6520,"adb_ip_and_port":"0.0.0.0:6520"} for x in paths],"connector_pid":205,"proxy_pid":206,"connector_argv":procs[4]["argv"],"proxy_argv":procs[5]["argv"]}}
     return result
 
@@ -117,13 +122,28 @@ def app()->dict:
     empty=hashlib.sha256(b"").hexdigest();result["ui"]["launch_probe"]={"argv":["shell","monkey","-p","org.amnezia.vpn","1"],"exit_code":0,"timed_out":False,"output":{"origin":"guest","transport":"qga-adb","path":"adb:candidate-monkey","size":0,"sha256":empty,"bytes_b64":""}}
     def raw(path,value):
       data=value.encode();return {"origin":"guest","transport":"qga-adb","path":path,"size":len(data),"sha256":hashlib.sha256(data).hexdigest(),"bytes_b64":base64.b64encode(data).decode()}
+    health_text='{"status":"ok","run_id":"run-1","role":"consumer-fixture"}';health_bytes=health_text.encode()
+    result["diagnostic_preflight"]={
+      "address":{"argv":["shell","ip","-4","addr","show"],"exit_code":0,"timed_out":False,"output":raw("adb:fixture-preflight-address","2: eth0 inet 10.0.2.15/24 scope global eth0\n"),"stderr":raw("adb:fixture-preflight-address-stderr","")},
+      "routes":{"argv":["shell","ip","-4","route","show"],"exit_code":0,"timed_out":False,"output":raw("adb:fixture-preflight-routes","default via 10.0.2.2 dev eth0\n"),"stderr":raw("adb:fixture-preflight-routes-stderr","")},
+      "route":{"argv":["shell","ip","-4","route","get","10.8.1.0"],"exit_code":0,"timed_out":False,"output":raw("adb:fixture-preflight-route","10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"),"stderr":raw("adb:fixture-preflight-route-stderr","")},
+      "connect":{"argv":["shell","toybox","nc","-z","-w","5","10.8.1.0","17865"],"exit_code":0,"timed_out":False,"output":raw("adb:fixture-preflight-connect",""),"stderr":raw("adb:fixture-preflight-connect-stderr","")},
+      "fixture_request":{"method":"GET","path":"/healthz","status":200,"sha256":hashlib.sha256(health_bytes).hexdigest(),"bytes":len(health_bytes),"content_length":len(health_bytes),"eof":True,"peer":"10.0.2.15","observed_at":99.0,"run_id":"run-1","attempt_nonce":"nonce-1"}}
+    pf=result["diagnostic_preflight"];request_text="GET /healthz HTTP/1.1\r\nHost: 10.8.1.0:17865\r\nConnection: close\r\n\r\n";response=f"HTTP/1.1 200 OK\r\nContent-Length: {len(health_bytes)}\r\nConnection: close\r\n\r\n{health_text}"
+    pf["healthz"]={"argv":["shell","sh","-c","printf 'GET /healthz HTTP/1.1\\r\\nHost: 10.8.1.0:17865\\r\\nConnection: close\\r\\n\\r\\n' | toybox nc -w 8 10.8.1.0 17865"],"exit_code":0,"timed_out":False,"output":raw("adb:fixture-preflight-healthz",response),"stderr":raw("adb:fixture-preflight-healthz-stderr","")}
+    for label,argv,out in (("link",["shell","ip","-details","link","show"],"2: eth0: UP\n"),("capability",["shell","toybox","nc","--help"],"usage: nc [-w SEC] HOST PORT\n"),("ril_state",["shell","getprop","init.svc.vendor.ril-daemon"],"running\n"),("ril_log",["shell","logcat","-d","-t","200","-v","threadtime","-b","main","-b","system","-b","events","RIL*:V","libcuttlefish-rild:V","init:I","*:S"],"")):pf[label]={"argv":argv,"exit_code":0,"timed_out":False,"output":raw("adb:fixture-preflight-"+label,out),"stderr":raw("adb:fixture-preflight-"+label+"-stderr","")}
+    pf["health_body"]=raw("adb:fixture-preflight-health-body",health_text)
     result["package_installer"]["session_evidence"]={"before":raw("adb:dumpsys-package-installs",""),"after":[raw("adb:dumpsys-package-installs","Session 7:\n  mAppPackageName=org.amnezia.vpn\n  mFinalStatus=1\n")]}
     policy=["shell","dumpsys","window","policy"]
     before_raw=raw("adb:keyguard-policy","KeyguardServiceDelegate:\n  showing=true\n  inputRestricted=true\n  simSecure=false");after_raw=raw("adb:keyguard-policy","KeyguardServiceDelegate:\n  showing=false\n  inputRestricted=false\n  simSecure=false")
     middle={"argv":policy,"showing":True,"input_restricted":True,"raw":before_raw,"attempts":[{"exit_code":0,"timed_out":False,"raw":before_raw}]}
     guard={"before":{"argv":policy,"showing":True,"input_restricted":True,"raw":before_raw,"attempts":[{"exit_code":0,"timed_out":False,"raw":before_raw}]},"after_dismiss":middle,"commands":[{"argv":["shell","wm","dismiss-keyguard"],"exit_code":0,"timed_out":False,"raw":raw("adb:keyguard-command","")},{"argv":["shell","input","keyevent","82"],"exit_code":0,"timed_out":False,"raw":raw("adb:keyguard-command","")}],"after":{"argv":policy,"showing":False,"input_restricted":False,"raw":after_raw,"attempts":[{"exit_code":0,"timed_out":False,"raw":after_raw}]},"passed":True}
     result["ui"]["keyguard"]=[{"phase":x,"receipt":json.loads(json.dumps(guard))} for x in ("installer-monkey","update-tap","install-tap","completion-tap","launch-monkey")]
-    result["timeout_seconds"]=300
+    request={"schema":1,"run_id":"run-1","attempt_nonce":"nonce-1","sequence":1,"kind":"update","state":"operator-unclassified","action":"Update","bounds":None,"display_owner":{"package":"org.amnezia.vpn","activity":"MainActivity","pid":301,"uid":10123},"action_target":{"package":"org.amnezia.vpn","version_code":2186,"artifact_sha256":"c"*64,"artifact_size":5},"artifact_sha256":"c"*64,"artifact_size":5,"created_at":100.0,"expires_at":190.0,"origin":"guest","transport":"qga-adb"}
+    controller={"origin":"controller","immutable":True,"request_id":"01-update","request_path":"/state/request.json","request_sha256":"6"*64,"request_size":1,"png_path":"/state/image.png","png_sha256":"7"*64,"png_size":9,"png_width":100,"png_height":200,"expires_at":190.0}
+    decision={"schema":1,"run_id":"run-1","attempt_nonce":"nonce-1","request_id":"01-update","request_sha256":"6"*64,"decision":"approve","bounds":[0,0,10,10],"decided_at":110.0,"origin":"controller","input_only":True,"immutable":True,"path":"/state/decision.json","sha256":"8"*64,"size":1}
+    result["ui"]["visual_handshake"]=[{"request":request,"controller":controller,"decision":decision,"keyguard":json.loads(json.dumps(guard)),"freshness":{"accepted":True,"max_seconds":45},"input":{"argv":["shell","input","tap","5","5"],"exit_code":0,"timed_out":False,"output":raw("adb:visual-tap",""),"x":5,"y":5}}]
+    result["timeout_seconds"]=600
     result["ui"]["update_check_restart"]={"force_stop":{"argv":["shell","am","force-stop","org.amnezia.vpn"],"exit_code":0,"output":raw("adb:update-check-force-stop","")},"keyguard":json.loads(json.dumps(guard)),"monkey":{"argv":["shell","monkey","-p","org.amnezia.vpn","1"],"exit_code":0,"timed_out":False,"output":raw("adb:update-check-monkey","")},"readiness":json.loads(json.dumps(result["ui"]["focus_observations"]))}
     remote="/data/local/tmp/amz-nonce-1.xml";result["ui"]["ui_capture_observations"]=[{"label":"ui-update","remote":remote,"attempts":[{"dump":{"argv":["shell","uiautomator","dump","--compressed",remote],"exit_code":0,"timed_out":False,"output":raw("adb:ui-dump","")},"cat":{"argv":["shell","cat",remote],"exit_code":0,"timed_out":False,"output":raw("adb:ui-xml",'<node package="com.android.permissioncontroller" text="Update" bounds="[0,0][1,1]"/>')}}]}]
     result["ui"]["package_state"]={"version_code":2187,"uid":10123,"dumpsys":{"argv":["shell","dumpsys","package","org.amnezia.vpn"],"exit_code":0,"output":raw("adb:dumpsys-package","versionCode=2187 minSdk=28 targetSdk=36")},"uid_lookup":{"argv":["shell","cmd","package","list","packages","-U","org.amnezia.vpn"],"exit_code":0,"output":raw("adb:cmd-package-list-U","package:org.amnezia.vpn uid:10123")}}
@@ -149,11 +169,10 @@ def test_exact_plan_uses_real_reviewed_flags_and_guest_cgroup():
     assert len(plan().root+"/runtime/tmp/cf_avd_999/cvd-1/grpc_socket/GnssGrpcProxyServer.sock") <= 107
     assert value["host_mounts"]==[] and value["host_network_mutation"] is False
     assert "device_external_network=slirp" in script and "enable_tap_devices=false" in script
-    assert "enable_modem_simulator=false" in script and "start_gnss_proxy=false" in script
+    assert "enable_modem_simulator=true" in script and "start_gnss_proxy=false" in script
     assert "/runtime/host/bin/assemble_cvd" in script and "exec " in script and "/runtime/host/bin/run_cvd\n" in script
     assert "run_cvd --daemon" not in script
-    assert "ril_ipaddr" in script and "10.0.2.15" in script and "ril_gateway" in script and "10.0.2.2" in script
-    assert "unexpected generated RIL config" in script and "runtime/ril-config-receipt.json" in script
+    assert "ril_ipaddr" not in script and "ril_gateway" not in script and "ril-config-receipt" not in script
     assert "root/'ril-config-receipt.json'" not in script
     assert "/sys/fs/cgroup/amnezia-release-lab" in script and "cgroup.procs" in script
     assert 'chmod 0711 "$root"' not in script and 'install -d -m 0700 "$HOME"' not in script
@@ -165,40 +184,33 @@ def test_exact_plan_uses_real_reviewed_flags_and_guest_cgroup():
     daemon=replace(p,launch_argv=p.launch_argv+("-daemon",))
     with pytest.raises(NestedCuttlefishError,match="noncanonical"): build_stage_plan(daemon)
 
-def test_config_patch_groups_parent_symlink_alias_before_mutation(tmp_path):
-    p=plan(); root=tmp_path/'n'; runtime=root/'runtime'; (runtime/'assembly').mkdir(parents=True); (runtime/'instances'/'cvd-1').mkdir(parents=True)
-    try:(runtime/'instance').symlink_to('.',target_is_directory=True)
-    except (OSError,NotImplementedError):pytest.skip('directory symlinks unavailable')
-    raw=(json.dumps({'instances':{'1':{'external_network_mode':'slirp','ril_ipaddr':'','ril_gateway':'','ril_prefixlen':255,'ril_dns':''}}})+'\n').encode()
-    (runtime/'assembly'/'cuttlefish_config.json').write_bytes(raw); (runtime/'instances'/'cvd-1'/'cuttlefish_config.json').write_bytes(raw)
-    script=build_launch_script(p); start=script.index('/usr/bin/python3 -c ',script.index('assemble_cvd')); end=script.index('\nexec ',start); argv=shlex.split(script[start:end])
-    code=argv[2].replace('os.O_NOFOLLOW',"getattr(os,'O_NOFOLLOW',0)").replace('os.fchown(f.fileno(),s.st_uid,s.st_gid);','').replace("d=os.open(target.parent,os.O_RDONLY|os.O_DIRECTORY);os.fsync(d);os.close(d)",'')
-    subprocess.run([sys.executable,'-c',code,str(root)],check=True)
-    logical=(runtime/'assembly'/'cuttlefish_config.json',runtime/'instance'/'assembly'/'cuttlefish_config.json',runtime/'instance'/'instances'/'cvd-1'/'cuttlefish_config.json')
-    assert len({x.read_bytes() for x in logical})==1
-    receipt=json.loads((root/'runtime'/'ril-config-receipt.json').read_text())
-    assert len(receipt['records'])==3
-    assert receipt['records'][0]['alias_target']==receipt['records'][1]['alias_target']
-    assert receipt['records'][2]['alias_target']!=receipt['records'][0]['alias_target']
-
-def test_config_receipt_is_written_by_real_uid1000_below_root0711():
-    if sys.platform != "win32" or not shutil.which("wsl.exe"):
-        pytest.skip("requires WSL uid1000 permission semantics")
-    p=plan();script=build_launch_script(p);start=script.index('/usr/bin/python3 -c ',script.index('assemble_cvd'));end=script.index('\nexec ',start);code=shlex.split(script[start:end])[2]
+@pytest.mark.skipif(sys.platform!="win32" or not shutil.which("wsl.exe"),reason="WSL required for POSIX atomic adapter behavior")
+@pytest.mark.parametrize("mode",["success","inconsistent","nonblank","symlink","partial"])
+def test_actual_cvd_network_config_adapter_is_fail_closed_and_atomic(mode):
+    script=build_launch_script(plan()); encoded=re.search(r"base64\.b64decode\('([A-Za-z0-9+/=]+)'\)",script).group(1)
     wrapper=r'''import base64,json,os,pathlib,shutil,sys,tempfile
-assert os.getuid()==1000
-root=pathlib.Path(tempfile.mkdtemp(prefix='ril-receipt-'));runtime=root/'runtime';os.chmod(root,0o711)
-for rel in ('assembly','instance/assembly','instance/instances/cvd-1'):(runtime/rel).mkdir(parents=True,exist_ok=True)
-os.chmod(runtime,0o700)
-raw=(json.dumps({'instances':{'1':{'external_network_mode':'slirp','ril_ipaddr':'','ril_gateway':'','ril_prefixlen':255,'ril_dns':''}}})+'\n').encode()
-for rel in ('assembly/cuttlefish_config.json','instance/assembly/cuttlefish_config.json','instance/instances/cvd-1/cuttlefish_config.json'):(runtime/rel).write_bytes(raw)
-try:
- sys.argv=['patch',str(root)];exec(compile(base64.b64decode(sys.argv_saved).decode(),'patch','exec'))
- receipt=runtime/'ril-config-receipt.json';print(json.dumps({'uid':receipt.stat().st_uid,'mode':oct(receipt.stat().st_mode&0o777),'old':(root/'ril-config-receipt.json').exists()}))
-finally:shutil.rmtree(root)
-'''.replace('sys.argv_saved',repr(base64.b64encode(code.encode()).decode()))
-    row=json.loads(subprocess.run(['wsl.exe','python3','-c',wrapper],check=True,capture_output=True,text=True).stdout)
-    assert row=={'uid':1000,'mode':'0o600','old':False}
+code=base64.b64decode(sys.argv[1]);scenario=sys.argv[2];root=pathlib.Path(tempfile.mkdtemp(prefix='amz-net-adapter-'));paths=(root/'runtime/assembly/cuttlefish_config.json',root/'runtime/instance/assembly/cuttlefish_config.json',root/'runtime/instance/instances/cvd-1/cuttlefish_config.json')
+raw={'instances':{'1':{'adb_host_port':6520,'adb_ip_and_port':'0.0.0.0:6520','external_network_mode':'slirp','enable_modem_simulator':True,'ril_ipaddr':'','ril_gateway':'','ril_prefixlen':255,'ril_dns':''}},'fragments':{'AdbConfigFragmentImpl':{'connector_enabled':True,'mode':['vsock_half_tunnel']}}};data=(json.dumps(raw,separators=(',',':'))+'\n').encode()
+source=data
+for p in paths:p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(source)
+if scenario=='inconsistent':paths[2].write_bytes(source+b' ')
+if scenario=='nonblank':v=json.loads(source);v['instances']['1']['ril_ipaddr']='192.0.2.9';paths[1].write_text(json.dumps(v))
+if scenario=='symlink':paths[1].unlink();paths[1].symlink_to(paths[0])
+original_replace=os.replace;count=[0]
+def replace(a,b):
+ if str(b).endswith('cuttlefish_config.json'):count[0]+=1
+ if scenario=='partial' and count[0]==2:raise OSError('injected second replace failure')
+ return original_replace(a,b)
+if scenario=='partial':os.replace=replace
+sys.argv=['adapter',str(root)];ok=True
+try:exec(compile(code,'adapter','exec'))
+except BaseException:ok=False
+finally:os.replace=original_replace
+same=[p.read_bytes()==source for p in paths if p.exists() and not p.is_symlink()];receipt=root/'runtime/network-config-adapter.json';print(json.dumps({'ok':ok,'same':same,'receipt':receipt.exists()}));shutil.rmtree(root)
+'''
+    row=json.loads(subprocess.run(["wsl.exe","python3","-c",wrapper,encoded,mode],check=True,capture_output=True,text=True).stdout)
+    if mode=="success": assert row["ok"] is True and row["receipt"] is True and row["same"]==[False,False,False]
+    else: assert row["ok"] is False and row["receipt"] is False and (mode!="partial" or row["same"]==[True,True,True])
 
 def test_boot_is_only_boot_and_requires_complete_stable_cgroup_inventory():
     assert validate_boot_receipt(plan(),boot())["passed"]
@@ -218,6 +230,19 @@ def test_boot_is_only_boot_and_requires_complete_stable_cgroup_inventory():
 
 def test_app_pass_needs_exact_apk_http_packageinstaller_ui_and_logcat():
     assert validate_app_update_receipt(plan(),boot(),app())["passed"]
+def test_preflight_diagnostic_rc2_is_allowed_but_health_remains_strict():
+    p=plan();r=app();r["diagnostic_preflight"]["route"]["exit_code"]=2
+    assert validate_app_update_receipt(p,boot(),r)["passed"]
+    r=app();r["diagnostic_preflight"]["healthz"]["exit_code"]=2
+    with pytest.raises(NestedCuttlefishError,match="semantic mismatch"):validate_app_update_receipt(p,boot(),r)
+@pytest.mark.parametrize("tamper",["raw-extra","raw-oversize","request-hash","request-size"])
+def test_preflight_raw_and_health_cross_binding_tamper_fails(tamper):
+    p=plan();r=app()
+    if tamper=="raw-extra":r["diagnostic_preflight"]["route"]["output"]["extra"]=1
+    elif tamper=="raw-oversize":r["diagnostic_preflight"]["route"]["output"]["size"]=65537
+    elif tamper=="request-hash":r["diagnostic_preflight"]["fixture_request"]["sha256"]="0"*64
+    else:r["diagnostic_preflight"]["fixture_request"]["bytes"]+=1
+    with pytest.raises(NestedCuttlefishError):validate_app_update_receipt(p,boot(),r)
 
 def test_cm_android16_installs_raw_replays_through_consumer_field_bound_parser():
     from pathlib import Path
@@ -356,3 +381,15 @@ def test_boot_rejects_minimal_or_environment_drifted_wayland_proof():
         candidate=json.loads(json.dumps(good));mutate(candidate)
         with pytest.raises(NestedCuttlefishError,match="Wayland"):
             validate_boot_receipt(p,candidate)
+
+
+def test_native_network_requires_frontend_nonloopback_default_and_endpoint_route_but_ril_is_diagnostic():
+    p=plan();value=boot();assert validate_boot_receipt(p,value)["passed"]
+    value=boot();value["network"]["qemu_frontend_argv"]=[]
+    with pytest.raises(NestedCuttlefishError,match="hostnet0"):validate_boot_receipt(p,value)
+    value=boot();value["network"]["guest_network"]["address"]["stdout"]="1: lo inet 127.0.0.1/8\n"
+    with pytest.raises(NestedCuttlefishError,match="semantic"):validate_boot_receipt(p,value)
+    value=boot();value["network"]["guest_network"]["routes"]["stdout"]="10.0.2.0/24 dev eth0\n"
+    with pytest.raises(NestedCuttlefishError,match="semantic"):validate_boot_receipt(p,value)
+    value=boot();value["network"]["guest_network"]["ril_state"]["stdout"]="restarting\n";value["network"]["guest_network"]["ril_log"]["stdout"]="Sending SIGKILL to service 'vendor.ril-daemon'\n"*8
+    assert validate_boot_receipt(p,value)["passed"]

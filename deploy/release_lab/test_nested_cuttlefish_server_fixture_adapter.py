@@ -27,8 +27,10 @@ class Q:
   if "zip(sys.argv" in code:
    p=plan();return {"stdout":json.dumps({"files":[{"path":p.script_path,"sha256":p.script_sha256,"size":p.script_size},{"path":p.manifest_path,"sha256":p.manifest_sha256,"size":p.manifest_size},{"path":p.apk_path,"sha256":p.apk_sha256,"size":p.apk_size}]})}
   if code==IDENTITY:return {"stdout":json.dumps({"pid":44,"start_ticks":55,"exe":"/usr/bin/python3","cmdline_sha256":"d"*64,"identity_rechecked":True})}
-  if "healthz" in code:return {"stdout":json.dumps({"status":"bad"} if self.health_bad else {"status":"ok","run_id":"run","role":"consumer-fixture"})}
-  if code==RESET:return {"stdout":json.dumps({"reset_token":args[5],"log_inode":9,"offset":0,"empty_sha256":hashlib.sha256(b"").hexdigest(),"reset_at":100.0,"run_id":"run","attempt_nonce":"1"*48})}
+  if code==RESET:
+   health=b'{"status":"ok","run_id":"run","role":"consumer-fixture"}'
+   return {"stdout":json.dumps({"reset_token":args[5],"log_inode":9,"offset":0,"empty_sha256":hashlib.sha256(b"").hexdigest(),"reset_at":100.0,"run_id":"run","attempt_nonce":"1"*48,"cleared_health_request":{"method":"GET","path":"/healthz","status":200,"sha256":hashlib.sha256(health).hexdigest(),"bytes":len(health),"content_length":len(health),"eof":True,"peer":"10.0.2.15","observed_at":99.0,"run_id":"run","attempt_nonce":"1"*48}})}
+  if "/__lab__/health" in code:return {"stdout":json.dumps({"status":"bad"} if self.health_bad else {"status":"ok","run_id":"run","role":"consumer-fixture"})}
   if code==READ_LOG:
    rows=[{"method":"GET","path":"/manifest.json","status":200,"sha256":"b"*64,"bytes":20,"content_length":20,"eof":True,"peer":"10.0.2.15","observed_at":101.0},{"method":"GET","path":f"/files/artifacts/{'c'*64}/app.apk","status":200,"sha256":"c"*64,"bytes":30,"content_length":30,"eof":True,"peer":"10.0.2.15","observed_at":102.0}]
    return {"stdout":json.dumps({"reset_token":"1"*48,"log_inode":9,"start_offset":0,"rows":rows,"log_sha256":"e"*64,"log_size":4,"finished_at":103.0})}

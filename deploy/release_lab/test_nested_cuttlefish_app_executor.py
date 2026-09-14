@@ -8,22 +8,26 @@ from deploy.release_lab.test_nested_cuttlefish_runner import wayland_dependency
 
 def setup():
  o=OuterOwnership("run","linux-headless-x64","nonce-1234567890",2,3,"11111111-1111-1111-1111-111111111111","/var/lib/amnezia-release-lab/r/qmp","/var/lib/amnezia-release-lab/r/qga");root="/var/lib/amnezia-release-lab/n/"+hashlib.sha256(b"run\0nonce-1234567890").hexdigest()[:8]
- argv=(f"{root}/runtime/host/bin/launch_cvd",f"-instance_dir={root}/runtime/instance",f"-assembly_dir={root}/runtime/assembly",f"-system_image_dir={root}/runtime/images",f"-early_tmp_dir={root}/runtime/tmp","-vm_manager=qemu_cli","-device_external_network=slirp","-enable_tap_devices=false","-enable_modem_simulator=false","-start_gnss_proxy=false","-enable_host_bluetooth=false","-enable_host_nfc=false","-enable_host_uwb=false","-start_webrtc=false","-report_anonymous_usage_stats=n","-gpu_mode=guest_swiftshader","-adb_mode=vsock_half_tunnel","-run_adb_connector=true","-cpus=2","-memory_mb=4096","-vsock_guest_cid=37",f"-qemu_binary_dir={root}/runtime/qemu","-noresume")
+ argv=(f"{root}/runtime/host/bin/launch_cvd",f"-instance_dir={root}/runtime/instance",f"-assembly_dir={root}/runtime/assembly",f"-system_image_dir={root}/runtime/images",f"-early_tmp_dir={root}/runtime/tmp","-vm_manager=qemu_cli","-device_external_network=slirp","-enable_tap_devices=false","-enable_modem_simulator=true","-start_gnss_proxy=false","-enable_host_bluetooth=false","-enable_host_nfc=false","-enable_host_uwb=false","-start_webrtc=false","-report_anonymous_usage_stats=n","-gpu_mode=guest_swiftshader","-adb_mode=vsock_half_tunnel","-run_adb_connector=true","-cpus=2","-memory_mb=4096","-vsock_guest_cid=37",f"-qemu_binary_dir={root}/runtime/qemu","-noresume")
  apk=ApkSpec("c.apk","/c",10,"c"*64,"org.amnezia.vpn",39);p=InnerPlan(o,(AssetSpec("h.tar.gz","/h",1,"a"*64),AssetSpec("i.zip","/i",1,"b"*64),AssetSpec("q.tar.gz","/q",1,"d"*64)),apk,37,1000,launch_argv=argv,qemu_aarch64_sha256="e"*64);b=ApkSpec("b.apk","/b",9,"f"*64,apk.package,38)
- so={"pid":22,"start_ticks":33,"uuid":"33333333-3333-3333-3333-333333333333","qmp_socket":"/srv/qmp","qga_socket":"/srv/qga"};fx=AppFixture("http://10.8.1.2:17865","run",o.attempt_nonce,"/manifest.json","1"*64,8,f"/files/artifacts/{apk.sha256}/{quote(apk.name,safe='-._~')}",40,400,"server-router","amnezia-release-lab:run:server-router",so);return p,b,fx
+ so={"pid":22,"start_ticks":33,"uuid":"33333333-3333-3333-3333-333333333333","qmp_socket":"/srv/qmp","qga_socket":"/srv/qga"};fx=AppFixture("http://10.8.1.0:17865","run",o.attempt_nonce,"/manifest.json","1"*64,8,f"/files/artifacts/{apk.sha256}/{quote(apk.name,safe='-._~')}",40,400,"server-router","amnezia-release-lab:run:server-router",so);return p,b,fx
 def boot(p):
  cg="/amnezia-release-lab/run/nonce-1234567890"
+ paths=[f"{p.root}/runtime/assembly/cuttlefish_config.json",f"{p.root}/runtime/instance/assembly/cuttlefish_config.json",f"{p.root}/runtime/instance/instances/cvd-1/cuttlefish_config.json"]
+ ar=[{"order":i,"path":path,"before_sha256":"2"*64,"before_size":90,"after_sha256":"3"*64,"after_size":100} for i,path in enumerate(paths,1)];receipt={"schema":1,"records":ar,"before_identical":True,"after_identical":True,"source_shape":{"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"","ril_gateway":"","ril_prefixlen":255,"ril_dns":""},"applied":{"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}}
  def proc(n,pid):
   exe=f"{p.root}/runtime/{'qemu' if n=='qemu-system-aarch64' else 'host/bin'}/{n}";a=[exe,p.root]+(["guest-cid=37","-netdev","user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"] if n=='qemu-system-aarch64' else ["-P","5053"] if n=='adb' else [])
   if n=="adb_connector":a=[exe,"--addresses=0.0.0.0:6520"]
   if n=="socket_vsock_proxy":a=[exe,"--server_type=tcp","--server_tcp_port=6520","--client_type=vsock","--client_vsock_port=5555","--client_vsock_id=37","--label=adb"]
   return {"pid":pid,"start_ticks":pid+100,"exe":exe,"exe_sha256":"a"*64,"uid":1000,"groups":([42] if n=="adb" else [42,993]),"state":"S","argv":a,"cmdline_sha256":"b"*64,"cgroup":cg}
- ps=[proc("run_cvd",11),proc("adb",12),proc("qemu-system-aarch64",13),proc("adb_connector",14),proc("socket_vsock_proxy",15)];ril={"schema":1,"records":[{"path":path,"alias_target":path,"before_sha256":"2"*64,"after_sha256":"3"*64,"size":100,"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"} for path in (f"{p.root}/runtime/assembly/cuttlefish_config.json",f"{p.root}/runtime/instance/assembly/cuttlefish_config.json",f"{p.root}/runtime/instance/instances/cvd-1/cuttlefish_config.json")]}
+ ps=[proc("run_cvd",11),proc("adb",12),proc("qemu-system-aarch64",13),proc("adb_connector",14),proc("socket_vsock_proxy",15)];native={"schema":1,"records":[{"path":path,"sha256":"3"*64,"size":100,"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"} for path in paths],"adapter":{"path":f"{p.root}/runtime/network-config-adapter.json","sha256":"4"*64,"size":500,"receipt":receipt}}
  detector={"exit_code":0,"assertion":False,"uid":p.runtime_uid,"groups":[42],"stdout_sha256":"0"*64,"stdout_size":0,"stderr_sha256":"1"*64,"stderr_size":128,"output_file":{"path":f"{p.root}/runtime/graphics-probe/availability.pbtxt","kind":"regular","dev":1,"inode":2,"uid":p.runtime_uid,"gid":p.runtime_uid,"mode":"0600","sha256":"967373415f2d0f0db2e7a8d28342096a9a40967dfd9c037257deadff94c0f354","size":26091,"eof":True}}
  installed={"run_id":p.ownership.run_id,"attempt_nonce":p.ownership.attempt_nonce,"origin":"guest","transport":"qga","injected":False,"loader":{"path":f"{p.root}/runtime/private-libs/libvulkan.so.1.3.275","soname_path":f"{p.root}/runtime/private-libs/libvulkan.so.1","sha256":p.vulkan_loader_sha256,"size":p.vulkan_loader_size,"uid":0,"mode":"0644","directory_uid":0,"directory_mode":"0755"},"dlopen":True,"vkGetInstanceProcAddr":True,"graphics_detector":detector}
+ def netcmd(out):return {"argv":["adb"],"exit_code":0,"stdout":out,"stdout_size":len(out),"stdout_sha256":hashlib.sha256(out.encode()).hexdigest(),"stderr":"","stderr_size":0,"stderr_sha256":hashlib.sha256(b"").hexdigest()}
+ guest_network={"link":netcmd("2: eth0: UP\n"),"address":netcmd("2: eth0 inet 10.0.2.15/24 scope global eth0\n"),"routes":netcmd("default via 10.0.2.2 dev eth0\n"),"endpoint_route":netcmd("10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"),"ril_state":netcmd("running\n"),"ril_log":netcmd("")}
  provision={"schema":1,"uid":p.runtime_uid,"user":"lab","primary_gid":p.runtime_uid,"cvdnetwork_gid":42,"created":True,"member":True,"resolved_groups":[42,p.runtime_uid],"files":[{"path":x,"before_sha256":"3"*64,"after_sha256":"4"*64} for x in ("/etc/group","/etc/gshadow")],"commands":[{"argv":a,"exe_sha256":"5"*64,"exit_code":0,"stdout_size":0,"stderr_size":0} for a in (["/usr/sbin/groupadd","--system","cvdnetwork"],["/usr/sbin/usermod","-aG","cvdnetwork","lab"])],"kvm_modified":False,"vhost_modified":False,"origin":"guest","transport":"qga","injected":False}
- result={"schema":2,"operation":"nested-cuttlefish-boot","run_id":"run","profile":"linux-headless-x64","attempt_nonce":p.ownership.attempt_nonce,"marker":p.marker,"guest_root":p.root,"origin":"guest","transport":"qga","injected":False,"outer_ownership":vars(p.ownership),"containment":{"kind":"cgroup-v2","path":cg,"member_pids":[11,12,13,14,15],"stable_reads":2},"processes":ps,"roles":{"cvd":11,"adb":12,"qemu":13},"boot":{"abi":"arm64-v8a","boot_completed":"1","serial":"127.0.0.1_6520","boot_id":"22222222-2222-2222-2222-222222222222"},"vsock_cid":37,"adb_endpoint":"127.0.0.1:5053","cvdnetwork_gid":42,"kvm_gid":993,"vhost_vsock":{"path":"/dev/vhost-vsock","dev":7,"inode":8,"uid":0,"gid":993,"mode":"0660","rdev":9,"char":True},"runtime_dependency":{"wayland_install":wayland_dependency(p,p.runtime_uid)[0],"wayland_runtime":wayland_dependency(p,p.runtime_uid)[1],"group_provisioning":provision,"stage":{"sha256":p.vulkan_deb_sha256,"size":p.vulkan_deb_size,"guest_root_identity":{"dev":1,"inode":2,"uid":0,"gid":0,"mode":"0711"}},"installed":installed},"network":{"adb_listen":"127.0.0.1:5053","host_mutation":False,"host_mounts":[],"qemu_netdev_argv":["user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"],"ril_config":ril},"passed":True}
- paths=[x["path"] for x in ril["records"]];adb=f"{p.root}/runtime/host/bin/adb";empty="List of devices attached\n";connected="List of devices attached\n127.0.0.1:6520\tdevice\n"
+ result={"schema":2,"operation":"nested-cuttlefish-boot","run_id":"run","profile":"linux-headless-x64","attempt_nonce":p.ownership.attempt_nonce,"marker":p.marker,"guest_root":p.root,"origin":"guest","transport":"qga","injected":False,"outer_ownership":vars(p.ownership),"containment":{"kind":"cgroup-v2","path":cg,"member_pids":[11,12,13,14,15],"stable_reads":2},"processes":ps,"roles":{"cvd":11,"adb":12,"qemu":13},"boot":{"abi":"arm64-v8a","boot_completed":"1","serial":"127.0.0.1_6520","boot_id":"22222222-2222-2222-2222-222222222222"},"vsock_cid":37,"adb_endpoint":"127.0.0.1:5053","cvdnetwork_gid":42,"kvm_gid":993,"vhost_vsock":{"path":"/dev/vhost-vsock","dev":7,"inode":8,"uid":0,"gid":993,"mode":"0660","rdev":9,"char":True},"runtime_dependency":{"wayland_install":wayland_dependency(p,p.runtime_uid)[0],"wayland_runtime":wayland_dependency(p,p.runtime_uid)[1],"group_provisioning":provision,"stage":{"sha256":p.vulkan_deb_sha256,"size":p.vulkan_deb_size,"guest_root_identity":{"dev":1,"inode":2,"uid":0,"gid":0,"mode":"0711"}},"installed":installed},"network":{"adb_listen":"127.0.0.1:5053","host_mutation":False,"host_mounts":[],"qemu_netdev_argv":["user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"],"qemu_frontend_argv":["virtio-net-pci,netdev=hostnet0"],"native_config":native,"guest_network":guest_network},"passed":True}
+ paths=[x["path"] for x in native["records"]];adb=f"{p.root}/runtime/host/bin/adb";empty="List of devices attached\n";connected="List of devices attached\n127.0.0.1:6520\tdevice\n"
  def cmd(argv,out):return {"argv":argv,"exit_code":0,"stdout":out,"stdout_size":len(out),"stdout_sha256":hashlib.sha256(out.encode()).hexdigest(),"stderr":"","stderr_size":0,"stderr_sha256":hashlib.sha256(b"").hexdigest()}
  result["network"]["adb_connection"]={"endpoint":"127.0.0.1:6520","before":cmd([adb,"-P","5053","devices"],empty),"connect":cmd([adb,"-P","5053","connect","127.0.0.1:6520"],"connected"),"after":cmd([adb,"-P","5053","devices"],connected),"binding":{"endpoint":"127.0.0.1:6520","config_rows":[{"path":x,"sha256":"3"*64,"size":100,"adb_host_port":6520,"adb_ip_and_port":"0.0.0.0:6520"} for x in paths],"connector_pid":14,"proxy_pid":15,"connector_argv":ps[3]["argv"],"proxy_argv":ps[4]["argv"]}}
  return result
@@ -31,7 +35,7 @@ class Clock:
  def __init__(self):self.v=100
  def __call__(self):return self.v
 class Q:
- def __init__(self):self.calls=[];self.request_timeouts=[];self.version=38;self.extra_version="";self.uid_output="package:org.amnezia.vpn uid:10123";self.focus="org.amnezia.vpn/MainActivity";self.focus_delay=0;self.splash_count=0;self.window_empty=False;self.activity_timeouts=0;self.policy_timeouts=0;self.ui_cat_timeouts=0;self.timeout_partial=b"partial activity output";self.big=False;self.evil=False;self.timeout=30;self.pending=None;self.close_error=False;self.read_error=False;self.locked=True;self.stubborn_lock=False;self.policy_raw=None;self.ui_actions=("Update","Install","Done");self.no_session=False
+ def __init__(self):self.calls=[];self.request_timeouts=[];self.version=38;self.extra_version="";self.uid_output="package:org.amnezia.vpn uid:10123";self.focus="org.amnezia.vpn/MainActivity";self.focus_delay=0;self.splash_count=0;self.window_empty=False;self.activity_timeouts=0;self.policy_timeouts=0;self.ui_cat_timeouts=0;self.timeout_partial=b"partial activity output";self.big=False;self.evil=False;self.timeout=30;self.pending=None;self.close_error=False;self.read_error=False;self.locked=True;self.stubborn_lock=False;self.policy_raw=None;self.ui_actions=("Update","Install","Done");self.no_session=False;self.route_rc=0;self.health_bad=False
  def guest_exec_wait(self,path,args,timeout=30):
   self.calls.append((args,timeout))
   if path=="/usr/bin/python3" and "RLIMIT_FSIZE" in args[1]:
@@ -42,7 +46,8 @@ class Q:
     else:self.ui_cat_timeouts-=1
     self.pending=self.timeout_partial
    else:result=self.guest_exec_wait(argv[0],argv[1:],timeout);self.pending=str(result.get("stdout","")).encode()
-   return {"exitcode":0,"stdout":json.dumps({"path":args[3],"size":len(self.pending),"sha256":hashlib.sha256(self.pending).hexdigest(),"rc":124 if timed else 0})}
+   route_failed=self.route_rc if argv[-6:-3]==["shell","ip","-4"] and argv[-3:-1]==["route","get"] else 0
+   return {"exitcode":0,"stdout":json.dumps({"path":args[3],"size":len(self.pending),"sha256":hashlib.sha256(self.pending).hexdigest(),"stderr_path":args[3]+".stderr","stderr_size":0,"stderr_sha256":hashlib.sha256(b"").hexdigest(),"rc":124 if timed else route_failed})}
   if path=="/usr/bin/python3":return {"exitcode":0,"stdout":json.dumps({"size":9,"sha256":"f"*64})}
   s=""
   if "install" in args:self.version=38;s="Success"
@@ -65,6 +70,14 @@ class Q:
   elif "pidof" in args:s="1234"
   elif "+%s.%3N" in args:s="1726185600.000"
   elif "logcat" in args:s=""
+  elif args[-4:]==["ip","-4","addr","show"]:s="2: eth0 inet 10.0.2.15/24 scope global eth0\n"
+  elif args[-4:]==["ip","-4","route","show"]:s="default via 10.0.2.2 dev eth0\n10.0.2.0/24 dev eth0\n"
+  elif args[-6:-3]==["shell","ip","-4"]:s="10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"
+  elif args[-3:]==["toybox","nc","--help"]:s="usage: nc [-46ELlntUuvz] [-w SEC] HOST PORT\n"
+  elif "GET /healthz HTTP/1.1" in " ".join(args):
+   body='{"status":"bad"}' if self.health_bad else '{"status":"ok","run_id":"run","role":"consumer-fixture"}';s=f"HTTP/1.1 200 OK\r\nContent-Length: {len(body.encode())}\r\nConnection: close\r\n\r\n{body}"
+  elif "nc" in args:s=""
+  elif "wget" in args:s='{"status":"bad"}' if self.health_bad else '{"status":"ok","run_id":"run","role":"consumer-fixture"}'
   elif args[-7:-1]==["shell","cmd","package","list","packages","-U"]:s=self.uid_output
   elif "dumpsys" in args:s=f"versionCode={self.version} minSdk=28 targetSdk=36"+self.extra_version
   elif "cat" in args:
@@ -83,20 +96,141 @@ class Q:
 def archive_failure(record,screenshot=None):
  return {"origin":"controller","immutable":True,"path":"/archive/failure.json","sha256":hashlib.sha256(json.dumps(record,sort_keys=True).encode()).hexdigest(),"size":len(json.dumps(record))}
 def fixture_for(fx,events,forged=False):
+ health=b'{"status":"ok","run_id":"run","role":"consumer-fixture"}';health_row={"method":"GET","path":"/healthz","status":200,"sha256":hashlib.sha256(health).hexdigest(),"bytes":len(health),"content_length":len(health),"eof":True,"peer":"10.0.2.15","observed_at":99.0,"run_id":fx.run_id,"attempt_nonce":fx.attempt_nonce}
  def call(action,data,timeout):
   events.append((action,timeout));common={"schema":1,"run_id":fx.run_id,"profile":fx.profile,"attempt_nonce":fx.attempt_nonce,"marker":fx.marker,"origin":"guest","transport":"qga","injected":False,"outer_ownership":dict(fx.outer_ownership),"pid":fx.pid,"start_ticks":fx.start_ticks,"listener":fx.endpoint,"manifest_sha256":fx.manifest_sha256,"manifest_size":fx.manifest_size,"artifact_sha256":"c"*64,"artifact_size":10}
   if forged:common["origin"]="controller"
   if action=="start":return {**common,"ready":True,"identity_rechecked":True}
-  if action=="reset":return {**common,"log_inode":5,"offset":0,"reset_token":"5"*48,"reset_at":100.0,"empty_sha256":hashlib.sha256(b"").hexdigest()}
+  if action=="reset":return {**common,"log_inode":5,"offset":0,"reset_token":"5"*48,"reset_at":100.0,"empty_sha256":hashlib.sha256(b"").hexdigest(),"cleared_health_request":health_row}
   if action=="stop":return {**common,"identity_rechecked":True,"stopped":True,"listener_closed":True,"unknown_survivors":[],"request_log_sha256":"4"*64,"request_log_size":4}
   rows=[{"method":"GET","path":"/manifest.json","status":200,"sha256":"1"*64,"bytes":8,"content_length":8,"eof":True,"peer":"10.0.2.15","observed_at":101.0},{"method":"GET","path":fx.artifact_path,"status":200,"sha256":"c"*64,"bytes":10,"content_length":10,"eof":True,"peer":"10.0.2.15","observed_at":102.0}]
-  reset={**common,"log_inode":5,"offset":0,"reset_token":"5"*48,"reset_at":100.0,"empty_sha256":hashlib.sha256(b"").hexdigest()};rs=receipt_sha(reset)
+  reset={**common,"log_inode":5,"offset":0,"reset_token":"5"*48,"reset_at":100.0,"empty_sha256":hashlib.sha256(b"").hexdigest(),"cleared_health_request":health_row};rs=receipt_sha(reset)
   return {**common,"requests":rows,"reset_receipt_sha256":rs,"reset_token":"5"*48,"log_inode":5,"start_offset":0,"transcript_sha256":receipt_sha({"reset_receipt_sha256":rs,"requests":rows}),"finished_at":103.0,"request_log_sha256":"4"*64,"request_log_size":4}
  return call
 def make(forged=False):
- p,b,fx=setup();q=Q();ev=[];e=NestedAppExecutor(q,p,boot(p),b,fx,lambda:p.ownership,lambda:dict(fx.outer_ownership),fixture_for(fx,ev,forged),failure_archive=archive_failure,clock=Clock(),sleep=lambda _:None);return p,b,fx,q,ev,e
+ p,b,fx=setup();q=Q();ev=[];decisions={}
+ def request(record,png):
+  bound={**record,"created_at":1000.0,"expires_at":1000.0+record["review_seconds"],"request_id":str(record["sequence"]),"png":{"path":"/image","sha256":hashlib.sha256(png).hexdigest(),"size":len(png),"width":100,"height":200}};ack={"origin":"controller","immutable":True,"run_id":record["run_id"],"attempt_nonce":record["attempt_nonce"],"request_id":bound["request_id"],"request_path":"/request","request_sha256":"a"*64,"png_path":"/image","png_sha256":hashlib.sha256(png).hexdigest(),"png_size":len(png),"png_width":100,"png_height":200,"created_at":bound["created_at"],"expires_at":bound["expires_at"],"request_record":bound};decisions[ack["request_id"]]={"origin":"controller","immutable":True,"input_only":True,"run_id":record["run_id"],"attempt_nonce":record["attempt_nonce"],"request_id":ack["request_id"],"request_sha256":ack["request_sha256"],"decision":"approve","bounds":[0,0,10,10],"sha256":"b"*64};return ack
+ e=NestedAppExecutor(q,p,boot(p),b,fx,lambda:p.ownership,lambda:dict(fx.outer_ownership),fixture_for(fx,ev,forged),failure_archive=archive_failure,visual_request=request,visual_poll=lambda ack:decisions.get(ack["request_id"]),clock=Clock(),sleep=lambda _:None);return p,b,fx,q,ev,e
 def test_happy_path_matches_semantic_validator_and_uses_proven_adb():
  p,b,fx,q,ev,e=make();e.install_baseline("/input/b.apk");r=e.run_update();validate_app_update_receipt(p,boot(p),r);assert all(c[0][:4]==["-P","5053","-s","127.0.0.1:6520"] for c in q.calls if c[0] and c[0][0]=="-P");assert ev[-1][0]=="stop"
+def test_update_visual_request_is_never_emitted_before_product_timer_60_seconds():
+ p,b,fx,q,ev,e=make();clock=e.clock;seen=[];original=e.visual_request;e.sleep=lambda seconds:setattr(clock,"v",clock.v+seconds)
+ e.visual_request=lambda record,png:(seen.append(clock.v),original(record,png))[1]
+ e.install_baseline("/input/b.apk");restart_floor=clock.v;e.run_update();assert seen and seen[0]>=restart_floor+60
+def test_route_rc2_is_diagnostic_health_succeeds_and_reset_clears_health_row():
+ p,b,fx,q,ev,e=make();q.route_rc=2;e.install_baseline("/input/b.apk");receipt=e.run_update();pre=receipt["diagnostic_preflight"]
+ assert pre["route"]["exit_code"]==2 and pre["route"]["timed_out"] is False and pre["healthz"]["exit_code"]==0 and pre["fixture_request"]["path"]=="/healthz"
+ assert [x[0] for x in ev[:3]]==["start","reset","read-log"]
+def test_health_failure_attempts_all_diagnostics_and_archives_health_result_without_reset():
+ p,b,fx,q,ev,e=make();q.route_rc=2;q.health_bad=True;archives=[]
+ def archive(record,screenshot=None):
+  archives.append(record);return archive_failure(record,screenshot)
+ e.failure_archive=archive
+ with pytest.raises(NestedCuttlefishError):e.run_update()
+ probe=archives[0]["last_probe"];assert set(probe["preflight"])=={"link","address","routes","route","connect","capability","ril_state","ril_log","healthz"} and probe["preflight"]["route"]["exit_code"]==2 and probe["health_result"]=={"status":"bad"}
+ assert not any(action=="reset" for action,_ in ev)
+def test_three_not_visible_refreshes_share_one_window_and_produce_zero_input():
+ p,b,fx,q,ev,e=make();e._unlock=lambda d:{"passed":True};e._focus=lambda *a,**k:("1234","10123","org.amnezia.vpn","MainActivity",[]);e._ui_xml=lambda *a,**k:b"<hierarchy/>";e._package=lambda *a,**k:({"version_code":38},10123)
+ e._capture_result=lambda argv,d,label,limit,command_cap=None:(b"",{"rc":0});e._adb=lambda *a,**k:{};e._read_file=lambda *a,**k:b"\x89PNG\r\n\x1a\nfixture"
+ requests=[];original=e.visual_request;e.visual_request=lambda record,png:(requests.append(record),original(record,png))[1]
+ e.visual_poll=lambda ack:{"origin":"controller","immutable":True,"input_only":True,"run_id":p.ownership.run_id,"attempt_nonce":p.ownership.attempt_nonce,"request_id":ack["request_id"],"request_sha256":ack["request_sha256"],"decision":"refresh","bounds":None,"sha256":"b"*64}
+ e._app_failure=lambda reason,diagnostic,d,phase:(_ for _ in ()).throw(NestedCuttlefishError(reason))
+ with pytest.raises(NestedCuttlefishError,match="visual-action-not-visible"):e._visual_action("Update",(p.apk.package,),500)
+ assert len(requests)==3 and all(x["state"]=="operator-unclassified" for x in requests) and not any("input" in argv for argv,_ in q.calls)
+@pytest.mark.parametrize("kind,display_package,display_uid",[("update","org.amnezia.vpn","10123"),("unknown-sources","com.android.settings","1000")])
+def test_empty_qt_uia_xml_is_never_read_and_root_decision_bounds_drive_one_exact_tap(kind,display_package,display_uid):
+ p,b,fx,q,ev,e=make();calls=[];uia_calls=[];empty_qt_xml=b"<hierarchy>"+b" "*761+b"</hierarchy>";assert len(empty_qt_xml)==784;e._unlock=lambda d:{"passed":True};e._ui_xml=lambda *a,**k:(uia_calls.append(empty_qt_xml),empty_qt_xml)[1];e._focus=lambda *a,**k:("1234",display_uid,display_package,"Activity",[]);e._package=lambda *a,**k:({"version_code":38},10123);e._adb=lambda *a,**k:{};e._read_file=lambda *a,**k:b"\x89PNG\r\n\x1a\nfixture"
+ def capture(argv,d,label,limit,command_cap=None):calls.append(argv);return b"",{"rc":0}
+ e._capture_result=capture
+ e._visual_action("Update" if kind=="update" else "Allow from this source",(display_package,),500,kind=kind,downstream_reserve=100)
+ taps=[x for x in calls if x[:3]==["shell","input","tap"]];assert uia_calls==[] and taps==[["shell","input","tap","5","5"]]
+def test_timeout_input_is_never_retried_and_later_postcondition_decides_effect():
+ p,b,fx,q,ev,e=make();calls=[]
+ def capture(argv,d,label,limit,command_cap=None):calls.append((list(argv),label));return b"partial",{"rc":124}
+ e._capture_result=capture
+ tap=e._input_once(["shell","input","tap","5","5"],500,"visual-update-tap");q.version=39
+ assert tap["timed_out"] is True and len(calls)==1 and q.version==39
+ p,b,fx,q,ev,e=make();calls=[];e._capture_result=capture
+ back=e._input_once(["shell","input","keyevent","4"],500,"unknown-sources-back")
+ assert back["timed_out"] is True and len(calls)==1 and q.focus=="org.amnezia.vpn/MainActivity"
+def test_old_png_with_fresh_wall_clock_decision_requires_new_png_and_decision():
+ p,b,fx,q,ev,e=make();clock=e.clock;requests=[];polls=0;original_request=e.visual_request;original_poll=e.visual_poll
+ e._unlock=lambda d:{"passed":True};e._focus=lambda *a,**k:("1234","10123","org.amnezia.vpn","MainActivity",[]);e._package=lambda *a,**k:({"version_code":38},10123);e._adb=lambda *a,**k:{};e._read_file=lambda *a,**k:b"\x89PNG\r\n\x1a\nfixture"
+ e._capture_result=lambda argv,d,label,limit,command_cap=None:(b"",{"rc":0})
+ def request(record,png):requests.append(record);return original_request(record,png)
+ def poll(ack):
+  nonlocal polls
+  polls+=1
+  if polls==1:clock.v+=46
+  return original_poll(ack)
+ e.visual_request=request;e.visual_poll=poll;e._visual_action("Update",(p.apk.package,),500)
+ assert len(requests)==2 and polls==2
+@pytest.mark.parametrize("delay_phase",["capture-pull","preinput-focus"])
+def test_visual_freshness_counts_capture_and_post_decision_recheck_latency(delay_phase):
+ p,b,fx,q,ev,e=make();clock=e.clock;requests=[];calls=[];focuses=0;pulls=0;original_request=e.visual_request
+ e._unlock=lambda d:{"passed":True};e._package=lambda *a,**k:({"version_code":38},10123);e._read_file=lambda *a,**k:b"\x89PNG\r\n\x1a\nfixture"
+ def focus(*a,**k):
+  nonlocal focuses
+  focuses+=1
+  if delay_phase=="preinput-focus" and focuses==2:clock.v+=46
+  return "1234","10123","org.amnezia.vpn","MainActivity",[]
+ def adb(argv,*a,**k):
+  nonlocal pulls
+  if argv and argv[0]=="pull":
+   pulls+=1
+   if delay_phase=="capture-pull" and pulls==1:clock.v+=46
+  return {}
+ def capture(argv,d,label,limit,command_cap=None):calls.append(list(argv));return b"",{"rc":0}
+ e._focus=focus;e._adb=adb;e._capture_result=capture;e.visual_request=lambda record,png:(requests.append(record),original_request(record,png))[1]
+ e._visual_action("Update",(p.apk.package,),500)
+ taps=[x for x in calls if x[:3]==["shell","input","tap"]]
+ assert len(requests)==2 and taps==[["shell","input","tap","5","5"]] and e.visual_history[0]["freshness"]["accepted"] is False
+def test_freshness_starts_at_successful_screencap_attempt_not_prior_timeout():
+ p,b,fx,q,ev,e=make();clock=e.clock;shots=0;calls=[]
+ e._unlock=lambda d:{"passed":True};e._focus=lambda *a,**k:("1234","10123","org.amnezia.vpn","MainActivity",[]);e._package=lambda *a,**k:({"version_code":38},10123);e._adb=lambda *a,**k:{};e._read_file=lambda *a,**k:b"\x89PNG\r\n\x1a\nfixture"
+ def capture(argv,d,label,limit,command_cap=None):
+  nonlocal shots
+  calls.append(list(argv))
+  if argv[:3]==["shell","screencap","-p"]:
+   shots+=1
+   if shots==1:clock.v+=40;return b"timeout",{"rc":124}
+  return b"",{"rc":0}
+ e._capture_result=capture;e._visual_action("Update",(p.apk.package,),500)
+ assert shots==2 and [x for x in calls if x[:3]==["shell","input","tap"]]==[["shell","input","tap","5","5"]] and e.visual_history[0]["freshness"]=={"accepted":True,"max_seconds":45}
+def test_same_process_with_changed_activity_before_input_fails_with_zero_tap():
+ p,b,fx,q,ev,e=make();focuses=0;calls=[]
+ e._unlock=lambda d:{"passed":True};e._package=lambda *a,**k:({"version_code":38},10123);e._adb=lambda *a,**k:{};e._read_file=lambda *a,**k:b"\x89PNG\r\n\x1a\nfixture"
+ def focus(*a,**k):
+  nonlocal focuses
+  focuses+=1
+  return "1234","10123","org.amnezia.vpn","MainActivity" if focuses==1 else "UnrelatedActivity",[]
+ def capture(argv,d,label,limit,command_cap=None):calls.append(list(argv));return b"",{"rc":0}
+ e._focus=focus;e._capture_result=capture;e._app_failure=lambda reason,*a,**k:(_ for _ in ()).throw(NestedCuttlefishError(reason))
+ with pytest.raises(NestedCuttlefishError,match="visual-preinput-binding-changed"):e._visual_action("Update",(p.apk.package,),500)
+ assert not [x for x in calls if x[:3]==["shell","input","tap"]]
+def test_native_pid_change_collects_actual_shaped_sigsegv_module_offset_and_tombstone():
+ p,b,fx,q,ev,e=make();calls=[]
+ crash=b"09-14 08:00:00.000  1234  1234 F DEBUG : signal 11 (SIGSEGV), code 1\n09-14 08:00:00.001 F DEBUG : #00 pc 0000000000123abc  /data/app/lib/arm64/libAmneziaVPN.so (Updater::apply+84)\n"
+ tomb=b"*** *** ***\npid: 1234, tid: 1234, name: org.amnezia.vpn\n#00 pc 00123abc libAmneziaVPN.so\n"
+ def capture(argv,d,label,limit,command_cap=None):
+  calls.append(list(argv));data=tomb if "dropbox" in argv else b"total 4 tombstone_00\n" if "tombstones" in argv else crash;return data,{"rc":0}
+ e._capture_result=capture;receipt=e._collect_native_crash("1234","2345","1726185600.000",500)
+ assert receipt["expected_pid"]==1234 and receipt["observed_pid"]==2345 and len(receipt["sources"])==4
+ decoded=b"\n".join(__import__("base64").b64decode(x["output"]["bytes_b64"]) for x in receipt["sources"]);assert b"SIGSEGV" in decoded and b"libAmneziaVPN.so" in decoded and b"00123abc" in decoded
+ assert sum(1 for x in calls if "dropbox" in x)==1
+def test_native_crash_absent_tombstone_and_capture_errors_are_durable_in_failure_archive():
+ p,b,fx,q,ev,e=make();archives=[];count=0
+ def capture(argv,d,label,limit,command_cap=None):
+  nonlocal count
+  count+=1
+  if "dropbox" in argv:raise NestedCuttlefishError("dropbox unavailable")
+  return (b"No tombstones.\n" if "tombstones" in argv else b"Fatal signal 11 (SIGSEGV) in tid 1234\n"),{"rc":1 if "tombstones" in argv else 0}
+ def archive(record,screenshot=None):archives.append(record);return archive_failure(record,screenshot)
+ e._capture_result=capture;e.failure_archive=archive;e._collect_native_crash("1234",None,"1726185600.000",500)
+ with pytest.raises(NestedCuttlefishError):e._app_failure("process-died",{},500,"app-focus")
+ native=archives[0]["last_probe"]["native_crash"];assert len(native["sources"])==4 and native["observed_pid"] is None and any("capture_error" in x for x in native["sources"])
+ assert count==5  # four native sources plus the independently attempted failure screenshot
 def test_update_restart_waits_for_strict_drawn_visible_state_before_update_and_persistent_nonvisible_fails():
  p,b,fx,q,ev,e=make();e.install_baseline("/input/b.apk");q.splash_count=4;r=e.run_update();ready=r["ui"]["update_check_restart"]["readiness"]
  assert len(ready)==5 and ready[-1]["matches"][0]["visible"] is True and ready[-1]["matches"][0]["drawn"] is True
@@ -407,8 +541,8 @@ def test_total_deadline_reaches_every_callback():
  p,b,fx=setup();q=Q();ev=[];clock=Clock()
  def slow(action,data,timeout):clock.v+=200;return fixture_for(fx,ev)(action,data,timeout)
  e=NestedAppExecutor(q,p,boot(p),b,fx,lambda:p.ownership,lambda:dict(fx.outer_ownership),slow,failure_archive=archive_failure,clock=clock)
- with pytest.raises(NestedCuttlefishError,match="app precondition failed"):e.run_update(60)
- assert ev[-1][0]=="stop"
+ with pytest.raises(NestedCuttlefishError,match="update timeout"):e.run_update(60)
+ assert ev==[]
 def test_authoritative_server_snapshot_cannot_be_callback_echo():
  p,b,fx=setup();q=Q();ev=[];foreign={**dict(fx.outer_ownership),"pid":999}
  e=NestedAppExecutor(q,p,boot(p),b,fx,lambda:p.ownership,lambda:foreign,fixture_for(fx,ev),failure_archive=archive_failure)
@@ -478,12 +612,12 @@ def test_ui_xml_non_timeout_dump_or_cat_failure_never_retries_or_uses_stale_xml(
  with pytest.raises(NestedCuttlefishError,match="UI XML command failed"):e._ui_xml("/data/local/tmp/amz-nonce.xml",e.clock()+30,"ui-update")
  assert calls==["ui-update-dump","ui-update-cat"] and not any("input" in argv for argv,_ in q.calls)
 
-def test_update_restarts_check_and_unknown_sources_is_diagnostic_only():
+def test_unknown_sources_requires_actual_settings_foreground_and_never_uses_privileged_shortcuts():
  p,b,fx,q,ev,e=make();e.install_baseline("/input/b.apk");q.ui_actions=("Update","Settings");records=[]
  def archive(record,screenshot=None):records.append(record);return archive_failure(record,screenshot)
  e.failure_archive=archive
- with pytest.raises(NestedCuttlefishError,match="app precondition failed"):e.run_update()
- probe=records[0]["last_probe"];xml=probe["ui_xml"];assert probe["reason"]=="unknown-sources-settings-unverified" and __import__('base64').b64decode(xml["bytes_b64"])
+ with pytest.raises(NestedCuttlefishError,match="foreground activity-top mismatch"):e.run_update()
+ assert records and records[0]["last_probe"]["reason"]=="package-mismatch"
  flat=" ".join(" ".join(call[0]) for call in q.calls);assert "force-stop org.amnezia.vpn" in flat and "appops" not in flat and "grant" not in flat and "locksettings" not in flat
 
 @pytest.mark.parametrize("kind",["nonzero","transport","transport-bool","metadata-bool","malformed","wrong-path","oversize","hash-mismatch","timeout"])
@@ -495,7 +629,7 @@ def test_capture_failure_retains_exact_metadata_without_arbitrary_path_read(kind
   if path=="/usr/bin/python3" and "RLIMIT_FSIZE" in args[1]:
    if kind=="malformed":return {"exitcode":0,"stdout":"{"}
    data=b"0123456789abcdefX" if kind=="oversize" else b"capture-output";q.pending=data;expected=args[3];rc=True if kind=="metadata-bool" else (124 if kind=="timeout" else (9 if kind=="nonzero" else 0));sha=("0"*64 if kind=="hash-mismatch" else hashlib.sha256(data).hexdigest())
-   return {"exitcode":False if kind=="transport-bool" else (7 if kind=="transport" else 0),"stdout":json.dumps({"path":"/untrusted/path" if kind=="wrong-path" else expected,"size":len(data),"sha256":sha,"rc":rc})}
+   return {"exitcode":False if kind=="transport-bool" else (7 if kind=="transport" else 0),"stdout":json.dumps({"path":"/untrusted/path" if kind=="wrong-path" else expected,"size":len(data),"sha256":sha,"stderr_path":expected+".stderr","stderr_size":0,"stderr_sha256":hashlib.sha256(b"").hexdigest(),"rc":rc})}
   return original(path,args,timeout)
  q.guest_exec_wait=injected
  with pytest.raises(NestedCuttlefishError):e._capture(["shell","dumpsys","package","installs"],e.clock()+30,"failure-retention",16,10)
@@ -523,3 +657,11 @@ def test_nonfocus_update_failure_archives_before_stop_and_bad_ack_retains():
  p,b,fx,q,ev,e=make();q.no_session=True;e.failure_archive=lambda *_:(_ for _ in ()).throw(RuntimeError("archive unavailable"))
  with pytest.raises(NestedCuttlefishError,match="archive failed") as caught:e.run_update()
  assert "stop" not in [x[0] for x in ev] and getattr(caught.value,"retain_owned_evidence",False) is True
+
+
+def test_nc_capability_and_http_failure_archive_all_network_rows_before_reset():
+ p,b,fx,q,ev,e=make();archives=[];q.health_bad=True;e.failure_archive=lambda record,screenshot=None:(archives.append(record) or archive_failure(record,screenshot))
+ with pytest.raises(NestedCuttlefishError):e.run_update()
+ probe=archives[0]["last_probe"];assert probe["fixture_log"]=={"state":"not-reset","reason":"health-preflight-failed"}
+ assert set(probe["preflight"])=={"link","address","routes","route","connect","capability","ril_state","ril_log","healthz"}
+ assert all(set(row)=={"argv","exit_code","timed_out","output","stderr"} for row in probe["preflight"].values()) and not any(action=="reset" for action,_ in ev)

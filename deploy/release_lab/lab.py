@@ -54,12 +54,14 @@ try:
     from linux_gui_visual_ack import validate_root_visual_ack
     from nested_cuttlefish_common_adapter import NestedCuttlefishCommonAdapter
     from nested_cuttlefish_server_fixture_adapter import canonical_android_artifact_path
+    from android_visual_handshake import AndroidVisualHandshakeStore
 except ImportError:  # pragma: no cover
     from .nested_cuttlefish_runner import NestedCuttlefishError, validate_app_update_receipt, validate_boot_receipt, validate_cleanup_receipt
     from .headless_native_acceptance import validate_http_receipt, validate_update_receipt, validate_rollback_receipt, validate_reboot_receipt
     from .linux_gui_visual_ack import validate_root_visual_ack
     from .nested_cuttlefish_common_adapter import NestedCuttlefishCommonAdapter
     from .nested_cuttlefish_server_fixture_adapter import canonical_android_artifact_path
+    from .android_visual_handshake import AndroidVisualHandshakeStore
 
 try:
     import pwd
@@ -105,6 +107,7 @@ SEMANTIC_HELPER_RELATIVES = (
     "deploy/release_lab/nested_cuttlefish_runner.py",
     "deploy/release_lab/nested_cuttlefish_qga_bridge.py",
     "deploy/release_lab/nested_cuttlefish_app_executor.py",
+    "deploy/release_lab/android_visual_handshake.py",
     "deploy/release_lab/nested_cuttlefish_server_fixture_adapter.py",
     "deploy/release_lab/nested_cuttlefish_common_adapter.py",
     "deploy/release_lab/nested_cuttlefish_private_link.py",
@@ -3693,8 +3696,32 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
         out.parent.mkdir(parents=True,exist_ok=True);immutable_json_dump(out,payload);record=artifact_record(out)
         run=self.get_run(run_id);run["nested_android_fixture_stage"]={**record,"attempt_nonce":plan.ownership.attempt_nonce};state=self.load_state();state["runs"][run_id]=run;self.save_state(state);return payload
 
+    def request_nested_android_visual(self, run_id: str, record: Mapping[str, Any], png: bytes) -> dict[str, Any]:
+        """Publish immutable visual evidence while the semantic run owns the mutation lock."""
+        self.get_run(run_id)
+        if record.get("run_id") != run_id:
+            raise LabError("nested Android visual request run mismatch")
+        ack = AndroidVisualHandshakeStore(self.root).request(record, png)
+        print(json.dumps({"milestone":"android-visual-request", "request_path":ack["request_path"],
+                          "png_path":ack["png_path"], "request_sha256":ack["request_sha256"],
+                          "request_id":ack["request_id"], "expires_at":ack["expires_at"],
+                          "action":record.get("action"), "state":record.get("state"), "bounds":record.get("bounds")},
+                         sort_keys=True, separators=(",", ":")), flush=True)
+        return ack
+
+    def poll_nested_android_visual(self, run_id: str, ack: Mapping[str, Any]) -> Mapping[str, Any] | None:
+        """Read an operator decision without acquiring or nesting the mutation lock."""
+        self.get_run(run_id)
+        return AndroidVisualHandshakeStore(self.root).poll(ack)
+
+    def decide_nested_android_visual(self, run_id: str, attempt_nonce: str, request_id: str,
+                                     request_sha256: str, decision: str, bounds: Sequence[int] | None = None) -> dict[str, Any]:
+        """External decision API; input only and intentionally outside mutation state."""
+        self.get_run(run_id)
+        return AndroidVisualHandshakeStore(self.root).decide(run_id, attempt_nonce, request_id, request_sha256, decision, bounds)
+
     @mutation_operation
-    def run_nested_android_semantic(self, run_id: str, plan: Any, bridge: Any, fixture_adapter: Any, private_link: Any, baseline: Any, outer_live_snapshot: Any) -> dict[str, Any]:
+    def run_nested_android_semantic(self, run_id: str, plan: Any, bridge: Any, fixture_adapter: Any, private_link: Any, baseline: Any, outer_live_snapshot: Any, visual_request: Any, visual_poll: Any) -> dict[str, Any]:
         """Run the reviewed nested lifecycle and durably archive its canonical receipt."""
         self.assert_mutation_context()
         run = self.get_run(run_id)
@@ -3705,6 +3732,8 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
             raise LabError("nested Android archive attempt already exists")
         if not callable(getattr(bridge, "boot_failure_archive", None)):
             raise LabError("nested Android bridge lacks controller boot failure archive")
+        if not callable(visual_request) or not callable(visual_poll):
+            raise LabError("nested Android visual callbacks are missing")
         ctx=self._preflight_nested_android_inputs(run_id,plan,fixture_adapter,private_link,baseline);run=ctx["run"];planned=ctx["planned"]
         deps=run.get("nested_android_host_dependencies") or {};dep_path=ensure_owned_child(self.root,Path(str(deps.get("path",""))),"nested dependency receipt")
         dep_actual=artifact_record(dep_path)
@@ -3747,7 +3776,8 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
             or isinstance(stage_payload.get("guest_root_inode"),bool) or not isinstance(stage_payload.get("guest_root_inode"),int) or stage_payload.get("guest_root_inode",0)<=0
             or {k:v for k,v in stage_payload.items() if k!="guest_root_inode"}!={"schema":1,"run_id":run_id,"attempt_nonce":plan.ownership.attempt_nonce,"guest_root":str(PurePosixPath(ctx["fixture_plan"].script_path).parent),"files":ctx["expected_stage"],"origin":"guest","transport":"qga","injected":False}):raise LabError("nested fixture stage receipt is missing, stale, or tampered")
         common = NestedCuttlefishCommonAdapter(plan, bridge, baseline,
-            str(run["baseline_version"]), str(run["candidate_version"]), fixture_adapter, private_link, outer_live_snapshot).run()
+            str(run["baseline_version"]), str(run["candidate_version"]), fixture_adapter, private_link, outer_live_snapshot,
+            visual_request=visual_request,visual_poll=visual_poll).run()
         validate_receipt(common, run_id=run_id, profile_id="android-arm64-v8a", artifact=planned,
                          baseline_version=str(run["baseline_version"]), candidate_version=str(run["candidate_version"]),
                          expected_role="candidate")
@@ -4324,6 +4354,13 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "collect": command.add_argument("--case-id")
     nested_probe = sub.add_parser("nested-android-probe")
     nested_probe.add_argument("--run-id", required=True)
+    visual_decide = sub.add_parser("android-visual-decide")
+    visual_decide.add_argument("--run-id", required=True)
+    visual_decide.add_argument("--attempt-nonce", required=True)
+    visual_decide.add_argument("--request-id", required=True)
+    visual_decide.add_argument("--request-sha256", required=True)
+    visual_decide.add_argument("--decision", required=True, choices=("approve", "refresh", "reject"))
+    visual_decide.add_argument("--bounds", nargs=4, type=int)
     suite = sub.add_parser("run-suite")
     suite.add_argument("--lane", choices=("candidate", "release"), default="release")
     suite.add_argument("--artifact", action="append", default=[])
@@ -4383,6 +4420,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "start": result = controller.start(args.run_id, args.profile)
         elif args.command == "guest-probe": result = controller.guest_probe(args.run_id, args.profile)
         elif args.command == "nested-android-probe": result = controller.nested_android_probe(args.run_id)
+        elif args.command == "android-visual-decide": result = controller.decide_nested_android_visual(args.run_id, args.attempt_nonce, args.request_id, args.request_sha256, args.decision, args.bounds)
         elif args.command == "run": result = controller.run_steps(args.run_id, args.profile, args.step or None, args.preserve_failed_guest)
         elif args.command == "collect": result = controller.collect(args.run_id, args.profile, args.case_id)
         elif args.command == "run-suite": result = controller.run_suite(args.lane, parse_artifacts(args.artifact), Path(args.outer_artifact).resolve() if args.outer_artifact else None, args.run_id, Path(args.manifest).resolve() if args.manifest else None, parse_artifacts(args.baseline_artifact), args.baseline_version, args.candidate_version, Path(args.manifest_public_key).resolve() if args.manifest_public_key else None, Path(args.baseline_manifest).resolve() if args.baseline_manifest else None, Path(args.headless_baseline_receipt).resolve() if args.headless_baseline_receipt else None, Path(args.headless_candidate_receipt).resolve() if args.headless_candidate_receipt else None, Path(args.baseline_outer_artifact).resolve() if args.baseline_outer_artifact else None)

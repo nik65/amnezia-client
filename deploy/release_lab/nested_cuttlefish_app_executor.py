@@ -40,11 +40,11 @@ class AppFixture:
   if self.manifest_path!="/manifest.json" or self.artifact_path!=f"/files/artifacts/{plan.apk.sha256}/{canonical_name}":raise NestedCuttlefishError("fixture paths differ from semantic gate")
 
 class NestedAppExecutor:
- def __init__(self,qga:Any,plan:InnerPlan,boot_receipt:Mapping[str,Any],baseline:ApkSpec,fixture:AppFixture,outer_live_snapshot:Callable[[],OuterOwnership],fixture_outer_snapshot:Callable[[],Mapping[str,Any]],fixture_call:Callable[[str,Mapping[str,Any],float],Mapping[str,Any]],*,failure_archive:Callable[[Mapping[str,Any]],Mapping[str,Any]]|None=None,clock=time.monotonic,sleep=time.sleep):
+ def __init__(self,qga:Any,plan:InnerPlan,boot_receipt:Mapping[str,Any],baseline:ApkSpec,fixture:AppFixture,outer_live_snapshot:Callable[[],OuterOwnership],fixture_outer_snapshot:Callable[[],Mapping[str,Any]],fixture_call:Callable[[str,Mapping[str,Any],float],Mapping[str,Any]],*,failure_archive:Callable[[Mapping[str,Any]],Mapping[str,Any]]|None=None,visual_request=None,visual_poll=None,clock=time.monotonic,sleep=time.sleep):
   plan.validate();validate_boot_receipt(plan,boot_receipt);baseline.validate();fixture.validate(plan)
   if baseline.package!=plan.apk.package or baseline.sha256==plan.apk.sha256:raise NestedCuttlefishError("baseline identity")
   self.qga,self.plan,self.boot,self.baseline,self.fixture,self.snapshot,self.fixture_snapshot,self.fixture_call=qga,plan,dict(boot_receipt),baseline,fixture,outer_live_snapshot,fixture_outer_snapshot,fixture_call
-  self.clock,self.sleep,self.failure_archive=clock,sleep,failure_archive;self.adb=f"{plan.root}/runtime/host/bin/adb";self.serial=self.boot["network"]["adb_connection"]["endpoint"];self.capture_seq=0;self.last_command=None;self.focus_observation_history=[];self.ui_capture_history=[]
+  self.clock,self.sleep,self.failure_archive=clock,sleep,failure_archive;self.visual_request,self.visual_poll=visual_request,visual_poll;self.adb=f"{plan.root}/runtime/host/bin/adb";self.serial=self.boot["network"]["adb_connection"]["endpoint"];self.capture_seq=0;self.visual_seq=0;self.last_command=None;self.focus_observation_history=[];self.ui_capture_history=[];self.visual_history=[];self._diagnostic_capture=False;self.native_crash_evidence=None;self.current_launch_epoch=None
   if not callable(failure_archive):raise NestedCuttlefishError("app failure archive callback missing")
   if self.boot["boot"]["serial"]!=self.serial.replace(":","_"):raise NestedCuttlefishError("ADB serial is not boot-bound")
  def _check(self):
@@ -118,14 +118,14 @@ class NestedAppExecutor:
  def _capture_result(self,args,d,label,limit,command_cap=None):
   self.capture_seq+=1;path=f"{self.plan.root}/evidence/{self.plan.ownership.attempt_nonce[:12]}-{self.capture_seq:02d}-{label}"
   code="""import hashlib,json,os,pathlib,resource,subprocess,sys
-argv=json.loads(sys.argv[1]);p=pathlib.Path(sys.argv[2]);limit=int(sys.argv[3]);p.parent.mkdir(mode=0o700,parents=True,exist_ok=True);fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+argv=json.loads(sys.argv[1]);p=pathlib.Path(sys.argv[2]);ep=pathlib.Path(str(p)+'.stderr');limit=int(sys.argv[3]);p.parent.mkdir(mode=0o700,parents=True,exist_ok=True);fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600);efd=os.open(ep,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
 def bound(): resource.setrlimit(resource.RLIMIT_FSIZE,(limit+1,limit+1))
 rc=125
 try:
- try: rc=subprocess.run(argv,stdout=fd,stderr=subprocess.DEVNULL,timeout=float(sys.argv[4]),preexec_fn=bound).returncode
+ try: rc=subprocess.run(argv,stdout=fd,stderr=efd,timeout=float(sys.argv[4]),preexec_fn=bound).returncode
  except subprocess.TimeoutExpired: rc=124
-finally: os.close(fd)
-b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.sha256(b).hexdigest(),'rc':rc},separators=(',',':')))
+finally: os.close(fd);os.close(efd)
+b=p.read_bytes();e=ep.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.sha256(b).hexdigest(),'stderr_path':str(ep),'stderr_size':len(e),'stderr_sha256':hashlib.sha256(e).hexdigest(),'rc':rc},separators=(',',':')))
 """
   remaining=self._left(d);inner=max(.1,remaining-5) if command_cap is None else min(float(command_cap),max(.1,remaining-5));outer=min(remaining,inner+5)
   argv=[self.adb,"-P",self.plan.adb_endpoint.rsplit(":",1)[1],"-s",self.serial,*args];self._check();r=self.qga.guest_exec_wait("/usr/bin/python3",["-c",code,json.dumps(argv,separators=(",",":")),path,str(limit),str(inner)],timeout=outer);self._check()
@@ -133,16 +133,16 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
   self.last_command={"argv":argv,"exit_code":transport_rc,"capture_transport":{"stdout":self._bounded_command_bytes(transport_stdout),"stderr":self._bounded_command_bytes(transport_stderr)}}
   try:m=json.loads(transport_stdout.decode("utf-8","replace"))
   except Exception as e:raise NestedCuttlefishError("bounded capture receipt missing") from e
-  if (not isinstance(m,Mapping) or m.get("path")!=path or not isinstance(m.get("size"),int) or isinstance(m.get("size"),bool) or m["size"]<0 or not SHA.fullmatch(str(m.get("sha256","")))):raise NestedCuttlefishError("bounded capture metadata invalid")
+  if (not isinstance(m,Mapping) or m.get("path")!=path or m.get("stderr_path")!=path+".stderr" or not isinstance(m.get("size"),int) or isinstance(m.get("size"),bool) or m["size"]<0 or not isinstance(m.get("stderr_size"),int) or isinstance(m.get("stderr_size"),bool) or m["stderr_size"]<0 or not SHA.fullmatch(str(m.get("sha256",""))) or not SHA.fullmatch(str(m.get("stderr_sha256","")))):raise NestedCuttlefishError("bounded capture metadata invalid")
   self.last_command["capture_metadata"]={"path":path,"exit_code":m.get("rc"),"timed_out":m.get("rc")==124,"size":m["size"],"sha256":m["sha256"]}
   if m["size"]>limit:
    prefix=self._read_prefix(path,d);self.last_command["stdout"]={"size":m["size"],"sha256":m["sha256"],"bytes_b64":None,"excerpt_b64":base64.b64encode(prefix).decode(),"excerpt_size":len(prefix),"excerpt_sha256":hashlib.sha256(prefix).hexdigest(),"complete":False};self.last_command["stderr"]=self._bounded_command_bytes(b"")
    raise NestedCuttlefishError("bounded capture output exceeds limit")
-  b=self._read_file(path,d,limit)
-  self.last_command.update(exit_code=m.get("rc"),stdout=self._bounded_command_bytes(b),stderr=self._bounded_command_bytes(b""))
-  if len(b)!=m["size"] or hashlib.sha256(b).hexdigest()!=m["sha256"]:raise NestedCuttlefishError("bounded capture readback mismatch")
+  b=self._read_file(path,d,limit);stderr=self._read_file(path+".stderr",d,limit) if m["stderr_size"] else b"";self.last_capture_stderr=stderr
+  self.last_command.update(exit_code=m.get("rc"),stdout=self._bounded_command_bytes(b),stderr=self._bounded_command_bytes(stderr))
+  if len(b)!=m["size"] or hashlib.sha256(b).hexdigest()!=m["sha256"] or len(stderr)!=m["stderr_size"] or hashlib.sha256(stderr).hexdigest()!=m["stderr_sha256"]:raise NestedCuttlefishError("bounded capture readback mismatch")
   if isinstance(transport_rc,bool) or not isinstance(transport_rc,int) or transport_rc!=0:raise NestedCuttlefishError("bounded capture transport exit invalid")
-  if isinstance(m.get("rc"),bool) or not isinstance(m.get("rc"),int) or m["rc"] not in (0,124):raise NestedCuttlefishError("bounded capture command exit invalid")
+  if isinstance(m.get("rc"),bool) or not isinstance(m.get("rc"),int) or (not self._diagnostic_capture and m["rc"] not in (0,124)):raise NestedCuttlefishError("bounded capture command exit invalid")
   return b,m
  def _capture(self,args,d,label,limit,command_cap=None):
   b,m=self._capture_result(args,d,label,limit,command_cap)
@@ -233,6 +233,7 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
  def _focus(self,allowed,d,initial_draw=False,lifecycle_epoch=None,max_observations=None,reserve_seconds=30):
   if lifecycle_epoch is None:lifecycle_epoch=str(self._adb(["shell","date","+%s.%3N"],d).get("stdout","")).strip()
   if not re.fullmatch(r"\d{10,}(?:\.\d{3})?",str(lifecycle_epoch)):raise NestedCuttlefishError("focus lifecycle epoch missing")
+  self.current_launch_epoch=str(lifecycle_epoch)
   argv=["shell","dumpsys","activity","top-resumed"];started=self.clock();deadline=d-reserve_seconds if initial_draw else min(d,started+45);observations=[];splash_pid=None
   limit=max_observations if max_observations is not None else (32 if initial_draw else 3)
   if not isinstance(limit,int) or isinstance(limit,bool) or not 1<=limit<=32 or deadline<=started:raise NestedCuttlefishError("insufficient deadline for foreground readiness proof")
@@ -266,7 +267,8 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
     elif match["drawn"] is not True or match["starting_displayed"] is not False:return self._focus_failure("non-drawn-without-starting-window",allowed,observations,raw,d)
     if active_start or match["visible"] is not True:
      if splash_pid is None:splash_pid=match["pid"]
-     elif splash_pid!=match["pid"]:return self._focus_failure("splash-process-changed",allowed,observations,raw,d)
+     elif splash_pid!=match["pid"]:
+      self._collect_native_crash(splash_pid,match["pid"],lifecycle_epoch,d);return self._focus_failure("splash-process-changed",allowed,observations,raw,d)
      largv=["shell","logcat","-d","-t","40"]
      try:
       log,logmeta=self._capture_result(largv,deadline,"focus-progress-logcat",32768,5);logtext=log.decode("utf-8","replace");fatal=any(token in logtext for token in ("FATAL EXCEPTION","Fatal signal","Process org.amnezia.vpn has died"))
@@ -275,7 +277,10 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
      if fatal:return self._focus_failure("splash-process-fatal",allowed,observations,raw,d)
      if self.clock()>=deadline:break
      self.sleep(min(1,self._left(deadline,1)));continue
+    if splash_pid is not None and splash_pid!=match["pid"]:
+     self._collect_native_crash(splash_pid,match["pid"],lifecycle_epoch,d);return self._focus_failure("process-changed-after-splash",allowed,observations,raw,d)
     return pid,uid,package,component,observations
+   if splash_pid is not None:self._collect_native_crash(splash_pid,None,lifecycle_epoch,d)
    if self.clock()>=deadline:break
    self.sleep(min(1,self._left(deadline,1)))
   return self._focus_failure("no-authoritative-record",allowed,observations,raw if 'raw' in locals() else b"",d)
@@ -288,12 +293,27 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
   except BaseException as exc:logcat={"attempted":True,"error_type":type(exc).__name__,"error_sha256":hashlib.sha256(str(exc).encode()).hexdigest()}
   diagnostic={"allowed":list(allowed),"observation_count":len(observations),"last":observations[-1] if observations else None,"focus_observations":self.focus_observation_history,"top_resumed_raw":{"size":len(raw),"sha256":hashlib.sha256(raw).hexdigest(),"bytes_b64":base64.b64encode(raw).decode()},"logcat":logcat}
   return self._app_failure(reason,diagnostic,d,"app-focus")
+ def _collect_native_crash(self,expected_pid,observed_pid,epoch,d):
+  if self.native_crash_evidence is not None:return self.native_crash_evidence
+  commands=(("crash",["logcat","-b","crash","-d","-T",str(epoch),"-v","threadtime"],262144),("all-events",["logcat","-b","main","-b","system","-b","events","-b","crash","-d","-T",str(epoch),"-t","600","-v","threadtime"],524288),("tombstone-metadata",["shell","ls","-la","/data/tombstones"],65536),("tombstone-backtrace",["shell","dumpsys","dropbox","--print","SYSTEM_TOMBSTONE"],524288))
+  rows=[]
+  for label,argv,limit in commands:
+   try:
+    self._diagnostic_capture=True;raw,meta=self._capture_result(argv,min(d,self.clock()+12),"native-crash-"+label,limit,7)
+    rows.append({"label":label,"argv":argv,"exit_code":meta["rc"],"timed_out":meta["rc"]==124,"output":self._raw("adb:native-crash-"+label,raw)})
+   except BaseException as exc:
+    rows.append({"label":label,"argv":argv,"capture_error":{"type":type(exc).__name__,"sha256":hashlib.sha256(str(exc).encode()).hexdigest()},"bounded_command":json.loads(json.dumps(self.last_command))})
+   finally:self._diagnostic_capture=False
+  self.native_crash_evidence={"schema":1,"expected_pid":int(expected_pid) if str(expected_pid).isdigit() else None,"observed_pid":int(observed_pid) if str(observed_pid).isdigit() else None,"launch_epoch":str(epoch),"sources":rows}
+  return self.native_crash_evidence
  def _app_failure(self,reason,diagnostic,d,phase):
-  if phase=="app-update" and "fixture_log" not in diagnostic:
+  if self.native_crash_evidence is not None and "native_crash" not in diagnostic:diagnostic={**diagnostic,"native_crash":self.native_crash_evidence}
+  if phase=="app-update" and "fixture_log" not in diagnostic and not (isinstance(diagnostic.get("preflight"),Mapping) and "healthz" in diagnostic["preflight"]):
    try:
     fixture_log=self._fx("read-log",self.clock()+10);encoded=json.dumps(fixture_log,sort_keys=True,separators=(",",":"))
     diagnostic={**diagnostic,"fixture_log":fixture_log if len(encoded)<=65536 else {"oversized":True,"size":len(encoded.encode()),"sha256":hashlib.sha256(encoded.encode()).hexdigest(),"request_count":len(fixture_log.get("requests",[])) if isinstance(fixture_log.get("requests"),list) else None}}
    except BaseException as exc:diagnostic={**diagnostic,"fixture_log":{"error_type":type(exc).__name__,"error_sha256":hashlib.sha256(str(exc).encode()).hexdigest()}}
+  elif phase=="app-update" and "fixture_log" not in diagnostic:diagnostic={**diagnostic,"fixture_log":{"state":"not-reset","reason":"health-preflight-failed"}}
   shot={"attempted":True};remaining=max(0,d-self.clock())
   try:
    png,meta=self._capture_result(["exec-out","screencap","-p"],self.clock()+min(15,max(1,remaining)),"focus-failure-screen",4194304,10)
@@ -320,7 +340,96 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
    if m:
     a,b,c,e=map(int,m.groups());self._adb(["shell","input","tap",str((a+c)//2),str((b+e)//2)],d);return unlock
    self.sleep(min(1,self._left(d,1)))
-  raise NestedCuttlefishError(f"bounded UI wait expired: {text}")
+   raise NestedCuttlefishError(f"bounded UI wait expired: {text}")
+ def _input_once(self,argv,d,label):
+  raw,meta=self._capture_result(argv,d,label,65536,10)
+  if meta["rc"] not in (0,124):raise NestedCuttlefishError("single UI input command failed")
+  return {"argv":argv,"exit_code":meta["rc"],"timed_out":meta["rc"]==124,"output":self._raw("adb:visual-input",raw)}
+ def _visual_action(self,text,allowed,d,focus_allowed=None,kind="update",downstream_reserve=300,review_window=90):
+  if not callable(self.visual_request) or not callable(self.visual_poll):raise NestedCuttlefishError("visual handshake callbacks missing")
+  deadline=min(d-downstream_reserve,self.clock()+review_window)
+  if deadline<=self.clock():raise NestedCuttlefishError("insufficient visual handshake reserve")
+  request_attempt=0
+  expected_action={"update":"Update","unknown-sources":"Allow from this source"}
+  if expected_action.get(kind)!=text:raise NestedCuttlefishError("visual kind/action mismatch")
+  while self.clock()<deadline:
+   unlock=self._unlock(deadline);top_pid,top_uid,pkg,activity,_=self._focus(focus_allowed or allowed,deadline,max_observations=12)
+   visual_remote=f"/data/local/tmp/amz-{self.plan.ownership.attempt_nonce[:12]}-{self.visual_seq+1:02d}.png";visual_local=f"{self.plan.root}/evidence/visual-{self.visual_seq+1:02d}.png"
+   image_monotonic=None;png_attempts=[]
+   for shot_index in range(3):
+    attempt_monotonic=self.clock();png_command=["shell","screencap","-p",visual_remote];raw,png_meta=self._capture_result(png_command,deadline,f"visual-{kind}",65536,10);png_attempts.append({"argv":png_command,"exit_code":png_meta["rc"],"output":self._raw("adb:visual-screencap",raw)})
+    if png_meta["rc"]==0:image_monotonic=attempt_monotonic;break
+    if png_meta["rc"]!=124:self._app_failure("visual-screenshot-failed",{"action":text,"attempts":png_attempts},d,"app-update")
+   if png_attempts[-1]["exit_code"]!=0:self._app_failure("visual-screenshot-timeout",{"action":text,"attempts":png_attempts},d,"app-update")
+   self._adb(["pull",visual_remote,visual_local],deadline,30);png=self._read_file(visual_local,deadline,PNG_MAX)
+   if not png.startswith(b"\x89PNG\r\n\x1a\n"):self._app_failure("visual-screenshot-invalid",{"action":text,"size":len(png)},d,"app-update")
+   request_attempt+=1;self.visual_seq+=1;now=self.clock()
+   request={"schema":1,"run_id":self.plan.ownership.run_id,"attempt_nonce":self.plan.ownership.attempt_nonce,"sequence":self.visual_seq,"kind":kind,"state":"operator-unclassified","action":text,"bounds":None,"display_owner":{"package":pkg,"activity":activity,"pid":int(top_pid),"uid":int(top_uid)},"action_target":{"package":self.plan.apk.package,"version_code":self.baseline.version_code,"artifact_sha256":self.plan.apk.sha256,"artifact_size":self.plan.apk.size},"artifact_sha256":self.plan.apk.sha256,"artifact_size":self.plan.apk.size,"review_seconds":min(review_window,max(0,deadline-now)),"screenshot_attempts":png_attempts,"origin":"guest","transport":"qga-adb"}
+   ack=self.visual_request(request,png);request=dict(ack.get("request_record",{})) if isinstance(ack,Mapping) else {}
+   if (not isinstance(ack,Mapping) or ack.get("origin")!="controller" or ack.get("immutable") is not True
+       or not SHA.fullmatch(str(ack.get("request_sha256",""))) or ack.get("png_sha256")!=hashlib.sha256(png).hexdigest()
+       or ack.get("run_id")!=request.get("run_id") or ack.get("attempt_nonce")!=request.get("attempt_nonce")
+       or ack.get("png_size")!=len(png) or not isinstance(ack.get("png_width"),int) or not isinstance(ack.get("png_height"),int) or ack.get("expires_at")!=request.get("expires_at") or ack.get("created_at")!=request.get("created_at")
+       or not all(isinstance(ack.get(k),str) and ack.get(k) for k in ("request_id","request_path","png_path"))):
+    self._app_failure("visual-request-archive-invalid",{"action":text},d,"app-update")
+   decision=None
+   while self.clock()<deadline:
+    decision=self.visual_poll(ack)
+    if decision is not None:break
+    self.sleep(min(.5,self._left(deadline,.5)))
+   row={"request":request,"controller":dict(ack),"decision":dict(decision) if isinstance(decision,Mapping) else None,"keyguard":unlock};self.visual_history.append(row)
+   if decision is None:self._app_failure("visual-decision-expired",{"visual_handshake":self.visual_history},d,"app-update")
+   if (not isinstance(decision,Mapping) or decision.get("origin")!="controller" or decision.get("immutable") is not True or decision.get("input_only") is not True
+       or decision.get("request_id")!=ack["request_id"] or decision.get("request_sha256")!=ack["request_sha256"]
+       or decision.get("run_id")!=request["run_id"] or decision.get("attempt_nonce")!=request["attempt_nonce"]
+       or decision.get("decision") not in ("approve","refresh","reject") or not SHA.fullmatch(str(decision.get("sha256","")))):
+    self._app_failure("visual-decision-invalid",{"visual_handshake":self.visual_history},d,"app-update")
+   if decision.get("decision")=="reject":self._app_failure("visual-decision-rejected",{"visual_handshake":self.visual_history},d,"app-update")
+   if decision.get("decision")=="refresh":
+    if request_attempt>=3:self._app_failure("visual-action-not-visible",{"visual_handshake":self.visual_history,"attempts":request_attempt},d,"app-update")
+    continue
+   bounds=decision.get("bounds")
+   if decision.get("decision")!="approve" or not isinstance(bounds,list) or len(bounds)!=4 or not (0<=bounds[0]<bounds[2]<=ack.get("png_width",0) and 0<=bounds[1]<bounds[3]<=ack.get("png_height",0)):self._app_failure("visual-decision-invalid",{"visual_handshake":self.visual_history},d,"app-update")
+   # Recheck every authority immediately before the single coordinate input.
+   self._check();self._check_fixture();package,uid=self._package(self.baseline.version_code if kind=="update" else self.baseline.version_code,deadline)
+   verify_pid,verify_uid,verify_pkg,verify_activity,_=self._focus(focus_allowed or allowed,deadline,max_observations=3)
+   if (verify_pid,verify_uid,verify_pkg,verify_activity)!=(top_pid,top_uid,pkg,activity) or (kind=="update" and uid!=int(top_uid)):
+    if verify_pid!=top_pid:self._collect_native_crash(top_pid,verify_pid,self.current_launch_epoch or "0",d)
+    self._app_failure("visual-preinput-binding-changed",{"visual_handshake":self.visual_history},d,"app-update")
+   if d-self.clock()<downstream_reserve:self._app_failure("visual-downstream-reserve-exhausted",{"visual_handshake":self.visual_history},d,"app-update")
+   # Check capture age only after every authority/focus recheck, immediately
+   # before input.  A stale approval causes a fresh operator request and no tap.
+   if self.clock()-image_monotonic>45:
+    row["freshness"]={"accepted":False,"max_seconds":45}
+    if request_attempt>=3:self._app_failure("visual-approval-not-fresh",{"visual_handshake":self.visual_history},d,"app-update")
+    continue
+   row["freshness"]={"accepted":True,"max_seconds":45}
+   if self.clock()>deadline:self._app_failure("visual-decision-monotonic-expired",{"visual_handshake":self.visual_history},d,"app-update")
+   x=(bounds[0]+bounds[2])//2;y=(bounds[1]+bounds[3])//2;argv=["shell","input","tap",str(x),str(y)];row["input"]={**self._input_once(argv,deadline,f"visual-{kind}-tap"),"x":x,"y":y};return unlock
+  raise NestedCuttlefishError(f"bounded visual wait expired: {text}")
+
+ def _fixture_diagnostic_preflight(self,d):
+  endpoint=urlparse(self.fixture.endpoint);host=str(endpoint.hostname);port=str(endpoint.port)
+  request=f"GET /healthz HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+  health_script=f"printf 'GET /healthz HTTP/1.1\\r\\nHost: {host}:{port}\\r\\nConnection: close\\r\\n\\r\\n' | toybox nc -w 8 {host} {port}"
+  commands=(("link",["shell","ip","-details","link","show"]),("address",["shell","ip","-4","addr","show"]),("routes",["shell","ip","-4","route","show"]),("route",["shell","ip","-4","route","get",host]),("connect",["shell","toybox","nc","-z","-w","5",host,port]),("capability",["shell","toybox","nc","--help"]),("ril_state",["shell","getprop","init.svc.vendor.ril-daemon"]),("ril_log",["shell","logcat","-d","-t","200","-v","threadtime","-b","main","-b","system","-b","events","RIL*:V","libcuttlefish-rild:V","init:I","*:S"]),("healthz",["shell","sh","-c",health_script]))
+  rows={}
+  for label,argv in commands:
+   self._diagnostic_capture=True
+   try:raw,meta=self._capture_result(argv,d,"fixture-preflight-"+label,65536,10)
+   finally:self._diagnostic_capture=False
+   rows[label]={"argv":argv,"exit_code":meta["rc"],"timed_out":meta["rc"]==124,"output":self._raw("adb:fixture-preflight-"+label,raw),"stderr":self._raw("adb:fixture-preflight-"+label+"-stderr",self.last_capture_stderr)}
+  response=base64.b64decode(rows["healthz"]["output"]["bytes_b64"]);health_value=None;body=b""
+  try:
+   head,body=response.split(b"\r\n\r\n",1);lines=head.split(b"\r\n");status=lines[0];headers={k.strip().lower():v.strip() for k,v in (line.split(b":",1) for line in lines[1:] if b":" in line)}
+   if status!=b"HTTP/1.1 200 OK" or headers.get(b"content-length")!=str(len(body)).encode():raise ValueError("HTTP envelope")
+   health_value=json.loads(body.decode("utf-8"))
+  except (ValueError,UnicodeError,json.JSONDecodeError):health_value=None
+  capability_bytes=base64.b64decode(rows["capability"]["output"]["bytes_b64"])+base64.b64decode(rows["capability"]["stderr"]["bytes_b64"])
+  if rows["capability"]["exit_code"] not in (0,1) or b"nc" not in capability_bytes.lower() or rows["healthz"]["exit_code"]!=0 or health_value!={"status":"ok","run_id":self.fixture.run_id,"role":"consumer-fixture"}:
+   self._app_failure("fixture-diagnostic-preflight-semantic-mismatch",{"preflight":rows,"health_result":health_value},d,"app-update")
+  rows["health_body"]={"origin":"guest","transport":"qga-adb","path":"adb:fixture-preflight-health-body","size":len(body),"sha256":hashlib.sha256(body).hexdigest(),"bytes_b64":base64.b64encode(body).decode()}
+  return rows
  def _tap_any(self,texts,allowed,d,focus_allowed=None):
   remote=f"/data/local/tmp/amz-{self.plan.ownership.attempt_nonce[:12]}.xml";deadline=min(d,self.clock()+90)
   while self.clock()<deadline:
@@ -376,28 +485,38 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
   r=self._fx("stop",d)
   if errors or r.get("identity_rechecked") is not True or r.get("stopped") is not True or r.get("listener_closed") is not True or r.get("unknown_survivors")!=[] or not SHA.fullmatch(str(r.get("request_log_sha256",""))):raise NestedCuttlefishError("app/fixture cleanup uncertain")
   return r
- def run_update(self,timeout=300):
-  if isinstance(timeout,bool) or not 60<=timeout<=300:raise NestedCuttlefishError("update timeout")
+ def run_update(self,timeout=600):
+  if isinstance(timeout,bool) or timeout!=600:raise NestedCuttlefishError("update timeout")
   d=self.clock()+timeout;started=False;primary=None
   try:
    started=True;s=self._fx("start",d)
    if s.get("ready") is not True or s.get("identity_rechecked") is not True:raise NestedCuttlefishError("fixture start receipt")
+   diagnostic_preflight=self._fixture_diagnostic_preflight(min(d,self.clock()+35))
    z=self._fx("reset",d)
+   health_bytes=base64.b64decode(diagnostic_preflight["health_body"]["bytes_b64"]);health_request=z.get("cleared_health_request")
    if (isinstance(z.get("log_inode"),bool) or not isinstance(z.get("log_inode"),int) or z["log_inode"]<=0 or z.get("offset")!=0
        or not re.fullmatch(r"[0-9a-f]{48}",str(z.get("reset_token",""))) or z.get("empty_sha256")!=hashlib.sha256(b"").hexdigest()
-       or not isinstance(z.get("reset_at"),(int,float)) or isinstance(z.get("reset_at"),bool) or not math.isfinite(z["reset_at"])):raise NestedCuttlefishError("fixture reset receipt")
+       or not isinstance(z.get("reset_at"),(int,float)) or isinstance(z.get("reset_at"),bool) or not math.isfinite(z["reset_at"])
+       or not isinstance(health_request,Mapping) or set(health_request)!={"method","path","status","sha256","bytes","content_length","eof","peer","observed_at","run_id","attempt_nonce"}
+       or health_request.get("run_id")!=self.fixture.run_id or health_request.get("attempt_nonce")!=self.fixture.attempt_nonce or health_request.get("method")!="GET" or health_request.get("path")!="/healthz" or health_request.get("status")!=200 or health_request.get("eof") is not True or not health_request.get("peer")
+       or health_request.get("sha256")!=hashlib.sha256(health_bytes).hexdigest() or health_request.get("bytes")!=len(health_bytes) or health_request.get("content_length")!=len(health_bytes)):raise NestedCuttlefishError("fixture reset receipt")
+   diagnostic_preflight["fixture_request"]=dict(z["cleared_health_request"])
    reset_sha=receipt_sha(z)
    force_argv=["shell","am","force-stop",self.plan.apk.package];force_bytes=self._capture(force_argv,d,"update-check-force-stop",65536,10);restart_unlock=self._unlock(d)
    epoch=str(self._adb(["shell","date","+%s.%3N"],d).get("stdout","")).strip()
    if not re.fullmatch(r"\d{10,}(?:\.\d{3})?",epoch):raise NestedCuttlefishError("logcat start time missing")
-   restart_monkey=self._launch_once(self.plan.apk.package,d,"update-check-monkey","adb:update-check-monkey")
-   if d-self.clock()<210:raise NestedCuttlefishError("insufficient update budget after fixture restart")
+   restart_monkey=self._launch_once(self.plan.apk.package,d,"update-check-monkey","adb:update-check-monkey");restart_started=self.clock()
+   if d-self.clock()<520:raise NestedCuttlefishError("insufficient interactive update budget after fixture restart")
    _,_,_,_,restart_focus=self._focus((self.plan.apk.package,),d,lifecycle_epoch=epoch,max_observations=12)
    update_restart={"force_stop":{"argv":force_argv,"exit_code":0,"output":self._raw("adb:update-check-force-stop",force_bytes)},"keyguard":restart_unlock,"monkey":restart_monkey,"readiness":restart_focus}
    installer_snapshot_argv=["shell","dumpsys","package","installs"];before_bytes=self._capture(installer_snapshot_argv,d,"installer-before",XML_MAX);before=self._sessions(before_bytes.decode(errors="replace"));installer_unlock=restart_unlock
-   update_unlock=self._tap("Update",(self.plan.apk.package,),d);install_action,install_unlock=self._tap_any(("Install","Settings"),INSTALLERS,d,focus_allowed=(self.plan.apk.package,*INSTALLERS))
+   wait_until=restart_started+60
+   if d-wait_until<460:raise NestedCuttlefishError("insufficient update reserve after 60 second product timer")
+   if self.clock()<wait_until:self.sleep(wait_until-self.clock())
+   update_unlock=self._visual_action("Update",(self.plan.apk.package,),d,kind="update",downstream_reserve=300,review_window=90);install_action,install_unlock=self._tap_any(("Install","Settings"),INSTALLERS,d,focus_allowed=(self.plan.apk.package,*INSTALLERS))
    if install_action=="Settings":
-    remote=f"/data/local/tmp/amz-{self.plan.ownership.attempt_nonce[:12]}.xml";settings_xml=self._ui_xml(remote,d,"ui-unknown-sources-settings");self._app_failure("unknown-sources-settings-unverified",{"ui_xml":self._raw("adb:unknown-sources-settings",settings_xml),"focus_observations":self.focus_observation_history,"ui_capture_observations":self.ui_capture_history},d,"app-update")
+    settings_unlock=self._visual_action("Allow from this source",("com.android.settings",),d,focus_allowed=("com.android.settings",),kind="unknown-sources",downstream_reserve=100,review_window=90)
+    back=self._input_once(["shell","input","keyevent","4"],d,"unknown-sources-back");self.visual_history[-1]["back"]=back;install_action,install_unlock=self._tap_any(("Install",),INSTALLERS,d,focus_allowed=(self.plan.apk.package,*INSTALLERS))
    completion_action,completion_unlock=self._tap_any(("Open","Done"),INSTALLERS,d)
    package,uid=self._package(self.plan.apk.version_code,d);session_observations=[];sessions=set()
    for poll in range(10):
@@ -408,7 +527,8 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
    log=self._capture(["logcat","-d","-T",epoch,"-v","threadtime","PackageInstaller:I","PackageManager:I","AndroidRuntime:E","*:S"],d,"logcat",LOG_MAX)
    if len(sessions)!=1 or re.search(rb"FATAL EXCEPTION|Fatal signal.*amnezia",log,re.I):raise NestedCuttlefishError("unique successful PackageInstaller session missing")
    launch_unlock=self._unlock(d);monkey=self._launch_once(self.plan.apk.package,d,"candidate-monkey","adb:candidate-monkey");top_pid,top_uid,pkg,activity,focus=self._focus((self.plan.apk.package,),d,lifecycle_epoch=epoch,max_observations=12);pid=str(self._adb(["shell","pidof",self.plan.apk.package],d).get("stdout","")).strip()
-   if not re.fullmatch(r"[1-9]\d*",pid) or pid!=top_pid or uid!=int(top_uid):raise NestedCuttlefishError("package PID/UID differs from activity top")
+   if not re.fullmatch(r"[1-9]\d*",pid) or pid!=top_pid or uid!=int(top_uid):
+    self._collect_native_crash(top_pid,pid if re.fullmatch(r"[1-9]\d*",pid) else None,epoch,d);self._app_failure("candidate-package-pid-changed",{"top_pid":top_pid,"pidof":pid},d,"app-update")
    wid="activity-top:"+top_pid
    remote=f"/data/local/tmp/amz-{self.plan.ownership.attempt_nonce[:12]}.png";local=f"{self.plan.root}/evidence/app.png";self._adb(["shell","screencap","-p",remote],d);self._adb(["pull",remote,local],d,60);png=self._read_file(local,d,PNG_MAX)
    if len(png)>PNG_MAX or not png.startswith(b"\x89PNG\r\n\x1a\n"):raise NestedCuttlefishError("screenshot invalid/oversized")
@@ -421,7 +541,7 @@ b=p.read_bytes();print(json.dumps({'path':str(p),'size':len(b),'sha256':hashlib.
        or times!=sorted(times) or not (z["reset_at"]<=times[0]<=times[-1]<=h["finished_at"])
        or h.get("transcript_sha256")!=receipt_sha({"reset_receipt_sha256":reset_sha,"requests":rows})):raise NestedCuttlefishError("exact app HTTP transcript missing")
    keyguards=[{"phase":phase,"receipt":value} for phase,value in (("installer-monkey",installer_unlock),("update-tap",update_unlock),("install-tap",install_unlock),("completion-tap",completion_unlock),("launch-monkey",launch_unlock))]
-   v={"schema":2,"operation":"nested-cuttlefish-app-update","timeout_seconds":timeout,"run_id":self.plan.ownership.run_id,"profile":self.plan.ownership.profile,"attempt_nonce":self.plan.ownership.attempt_nonce,"marker":self.plan.marker,"guest_root":self.plan.root,"outer_ownership":asdict(self.plan.ownership),"origin":"guest","transport":"qga","injected":False,"boot_binding_sha256":receipt_sha(self.boot),"package_installer":{"package":self.plan.apk.package,"version_code":self.plan.apk.version_code,"artifact_sha256":self.plan.apk.sha256,"artifact_size":self.plan.apk.size,"download_sha256":self.plan.apk.sha256,"session_id":next(iter(sessions)),"status":"STATUS_SUCCESS","method":"PackageInstaller","snapshot_argv":installer_snapshot_argv,"session_evidence":{"before":self._raw("adb:dumpsys-package-installs",before_bytes),"after":session_observations}},"http":{"fixture_nonce":self.fixture.attempt_nonce,"manifest_sha256":self.fixture.manifest_sha256,"requests":rows,"fixture_receipt_sha256":receipt_sha(h)},"ui":{"package":pkg,"activity":activity,"window_id":wid,"window_title":pkg,"package_pid":int(pid),"package_uid":uid,"version_code":self.plan.apk.version_code,"screenshot_sha256":hashlib.sha256(png).hexdigest(),"package_state":package,"update_check_restart":update_restart,"keyguard":keyguards,"completion_action":completion_action,"launch_probe":monkey,"focus_observations":focus,"ui_capture_observations":self.ui_capture_history},"logcat":{"started_at":epoch,"finished_at":str(h.get("finished_at","")),"sha256":hashlib.sha256(log).hexdigest(),"size":len(log),"crashes":[]},"passed":True}
+   v={"schema":2,"operation":"nested-cuttlefish-app-update","timeout_seconds":timeout,"run_id":self.plan.ownership.run_id,"profile":self.plan.ownership.profile,"attempt_nonce":self.plan.ownership.attempt_nonce,"marker":self.plan.marker,"guest_root":self.plan.root,"outer_ownership":asdict(self.plan.ownership),"origin":"guest","transport":"qga","injected":False,"boot_binding_sha256":receipt_sha(self.boot),"diagnostic_preflight":diagnostic_preflight,"package_installer":{"package":self.plan.apk.package,"version_code":self.plan.apk.version_code,"artifact_sha256":self.plan.apk.sha256,"artifact_size":self.plan.apk.size,"download_sha256":self.plan.apk.sha256,"session_id":next(iter(sessions)),"status":"STATUS_SUCCESS","method":"PackageInstaller","snapshot_argv":installer_snapshot_argv,"session_evidence":{"before":self._raw("adb:dumpsys-package-installs",before_bytes),"after":session_observations}},"http":{"fixture_nonce":self.fixture.attempt_nonce,"manifest_sha256":self.fixture.manifest_sha256,"requests":rows,"fixture_receipt_sha256":receipt_sha(h)},"ui":{"package":pkg,"activity":activity,"window_id":wid,"window_title":pkg,"package_pid":int(pid),"package_uid":uid,"version_code":self.plan.apk.version_code,"screenshot_sha256":hashlib.sha256(png).hexdigest(),"package_state":package,"update_check_restart":update_restart,"keyguard":keyguards,"completion_action":completion_action,"launch_probe":monkey,"focus_observations":focus,"ui_capture_observations":self.ui_capture_history,"visual_handshake":self.visual_history},"logcat":{"started_at":epoch,"finished_at":str(h.get("finished_at","")),"sha256":hashlib.sha256(log).hexdigest(),"size":len(log),"crashes":[]},"passed":True}
    return validate_app_update_receipt(self.plan,self.boot,v)
   except BaseException as e:
    if getattr(e,"archive_durable",False) or getattr(e,"retain_owned_evidence",False):primary=e;raise

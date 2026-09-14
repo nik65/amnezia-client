@@ -26,6 +26,8 @@ class NestedCuttlefishCommonAdapter:
  fixture_adapter: Any
  private_link: Any
  outer_live_snapshot: Any
+ visual_request: Any = None
+ visual_poll: Any = None
  def run(self)->dict[str,Any]:
   if self.bridge.plan != self.plan:
    raise NestedCommonError("nested lifecycle components differ from the exact plan")
@@ -49,7 +51,8 @@ class NestedCuttlefishCommonAdapter:
    boot=validate_boot_receipt(self.plan,self.bridge.launch_boot(stage))
    # Baseline installation is real product setup evidence, never inferred from boot.
    executor=NestedAppExecutor(self.bridge.qga,self.plan,boot,self.baseline,fixture,self.outer_live_snapshot,
-    self.fixture_adapter.snapshot,self.fixture_adapter.callback,failure_archive=self.bridge.boot_failure_archive)
+     self.fixture_adapter.snapshot,self.fixture_adapter.callback,failure_archive=self.bridge.boot_failure_archive,
+     visual_request=self.visual_request,visual_poll=self.visual_poll)
    if executor.boot != boot:raise NestedCommonError("executor boot binding differs from generated boot receipt")
    baseline=executor.install_baseline(str(supplemental["guest_path"]))
    if (baseline.get("passed") is not True or baseline.get("operation")!="nested-baseline-setup"

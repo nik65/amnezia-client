@@ -76,11 +76,18 @@ if str(script) not in argv or marker not in '\0'.join(argv) or hashlib.sha256(sc
 print(json.dumps({'pid':pid,'start_ticks':start,'exe':str(p.joinpath('exe').resolve(strict=True)),'cmdline_sha256':hashlib.sha256(cmd).hexdigest(),'identity_rechecked':True},separators=(',',':')))
 '''
 RESET=r'''import hashlib,json,os,pathlib,sys,time,urllib.request
-url,log,cursor,token,run,nonce=sys.argv[1:]; data=urllib.request.urlopen(url,timeout=10).read(); response=json.loads(data)
+url,log,cursor,token,run,nonce=sys.argv[1:]; p=pathlib.Path(log); before=p.read_bytes(); data=urllib.request.urlopen(url,timeout=10).read(); response=json.loads(data)
 if response!={'status':'reset','run_id':run}: raise SystemExit('reset response')
-p=pathlib.Path(log); s=p.stat(); b=p.read_bytes()
+pairs=[]
+for line in before.splitlines():
+ x=json.loads(line)
+ if x.get('run_id')!=run or x.get('attempt_nonce')!=nonce: raise SystemExit('pre-reset row identity')
+ pairs.append(x)
+if len(pairs)!=1 or pairs[0].get('method')!='GET' or pairs[0].get('path')!='/healthz' or pairs[0].get('status')!=200 or pairs[0].get('bytes')!=pairs[0].get('content_length'): raise SystemExit('health request row')
+s=p.stat(); b=p.read_bytes()
 if b: raise SystemExit('log not empty')
-value={'reset_token':token,'log_inode':s.st_ino,'offset':0,'empty_sha256':hashlib.sha256(b).hexdigest(),'reset_at':time.time(),'run_id':run,'attempt_nonce':nonce}
+x=pairs[0]; health={'method':x['method'],'path':x['path'],'status':x['status'],'sha256':x['sha256'],'bytes':x['bytes'],'content_length':x['content_length'],'eof':True,'peer':x['client'],'observed_at':x['timestamp'],'run_id':x['run_id'],'attempt_nonce':x['attempt_nonce']}
+value={'reset_token':token,'log_inode':s.st_ino,'offset':0,'empty_sha256':hashlib.sha256(b).hexdigest(),'reset_at':time.time(),'run_id':run,'attempt_nonce':nonce,'cleared_health_request':health}
 q=pathlib.Path(cursor); fd=os.open(q,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
 with os.fdopen(fd,'w') as f: json.dump(value,f,separators=(',',':'));f.flush();os.fsync(f.fileno())
 print(json.dumps(value,separators=(',',':')))
@@ -141,7 +148,7 @@ class ServerRouterFixtureAdapter:
  def start(self,timeout=30):
   if self.pid is not None and self.start_ticks is not None:
    ident=self._json(IDENTITY,[str(self.pid),str(self.start_ticks),self.plan.attempt_nonce,self.plan.script_path,self.plan.script_sha256],timeout)
-   health=self._json("import json,sys,urllib.request\nprint(urllib.request.urlopen('http://127.0.0.1:'+sys.argv[1]+'/healthz',timeout=3).read().decode())",[str(self.plan.port)],min(timeout,5))
+   health=self._json("import json,sys,urllib.parse,urllib.request\nurl='http://127.0.0.1:'+sys.argv[1]+'/__lab__/health?'+urllib.parse.urlencode({'run_id':sys.argv[2],'nonce':sys.argv[3]});print(urllib.request.urlopen(url,timeout=3).read().decode())",[str(self.plan.port),self.plan.run_id,self.plan.attempt_nonce],min(timeout,5))
    if health!={"status":"ok","run_id":self.plan.run_id,"role":"consumer-fixture"}:raise NestedCuttlefishError("fixture health identity")
    return {**self._common(),**ident,"ready":True,"file_receipt_sha256":self.file_receipt_sha256}
   self._check();verify=self._json("import hashlib,json,pathlib,sys\nrows=[]\nfor p,h,n in zip(sys.argv[1::3],sys.argv[2::3],sys.argv[3::3]):\n b=pathlib.Path(p).read_bytes();rows.append({'path':p,'sha256':hashlib.sha256(b).hexdigest(),'size':len(b)});assert rows[-1]['sha256']==h and rows[-1]['size']==int(n)\nprint(json.dumps({'files':rows},separators=(',',':')))",[self.plan.script_path,self.plan.script_sha256,str(self.plan.script_size),self.plan.manifest_path,self.plan.manifest_sha256,str(self.plan.manifest_size),self.plan.apk_path,self.plan.apk_sha256,str(self.plan.apk_size)],timeout)
@@ -154,7 +161,7 @@ class ServerRouterFixtureAdapter:
   while self.clock()<deadline:
    try:
     ident=self._json(IDENTITY,[str(self.pid),"",self.plan.attempt_nonce,self.plan.script_path,self.plan.script_sha256],min(10,max(1,deadline-self.clock())));self.start_ticks=ident["start_ticks"]
-    health=self._json("import json,sys,urllib.request\nprint(urllib.request.urlopen('http://127.0.0.1:'+sys.argv[1]+'/healthz',timeout=3).read().decode())",[str(self.plan.port)],5)
+    health=self._json("import json,sys,urllib.parse,urllib.request\nurl='http://127.0.0.1:'+sys.argv[1]+'/__lab__/health?'+urllib.parse.urlencode({'run_id':sys.argv[2],'nonce':sys.argv[3]});print(urllib.request.urlopen(url,timeout=3).read().decode())",[str(self.plan.port),self.plan.run_id,self.plan.attempt_nonce],5)
     if health=={"status":"ok","run_id":self.plan.run_id,"role":"consumer-fixture"}:return {**self._common(),**ident,"ready":True,"file_receipt_sha256":self.file_receipt_sha256}
    except Exception:self.sleep(.2)
   failure=NestedCuttlefishError("fixture bounded start expired")

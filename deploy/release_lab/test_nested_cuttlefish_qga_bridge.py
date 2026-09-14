@@ -14,7 +14,7 @@ def make_plan()->InnerPlan:
     root="/var/lib/amnezia-release-lab/n/"+hashlib.sha256(b"bridge-1\0nonce-1").hexdigest()[:8]
     argv=(f"{root}/runtime/host/bin/launch_cvd",f"-instance_dir={root}/runtime/instance",f"-assembly_dir={root}/runtime/assembly",
       f"-system_image_dir={root}/runtime/images",f"-early_tmp_dir={root}/runtime/tmp","-vm_manager=qemu_cli",
-      "-device_external_network=slirp","-enable_tap_devices=false","-enable_modem_simulator=false",
+      "-device_external_network=slirp","-enable_tap_devices=false","-enable_modem_simulator=true",
       "-start_gnss_proxy=false","-enable_host_bluetooth=false","-enable_host_nfc=false","-enable_host_uwb=false",
       "-start_webrtc=false","-report_anonymous_usage_stats=n",
       "-gpu_mode=guest_swiftshader","-adb_mode=vsock_half_tunnel","-run_adb_connector=true","-cpus=2","-memory_mb=4096","-vsock_guest_cid=37",f"-qemu_binary_dir={root}/runtime/qemu","-noresume")
@@ -39,14 +39,17 @@ def boot_receipt(plan:InnerPlan)->dict:
     processes=[proc("run_cvd",201),proc("adb",202),proc("qemu-system-aarch64",203),proc("adb_connector",204),proc("socket_vsock_proxy",205)]
     provision={"schema":1,"uid":plan.runtime_uid,"user":"lab","primary_gid":999,"cvdnetwork_gid":4242,"created":True,"member":True,"resolved_groups":[999,4242],"files":[{"path":x,"before_sha256":"3"*64,"after_sha256":"4"*64} for x in ("/etc/group","/etc/gshadow")],"commands":[{"argv":a,"exe_sha256":"5"*64,"exit_code":0,"stdout_size":0,"stderr_size":0} for a in (["/usr/sbin/groupadd","--system","cvdnetwork"],["/usr/sbin/usermod","-aG","cvdnetwork","lab"])],"kvm_modified":False,"vhost_modified":False,"origin":"guest","transport":"qga","injected":False}
     way_i,way_r=wayland_dependency(plan,1000);dependency={"wayland_install":way_i,"wayland_runtime":way_r,"group_provisioning":provision,"stage":{"sha256":plan.vulkan_deb_sha256,"size":plan.vulkan_deb_size,"guest_root_identity":{"dev":1,"inode":2,"uid":0,"gid":0,"mode":"0711"}},"installed":{"run_id":plan.ownership.run_id,"attempt_nonce":plan.ownership.attempt_nonce,"origin":"guest","transport":"qga","injected":False,"loader":{"path":f"{plan.root}/runtime/private-libs/libvulkan.so.1.3.275","soname_path":f"{plan.root}/runtime/private-libs/libvulkan.so.1","sha256":plan.vulkan_loader_sha256,"size":plan.vulkan_loader_size,"uid":0,"mode":"0644","directory_uid":0,"directory_mode":"0755"},"dlopen":True,"vkGetInstanceProcAddr":True,"graphics_detector":{"exit_code":0,"assertion":False,"uid":plan.runtime_uid,"groups":[4242],"stdout_sha256":"0"*64,"stdout_size":0,"stderr_sha256":"1"*64,"stderr_size":0,"output_file":{"path":f"{plan.root}/runtime/graphics-probe/availability.pbtxt","kind":"regular","dev":1,"inode":2,"uid":plan.runtime_uid,"gid":1000,"mode":"0600","sha256":"2"*64,"size":26091,"eof":True}}}}
+    paths=[f"{plan.root}/runtime/assembly/cuttlefish_config.json",f"{plan.root}/runtime/instance/assembly/cuttlefish_config.json",f"{plan.root}/runtime/instance/instances/cvd-1/cuttlefish_config.json"]
+    ar=[{"order":i,"path":path,"before_sha256":"2"*64,"before_size":90,"after_sha256":"3"*64,"after_size":100} for i,path in enumerate(paths,1)];adapter={"schema":1,"records":ar,"before_identical":True,"after_identical":True,"source_shape":{"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"","ril_gateway":"","ril_prefixlen":255,"ril_dns":""},"applied":{"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}}
     result={"schema":2,"operation":"nested-cuttlefish-boot","run_id":plan.ownership.run_id,"profile":plan.ownership.profile,
       "attempt_nonce":plan.ownership.attempt_nonce,"marker":plan.marker,"guest_root":plan.root,"outer_ownership":asdict(plan.ownership),
       "origin":"guest","transport":"qga","injected":False,"passed":True,"containment":{"kind":"cgroup-v2","path":cgroup,
       "member_pids":[201,202,203,204,205],"stable_reads":2},"processes":processes,"roles":{"cvd":201,"adb":202,"qemu":203},
       "boot":{"abi":"arm64-v8a","boot_completed":"1","serial":"127.0.0.1_6520","boot_id":"22222222-2222-2222-2222-222222222222"},
-      "vsock_cid":37,"adb_endpoint":"127.0.0.1:5053","cvdnetwork_gid":4242,"kvm_gid":993,"vhost_vsock":{"path":"/dev/vhost-vsock","dev":7,"inode":8,"uid":0,"gid":993,"mode":"0660","rdev":9,"char":True},"vhost_access":{"exit_code":0,"result":{"egid":999,"euid":999,"groups":[993,4242],"read":True,"write":True}},"runtime_dependency":dependency,"network":{"adb_listen":"127.0.0.1:5053","host_mutation":False,"host_mounts":[],"qemu_netdev_argv":["user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"],"ril_config":{"schema":1,"records":[{"path":path,"before_sha256":"2"*64,"after_sha256":"3"*64,"size":100,"alias_target":path,"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"} for path in (f"{plan.root}/runtime/assembly/cuttlefish_config.json",f"{plan.root}/runtime/instance/assembly/cuttlefish_config.json",f"{plan.root}/runtime/instance/instances/cvd-1/cuttlefish_config.json")]}}}
-    paths=[x["path"] for x in result["network"]["ril_config"]["records"]];adb=f"{plan.root}/runtime/host/bin/adb";empty="List of devices attached\n";connected="List of devices attached\n127.0.0.1:6520\tdevice\n"
+      "vsock_cid":37,"adb_endpoint":"127.0.0.1:5053","cvdnetwork_gid":4242,"kvm_gid":993,"vhost_vsock":{"path":"/dev/vhost-vsock","dev":7,"inode":8,"uid":0,"gid":993,"mode":"0660","rdev":9,"char":True},"vhost_access":{"exit_code":0,"result":{"egid":999,"euid":999,"groups":[993,4242],"read":True,"write":True}},"runtime_dependency":dependency,"network":{"adb_listen":"127.0.0.1:5053","host_mutation":False,"host_mounts":[],"qemu_netdev_argv":["user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1"],"qemu_frontend_argv":["virtio-net-pci,netdev=hostnet0"],"native_config":{"schema":1,"records":[{"path":path,"sha256":"3"*64,"size":100,"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"} for path in paths],"adapter":{"path":f"{plan.root}/runtime/network-config-adapter.json","sha256":"4"*64,"size":500,"receipt":adapter}}}}
+    paths=[x["path"] for x in result["network"]["native_config"]["records"]];adb=f"{plan.root}/runtime/host/bin/adb";empty="List of devices attached\n";connected="List of devices attached\n127.0.0.1:6520\tdevice\n"
     def cmd(argv,out): return {"argv":argv,"exit_code":0,"stdout":out,"stdout_size":len(out),"stdout_sha256":hashlib.sha256(out.encode()).hexdigest(),"stderr":"","stderr_size":0,"stderr_sha256":hashlib.sha256(b"").hexdigest()}
+    result["network"]["guest_network"]={"link":cmd(["adb"],"2: eth0: UP\n"),"address":cmd(["adb"],"2: eth0 inet 10.0.2.15/24 scope global eth0\n"),"routes":cmd(["adb"],"default via 10.0.2.2 dev eth0\n"),"endpoint_route":cmd(["adb"],"10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"),"ril_state":cmd(["adb"],"stopped\n"),"ril_log":cmd(["adb"],"restart diagnostic\n")}
     result["network"]["adb_connection"]={"endpoint":"127.0.0.1:6520","before":cmd([adb,"-P","5053","devices"],empty),"connect":cmd([adb,"-P","5053","connect","127.0.0.1:6520"],"connected"),"after":cmd([adb,"-P","5053","devices"],connected),"binding":{"endpoint":"127.0.0.1:6520","config_rows":[{"path":x,"sha256":"3"*64,"size":100,"adb_host_port":6520,"adb_ip_and_port":"0.0.0.0:6520"} for x in paths],"connector_pid":204,"proxy_pid":205,"connector_argv":processes[3]["argv"],"proxy_argv":processes[4]["argv"]}}
     return result
 
@@ -267,26 +270,25 @@ def test_boot_probe_keeps_cgroup_separate_from_supplementary_groups_and_failed_c
     assert "assembly_stalled" in BOOT_PROBE and "post_assembly_stalled" in BOOT_PROBE
     assert "if roles['qemu'] is None or roles['adb'] is None:" in BOOT_PROBE
     assert BOOT_PROBE.index("if roles['qemu'] is None or roles['adb'] is None:") < BOOT_PROBE.index("sys.boot_completed")
-    assert "runtime/ril-config-receipt.json" in BOOT_PROBE
-    assert "stale legacy receipt path" in BOOT_PROBE
+    assert "runtime/ril-config-receipt.json" not in BOOT_PROBE and "native-network-config-invalid" in BOOT_PROBE
     for field in ("start_ticks","exe_sha256","cmdline_sha256","cgroup"):
       assert field in FAILED_LAUNCH_CLEANUP
     assert "actual!=known" in FAILED_LAUNCH_CLEANUP
 
 def test_boot_probe_without_run_cvd_executes_adb_property_gate(tmp_path,capsys):
     import errno
+    import re
     import ipaddress
     import pathlib
     import types
     import uuid
     root=tmp_path
     (root/"runtime").mkdir()
-    config={"instances":{"1":{"adb_host_port":6520,"adb_ip_and_port":"0.0.0.0:6520"}},"fragments":{"AdbConfigFragmentImpl":{"connector_enabled":True,"mode":["vsock_half_tunnel"]}}}
-    config_paths=[]
-    for i in range(3):
-      q=root/f"config-{i}.json";q.write_text(json.dumps(config));config_paths.append(q)
-    ril={"records":[{"path":str(q),"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"} for q in config_paths]}
-    (root/"runtime/ril-config-receipt.json").write_text(json.dumps(ril))
+    config={"instances":{"1":{"adb_host_port":6520,"adb_ip_and_port":"0.0.0.0:6520","external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}},"fragments":{"AdbConfigFragmentImpl":{"connector_enabled":True,"mode":["vsock_half_tunnel"]}}}
+    config_paths=[root/"runtime/assembly/cuttlefish_config.json",root/"runtime/instance/assembly/cuttlefish_config.json",root/"runtime/instance/instances/cvd-1/cuttlefish_config.json"]
+    for q in config_paths:q.parent.mkdir(parents=True,exist_ok=True);q.write_text(json.dumps(config))
+    after=[hashlib.sha256(q.read_bytes()).hexdigest() for q in config_paths];adapter={"schema":1,"records":[{"order":i,"path":str(q),"before_sha256":"2"*64,"before_size":90,"after_sha256":after[i-1],"after_size":q.stat().st_size} for i,q in enumerate(config_paths,1)],"before_identical":True,"after_identical":True,"source_shape":{"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"","ril_gateway":"","ril_prefixlen":255,"ril_dns":""},"applied":{"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}}
+    (root/"runtime/network-config-adapter.json").write_text(json.dumps(adapter))
     calls=[]
     def output(args):
       calls.append(args)
@@ -295,13 +297,20 @@ def test_boot_probe_without_run_cvd_executes_adb_property_gate(tmp_path,capsys):
       if args[-2:]==["getprop","ro.product.cpu.abi"]: return "arm64-v8a"
       if args[-2:]==["getprop","sys.boot_completed"]: return "1"
       if args[-3:]==["shell","cat","/proc/sys/kernel/random/boot_id"]: return "11111111-2222-4333-8444-555555555555"
+      joined=" ".join(args)
+      if "ip -details link show" in joined:return "2: eth0: UP\n"
+      if "ip -4 addr show" in joined:return "2: eth0 inet 10.0.2.15/24 scope global eth0\n"
+      if "ip -4 route show" in joined:return "default via 10.0.2.2 dev eth0\n"
+      if "ip -4 route get" in joined:return "10.8.1.0 via 10.0.2.2 dev eth0 src 10.0.2.15\n"
+      if "init.svc.vendor.ril-daemon" in joined:return "restarting\n"
+      if "logcat" in joined:return "ril diagnostic\n"
       raise AssertionError(args)
     def command(args):
       value=output(args)
       return {"argv":args,"exit_code":0,"stdout":value,"stdout_size":len(value),"stdout_sha256":hashlib.sha256(value.encode()).hexdigest(),"stderr":"","stderr_size":0,"stderr_sha256":hashlib.sha256(b"").hexdigest()}
     captured=[
       {"pid":202,"argv":[str(root/"runtime/host/bin/adb")],"exe":str(root/"runtime/host/bin/adb")},
-      {"pid":203,"argv":[str(root/"runtime/qemu/qemu-system-aarch64"),"-netdev","user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1","-netdev","user,id=hostnet1,net=10.0.1.1/24,dns=8.8.4.4"],"exe":str(root/"runtime/qemu/qemu-system-aarch64")},
+      {"pid":203,"argv":[str(root/"runtime/qemu/qemu-system-aarch64"),"-netdev","user,id=hostnet0,net=10.0.2.15/24,host=10.0.2.2,dns=127.0.0.1","-device","virtio-net-pci,netdev=hostnet0","-netdev","user,id=hostnet1,net=10.0.1.1/24,dns=8.8.4.4"],"exe":str(root/"runtime/qemu/qemu-system-aarch64")},
       {"pid":204,"argv":[str(root/"runtime/host/bin/adb_connector"),"--addresses=0.0.0.0:6520"],"exe":str(root/"runtime/host/bin/adb_connector")},
       {"pid":205,"argv":[str(root/"runtime/host/bin/socket_vsock_proxy"),"--server_type=tcp","--server_tcp_port=6520","--client_type=vsock","--client_vsock_port=5555","--client_vsock_id=37","--label=adb"],"exe":str(root/"runtime/host/bin/socket_vsock_proxy")},
     ]
@@ -320,7 +329,7 @@ def test_boot_probe_without_run_cvd_executes_adb_property_gate(tmp_path,capsys):
       if pid==201: raise FileNotFoundError(errno.ENOENT,"vanished",str(pid))
       return next(x for x in captured if x["pid"]==pid)
     scope={"pids":[201,202,203,204,205],"ident":identify,"cg":Cgroup(),"pathlib":paths,"hashlib":hashlib,
-      "errno":errno,"p":payload,"root":real_path(root),"command":command,"ipaddress":ipaddress,"uuid":uuid,"json":json}
+      "errno":errno,"p":payload,"root":real_path(root),"command":command,"ipaddress":ipaddress,"uuid":uuid,"json":json,"re":re}
     exec(BOOT_PROBE[BOOT_PROBE.index("processes=[]"):],scope)
     receipt=json.loads(capsys.readouterr().out)
     assert receipt["passed"] is True and receipt["roles"]=={"cvd":None,"adb":202,"qemu":203}
@@ -356,15 +365,15 @@ def test_boot_probe_command_timeout_is_structured_and_uses_three_seconds():
     assert seen==[3] and row["exit_code"]==124 and row["stdout"]=="partial" and row["stderr"]=="late"
 
 def test_boot_probe_rejects_proxy_config_mismatch_before_adb_connect(tmp_path,capsys):
-    config={"instances":{"1":{"adb_host_port":6520,"adb_ip_and_port":"0.0.0.0:6520"}},"fragments":{"AdbConfigFragmentImpl":{"connector_enabled":True,"mode":["vsock_half_tunnel"]}}}
+    config={"instances":{"1":{"adb_host_port":6520,"adb_ip_and_port":"0.0.0.0:6520","external_network_mode":"slirp","enable_modem_simulator":True}},"fragments":{"AdbConfigFragmentImpl":{"connector_enabled":True,"mode":["vsock_half_tunnel"]}}}
     paths=[]
     for i in range(3):q=tmp_path/f"c{i}.json";q.write_text(json.dumps(config));paths.append(str(q))
-    ril={"records":[{"path":x} for x in paths]};root=tmp_path
+    native={"records":[{"path":x} for x in paths]};root=tmp_path
     connector={"pid":4,"exe":str(tmp_path/"adb_connector"),"argv":[str(tmp_path/"adb_connector"),"--addresses=0.0.0.0:6520"]}
     proxy={"pid":5,"exe":str(tmp_path/"socket_vsock_proxy"),"argv":[str(tmp_path/"socket_vsock_proxy"),"--server_type=tcp","--server_tcp_port=6520","--client_type=vsock","--client_vsock_port=5555","--client_vsock_id=99","--label=adb"]}
     start=BOOT_PROBE.index("config_rows=[]");end=BOOT_PROBE.index("adb=str(root/'runtime/host/bin/adb')")
     with pytest.raises(SystemExit):
-      exec(BOOT_PROBE[start:end],{"ril":ril,"root":root,"processes":[connector,proxy],"pathlib":__import__('pathlib'),"hashlib":hashlib,"json":json,"p":{"cgroup":"/owned","vsock_cid":37}})
+      exec(BOOT_PROBE[start:end],{"native":native,"root":root,"processes":[connector,proxy],"pathlib":__import__('pathlib'),"hashlib":hashlib,"json":json,"p":{"cgroup":"/owned","vsock_cid":37}})
     row=json.loads(capsys.readouterr().out)
     assert row["reason"]=="adb-vsock-proxy-binding-invalid" and row["fatal"] is True
 

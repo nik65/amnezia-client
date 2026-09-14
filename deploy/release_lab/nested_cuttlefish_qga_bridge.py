@@ -361,7 +361,7 @@ print(json.dumps({'schema':1,'root':str(root),'root_before':root_before,'root_af
 '''
 
 BOOT_PROBE = r'''
-import errno,hashlib,ipaddress,json,os,pathlib,stat,subprocess,sys,uuid
+import errno,hashlib,ipaddress,json,os,pathlib,re,stat,subprocess,sys,uuid
 p=json.loads(sys.argv[1]); root=pathlib.Path(p['guest_root']); cg=pathlib.Path('/sys/fs/cgroup'+p['cgroup'])
 def command(args):
  try: q=subprocess.run(args,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=3); rc=q.returncode; stdout=q.stdout; stderr=q.stderr
@@ -431,9 +431,10 @@ if roles['qemu'] is None or roles['adb'] is None:
   'launcher_no_progress':launcher_no_progress,
   'assembly_elapsed_seconds':p.get('assembly_elapsed_seconds',0),'assembly_missing_polls':p.get('assembly_missing_polls',0),
   'processes':processes,'cgroup':p['cgroup'],'logs':{'launch_stderr':launch_log,'adb_stderr':tail('adb.stderr')}})); raise SystemExit
-qemu=next(x for x in processes if x['pid']==roles['qemu']); netdev=[]
+qemu=next(x for x in processes if x['pid']==roles['qemu']); netdev=[]; frontends=[]
 for i,arg in enumerate(qemu['argv'][:-1]):
  if arg=='-netdev': netdev.append(qemu['argv'][i+1])
+ if arg=='-device' and 'netdev=hostnet0' in qemu['argv'][i+1]: frontends.append(qemu['argv'][i+1])
 if not netdev or any('net=/255' in x or 'host=,' in x for x in netdev):
  print(json.dumps({'ready':False,'fatal':True,'reason':'invalid-qemu-network-argv','phase':'qemu','qemu_seen':True,'network_argv':netdev})); raise SystemExit
 hostnet0=[x for x in netdev if x.startswith('user,id=hostnet0,')]
@@ -446,17 +447,23 @@ except (KeyError,ValueError):
  print(json.dumps({'ready':False,'fatal':True,'reason':'unparseable-hostnet0','phase':'qemu','qemu_seen':True,'network_argv':netdev})); raise SystemExit
 if set(parts)!={'net','host','dns'} or interface.ip!=ipaddress.ip_address('10.0.2.15') or interface.network!=ipaddress.ip_network('10.0.2.0/24') or gateway!=ipaddress.ip_address('10.0.2.2') or dns!=ipaddress.ip_address('127.0.0.1'):
  print(json.dumps({'ready':False,'fatal':True,'reason':'unsafe-hostnet0','phase':'qemu','qemu_seen':True,'network_argv':netdev})); raise SystemExit
+if len(frontends)!=1:
+ print(json.dumps({'ready':False,'fatal':True,'reason':'missing-hostnet0-frontend','phase':'qemu','qemu_seen':True,'network_argv':netdev,'frontend_argv':frontends})); raise SystemExit
+native={'schema':1,'records':[]}; config_paths=(root/'runtime/assembly/cuttlefish_config.json',root/'runtime/instance/assembly/cuttlefish_config.json',root/'runtime/instance/instances/cvd-1/cuttlefish_config.json')
 try:
- ril_path=root.joinpath('runtime/ril-config-receipt.json')
- if root.joinpath('ril-config-receipt.json').exists(): raise OSError('stale legacy receipt path')
- ril=json.loads(ril_path.read_text())
-except (OSError,ValueError):
- print(json.dumps({'ready':False,'fatal':True,'reason':'ril-config-receipt-missing','phase':'qemu','qemu_seen':True})); raise SystemExit
-if len(ril.get('records',[]))!=3 or any(x.get('ril_ipaddr')!='10.0.2.15' or x.get('ril_gateway')!=str(gateway) or x.get('ril_prefixlen')!=interface.network.prefixlen or x.get('ril_dns')!='10.0.2.3' for x in ril['records']):
- print(json.dumps({'ready':False,'fatal':True,'reason':'qemu-config-binding-mismatch','phase':'qemu','qemu_seen':True,'network_argv':netdev})); raise SystemExit
+ adapter_raw=(root/'runtime/network-config-adapter.json').read_bytes(); adapter=json.loads(adapter_raw)
+ if adapter.get('schema')!=1 or adapter.get('before_identical') is not True or adapter.get('after_identical') is not True or adapter.get('source_shape')!={'external_network_mode':'slirp','enable_modem_simulator':True,'ril_ipaddr':'','ril_gateway':'','ril_prefixlen':255,'ril_dns':''} or adapter.get('applied')!={'ril_ipaddr':'10.0.2.15','ril_gateway':'10.0.2.2','ril_prefixlen':24,'ril_dns':'10.0.2.3'}: raise ValueError('adapter receipt')
+ native['adapter']={'path':str(root/'runtime/network-config-adapter.json'),'sha256':hashlib.sha256(adapter_raw).hexdigest(),'size':len(adapter_raw),'receipt':adapter}
+ for path in config_paths:
+  raw=path.read_bytes(); cfg=json.loads(raw); inst=cfg['instances']['1']
+  if inst.get('external_network_mode')!='slirp' or inst.get('enable_modem_simulator') is not True or {k:inst.get(k) for k in ('ril_ipaddr','ril_gateway','ril_prefixlen','ril_dns')}!={'ril_ipaddr':'10.0.2.15','ril_gateway':'10.0.2.2','ril_prefixlen':24,'ril_dns':'10.0.2.3'}: raise ValueError('native network mode')
+  native['records'].append({'path':str(path),'sha256':hashlib.sha256(raw).hexdigest(),'size':len(raw),'external_network_mode':'slirp','enable_modem_simulator':True,'ril_ipaddr':'10.0.2.15','ril_gateway':'10.0.2.2','ril_prefixlen':24,'ril_dns':'10.0.2.3'})
+ if len({x['sha256'] for x in native['records']})!=1 or [x.get('path') for x in adapter['records']]!=[str(x) for x in config_paths] or any(x.get('order')!=i for i,x in enumerate(adapter['records'],1)) or [x.get('after_sha256') for x in adapter['records']]!=[x['sha256'] for x in native['records']]: raise ValueError('adapter binding')
+except (OSError,KeyError,TypeError,ValueError,json.JSONDecodeError) as exc:
+ print(json.dumps({'ready':False,'fatal':True,'reason':'native-network-config-invalid','phase':'qemu','qemu_seen':True,'error_type':type(exc).__name__,'network_argv':netdev,'frontend_argv':frontends})); raise SystemExit
 config_rows=[]; ports=[]
 try:
- for item in ril['records']:
+ for item in native['records']:
   raw=pathlib.Path(item['path']).read_bytes(); cfg=json.loads(raw); inst=cfg['instances']['1']; fragment=cfg['fragments']['AdbConfigFragmentImpl']
   port=inst['adb_host_port']
   if isinstance(port,bool) or not isinstance(port,int) or not 1024<=port<=65535 or inst['adb_ip_and_port']!=f'0.0.0.0:{port}' or fragment!={'connector_enabled':True,'mode':['vsock_half_tunnel']}: raise ValueError('adb config binding')
@@ -509,11 +516,21 @@ if not abi or complete!='1' or not boot_id:
 try: uuid.UUID(boot_id)
 except ValueError:
  print(json.dumps({'ready':False,'fatal':True,'reason':'invalid-android-boot-id','phase':'android-boot','qemu_seen':True,'serial':serial.replace(':','_'),'boot_id_sha256':hashlib.sha256(boot_id.encode()).hexdigest(),'adb_probes':probes,'processes':processes,'cgroup':p['cgroup']})); raise SystemExit
+network_commands={'link':['shell','ip','-details','link','show'],'address':['shell','ip','-4','addr','show'],'routes':['shell','ip','-4','route','show'],'endpoint_route':['shell','ip','-4','route','get','10.8.1.0'],'ril_state':['shell','getprop','init.svc.vendor.ril-daemon'],'ril_log':['shell','logcat','-d','-t','200','-v','threadtime','-b','main','-b','system','-b','events','RIL*:V','libcuttlefish-rild:V','init:I','*:S']}
+network_evidence={name:command([adb,'-P',port,'-s',serial,*argv]) for name,argv in network_commands.items()}
+def fail_network(reason):
+ print(json.dumps({'ready':False,'fatal':True,'reason':reason,'phase':'android-network','qemu_seen':True,'network_argv':netdev,'frontend_argv':frontends,'native_config':native,'guest_network':network_evidence,'processes':processes,'cgroup':p['cgroup']}));raise SystemExit
+if any(row['exit_code']!=0 for row in network_evidence.values()): fail_network('guest-network-capability-failed')
+addr=network_evidence['address']['stdout']; routes=network_evidence['routes']['stdout']; route=network_evidence['endpoint_route']['stdout']
+addresses=re.findall(r'\binet ([0-9.]+)/(\d+)',addr)
+if not any(not ipaddress.ip_address(ip).is_loopback for ip,_ in addresses): fail_network('guest-nonloopback-ipv4-missing')
+defaults=re.findall(r'(?m)^default(?: via ([0-9.]+))? dev (\S+)',routes)
+if len(defaults)!=1 or not defaults[0][1] or not re.search(r'\bdev '+re.escape(defaults[0][1])+r'\b.*\bsrc ([0-9.]+)',route): fail_network('guest-default-or-endpoint-route-missing')
 r={'schema':2,'operation':'nested-cuttlefish-boot','run_id':p['run_id'],'profile':p['profile'],'attempt_nonce':p['attempt_nonce'],
  'marker':p['marker'],'guest_root':p['guest_root'],'outer_ownership':p['outer_ownership'],'origin':'guest','transport':'qga','injected':False,
  'containment':{'kind':'cgroup-v2','path':p['cgroup'],'member_pids':pids,'stable_reads':p['stable_reads']},'processes':processes,'roles':{'cvd':roles['cvd'],'adb':roles['adb'],'qemu':roles['qemu']},
  'boot':{'abi':abi,'boot_completed':complete,'serial':serial.replace(':','_'),'boot_id':boot_id},'vsock_cid':p['vsock_cid'],
- 'adb_endpoint':p['adb_endpoint'],'cvdnetwork_gid':p['cvdnetwork_gid'],'kvm_gid':p['kvm_gid'],'vhost_vsock':p['vhost_vsock'],'network':{'adb_listen':p['adb_endpoint'],'host_mutation':False,'host_mounts':[],'qemu_netdev_argv':netdev,'ril_config':ril,'adb_connection':adb_connection},'passed':True}
+ 'adb_endpoint':p['adb_endpoint'],'cvdnetwork_gid':p['cvdnetwork_gid'],'kvm_gid':p['kvm_gid'],'vhost_vsock':p['vhost_vsock'],'network':{'adb_listen':p['adb_endpoint'],'host_mutation':False,'host_mounts':[],'qemu_netdev_argv':netdev,'qemu_frontend_argv':frontends,'native_config':native,'guest_network':network_evidence,'adb_connection':adb_connection},'passed':True}
 print(json.dumps(r,sort_keys=True,separators=(',',':')))
 '''
 
