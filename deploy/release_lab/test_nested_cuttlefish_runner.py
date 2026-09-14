@@ -86,8 +86,8 @@ def wayland_dependency(p:InnerPlan,gid:int=999)->tuple[dict,dict]:
 def boot()->dict:
     p=plan();result=base("nested-cuttlefish-boot")
     paths=[f"{p.root}/runtime/assembly/cuttlefish_config.json",f"{p.root}/runtime/instance/assembly/cuttlefish_config.json",f"{p.root}/runtime/instance/instances/cvd-1/cuttlefish_config.json"]
-    adapter_records=[{"order":i,"path":path,"before_sha256":"2"*64,"before_size":90,"after_sha256":"3"*64,"after_size":100} for i,path in enumerate(paths,1)]
-    adapter_receipt={"schema":1,"records":adapter_records,"before_identical":True,"after_identical":True,"source_shape":{"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"","ril_gateway":"","ril_prefixlen":255,"ril_dns":""},"applied":{"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}}
+    adapter_records=[{"order":i,"path":path,"target_order":1 if i<3 else 2,"before_dev":1,"before_inode":11 if i<3 else 12,"after_dev":1,"after_inode":21 if i<3 else 22,"before_sha256":"2"*64,"before_size":90,"after_sha256":"3"*64,"after_size":100} for i,path in enumerate(paths,1)]
+    adapter_receipt={"schema":2,"records":adapter_records,"unique_target_writes":2,"alias":{"path":f"{p.root}/runtime/assembly","target":f"{p.root}/runtime/instance/assembly"},"before_identical":True,"after_identical":True,"source_shape":{"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"","ril_gateway":"","ril_prefixlen":255,"ril_dns":""},"applied":{"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}}
     native={"schema":1,"records":[{"path":path,"sha256":"3"*64,"size":100,"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"} for path in paths],"adapter":{"path":f"{p.root}/runtime/network-config-adapter.json","sha256":"4"*64,"size":500,"receipt":adapter_receipt}}
     procs=[process("run_cvd",201),process("adb",202),process("qemu-system-aarch64",203),process("kernel_log_monitor",204),process("adb_connector",205),process("socket_vsock_proxy",206)]
     result.update({"containment":{"kind":"cgroup-v2","path":"/amnezia-release-lab/run-1/nonce-1",
@@ -185,30 +185,33 @@ def test_exact_plan_uses_real_reviewed_flags_and_guest_cgroup():
     with pytest.raises(NestedCuttlefishError,match="noncanonical"): build_stage_plan(daemon)
 
 @pytest.mark.skipif(sys.platform!="win32" or not shutil.which("wsl.exe"),reason="WSL required for POSIX atomic adapter behavior")
-@pytest.mark.parametrize("mode",["success","inconsistent","nonblank","symlink","partial"])
+@pytest.mark.parametrize("mode",["success","inconsistent","nonblank","outside-alias","partial"])
 def test_actual_cvd_network_config_adapter_is_fail_closed_and_atomic(mode):
     script=build_launch_script(plan()); encoded=re.search(r"base64\.b64decode\('([A-Za-z0-9+/=]+)'\)",script).group(1)
     wrapper=r'''import base64,json,os,pathlib,shutil,sys,tempfile
-code=base64.b64decode(sys.argv[1]);scenario=sys.argv[2];root=pathlib.Path(tempfile.mkdtemp(prefix='amz-net-adapter-'));paths=(root/'runtime/assembly/cuttlefish_config.json',root/'runtime/instance/assembly/cuttlefish_config.json',root/'runtime/instance/instances/cvd-1/cuttlefish_config.json')
+code=base64.b64decode(sys.argv[1]);scenario=sys.argv[2];root=pathlib.Path(tempfile.mkdtemp(prefix='amz-net-adapter-'));runtime=root/'runtime';target1=runtime/'instance/assembly';target2=runtime/'instance/instances/cvd-1';target1.mkdir(parents=True);target2.mkdir(parents=True);os.symlink(str(target1),runtime/'assembly');paths=(runtime/'assembly/cuttlefish_config.json',target1/'cuttlefish_config.json',target2/'cuttlefish_config.json')
 raw={'instances':{'1':{'adb_host_port':6520,'adb_ip_and_port':'0.0.0.0:6520','external_network_mode':'slirp','enable_modem_simulator':True,'ril_ipaddr':'','ril_gateway':'','ril_prefixlen':255,'ril_dns':''}},'fragments':{'AdbConfigFragmentImpl':{'connector_enabled':True,'mode':['vsock_half_tunnel']}}};data=(json.dumps(raw,separators=(',',':'))+'\n').encode()
 source=data
-for p in paths:p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(source)
+for p in (paths[1],paths[2]):p.write_bytes(source);os.chown(p,1000,1000);os.chmod(p,0o600)
+os.chown(root,0,0);os.chmod(root,0o711);os.chown(runtime,1000,1000);os.chmod(runtime,0o755);os.chown(runtime/'instance',1000,1000);os.chmod(runtime/'instance',0o700)
+for p in (target1,runtime/'instance/instances',target2):os.chown(p,1000,1000);os.chmod(p,0o775)
+os.lchown(runtime/'assembly',1000,1000)
 if scenario=='inconsistent':paths[2].write_bytes(source+b' ')
 if scenario=='nonblank':v=json.loads(source);v['instances']['1']['ril_ipaddr']='192.0.2.9';paths[1].write_text(json.dumps(v))
-if scenario=='symlink':paths[1].unlink();paths[1].symlink_to(paths[0])
+if scenario=='outside-alias':(runtime/'assembly').unlink();os.symlink('/tmp',runtime/'assembly');os.lchown(runtime/'assembly',1000,1000)
 original_replace=os.replace;count=[0]
 def replace(a,b):
  if str(b).endswith('cuttlefish_config.json'):count[0]+=1
  if scenario=='partial' and count[0]==2:raise OSError('injected second replace failure')
  return original_replace(a,b)
 if scenario=='partial':os.replace=replace
-sys.argv=['adapter',str(root)];ok=True
+sys.argv=['adapter',str(root),'1000'];ok=True
 try:exec(compile(code,'adapter','exec'))
 except BaseException:ok=False
 finally:os.replace=original_replace
 same=[p.read_bytes()==source for p in paths if p.exists() and not p.is_symlink()];receipt=root/'runtime/network-config-adapter.json';print(json.dumps({'ok':ok,'same':same,'receipt':receipt.exists()}));shutil.rmtree(root)
 '''
-    row=json.loads(subprocess.run(["wsl.exe","python3","-c",wrapper,encoded,mode],check=True,capture_output=True,text=True).stdout)
+    row=json.loads(subprocess.run(["wsl.exe","-u","root","python3","-c",wrapper,encoded,mode],check=True,capture_output=True,text=True).stdout)
     if mode=="success": assert row["ok"] is True and row["receipt"] is True and row["same"]==[False,False,False]
     else: assert row["ok"] is False and row["receipt"] is False and (mode!="partial" or row["same"]==[True,True,True])
 
@@ -218,28 +221,33 @@ def test_entire_generated_start_script_binds_root_and_runs_consumer_only_after_a
     p=plan(); outer=build_launch_script(p); start=re.search(r"<<'AMNEZIA_CVD_START'\n(.*?)\nAMNEZIA_CVD_START",outer,re.S).group(1); encoded=base64.b64encode(start.encode()).decode()
     wrapper=r"""import base64,json,os,pathlib,shutil,subprocess,sys
 start=base64.b64decode(sys.argv[1]);mode=sys.argv[2];root=pathlib.Path(sys.argv[3]);shutil.rmtree(root,ignore_errors=True)
-for rel in ('runtime/host/bin','runtime/assembly','runtime/instance/assembly','runtime/instance/instances/cvd-1','runtime/home','runtime/tmp','runtime/images','runtime/qemu','logs'):(root/rel).mkdir(parents=True,exist_ok=True)
+for rel in ('runtime/host/bin','runtime/instance/assembly','runtime/instance/instances/cvd-1','runtime/home','runtime/tmp','runtime/images','runtime/qemu','logs'):(root/rel).mkdir(parents=True,exist_ok=True)
 assemble=root/'runtime/host/bin/assemble_cvd';run=root/'runtime/host/bin/run_cvd'
 assemble.write_text('''#!/usr/bin/python3
 import json,os,pathlib,sys
-root=pathlib.Path(os.environ['AMZ_TEST_ROOT']); mode=os.environ['AMZ_TEST_MODE']; row={'argv':sys.argv,'cwd':os.getcwd(),'HOME':os.environ.get('HOME'),'TMPDIR':os.environ.get('TMPDIR')}; (root/'assemble.json').write_text(json.dumps(row))
+root=pathlib.Path(os.environ['AMZ_TEST_ROOT']); owner=int(os.environ['AMZ_TEST_UID']); mode=os.environ['AMZ_TEST_MODE']; row={'argv':sys.argv,'cwd':os.getcwd(),'HOME':os.environ.get('HOME'),'TMPDIR':os.environ.get('TMPDIR')}; (root/'assemble.json').write_text(json.dumps(row))
 cfg={'instances':{'1':{'adb_host_port':6520,'adb_ip_and_port':'0.0.0.0:6520','external_network_mode':'slirp','enable_modem_simulator':True,'ril_ipaddr':'','ril_gateway':'','ril_prefixlen':255,'ril_dns':''}},'fragments':{'AdbConfigFragmentImpl':{'connector_enabled':True,'mode':['vsock_half_tunnel']}}}
 if mode=='adapter-failure':cfg['instances']['1']['ril_gateway']='192.0.2.1'
 raw=json.dumps(cfg,separators=(',',':')).encode()
-for rel in ('runtime/assembly/cuttlefish_config.json','runtime/instance/assembly/cuttlefish_config.json','runtime/instance/instances/cvd-1/cuttlefish_config.json'):(root/rel).write_bytes(raw)
+target1=root/'runtime/instance/assembly';target2=root/'runtime/instance/instances/cvd-1';alias=root/'runtime/assembly';alias.symlink_to(target1)
+for p in (target1/'cuttlefish_config.json',target2/'cuttlefish_config.json'):p.write_bytes(raw);os.chown(p,owner,owner);os.chmod(p,0o600)
+os.chown(root,0,0);os.chmod(root,0o711);os.chown(root/'runtime',owner,owner);os.chmod(root/'runtime',0o755);os.chown(root/'runtime/instance',owner,owner);os.chmod(root/'runtime/instance',0o700)
+for p in (target1,root/'runtime/instance/instances',target2):os.chown(p,owner,owner);os.chmod(p,0o775)
+os.lchown(alias,owner,owner)
 ''');run.write_text('''#!/usr/bin/python3
 import json,os,pathlib,sys
 root=pathlib.Path(os.environ['AMZ_TEST_ROOT']); receipt=json.loads((root/'runtime/network-config-adapter.json').read_text()); (root/'run.json').write_text(json.dumps({'argv':sys.argv,'receipt':receipt}))
 ''')
-assemble.chmod(0o700);run.chmod(0o700);start_path=root/'runtime/start-cvd-e2e.sh';start_path.write_bytes(start);start_path.chmod(0o700);env=dict(os.environ,AMZ_TEST_ROOT=str(root),AMZ_TEST_MODE=mode,HOME=str(root/'runtime/home'),TMPDIR=str(root/'runtime/tmp'),ANDROID_HOST_OUT=str(root/'runtime/host'),ANDROID_PRODUCT_OUT=str(root/'runtime/images'));proc=subprocess.run(['/bin/sh',str(start_path)],env=env,capture_output=True,text=True)
+assemble.chmod(0o700);run.chmod(0o700);start_path=root/'runtime/start-cvd-e2e.sh';start_path.write_bytes(start);start_path.chmod(0o700);env=dict(os.environ,AMZ_TEST_ROOT=str(root),AMZ_TEST_UID=sys.argv[4],AMZ_TEST_MODE=mode,HOME=str(root/'runtime/home'),TMPDIR=str(root/'runtime/tmp'),ANDROID_HOST_OUT=str(root/'runtime/host'),ANDROID_PRODUCT_OUT=str(root/'runtime/images'));proc=subprocess.run(['/bin/sh',str(start_path)],env=env,capture_output=True,text=True)
 assemble_path=root/'assemble.json';assemble_row=json.loads(assemble_path.read_text()) if assemble_path.exists() else None;run_path=root/'run.json';run_row=json.loads(run_path.read_text()) if run_path.exists() else None;print(json.dumps({'rc':proc.returncode,'stderr':proc.stderr,'assemble':assemble_row,'run':run_row}));shutil.rmtree(root)
 """
-    row=json.loads(subprocess.run(["wsl.exe","-u","root","python3","-c",wrapper,encoded,mode,p.root],check=True,capture_output=True,text=True).stdout)
+    row=json.loads(subprocess.run(["wsl.exe","-u","root","python3","-c",wrapper,encoded,mode,p.root,str(p.runtime_uid)],check=True,capture_output=True,text=True).stdout)
     assert row["assemble"] is not None,row
     assert row["assemble"]["cwd"]==f"{p.root}/runtime" and row["assemble"]["HOME"]==f"{p.root}/runtime/home" and row["assemble"]["TMPDIR"]==f"{p.root}/runtime/tmp"
     assert row["assemble"]["argv"]==[f"{p.root}/runtime/host/bin/assemble_cvd",*p.launch_argv[1:]]
     if mode=="success":
-        assert row["rc"]==0 and row["run"]["argv"]==[f"{p.root}/runtime/host/bin/run_cvd"] and [x["order"] for x in row["run"]["receipt"]["records"]]==[1,2,3]
+        assert row["rc"]==0,row
+        assert row["run"]["argv"]==[f"{p.root}/runtime/host/bin/run_cvd"] and [x["order"] for x in row["run"]["receipt"]["records"]]==[1,2,3]
     else: assert row["rc"]!=0 and row["run"] is None and "network-config-adapter:ValueError" in row["stderr"]
 
 def test_boot_is_only_boot_and_requires_complete_stable_cgroup_inventory():

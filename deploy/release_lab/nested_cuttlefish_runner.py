@@ -267,7 +267,7 @@ def build_launch_script(plan: InnerPlan) -> str:
     assemble_argv=" ".join(shlex.quote(x) for x in assemble)
     run_cvd=shlex.quote(f"{plan.root}/runtime/host/bin/run_cvd")
     adapter_code=r'''import hashlib,json,os,pathlib,stat,sys
-root=pathlib.Path(sys.argv[1]); paths=(root/'runtime/assembly/cuttlefish_config.json',root/'runtime/instance/assembly/cuttlefish_config.json',root/'runtime/instance/instances/cvd-1/cuttlefish_config.json'); originals=[]
+root=pathlib.Path(sys.argv[1]); uid=int(sys.argv[2]); alias=root/'runtime/assembly'; target1=root/'runtime/instance/assembly'; target2=root/'runtime/instance/instances/cvd-1'; paths=(alias/'cuttlefish_config.json',target1/'cuttlefish_config.json',target2/'cuttlefish_config.json'); targets=(target1/'cuttlefish_config.json',target2/'cuttlefish_config.json'); originals=[]
 expected={'external_network_mode':'slirp','enable_modem_simulator':True,'ril_ipaddr':'','ril_gateway':'','ril_prefixlen':255,'ril_dns':''}; replacement={'ril_ipaddr':'10.0.2.15','ril_gateway':'10.0.2.2','ril_prefixlen':24,'ril_dns':'10.0.2.3'}
 def atomic(path,data,mode):
  tmp=path.with_name(path.name+'.amnezia-network.tmp'); fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,mode)
@@ -279,9 +279,16 @@ def atomic(path,data,mode):
  finally: os.close(fd)
  os.replace(tmp,path); d=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW); os.fsync(d); os.close(d)
 try:
- for index,path in enumerate(paths):
+ checks=((root,0,0o711),(root/'runtime',uid,0o755),(root/'runtime/instance',uid,0o700),(target1,uid,0o775),(root/'runtime/instance/instances',uid,0o775),(target2,uid,0o775))
+ for path,owner,perm in checks:
   s=path.lstat()
-  if not stat.S_ISREG(s.st_mode) or path.is_symlink(): raise ValueError('config identity')
+  if not stat.S_ISDIR(s.st_mode) or path.is_symlink() or s.st_uid!=owner or s.st_gid!=owner or stat.S_IMODE(s.st_mode)!=perm: raise ValueError(f'ancestry identity:{path}:{s.st_uid}:{s.st_gid}:{stat.S_IMODE(s.st_mode):o}')
+ ls=alias.lstat()
+ if not stat.S_ISLNK(ls.st_mode) or ls.st_uid!=uid or ls.st_gid!=uid or os.readlink(alias)!=str(target1): raise ValueError('assembly alias identity')
+ unique_originals=[]; unique_identities=[]
+ for path in targets:
+  s=path.lstat()
+  if not stat.S_ISREG(s.st_mode) or path.is_symlink() or s.st_uid!=uid or s.st_gid!=uid or stat.S_IMODE(s.st_mode)!=0o600: raise ValueError('config identity')
   fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW); held=os.fstat(fd); chunks=[]
   try:
    while True:
@@ -293,28 +300,30 @@ try:
   if (held.st_dev,held.st_ino,held.st_size)!=(s.st_dev,s.st_ino,len(raw)): raise ValueError('config changed')
   cfg=json.loads(raw); inst=cfg['instances']['1']
   if any(inst.get(k)!=v for k,v in expected.items()): raise ValueError('unexpected native network shape')
-  originals.append((path,raw,stat.S_IMODE(s.st_mode),cfg))
- if len({raw for _,raw,_,_ in originals})!=1: raise ValueError('config bytes differ')
+  unique_identities.append((held.st_dev,held.st_ino)); unique_originals.append((path,raw,cfg))
+ if unique_identities[0]==unique_identities[1]: raise ValueError('config alias topology')
+ originals=[(paths[0],unique_originals[0][1],unique_originals[0][2]),(paths[1],unique_originals[0][1],unique_originals[0][2]),(paths[2],unique_originals[1][1],unique_originals[1][2])]; identities=[unique_identities[0],unique_identities[0],unique_identities[1]]
+ if len({raw for _,raw,_ in originals})!=1: raise ValueError('config bytes differ')
  updated=[]
- for _,_,_,cfg in originals:
+ for _,_,cfg in originals[:1]:
   inst=cfg['instances']['1']; inst.update(replacement); updated.append((json.dumps(cfg,sort_keys=True,separators=(',',':'))+'\n').encode())
- if len(set(updated))!=1: raise ValueError('adapter output differs')
- written=[]
+ data=updated[0]; unique=((targets[0],originals[0][1]),(targets[1],originals[2][1])); written=[]
  try:
-  for (path,raw,mode,_),data in zip(originals,updated): written.append((path,raw,mode)); atomic(path,data,mode)
+  for path,raw in unique: written.append((path,raw)); atomic(path,data,0o600)
  except BaseException:
   rollback=[]
-  for path,raw,mode in reversed(written):
-   try: atomic(path,raw,mode); rollback.append(str(path))
+  for path,raw in reversed(written):
+   try: atomic(path,raw,0o600); rollback.append(str(path))
    except BaseException: pass
   if len(rollback)!=len(written): raise RuntimeError('network adapter rollback incomplete')
   raise
  records=[]
- for order,((path,raw,_,_),data) in enumerate(zip(originals,updated),1):
+ for order,(path,raw,_) in enumerate(originals,1):
   check=path.read_bytes()
   if check!=data: raise RuntimeError('network adapter readback mismatch')
-  records.append({'order':order,'path':str(path),'before_sha256':hashlib.sha256(raw).hexdigest(),'before_size':len(raw),'after_sha256':hashlib.sha256(check).hexdigest(),'after_size':len(check)})
- receipt={'schema':1,'records':records,'before_identical':True,'after_identical':len({x['after_sha256'] for x in records})==1,'source_shape':expected,'applied':replacement}
+  now=path.stat(); records.append({'order':order,'path':str(path),'target_order':1 if order<3 else 2,'before_dev':identities[order-1][0],'before_inode':identities[order-1][1],'after_dev':now.st_dev,'after_inode':now.st_ino,'before_sha256':hashlib.sha256(raw).hexdigest(),'before_size':len(raw),'after_sha256':hashlib.sha256(check).hexdigest(),'after_size':len(check)})
+ if (records[0]['after_dev'],records[0]['after_inode'])!=(records[1]['after_dev'],records[1]['after_inode']) or (records[2]['after_dev'],records[2]['after_inode'])==(records[0]['after_dev'],records[0]['after_inode']): raise RuntimeError('network adapter alias readback mismatch')
+ receipt={'schema':2,'records':records,'unique_target_writes':2,'alias':{'path':str(alias),'target':str(target1)},'before_identical':True,'after_identical':len({x['after_sha256'] for x in records})==1,'source_shape':expected,'applied':replacement}
  out=root/'runtime/network-config-adapter.json'; atomic(out,(json.dumps(receipt,sort_keys=True,separators=(',',':'))+'\n').encode(),0o600)
 except BaseException as exc:
  print('network-config-adapter:'+type(exc).__name__,file=sys.stderr); raise
@@ -355,7 +364,7 @@ set -eu
 root={shlex.quote(plan.root)}
 cd "$root/runtime"
 {assemble_argv}
-python3 -c "import base64;exec(compile(base64.b64decode('{adapter_b64}'),'network-config-adapter','exec'))" "$root"
+python3 -c "import base64;exec(compile(base64.b64decode('{adapter_b64}'),'network-config-adapter','exec'))" "$root" {plan.runtime_uid}
 exec {run_cvd}
 AMNEZIA_CVD_START
 chmod 0700 "$root/runtime/start-cvd.sh"
@@ -424,11 +433,12 @@ def validate_boot_receipt(plan: InnerPlan, receipt: Mapping) -> dict:
         if not isinstance(item,Mapping) or set(item)!={"path","sha256","size","external_network_mode","enable_modem_simulator","ril_ipaddr","ril_gateway","ril_prefixlen","ril_dns"} or not SHA_RE.fullmatch(str(item.get("sha256",""))) or not isinstance(item.get("size"),int) or isinstance(item.get("size"),bool) or item["size"]<=0 or item.get("external_network_mode")!="slirp" or item.get("enable_modem_simulator") is not True or {k:item.get(k) for k in ("ril_ipaddr","ril_gateway","ril_prefixlen","ril_dns")}!={"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}: raise NestedCuttlefishError("native config binding invalid")
     if len({x["sha256"] for x in native["records"]})!=1: raise NestedCuttlefishError("native config bytes differ")
     adapter=native["adapter"]; adapter_receipt=adapter.get("receipt") if isinstance(adapter,Mapping) else None
-    if not isinstance(adapter,Mapping) or set(adapter)!={"path","sha256","size","receipt"} or adapter.get("path")!=f"{plan.root}/runtime/network-config-adapter.json" or not SHA_RE.fullmatch(str(adapter.get("sha256",""))) or not isinstance(adapter.get("size"),int) or isinstance(adapter.get("size"),bool) or adapter["size"]<=0 or not isinstance(adapter_receipt,Mapping) or adapter_receipt.get("schema")!=1 or adapter_receipt.get("before_identical") is not True or adapter_receipt.get("after_identical") is not True or adapter_receipt.get("source_shape")!={"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"","ril_gateway":"","ril_prefixlen":255,"ril_dns":""} or adapter_receipt.get("applied")!={"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}: raise NestedCuttlefishError("network adapter receipt invalid")
+    if not isinstance(adapter,Mapping) or set(adapter)!={"path","sha256","size","receipt"} or adapter.get("path")!=f"{plan.root}/runtime/network-config-adapter.json" or not SHA_RE.fullmatch(str(adapter.get("sha256",""))) or not isinstance(adapter.get("size"),int) or isinstance(adapter.get("size"),bool) or adapter["size"]<=0 or not isinstance(adapter_receipt,Mapping) or set(adapter_receipt)!={"schema","records","unique_target_writes","alias","before_identical","after_identical","source_shape","applied"} or adapter_receipt.get("schema")!=2 or adapter_receipt.get("unique_target_writes")!=2 or adapter_receipt.get("alias")!={"path":f"{plan.root}/runtime/assembly","target":f"{plan.root}/runtime/instance/assembly"} or adapter_receipt.get("before_identical") is not True or adapter_receipt.get("after_identical") is not True or adapter_receipt.get("source_shape")!={"external_network_mode":"slirp","enable_modem_simulator":True,"ril_ipaddr":"","ril_gateway":"","ril_prefixlen":255,"ril_dns":""} or adapter_receipt.get("applied")!={"ril_ipaddr":"10.0.2.15","ril_gateway":"10.0.2.2","ril_prefixlen":24,"ril_dns":"10.0.2.3"}: raise NestedCuttlefishError("network adapter receipt invalid")
     adapter_records=adapter_receipt.get("records")
     if not isinstance(adapter_records,list) or len(adapter_records)!=3 or [x.get("path") for x in adapter_records if isinstance(x,Mapping)]!=expected_order: raise NestedCuttlefishError("network adapter paths invalid")
     for index,(row,config) in enumerate(zip(adapter_records,native["records"]),1):
-        if not isinstance(row,Mapping) or set(row)!={"order","path","before_sha256","before_size","after_sha256","after_size"} or row.get("order")!=index or not SHA_RE.fullmatch(str(row.get("before_sha256",""))) or not isinstance(row.get("before_size"),int) or isinstance(row.get("before_size"),bool) or row["before_size"]<=0 or row.get("after_sha256")!=config["sha256"] or row.get("after_size")!=config["size"]: raise NestedCuttlefishError("network adapter binding invalid")
+        if not isinstance(row,Mapping) or set(row)!={"order","path","target_order","before_dev","before_inode","after_dev","after_inode","before_sha256","before_size","after_sha256","after_size"} or row.get("order")!=index or row.get("target_order")!=(1 if index<3 else 2) or any(not isinstance(row.get(k),int) or isinstance(row.get(k),bool) or row[k]<=0 for k in ("before_dev","before_inode","after_dev","after_inode")) or not SHA_RE.fullmatch(str(row.get("before_sha256",""))) or not isinstance(row.get("before_size"),int) or isinstance(row.get("before_size"),bool) or row["before_size"]<=0 or row.get("after_sha256")!=config["sha256"] or row.get("after_size")!=config["size"]: raise NestedCuttlefishError("network adapter binding invalid")
+    if (adapter_records[0]["before_dev"],adapter_records[0]["before_inode"])!=(adapter_records[1]["before_dev"],adapter_records[1]["before_inode"]) or (adapter_records[2]["before_dev"],adapter_records[2]["before_inode"])==(adapter_records[0]["before_dev"],adapter_records[0]["before_inode"]) or (adapter_records[0]["after_dev"],adapter_records[0]["after_inode"])!=(adapter_records[1]["after_dev"],adapter_records[1]["after_inode"]) or (adapter_records[2]["after_dev"],adapter_records[2]["after_inode"])==(adapter_records[0]["after_dev"],adapter_records[0]["after_inode"]): raise NestedCuttlefishError("network adapter alias topology invalid")
     if not isinstance(guest_network,Mapping) or set(guest_network)!={"link","address","routes","endpoint_route","ril_state","ril_log"}: raise NestedCuttlefishError("guest network proof missing")
     for row in guest_network.values():
         if not isinstance(row,Mapping) or row.get("exit_code")!=0 or isinstance(row.get("exit_code"),bool) or any(not SHA_RE.fullmatch(str(row.get(k,""))) for k in ("stdout_sha256","stderr_sha256")) or any(not isinstance(row.get(k),int) or isinstance(row.get(k),bool) or not 0<=row[k]<=1048576 for k in ("stdout_size","stderr_size")): raise NestedCuttlefishError("guest network command evidence invalid")
