@@ -780,7 +780,8 @@ bool VpnBackend::prepareFullTunnelConfig(const Profile &profile,
         rewritten.replace(tableLine, QStringLiteral("Table = off"));
     } else {
         const qsizetype interfaceEnd = rewritten.indexOf(QRegularExpression(
-                QStringLiteral(R"(^\s*\[Peer\]\s*$)")), 0);
+                QStringLiteral(R"(^\s*\[Peer\]\s*$)"),
+                QRegularExpression::MultilineOption), 0);
         const QString line = QStringLiteral("Table = off\n");
         if (interfaceEnd >= 0) {
             rewritten.insert(interfaceEnd, line);

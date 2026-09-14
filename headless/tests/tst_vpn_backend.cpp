@@ -422,10 +422,15 @@ private slots:
         QVERIFY(stagedPath.endsWith(QStringLiteral("wg0.conf")));
         QFile staged(stagedPath);
         QVERIFY(staged.open(QIODevice::ReadOnly));
-        QVERIFY(QString::fromUtf8(staged.readAll()).contains(
-                QStringLiteral("AllowedIPs = 0.0.0.0/0, ::/0")));
-        staged.seek(0);
-        QVERIFY(QString::fromUtf8(staged.readAll()).contains(QStringLiteral("Table = off")));
+        const QString stagedContent = QString::fromUtf8(staged.readAll());
+        QVERIFY(stagedContent.contains(QStringLiteral("AllowedIPs = 0.0.0.0/0, ::/0")));
+        QCOMPARE(stagedContent.count(QStringLiteral("Table = off")), 1);
+        const qsizetype tableOffset = stagedContent.indexOf(QStringLiteral("Table = off"));
+        const qsizetype peerOffset = stagedContent.indexOf(QStringLiteral("[Peer]"));
+        QVERIFY(tableOffset > stagedContent.indexOf(QStringLiteral("[Interface]")));
+        QVERIFY(tableOffset < peerOffset);
+        const QString peerSection = stagedContent.mid(peerOffset);
+        QVERIFY(!peerSection.contains(QStringLiteral("Table = off")));
 
         QVERIFY2(backend.disconnect().ok, qPrintable(backend.lastError().message));
         QCOMPARE(runner->calls.constLast().arguments.at(0), QStringLiteral("down"));
