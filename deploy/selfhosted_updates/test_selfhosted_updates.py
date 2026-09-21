@@ -3331,8 +3331,8 @@ class SourceContractTests(unittest.TestCase):
             REPO_ROOT / "client/platforms/windows/daemon/wireguardutilswindows.cpp"
         ).read_text(encoding="utf-8")
         client_cmake = (REPO_ROOT / "client/CMakeLists.txt").read_text(encoding="utf-8")
-        marketplace_updates = (
-            REPO_ROOT / "client/ui/controllers/marketplaceUpdateController.cpp"
+        selfhosted_updates = (
+            REPO_ROOT / "client/core/controllers/updateController.cpp"
         ).read_text(encoding="utf-8")
         tun2socks_recipe = (REPO_ROOT / "recipes/tun2socks/conanfile.py").read_text(encoding="utf-8")
         libxray_recipe = (REPO_ROOT / "recipes/amnezia-libxray/conanfile.py").read_text(encoding="utf-8")
@@ -3361,12 +3361,11 @@ class SourceContractTests(unittest.TestCase):
         )
 
         self.assertIn("add_compile_definitions(AMNEZIA_SELFHOSTED_BUILD)", client_cmake)
-        self.assertIn(
-            "#if defined(AMNEZIA_SELFHOSTED_BUILD)\n"
-            "    // A self-hosted release has its own signed update channel",
-            marketplace_updates,
-        )
-        self.assertIn("    return;\n#endif\n\n#if defined(Q_OS_IOS) || defined(Q_OS_ANDROID)", marketplace_updates)
+        self.assertIn("if (isSelfHostedUpdateChannelConfigured())", selfhosted_updates)
+        self.assertIn("fetchSelfHostedManifest();", selfhosted_updates)
+        self.assertIn("bool UpdateController::verifySignedManifestEnvelope", selfhosted_updates)
+        self.assertIn("bool UpdateController::verifyManifestSignature", selfhosted_updates)
+        self.assertIn("bool UpdateController::runInstaller()", selfhosted_updates)
 
         self.assertIn('go_tmp_dir = os.path.join(self.build_folder, "gotmp")', tun2socks_recipe)
         self.assertIn("os.makedirs(go_tmp_dir, exist_ok=True)", tun2socks_recipe)
@@ -8909,10 +8908,11 @@ process.stdout.write(JSON.stringify({{
     def test_qif_structured_snapshot_payload_matches_readable_helper(self) -> None:
         helper_path = REPO_ROOT / "deploy" / "installer" / "qif" / "windows_service_snapshot.cs"
         control = (REPO_ROOT / "deploy" / "installer" / "qif" / "controlscript.js").read_bytes()
-        match = re.search(rb'(?m)^    var sourceGzipBase64 = "([^"]+)";$', control)
+        match = re.search(rb'(?m)^    var sourceGzipBase64 = "([^"]+)";\r?$', control)
         self.assertIsNotNone(match)
-        self.assertEqual(gzip.decompress(base64.b64decode(match.group(1))), helper_path.read_bytes())
+        payload = gzip.decompress(base64.b64decode(match.group(1)))
         helper = helper_path.read_bytes()
+        self.assertEqual(payload.replace(b"\r\n", b"\n"), helper.replace(b"\r\n", b"\n"))
         self.assertIn(b"OpenSCManagerW", helper)
         self.assertIn(b"QueryServiceConfig2W", helper)
         self.assertNotIn(b"sc.exe", helper)
