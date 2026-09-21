@@ -523,6 +523,7 @@ query_network_field() {
     fi
     case "$network_query_output" in
         *"No such network"*|*"No such object"*) return 1 ;;
+        "Error response from daemon: network $network_ref not found") return 1 ;;
         *) die "Docker failed while querying $network_description for $network_ref: $network_query_output" ;;
     esac
 }

@@ -194,7 +194,11 @@ void DaemonLocalServerConnection::disconnected() {
 void DaemonLocalServerConnection::backendFailure(DaemonError err) {
   QJsonObject obj;
   obj.insert("type", "backendFailure");
-  obj.insert("errorCode", static_cast<int>(err));
+  obj.insert("errorCode", daemonErrorLegacyIpcValue(err));
+  const int typedReason = daemonErrorTypedReasonIpcValue(err);
+  if (typedReason >= 0) {
+    obj.insert("failureReason", typedReason);
+  }
   write(obj);
 }
 

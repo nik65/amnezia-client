@@ -304,14 +304,78 @@ if(WIN32)
 endif()
 
 qt_generate_deploy_qml_app_script(
-    TARGET ${PROJECT}
-    OUTPUT_SCRIPT QT_DEPLOY_SCRIPT
-    NO_UNSUPPORTED_PLATFORM_ERROR
-    DEPLOY_TOOL_OPTIONS ${deploy_tool_options}
+    TARGET ${PROJECT} OUTPUT_SCRIPT QT_DEPLOY_SCRIPT
+    NO_UNSUPPORTED_PLATFORM_ERROR DEPLOY_TOOL_OPTIONS ${deploy_tool_options}
 )
 install(SCRIPT ${QT_DEPLOY_SCRIPT}
     COMPONENT AmneziaVPN
 )
+
+if(LINUX AND NOT ANDROID)
+    if(NOT TARGET Qt6::QTiffPlugin)
+        message(FATAL_ERROR "Expected Qt TIFF plugin target is unavailable in the selected Qt kit")
+    endif()
+    get_target_property(_amnezia_qtiff_location Qt6::QTiffPlugin IMPORTED_LOCATION_RELEASE)
+    if(NOT _amnezia_qtiff_location)
+        get_target_property(_amnezia_qtiff_location Qt6::QTiffPlugin IMPORTED_LOCATION)
+    endif()
+    if(NOT EXISTS "${_amnezia_qtiff_location}" OR IS_SYMLINK "${_amnezia_qtiff_location}")
+        message(FATAL_ERROR "Expected Qt TIFF plugin is missing or ambiguous: ${_amnezia_qtiff_location}")
+    endif()
+    file(SHA256 "${_amnezia_qtiff_location}" _amnezia_qtiff_sha256)
+    set(AMNEZIA_QTIFF_EXPECTED_SHA256 "${_amnezia_qtiff_sha256}" CACHE INTERNAL "Selected-kit TIFF plugin hash")
+
+    get_target_property(_amnezia_qt_core_location Qt6::Core IMPORTED_LOCATION_RELEASE)
+    if(NOT _amnezia_qt_core_location)
+        get_target_property(_amnezia_qt_core_location Qt6::Core IMPORTED_LOCATION)
+    endif()
+    get_filename_component(_amnezia_qt_lib_dir "${_amnezia_qt_core_location}" DIRECTORY)
+
+    # The operator JSON/status path explicitly uses Qt's offscreen platform.
+    # qt_generate_deploy_qml_app_script does not copy that plugin when the
+    # build host currently uses xcb, so bind and install it from the same Qt
+    # kit as Qt6::Core.
+    if(NOT TARGET Qt6::QOffscreenIntegrationPlugin)
+        message(FATAL_ERROR "Qt offscreen platform plugin target is unavailable in the selected Qt kit")
+    endif()
+    get_target_property(_amnezia_qt_offscreen_location Qt6::QOffscreenIntegrationPlugin IMPORTED_LOCATION_RELEASE)
+    if(NOT _amnezia_qt_offscreen_location)
+        get_target_property(_amnezia_qt_offscreen_location Qt6::QOffscreenIntegrationPlugin IMPORTED_LOCATION)
+    endif()
+    if(NOT EXISTS "${_amnezia_qt_offscreen_location}" OR IS_SYMLINK "${_amnezia_qt_offscreen_location}")
+        message(FATAL_ERROR "Exact Qt offscreen platform plugin is missing: ${_amnezia_qt_offscreen_location}")
+    endif()
+    file(REAL_PATH "${_amnezia_qt_offscreen_location}" _amnezia_qt_offscreen_real)
+    file(REAL_PATH "${_amnezia_qt_lib_dir}/../plugins/platforms" _amnezia_qt_platforms_dir)
+    get_filename_component(_amnezia_qt_offscreen_dir "${_amnezia_qt_offscreen_real}" DIRECTORY)
+    if(NOT _amnezia_qt_offscreen_dir STREQUAL _amnezia_qt_platforms_dir)
+        message(FATAL_ERROR "Qt offscreen platform plugin is not from the selected Qt kit")
+    endif()
+    install(FILES "${_amnezia_qt_offscreen_real}"
+        DESTINATION "plugins/platforms"
+        COMPONENT AmneziaVPN
+    )
+
+    # Preserve the real library and its SONAME link (libQt6ShaderTools.so.6).
+    set(_amnezia_shader_tools_real "${_amnezia_qt_lib_dir}/libQt6ShaderTools.so.${Qt6_VERSION}")
+    set(_amnezia_shader_tools_soname "${_amnezia_qt_lib_dir}/libQt6ShaderTools.so.6")
+    if(NOT EXISTS "${_amnezia_shader_tools_real}" OR IS_SYMLINK "${_amnezia_shader_tools_real}")
+        message(FATAL_ERROR "Exact Qt ShaderTools runtime is missing: ${_amnezia_shader_tools_real}")
+    endif()
+    if(NOT IS_SYMLINK "${_amnezia_shader_tools_soname}")
+        message(FATAL_ERROR "Qt ShaderTools SONAME link is missing: ${_amnezia_shader_tools_soname}")
+    endif()
+    file(REAL_PATH "${_amnezia_shader_tools_soname}" _amnezia_shader_tools_resolved)
+    if(NOT _amnezia_shader_tools_resolved STREQUAL _amnezia_shader_tools_real)
+        message(FATAL_ERROR "Qt ShaderTools SONAME link resolves to unexpected bytes")
+    endif()
+    install(FILES
+        "${_amnezia_shader_tools_real}"
+        "${_amnezia_shader_tools_soname}"
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+        COMPONENT AmneziaVPN
+    )
+endif()
 
 if(WIN32 AND DEFINED ENV{SELFHOSTED_UPDATE_BUNDLE_DIR} AND NOT "$ENV{SELFHOSTED_UPDATE_BUNDLE_DIR}" STREQUAL "")
     file(TO_CMAKE_PATH "$ENV{SELFHOSTED_UPDATE_BUNDLE_DIR}" SELFHOSTED_UPDATE_BUNDLE_DIR)

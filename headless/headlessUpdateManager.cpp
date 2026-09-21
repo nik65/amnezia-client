@@ -2137,14 +2137,44 @@ bool HeadlessUpdateManager::restoreCurrentPair(QString *error)
         if (error) *error = QStringLiteral("no current binary pair recovery evidence is recorded");
         return false;
     }
+    // The staged current pair can only be verified against the hash receipt
+    // that was recorded in the rollback journal before the installed pair was
+    // replaced.  Re-hashing the backup files and comparing them against those
+    // same hashes would merely prove that each file equals itself.
+    QJsonObject expectedHashes;
+    {
+        QFile journalFile(m_journalPath);
+        QJsonParseError parseError;
+        if (m_journalPath.isEmpty() || !journalFile.open(QIODevice::ReadOnly)) {
+            if (error) *error = QStringLiteral("current binary pair recovery evidence has no recorded journal");
+            return false;
+        }
+        const QJsonDocument document = QJsonDocument::fromJson(journalFile.readAll(), &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            if (error) *error = QStringLiteral("current binary pair recovery journal is invalid");
+            return false;
+        }
+        const QJsonObject journalObject = document.object();
+        expectedHashes = journalObject.value(QStringLiteral("previousHashes")).toObject();
+        const QString recordedDirectory = QFileInfo(
+                journalObject.value(QStringLiteral("previousDirectory")).toString()).canonicalFilePath();
+        const QString evidenceDirectory = QFileInfo(m_currentRollbackDirectory).canonicalFilePath();
+        if (recordedDirectory.isEmpty() || evidenceDirectory.isEmpty()
+            || recordedDirectory != evidenceDirectory
+            || !hasExactManagedFileSet(expectedHashes)) {
+            if (error) *error = QStringLiteral("current binary pair recovery journal does not match the recorded evidence");
+            return false;
+        }
+    }
     bool ok = true;
     for (const QString &name : managedPayloadFiles()) {
         const QString backup = QDir(m_currentRollbackDirectory).filePath(name);
         const QString staged = QDir(m_currentRollbackDirectory).filePath(
                 QStringLiteral(".%1.restore-%2").arg(name,
                     QUuid::createUuid().toString(QUuid::WithoutBraces)));
-        const QString expected = sha256ForFile(backup);
-        if (!verifyRollbackFile(backup, expected, error)
+        const QString expected = expectedHashes.value(name).toString();
+        if (!validSha256(expected)
+            || !verifyRollbackFile(backup, expected, error)
             || !QFile::copy(backup, staged)
             || !durableSyncFileAndDirectory(staged)
             || sha256ForFile(staged) != expected) {

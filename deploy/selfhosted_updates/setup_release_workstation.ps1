@@ -451,6 +451,14 @@ printf %s "$HOME/Qt"
     return $result.Trim()
 }
 
+function Resolve-WslQtRoot {
+    if (-not [string]::IsNullOrWhiteSpace($env:WSL_QT_ROOT_PATH)) {
+        return $env:WSL_QT_ROOT_PATH.Trim()
+    }
+    $candidate = (Resolve-WslQtInstallRoot).TrimEnd("/") + "/" + $QtVersion
+    return $candidate
+}
+
 function Resolve-WslQifRoot {
     $script = @'
 for base in "$HOME/Qt" "$HOME/.local/Qt" "/opt/Qt"; do
@@ -669,6 +677,7 @@ function Write-EnvironmentFile {
     Write-Step "Write release environment file"
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $EnvFile) | Out-Null
     $resolvedWslAndroidHome = Resolve-WslAndroidHome
+    $resolvedWslQtRoot = Resolve-WslQtRoot
     $publicKeyBase64 = ""
     if (Test-Path -LiteralPath $PublicKeyPath -PathType Leaf) {
         $publicKeyBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($PublicKeyPath))
@@ -676,6 +685,7 @@ function Write-EnvironmentFile {
     $content = @(
         "`$env:QT_INSTALL_DIR = $(Quote-PsSingle $QtInstallDir)",
         "`$env:QT_ROOT_PATH = $(Quote-PsSingle (Join-Path $QtInstallDir $QtVersion))",
+        "`$env:WSL_QT_ROOT_PATH = $(Quote-PsSingle $resolvedWslQtRoot)",
         "`$env:QT_ANDROID_SHADERTOOLS_LIB = $(Quote-PsSingle (Resolve-AndroidShaderToolsLib))",
         "`$env:QIF_ROOT_PATH = $(Quote-PsSingle (Join-Path $QtInstallDir 'Tools\QtInstallerFramework\4.7'))",
         "`$env:WSL_QIF_ROOT_PATH = $(Quote-PsSingle (Resolve-WslQifRoot))",

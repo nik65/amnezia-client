@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import contextlib
 import errno
 import functools
@@ -96,6 +97,7 @@ RELEASE_PLATFORM_IDS = frozenset(("windows-x64", "android-arm64-v8a", "linux-x64
 RECEIPT_REQUIRED = frozenset(("schema", "run_id", "profile", "artifact", "artifact_sha256", "artifact_size", "artifact_role", "artifact_source", "baseline_version", "candidate_version", "guest_marker", "transport", "steps", "observed_at"))
 CONSUMER_FIXTURE_GUEST_PORT = 17865
 HYPERV_TRANSPORT = "hyperv-powershell-direct"
+HYPERV_WINDOWS_MATRIX_SCHEMA = "windows-hyperv-matrix-v1"
 HYPERV_ADAPTER_RELATIVE = "deploy/release_lab/windows_host/hyperv_adapter.ps1"
 HYPERV_UI_HELPER_RELATIVE = "deploy/release_lab/windows_host/hyperv_ui_helper.ps1"
 HYPERV_LAUNCHER_RELATIVE = "deploy/release_lab/windows_host/hyperv_interactive_launcher.ps1"
@@ -526,6 +528,170 @@ def validate_hyperv_interactive_archives(root: Path, receipt: Mapping[str, Any])
         validate_archive_record(root, app_archive, kind="app-window", vm_id=vm_id, case_id="outer-interactive", attempt_nonce=attempt)
     except WindowsEvidenceArchiveError as exc:
         raise LabError(f"Hyper-V interactive durable archive validation failed: {exc}") from exc
+
+
+def _canonical_value_sha256(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _hyperv_guest_binding(value: Mapping[str, Any], *, label: str) -> tuple[str, str]:
+    if (value.get("transport") != HYPERV_TRANSPORT or value.get("origin") != "guest"
+            or value.get("injected") is not False):
+        raise LabError(f"Hyper-V {label} is not guest-origin evidence")
+    vm_id = str(value.get("vm_id") or "")
+    parent_sha256 = str(value.get("parent_sha256") or "")
+    if not vm_id or not re.fullmatch(r"[0-9a-fA-F]{64}", parent_sha256):
+        raise LabError(f"Hyper-V {label} lacks a valid VM/parent binding")
+    return vm_id, parent_sha256
+
+
+def build_hyperv_matrix_aggregation(
+    run: Mapping[str, Any], profile_state: Mapping[str, Any], root: Path,
+) -> dict[str, Any]:
+    """Build a controller envelope over the complete Windows guest matrix.
+
+    The envelope deliberately remains separate from the guest service-health
+    receipt.  Every action and health object is copied from the stored guest
+    readback, while the controller-created step wrappers are used only for
+    canonical profile coverage.
+    """
+    if run.get("windows_backend") != "hyperv":
+        raise LabError("Hyper-V matrix aggregation requires the Hyper-V backend")
+    case_specs = windows_case_specs(run)
+    expected_case_ids = list(case_specs)
+    case_receipts = profile_state.get("case_receipts")
+    if not isinstance(case_receipts, list) or [item.get("case_id") for item in case_receipts if isinstance(item, Mapping)] != expected_case_ids:
+        raise LabError("Hyper-V matrix archive requires the exact six Windows cases in canonical order")
+    if len(case_receipts) != len(expected_case_ids) or any(not isinstance(item, Mapping) for item in case_receipts):
+        raise LabError("Hyper-V matrix archive contains missing or invalid case receipts")
+    hyperv_cases = profile_state.get("hyperv_cases")
+    if not isinstance(hyperv_cases, Mapping):
+        raise LabError("Hyper-V matrix archive lacks persisted case state")
+    observed_steps = profile_state.get("steps")
+    if not isinstance(observed_steps, list):
+        raise LabError("Hyper-V matrix archive lacks persisted controller steps")
+    planned_baseline = run.get("baseline_version")
+    planned_candidate = run.get("candidate_version")
+    matrix_steps: list[dict[str, Any]] = []
+    normalized_cases: list[dict[str, Any]] = []
+    for case_id, case_record in zip(expected_case_ids, case_receipts):
+        state_record = hyperv_cases.get(case_id)
+        if not isinstance(state_record, Mapping) or state_record.get("state") != "reset":
+            raise LabError(f"Hyper-V matrix case {case_id} lacks reset proof")
+        case_vm_id = str(case_record.get("vm_id") or "")
+        case_parent = str(case_record.get("parent_sha256") or "")
+        state_vm_id = str(state_record.get("vm_id") or "")
+        state_parent = str(state_record.get("parent_sha256") or "")
+        if not case_vm_id or case_vm_id != state_vm_id or not case_parent or case_parent != state_parent:
+            raise LabError(f"Hyper-V matrix case {case_id} VM/parent binding differs from reset state")
+        case_steps = case_record.get("steps")
+        health = case_record.get("service_health")
+        if not isinstance(case_steps, list) or not isinstance(health, Mapping):
+            raise LabError(f"Hyper-V matrix case {case_id} lacks action or service-health evidence")
+        specs = case_specs[case_id]
+        if len(case_steps) != len(specs):
+            raise LabError(f"Hyper-V matrix case {case_id} action cardinality differs from its plan")
+        expected_case_steps: list[dict[str, Any]] = []
+        for index, (stage_name, selected_artifact, action, expected_version) in enumerate(specs):
+            item = case_steps[index]
+            guest_receipt = item.get("guest_receipt") if isinstance(item, Mapping) else None
+            if (not isinstance(item, Mapping) or item.get("stage") != stage_name
+                    or item.get("action") != action or item.get("passed") is not True
+                    or item.get("vm_id") != case_vm_id or item.get("parent_sha256") != case_parent
+                    or not isinstance(guest_receipt, Mapping)):
+                raise LabError(f"Hyper-V matrix case {case_id} step {action} is not bound to its child")
+            validate_receipt(
+                guest_receipt, run_id=str(run["run_id"]), profile_id="windows-x64",
+                artifact=selected_artifact, case_id=case_id,
+                baseline_version=str(planned_baseline), candidate_version=str(planned_candidate),
+                expected_role=artifact_role_for_stage(stage_name),
+            )
+            expected_case_steps.append({
+                "stage": stage_name, "action": action, "guest_receipt": copy.deepcopy(guest_receipt),
+                "vm_id": case_vm_id, "parent_sha256": case_parent,
+                "guest_receipt_sha256": _canonical_value_sha256(guest_receipt),
+            })
+        final_artifact = specs[-1][1]
+        validate_receipt(
+            health, run_id=str(run["run_id"]), profile_id="windows-x64", artifact=final_artifact,
+            case_id=case_id, baseline_version=str(planned_baseline),
+            candidate_version=str(planned_candidate), expected_role="candidate",
+        )
+        if health.get("transport") != HYPERV_TRANSPORT or health.get("origin") != "guest" or health.get("injected") is not False:
+            raise LabError(f"Hyper-V {case_id} service-health is not guest-origin evidence")
+        if ((health.get("vm_id") is not None and str(health.get("vm_id")) != case_vm_id)
+                or (health.get("parent_sha256") is not None and str(health.get("parent_sha256")) != case_parent)):
+            raise LabError(f"Hyper-V matrix case {case_id} service-health binding differs from its child")
+        case_copy = copy.deepcopy(dict(case_record))
+        case_copy["steps"] = expected_case_steps
+        case_copy["service_health"] = copy.deepcopy(dict(health))
+        case_copy["case_receipt_sha256"] = _canonical_value_sha256(case_copy)
+        normalized_cases.append(case_copy)
+
+        probe_steps = [step for step in observed_steps if isinstance(step, Mapping) and step.get("case_id") == case_id and step.get("id") == "probe"]
+        if len(probe_steps) != 1:
+            raise LabError(f"Hyper-V matrix case {case_id} lacks exactly one probe step")
+        probe = probe_steps[0].get("probe")
+        probe_vm_id, probe_parent = _hyperv_guest_binding(probe if isinstance(probe, Mapping) else {}, label=f"{case_id} probe")
+        if probe_vm_id != case_vm_id or probe_parent != case_parent or probe_steps[0].get("passed") is not True:
+            raise LabError(f"Hyper-V matrix case {case_id} probe binding is invalid")
+        matrix_steps.append({
+            "id": "probe", "case_id": case_id, "action": "probe", "passed": True,
+            "probe": copy.deepcopy(dict(probe)), "source_probe_sha256": _canonical_value_sha256(probe),
+        })
+        action_steps = [step for step in observed_steps if isinstance(step, Mapping) and step.get("case_id") == case_id and step.get("id") != "probe"]
+        if len(action_steps) != len(specs):
+            raise LabError(f"Hyper-V matrix case {case_id} controller action cardinality differs from its plan")
+        for expected, observed in zip(expected_case_steps, action_steps):
+            if (observed.get("id") != expected["action"] or observed.get("action") != expected["action"]
+                    or observed.get("stage") != expected["stage"] or observed.get("passed") is not True
+                    or observed.get("vm_id") != expected["vm_id"]
+                    or observed.get("parent_sha256") != expected["parent_sha256"]
+                    or observed.get("guest_receipt") != expected["guest_receipt"]):
+                raise LabError(f"Hyper-V matrix case {case_id} controller action differs from guest evidence")
+            matrix_steps.append(copy.deepcopy(dict(observed)) | {
+                "source_guest_receipt_sha256": expected["guest_receipt_sha256"],
+            })
+        matrix_steps.append({
+            "id": "service-health", "case_id": case_id, "action": "service-health", "passed": True,
+            "guest_receipt": copy.deepcopy(dict(health)),
+            "source_guest_receipt_sha256": _canonical_value_sha256(health),
+            "vm_id": case_vm_id, "parent_sha256": case_parent,
+        })
+
+    interactive = profile_state.get("interactive_receipt")
+    if not isinstance(interactive, Mapping):
+        raise LabError("Hyper-V matrix archive lacks the interactive guest receipt")
+    outer_candidate = run.get("outer_artifact")
+    if not isinstance(outer_candidate, Mapping):
+        raise LabError("Hyper-V matrix archive lacks the planned outer candidate")
+    validate_receipt(
+        interactive, run_id=str(run["run_id"]), profile_id="windows-x64", artifact=outer_candidate,
+        case_id="outer-interactive", baseline_version=str(planned_baseline),
+        candidate_version=str(planned_candidate), expected_role="candidate",
+    )
+    if interactive.get("interactive_verified") is not True or (interactive.get("assertion") or {}).get("interactive_passed") is not True:
+        raise LabError("Hyper-V matrix interactive receipt does not prove guest UI/UAC acceptance")
+    validate_hyperv_interactive_archives(root, interactive)
+    interactive_state = hyperv_cases.get("outer-interactive")
+    if not isinstance(interactive_state, Mapping) or interactive_state.get("state") != "reset":
+        raise LabError("Hyper-V matrix interactive case lacks reset proof")
+    interactive_vm_id = str(((interactive.get("installed_app_window") or {}).get("vm_id")) or "")
+    interactive_parent = str(interactive_state.get("parent_sha256") or "")
+    if (not interactive_vm_id or str(interactive_state.get("vm_id") or "") != interactive_vm_id
+            or not re.fullmatch(r"[0-9a-fA-F]{64}", interactive_parent)):
+        raise LabError("Hyper-V matrix interactive VM binding differs from reset state")
+    if {step.get("id") for step in matrix_steps if isinstance(step, Mapping) and step.get("passed") is True} != {"probe", "reinstall", "update", "service-health"}:
+        raise LabError("Hyper-V matrix archive does not represent every canonical Windows step")
+    return {
+        "schema": HYPERV_WINDOWS_MATRIX_SCHEMA, "controller_created": True, "origin": "controller",
+        "run_id": run["run_id"], "profile": "windows-x64", "case_ids": expected_case_ids,
+        "case_receipts": normalized_cases, "steps": matrix_steps,
+        "interactive_receipt": copy.deepcopy(dict(interactive)),
+        "interactive_receipt_sha256": _canonical_value_sha256(interactive),
+        "canonical_step_ids": [step["id"] for step in load_profiles()["windows-x64"].get("steps", [])],
+    }
 
 
 def hyperv_adapter_source() -> Path:
@@ -2985,18 +3151,27 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
             archived = next((item for item in (run.get("profiles", {}).get(profile_id, {}).get("case_receipts") or []) if item.get("case_id") == case_id), None)
             if not isinstance(archived, dict) or not isinstance(archived.get("service_health"), dict):
                 raise LabError("Hyper-V collect has no archived guest receipt for the final case")
-            receipt = dict(archived["service_health"])
+            receipt = copy.deepcopy(archived["service_health"])
             artifact = run.get("outer_artifact") or run.get("artifacts", {}).get(profile_id)
             validate_receipt(receipt, run_id=run_id, profile_id=profile_id, artifact=artifact, case_id=case_id, baseline_version=str(run["baseline_version"]), candidate_version=str(run["candidate_version"]))
-            receipt["hyperv_binding"] = {"vm_id": archived.get("vm_id"), "case_id": case_id, "parent_sha256": archived.get("parent_sha256"), "transport": HYPERV_TRANSPORT, "archived": True}
-            if not receipt["hyperv_binding"]["vm_id"] or not receipt["hyperv_binding"]["parent_sha256"]:
+            hyperv_binding = {"vm_id": archived.get("vm_id"), "case_id": case_id, "parent_sha256": archived.get("parent_sha256"), "transport": HYPERV_TRANSPORT, "archived": True}
+            if not hyperv_binding["vm_id"] or not hyperv_binding["parent_sha256"]:
                 raise LabError("Hyper-V archived receipt lacks child VM/parent binding")
             interactive = run.get("profiles", {}).get(profile_id, {}).get("interactive_receipt")
+            interactive_verified = False
             if isinstance(interactive, dict):
                 validate_hyperv_interactive_archives(self.root, interactive)
-                receipt["interactive_verified"] = interactive.get("interactive_verified") is True and interactive.get("assertion", {}).get("interactive_passed") is True
-                receipt["interactive_receipt"] = interactive
-            run["profiles"][profile_id].update(status="evidence-collected", evidence=receipt)
+                interactive_verified = interactive.get("interactive_verified") is True and interactive.get("assertion", {}).get("interactive_passed") is True
+            matrix = build_hyperv_matrix_aggregation(run, run["profiles"][profile_id], self.root)
+            run["profiles"][profile_id]["matrix_aggregation"] = matrix
+            run["profiles"][profile_id].update(
+                status="evidence-collected", evidence=receipt,
+                controller_evidence={
+                    "hyperv_binding": hyperv_binding,
+                    "interactive_verified": interactive_verified,
+                    "interactive_receipt": copy.deepcopy(interactive) if isinstance(interactive, dict) else None,
+                },
+            )
             state = self.load_state(); state["runs"][run_id] = run; self.save_state(state)
             return receipt
         run = self.get_run(run_id); vm = self.owned_vm(run_id, profile_id)
@@ -3060,11 +3235,19 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
         elif self.uses_hyperv(run, profile_id):
             diagnostics = run.get("profiles", {}).get(profile_id, {}).get("failure_diagnostics") or []
             record["failure_diagnostics"] = list(diagnostics)
+            matrix = run.get("profiles", {}).get(profile_id, {}).get("matrix_aggregation")
+            if isinstance(matrix, Mapping):
+                record["matrix_aggregation"] = copy.deepcopy(dict(matrix))
+            controller_evidence = run.get("profiles", {}).get(profile_id, {}).get("controller_evidence")
+            if isinstance(controller_evidence, Mapping):
+                record["controller_evidence"] = copy.deepcopy(dict(controller_evidence))
+                record["guest_binding"] = copy.deepcopy(controller_evidence.get("hyperv_binding") or {})
             receipt = run.get("profiles", {}).get(profile_id, {}).get("evidence")
             if isinstance(receipt, dict):
                 receipt_bytes = (json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
                 record["transport"] = HYPERV_TRANSPORT
-                record["guest_binding"] = receipt.get("hyperv_binding") or {}
+                if not record.get("guest_binding"):
+                    record["guest_binding"] = receipt.get("hyperv_binding") or {}
         else:
             vm = self.owned_vm(run_id, profile_id)
             record["guest_binding"] = {key: vm.get(key) for key in ("pid", "proc_start_time", "uid", "uuid", "qmp_socket", "qga_socket", "started_at")}
@@ -4036,6 +4219,8 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
             elif not (isinstance(publication.get("cleanup"), Mapping) and publication["cleanup"].get("server_reset") is True):
                 raise LabError("release gate cannot re-observe a server that was reset without publication cleanup proof")
         archived_evidence: dict[str, dict[str, Any]] = {}
+        archived_matrices: dict[str, dict[str, Any]] = {}
+        archived_controller_evidence: dict[str, dict[str, Any]] = {}
         for profile_id in expected_profiles:
             profile_state = profiles.get(profile_id, {})
             archive_path = profile_state.get("evidence_archive")
@@ -4072,11 +4257,22 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
                                     or archive_binding.get("qemu_uuid") != (identity.get("qemu_uuid") or identity.get("qemuUuid"))):
                                 raise LabError("archived Android guest binding differs from receipt identity")
                         elif self.uses_hyperv(run, profile_id):
-                            hyperv_binding = receipt_value.get("hyperv_binding") or {}
+                            controller_evidence = archive_value.get("controller_evidence")
+                            if not isinstance(controller_evidence, Mapping):
+                                raise LabError("archived Hyper-V controller evidence is missing")
+                            hyperv_binding = controller_evidence.get("hyperv_binding") or {}
                             if (archive_binding.get("vm_id") != hyperv_binding.get("vm_id")
                                     or archive_binding.get("parent_sha256") != hyperv_binding.get("parent_sha256")
                                     or archive_binding.get("archived") is not True):
-                                raise LabError("archived Hyper-V guest binding differs from receipt identity")
+                                raise LabError("archived Hyper-V controller binding differs from archive identity")
+                            archived_controller_evidence[profile_id] = dict(controller_evidence)
+                            matrix = archive_value.get("matrix_aggregation")
+                            if not isinstance(matrix, Mapping):
+                                raise LabError("archived Hyper-V matrix aggregation is missing")
+                            expected_matrix = build_hyperv_matrix_aggregation(run, profiles[profile_id], self.root)
+                            if dict(matrix) != expected_matrix:
+                                raise LabError("archived Hyper-V matrix aggregation differs from controller state")
+                            archived_matrices[profile_id] = dict(matrix)
                         elif not archive_binding.get("qga_socket") or not archive_binding.get("uuid"):
                             raise LabError("archived QGA guest binding is incomplete")
                         elif load_profiles()[profile_id].get("backend") == "qemu-linux":
@@ -4118,7 +4314,9 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
             declared = {step.get("id") for step in load_profiles()[profile_id].get("steps", [])}
             evidence = archived_evidence.get(profile_id) or profiles.get(profile_id, {}).get("evidence") or {}
             observed_steps = profiles.get(profile_id, {}).get("steps", [])
-            if profile_id in archived_evidence:
+            if profile_id in archived_matrices:
+                observed_steps = archived_matrices[profile_id].get("steps", [])
+            elif profile_id in archived_evidence:
                 # After reset the archive is the sole source of step truth;
                 # cached controller steps may be stale or over-complete.
                 observed_steps = archived_evidence[profile_id].get("steps", [])
@@ -4167,7 +4365,8 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
             # The immutable controller archive is authoritative after reset;
             # cached profile evidence is only a fallback for pre-reset use.
             evidence = archived_evidence.get("windows-x64") or profiles["windows-x64"].get("evidence") or {}
-            binding = evidence.get("hyperv_binding") if isinstance(evidence, dict) else None
+            controller_evidence = archived_controller_evidence.get("windows-x64") or profiles["windows-x64"].get("controller_evidence") or {}
+            binding = controller_evidence.get("hyperv_binding") if isinstance(controller_evidence, Mapping) else None
             case_id = profiles["windows-x64"].get("last_case_id") or "control"
             # reset clears the live child VM record.  The immutable receipt
             # archive is the post-reset source for the sealed-parent binding.
@@ -4183,7 +4382,7 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
                 validate_hyperv_interactive_archives(self.root, profiles["windows-x64"].get("interactive_receipt") or {})
             except LabError:
                 missing.append("windows-x64-hyperv-interactive-durable-archives")
-        if self.uses_hyperv(run, "windows-x64") and (archived_evidence.get("windows-x64") or profiles.get("windows-x64", {}).get("evidence") or {}).get("interactive_verified") is not True:
+        if self.uses_hyperv(run, "windows-x64") and (archived_controller_evidence.get("windows-x64") or profiles.get("windows-x64", {}).get("controller_evidence") or {}).get("interactive_verified") is not True:
             missing.append("windows-x64-interactive-uac")
         if missing:
             return {"run_id": run_id, "lane": lane, "candidate_passed": False, "release_passed": False, "reason": "missing real guest evidence", "missing_profiles": missing}

@@ -36,6 +36,19 @@ DaemonError splitTunnelFailureOr(const WindowsSplitTunnel* manager,
   }
   return manager->lastFailure();
 }
+
+DaemonError stopSplitTunnelAndFailure(WindowsSplitTunnel* manager,
+                                       DaemonError fallback) {
+  if (manager == nullptr) {
+    return fallback;
+  }
+  const bool stopped = manager->stop();
+  if (!stopped) {
+    return splitTunnelFailureOr(
+        manager, DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_CLEANUP_FAILED);
+  }
+  return fallback;
+}
 }
 
 WindowsDaemon::WindowsDaemon() : Daemon(nullptr) {
@@ -99,28 +112,33 @@ void WindowsDaemon::activateSplitTunnel(const InterfaceConfig& config, int vpnAd
   if (config.m_vpnDisabledApps.length() > 0) {
         if (!m_splitTunnelManager->start(m_inetAdapterIndex, vpnAdapterIndex)) {
           logger.error() << "Failed to start split tunnel";
-          emit backendFailure(splitTunnelFailureOr(
+          emit backendFailure(stopSplitTunnelAndFailure(
               m_splitTunnelManager.get(),
-              DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE));
-          m_splitTunnelManager->stop();
+              splitTunnelFailureOr(m_splitTunnelManager.get(),
+                                   DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE)));
           return;
       }
         if (!m_splitTunnelManager->excludeApps(config.m_vpnDisabledApps)) {
           logger.error() << "Failed to apply split tunnel app exclusions";
-          emit backendFailure(splitTunnelFailureOr(
+          emit backendFailure(stopSplitTunnelAndFailure(
               m_splitTunnelManager.get(),
-              DaemonError::ERROR_SPLIT_TUNNEL_EXCLUDE_FAILURE));
-          m_splitTunnelManager->stop();
+              splitTunnelFailureOr(m_splitTunnelManager.get(),
+                                   DaemonError::ERROR_SPLIT_TUNNEL_EXCLUDE_FAILURE)));
           return;
       }
       if (!m_splitTunnelManager->isRunning()) {
           logger.error() << "Split tunnel did not reach running state";
-          emit backendFailure(DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE);
-          m_splitTunnelManager->stop();
+          emit backendFailure(stopSplitTunnelAndFailure(
+              m_splitTunnelManager.get(),
+              DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE));
           return;
       }
   } else {
-      m_splitTunnelManager->stop();
+      const DaemonError failure = stopSplitTunnelAndFailure(
+          m_splitTunnelManager.get(), DaemonError::ERROR_NONE);
+      if (failure != DaemonError::ERROR_NONE) {
+        emit backendFailure(failure);
+      }
   }
 }
 
@@ -138,37 +156,48 @@ bool WindowsDaemon::run(Op op, const InterfaceConfig& config) {
   }
 
   if (op == Down) {
-    m_splitTunnelManager->stop();
+    const DaemonError failure = stopSplitTunnelAndFailure(
+        m_splitTunnelManager.get(), DaemonError::ERROR_NONE);
+    if (failure != DaemonError::ERROR_NONE) {
+      emit backendFailure(failure);
+      return false;
+    }
     return true;
   }
   if (config.m_vpnDisabledApps.length() > 0) {
     if (!m_splitTunnelManager->start(m_inetAdapterIndex)) {
       logger.error() << "Split tunnel start failed";
-      emit backendFailure(splitTunnelFailureOr(
+      emit backendFailure(stopSplitTunnelAndFailure(
           m_splitTunnelManager.get(),
-          DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE));
-      m_splitTunnelManager->stop();
+          splitTunnelFailureOr(m_splitTunnelManager.get(),
+                               DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE)));
       return false;
     };
     if (!m_splitTunnelManager->excludeApps(config.m_vpnDisabledApps)) {
       logger.error() << "Split tunnel app exclusion failed";
-      emit backendFailure(splitTunnelFailureOr(
+      emit backendFailure(stopSplitTunnelAndFailure(
           m_splitTunnelManager.get(),
-          DaemonError::ERROR_SPLIT_TUNNEL_EXCLUDE_FAILURE));
-      m_splitTunnelManager->stop();
+          splitTunnelFailureOr(m_splitTunnelManager.get(),
+                               DaemonError::ERROR_SPLIT_TUNNEL_EXCLUDE_FAILURE)));
       return false;
     };
     // Now the driver should be running (State == 4)
     if (!m_splitTunnelManager->isRunning()) {
       logger.error() << "Split tunnel did not reach running state";
-      emit backendFailure(DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE);
-      m_splitTunnelManager->stop();
+      emit backendFailure(stopSplitTunnelAndFailure(
+          m_splitTunnelManager.get(),
+          DaemonError::ERROR_SPLIT_TUNNEL_START_FAILURE));
       return false;
     }
     return true;
   }
-  m_splitTunnelManager->stop();
-      return true;
+  const DaemonError failure = stopSplitTunnelAndFailure(
+      m_splitTunnelManager.get(), DaemonError::ERROR_NONE);
+  if (failure != DaemonError::ERROR_NONE) {
+    emit backendFailure(failure);
+    return false;
+  }
+  return true;
 }
 
 void WindowsDaemon::monitorBackendFailure() {

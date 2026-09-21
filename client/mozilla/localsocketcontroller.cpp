@@ -555,6 +555,7 @@ void LocalSocketController::parseCommand(const QByteArray& command) {
 
   if (type == "backendFailure") {
     const QJsonValue rawErrorCode = obj.value("errorCode");
+    const QJsonValue rawTypedReason = obj.value("failureReason");
     if (!rawErrorCode.isDouble()) {
       logger.error() << "generic backend failure error";
       emit backendFailure(DaemonError::ERROR_FATAL);
@@ -566,14 +567,22 @@ void LocalSocketController::parseCommand(const QByteArray& command) {
       emit backendFailure(DaemonError::ERROR_FATAL);
       return;
     }
-    const int errorCode = static_cast<int>(numericErrorCode);
-    if (!isDaemonFailureIpcValue(errorCode)) {
-      logger.error() << "invalid backend failure error code" << errorCode;
+    int typedReason = -1;
+    if (rawTypedReason.isDouble()) {
+      const double numericTypedReason = rawTypedReason.toDouble();
+      if (isValidDaemonFailureNumber(numericTypedReason)) {
+        typedReason = static_cast<int>(numericTypedReason);
+      }
+    }
+    const int legacyErrorCode = static_cast<int>(numericErrorCode);
+    const DaemonError error = daemonErrorFromIpcValues(legacyErrorCode, typedReason);
+    if (!isDaemonFailureIpcValue(legacyErrorCode)) {
+      logger.error() << "invalid backend failure error code" << legacyErrorCode;
       emit backendFailure(DaemonError::ERROR_FATAL);
       return;
     }
-    const DaemonError error = daemonErrorFromIpcValue(errorCode);
-    logger.error() << "backend failure error code" << errorCode;
+    logger.error() << "backend failure error code" << legacyErrorCode
+                   << "typed reason" << typedReason;
     emit backendFailure(error);
     return;
   }

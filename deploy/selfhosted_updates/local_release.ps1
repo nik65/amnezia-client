@@ -50,7 +50,12 @@ param(
     [string] $LabRunId = "",
     [string[]] $LabBaselineArtifact = @(),
     [string] $LabBaselineVersion = $(if ($env:AMNEZIA_RELEASE_LAB_BASELINE_VERSION) { $env:AMNEZIA_RELEASE_LAB_BASELINE_VERSION } else { "" }),
-    [string] $LabManifestPublicKey = $(if ($env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY) { $env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY } else { "" })
+    [string] $LabManifestPublicKey = $(if ($env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY) { $env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY } else { "" }),
+    [string] $LabBaselineManifest = $(if ($env:AMNEZIA_RELEASE_LAB_BASELINE_MANIFEST) { $env:AMNEZIA_RELEASE_LAB_BASELINE_MANIFEST } else { "" }),
+    [string] $LabHeadlessBaselineReceipt = $(if ($env:AMNEZIA_RELEASE_LAB_HEADLESS_BASELINE_RECEIPT) { $env:AMNEZIA_RELEASE_LAB_HEADLESS_BASELINE_RECEIPT } else { "" }),
+    [string] $LabHeadlessCandidateReceipt = $(if ($env:AMNEZIA_RELEASE_LAB_HEADLESS_CANDIDATE_RECEIPT) { $env:AMNEZIA_RELEASE_LAB_HEADLESS_CANDIDATE_RECEIPT } else { "" }),
+    [ValidateSet("qemu", "hyperv")] [string] $LabWindowsBackend = $(if ($env:AMNEZIA_RELEASE_LAB_WINDOWS_BACKEND) { $env:AMNEZIA_RELEASE_LAB_WINDOWS_BACKEND } else { "hyperv" }),
+    [string] $RuntimeConfigPath = $(if ($env:AMNEZIA_RELEASE_LAB_RUNTIME_CONFIG) { $env:AMNEZIA_RELEASE_LAB_RUNTIME_CONFIG } else { Join-Path $env:LOCALAPPDATA "AmneziaReleaseLab\runtime.json" })
 )
 
 if ($PSBoundParameters.ContainsKey("BuildPlatform") -and
@@ -81,6 +86,39 @@ if ($RollbackArtifact.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:SE
 
 $ScriptRoot = Split-Path -Parent $PSCommandPath
 $RepoRoot = (Resolve-Path (Join-Path $ScriptRoot "..\..")).Path
+$script:LabHyperVCredentialFile = ""
+$script:LabHyperVCredentialWslFile = ""
+$RuntimeConfig = $null
+if (Test-Path -LiteralPath $RuntimeConfigPath -PathType Leaf) {
+    $runtimeConfigItem = Get-Item -LiteralPath $RuntimeConfigPath -Force
+    if ($runtimeConfigItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Runtime config must not be a reparse point: $RuntimeConfigPath"
+    }
+    $runtimeAcl = Get-Acl -LiteralPath $RuntimeConfigPath
+    $currentRuntimeSid = (New-Object System.Security.Principal.NTAccount($env:USERDOMAIN, $env:USERNAME)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    $allowedRuntimeSids = @($currentRuntimeSid, "S-1-5-18", "S-1-5-32-544")
+    foreach ($runtimeAccess in $runtimeAcl.Access) {
+        $runtimeSid = $runtimeAccess.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        if ($runtimeAccess.AccessControlType -eq "Allow" -and $runtimeSid -notin $allowedRuntimeSids) {
+            throw "Runtime config ACL grants access to an unexpected identity: $($runtimeAccess.IdentityReference)"
+        }
+    }
+    try { $RuntimeConfig = Get-Content -LiteralPath $RuntimeConfigPath -Raw | ConvertFrom-Json } catch { throw "Runtime config is not valid JSON: $RuntimeConfigPath" }
+    if ($null -ne $RuntimeConfig.wslDistro -and -not $PSBoundParameters.ContainsKey("LabDistro")) { $LabDistro = [string]$RuntimeConfig.wslDistro }
+    if ($null -ne $RuntimeConfig.stateRoot -and -not $PSBoundParameters.ContainsKey("LabStateRoot")) { $LabStateRoot = [string]$RuntimeConfig.stateRoot }
+    if ($null -ne $RuntimeConfig.windowsBackend -and -not $PSBoundParameters.ContainsKey("LabWindowsBackend")) { $LabWindowsBackend = [string]$RuntimeConfig.windowsBackend }
+    if ($null -ne $RuntimeConfig.hypervCredentialFile) {
+        $script:LabHyperVCredentialFile = [string]$RuntimeConfig.hypervCredentialFile
+        if ($script:LabHyperVCredentialFile -match '(?i)\\Temp(\\|$)|/tmp(/|$)') { throw "Hyper-V credential path must be durable and outside temporary directories" }
+    }
+    $wslCredentialProperty = $RuntimeConfig.PSObject.Properties["hypervCredentialWslFile"]
+    if ($null -ne $wslCredentialProperty) {
+        $script:LabHyperVCredentialWslFile = [string]$wslCredentialProperty.Value
+        if ($script:LabHyperVCredentialWslFile -notmatch '^/[^\0]*$' -or $script:LabHyperVCredentialWslFile -match '(^|/)(tmp|var/tmp)(/|$)|\.\.') {
+            throw "WSL Hyper-V credential path must be an absolute durable path outside temporary directories"
+        }
+    }
+}
 
 # PowerShell -File receives array parameters as one token on some hosts.  Be
 # explicit about comma-separated values so the release wrapper cannot silently
@@ -93,6 +131,12 @@ foreach ($platform in $BuildPlatform) {
     if ($platform -notin @("windows", "linux", "android", "headless")) {
         throw "Unsupported build platform: $platform"
     }
+}
+if ($LabWindowsBackend -notin @("qemu", "hyperv")) {
+    throw "Runtime config windowsBackend must be qemu or hyperv"
+}
+if ($LabLane -eq "release" -and $LabWindowsBackend -ne "hyperv") {
+    throw "Release-lane self-hosted publication requires the validated Hyper-V Windows backend"
 }
 $RequirePlatform = @($RequirePlatform | ForEach-Object { [string]$_ -split "," } |
     ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
@@ -388,6 +432,21 @@ exit 1
     if ([string]::IsNullOrWhiteSpace($result)) {
         return ""
     }
+    return $result.Trim()
+}
+
+function Resolve-WslQtRootPath {
+    if (-not [string]::IsNullOrWhiteSpace($env:WSL_QT_ROOT_PATH)) {
+        return $env:WSL_QT_ROOT_PATH.Trim()
+    }
+    $script = @'
+for base in "$HOME/Qt" "$HOME/.local/Qt" "/opt/Qt"; do
+    [ -d "$base" ] || continue
+    find "$base" -mindepth 6 -maxdepth 6 -type f -path "*/gcc_64/lib/cmake/Qt6/qt.toolchain.cmake" -printf '%h\n' 2>/dev/null
+done | sed 's#/gcc_64/lib/cmake/Qt6$##' | sort -V | tail -n 1
+'@
+    $result = Invoke-WslBashOutput $script
+    if ([string]::IsNullOrWhiteSpace($result)) { return "" }
     return $result.Trim()
 }
 
@@ -694,16 +753,14 @@ function Assert-LocalReleasePrerequisites {
         Assert-WslCommand "conan"
     }
     $qtRootPath = Resolve-QtRootPath
-    if ($BuildPlatform -contains "linux" -or $BuildPlatform -contains "android") {
+    if ($BuildPlatform -contains "android") {
         if ([string]::IsNullOrWhiteSpace($qtRootPath)) {
-            throw "QT_ROOT_PATH or QT_INSTALL_DIR must point to a Qt installation for Linux/Android local release builds"
+            throw "QT_ROOT_PATH or QT_INSTALL_DIR must point to a Qt installation for Android local release builds"
         }
     }
     if ($BuildPlatform -contains "linux") {
-        Assert-QtTargetKit $qtRootPath "gcc_64"
-        Assert-QtTargetModule $qtRootPath "gcc_64" "Qt6RemoteObjects" "Install Qt module qtremoteobjects for linux desktop gcc_64."
-        Assert-QtTargetModule $qtRootPath "gcc_64" "Qt6Core5Compat" "Install Qt module qt5compat for linux desktop gcc_64."
-        $qifRootPath = Resolve-QifRootPath
+        $wslQtRootPath = Resolve-WslQtRootPath
+        Assert-WslQtReady $wslQtRootPath
         Assert-WslQifReady
     }
     if ($BuildPlatform -contains "android") {
@@ -720,13 +777,187 @@ function Assert-LocalReleasePrerequisites {
     }
 }
 
+function Assert-WslQtReady([string] $WslQtRoot) {
+    if ([string]::IsNullOrWhiteSpace($WslQtRoot) -or -not $WslQtRoot.StartsWith("/") -or $WslQtRoot -match "[\r\n]") {
+        throw "WSL_QT_ROOT_PATH must be an absolute Linux path"
+    }
+    $kit = $WslQtRoot.TrimEnd("/") + "/gcc_64"
+    $script = @(
+        ('kit=' + (Quote-Sh $kit)),
+        'test -f "$kit/lib/cmake/Qt6/qt.toolchain.cmake"',
+        'test -f "$kit/lib/cmake/Qt6RemoteObjects/Qt6RemoteObjectsConfig.cmake"',
+        'test -f "$kit/lib/cmake/Qt6Core5Compat/Qt6Core5CompatConfig.cmake"',
+        'real=$(find "$kit/lib" -maxdepth 1 -type f -name ''libQt6ShaderTools.so.6.*'' -print -quit)',
+        'test -n "$real"',
+        'test -L "$kit/lib/libQt6ShaderTools.so.6"',
+        'test "$(readlink -f "$kit/lib/libQt6ShaderTools.so.6")" = "$(readlink -f "$real")"'
+    ) -join "`n"
+    try { Invoke-WslBash $script } catch {
+        throw "WSL_QT_ROOT_PATH must identify one complete Linux Qt kit with RemoteObjects, Core5Compat, and ShaderTools: $WslQtRoot"
+    }
+}
+
+function Assert-LinuxQtCacheBinding([string] $BuildWsl, [string] $WslQtRoot) {
+    $expectedQtDir = $WslQtRoot.TrimEnd("/") + "/gcc_64/lib/cmake/Qt6"
+    $script = @(
+        ('cache=' + (Quote-Sh ($BuildWsl.TrimEnd("/") + "/CMakeCache.txt"))),
+        ('expected=' + (Quote-Sh $expectedQtDir)),
+        '[ ! -f "$cache" ] || cached=$(sed -n ''s/^Qt6_DIR:PATH=//p'' "$cache" | tail -n 1)',
+        '[ ! -f "$cache" ] || [ "$cached" = "$expected" ]'
+    ) -join "`n"
+    try { Invoke-WslBash $script } catch {
+        throw "deploy/build-linux has a stale Qt6_DIR. Recreate that build directory before building with WSL_QT_ROOT_PATH=$WslQtRoot"
+    }
+}
+
+function New-WindowsOuterBinaryCreator() {
+    $mt = Get-Command "mt.exe" -ErrorAction SilentlyContinue
+    if ($null -eq $mt) {
+        $mt = Get-ChildItem -LiteralPath "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter "mt.exe" -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -eq "x64" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+    }
+    if ($null -eq $mt) {
+        throw "Windows SDK mt.exe is required to mark the bundled outer installer as requireAdministrator."
+    }
+    $mtPath = if ($mt -is [System.Management.Automation.CommandInfo]) { $mt.Source } else { $mt.FullName }
+    $qifRoot = Resolve-QifRootPath
+    if ([string]::IsNullOrWhiteSpace($qifRoot)) { throw "Qt IFW root is required to build the bundled Windows client." }
+    $sourceBase = Join-Path $qifRoot "bin\installerbase.exe"
+    Assert-ExistingFile $sourceBase "Qt IFW Windows installer base"
+    $versionOutput = @(& $sourceBase --version 2>&1 | ForEach-Object { [string]$_ }) -join "`n"
+    if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch '(?m)^IFW Version:\s*([0-9]+\.[0-9]+\.[0-9]+)\b') {
+        throw "Could not derive the Qt IFW version from the unmodified installerbase."
+    }
+    $env:AMNEZIA_IFW_FRAMEWORK_VERSION = $Matches[1]
+    $workDir = Join-Path $RepoRoot "dist\.build-tools\ifw-admin\bin"
+    New-Item -ItemType Directory -Force -Path $workDir | Out-Null
+    $customBase = Join-Path $workDir "installerbase.exe"
+    $customBinaryCreator = Join-Path $workDir "binarycreator.exe"
+    Copy-Item -LiteralPath $sourceBase -Destination $customBase -Force
+    Copy-Item -LiteralPath (Join-Path $qifRoot "bin\binarycreator.exe") -Destination $customBinaryCreator -Force
+    $manifestPath = Join-Path $workDir "installerbase-require-admin.manifest"
+    try {
+        $adminManifest = @'
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security><requestedPrivileges><requestedExecutionLevel level="requireAdministrator" uiAccess="false"/></requestedPrivileges></security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1"><application>
+    <supportedOS Id="{e2011457-1546-43c5-a5fe-008deee3d3f0}"/>
+    <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
+    <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
+    <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
+  </application></compatibility>
+</assembly>
+'@
+        [System.IO.File]::WriteAllText($manifestPath, $adminManifest, [System.Text.UTF8Encoding]::new($false))
+        Invoke-External $mtPath @("-nologo", "-manifest", $manifestPath, "-outputresource:${customBase};#1")
+        return $customBinaryCreator
+    } finally {
+        Remove-Item -LiteralPath $manifestPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Assert-WindowsOuterIfwMetadata([string] $ArtifactPath) {
+    Assert-ExistingFile $ArtifactPath "Bundled Windows release client"
+    $qifRoot = Resolve-QifRootPath
+    if ([string]::IsNullOrWhiteSpace($qifRoot)) { throw "Qt IFW root is required to inspect the bundled Windows client." }
+    $devtool = Join-Path $qifRoot "bin\devtool.exe"
+    Assert-ExistingFile $devtool "Qt IFW metadata inspection tool"
+    $inspectionRoot = Join-Path $RepoRoot "dist\.build-tools\ifw-outer-inspection"
+    if (Test-Path -LiteralPath $inspectionRoot) {
+        $resolvedInspection = [IO.Path]::GetFullPath($inspectionRoot)
+        $ownedRoot = [IO.Path]::GetFullPath((Join-Path $RepoRoot "dist\.build-tools")) + [IO.Path]::DirectorySeparatorChar
+        if (-not $resolvedInspection.StartsWith($ownedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "IFW inspection directory escaped the owned build-tools root."
+        }
+        Remove-Item -LiteralPath $resolvedInspection -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $inspectionRoot | Out-Null
+    try {
+        Invoke-External $devtool @("dump", $ArtifactPath, $inspectionRoot)
+        $config = Join-Path $inspectionRoot "metadata\installer-config\config.xml"
+        $embeddedControl = Join-Path $inspectionRoot "metadata\installer-config\controlscript_js.js"
+        Assert-ExistingFile $config "Bundled outer IFW config"
+        Assert-ExistingFile $embeddedControl "Bundled outer IFW control script"
+        $configText = [IO.File]::ReadAllText($config)
+        if ($configText -notmatch '<ControlScript>controlscript_js\.js</ControlScript>') {
+            throw "Bundled outer IFW config does not reference the control script."
+        }
+        $sourceControl = Join-Path $RepoRoot "deploy\installer\qif\controlscript.js"
+        if ((Get-FileHash -LiteralPath $embeddedControl -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $sourceControl -Algorithm SHA256).Hash) {
+            throw "Bundled outer IFW control script differs from the reviewed source."
+        }
+    } finally {
+        Remove-Item -LiteralPath $inspectionRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Assert-PrivateCredentialFile([string] $Path) {
+    Assert-ExistingFile $Path "durable Hyper-V lab credential file"
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        throw "Hyper-V credential file must not be a reparse point: $Path"
+    }
+    $currentSid = (New-Object System.Security.Principal.NTAccount($env:USERDOMAIN, $env:USERNAME)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    $allowedSids = @($currentSid, "S-1-5-18", "S-1-5-32-544")
+    foreach ($access in (Get-Acl -LiteralPath $Path).Access) {
+        $sid = $access.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        if ($access.AccessControlType -eq "Allow" -and $sid -notin $allowedSids) {
+            throw "Hyper-V credential ACL grants access to an unexpected identity: $($access.IdentityReference)"
+        }
+    }
+}
+
+function Assert-WslPrivateCredentialFile([string] $Path) {
+    Assert-Command "wsl.exe"
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "WSL Hyper-V credential path is required"
+    }
+    $expectedUid = (& wsl.exe -d $LabDistro -u amnezia-lab -e /usr/bin/env LC_ALL=C /usr/bin/id -u).Trim()
+    if ($LASTEXITCODE -ne 0 -or $expectedUid -notmatch '^\d+$') {
+        throw "Unable to resolve the amnezia-lab UID in WSL"
+    }
+    $expectedGid = (& wsl.exe -d $LabDistro -u amnezia-lab -e /usr/bin/env LC_ALL=C /usr/bin/id -g).Trim()
+    if ($LASTEXITCODE -ne 0 -or $expectedGid -notmatch '^\d+$') {
+        throw "Unable to resolve the amnezia-lab GID in WSL"
+    }
+    $metadata = & wsl.exe -d $LabDistro -u amnezia-lab -e /usr/bin/env LC_ALL=C /usr/bin/stat -c "%u:%g:%a:%F" $Path
+    if ($LASTEXITCODE -ne 0 -or @($metadata).Count -ne 1) {
+        throw "WSL Hyper-V credential file is unavailable: $Path"
+    }
+    $parts = ([string]$metadata).Trim() -split ":", 4
+    if ($parts.Count -ne 4 -or $parts[0] -ne $expectedUid -or $parts[1] -ne $expectedGid -or $parts[2] -ne "600" -or $parts[3] -ne "regular file") {
+        throw "WSL Hyper-V credential file must be owned by the amnezia-lab account with mode 0600: $Path"
+    }
+}
+
 function Invoke-ReleaseLab([string] $Command, [string[]] $Arguments = @()) {
     if ($LabLane -eq "off") {
         throw "Release-lab command requested while -LabLane off"
     }
     Assert-Command "wsl.exe"
+    $credentialWslPath = ""
+    if ($LabWindowsBackend -eq "hyperv" -and [string]::IsNullOrWhiteSpace($script:LabHyperVCredentialWslFile) -and [string]::IsNullOrWhiteSpace($script:LabHyperVCredentialFile)) {
+        throw "Hyper-V release-lab commands require a credential path from the validated durable runtime config"
+    }
+    if ($LabWindowsBackend -eq "hyperv" -and -not [string]::IsNullOrWhiteSpace($script:LabHyperVCredentialWslFile)) {
+        Assert-WslPrivateCredentialFile $script:LabHyperVCredentialWslFile
+        $credentialWslPath = $script:LabHyperVCredentialWslFile
+    } elseif ($LabWindowsBackend -eq "hyperv" -and -not [string]::IsNullOrWhiteSpace($script:LabHyperVCredentialFile)) {
+        Assert-PrivateCredentialFile $script:LabHyperVCredentialFile
+        $credentialWslPath = Convert-ToWslPath $script:LabHyperVCredentialFile
+    }
     $labScriptWsl = Convert-ToWslPath (Join-Path $RepoRoot "deploy\release_lab\lab.py")
-    $labArgs = @("-d", $LabDistro, "-u", "amnezia-lab", "-e", "/usr/bin/python3", $labScriptWsl, "--state-root", $LabStateRoot, "--json", $Command) + $Arguments
+    if ($credentialWslPath) {
+        $labArgs = @("-d", $LabDistro, "-u", "amnezia-lab", "-e", "/usr/bin/env", "AMNEZIA_HYPERV_CREDENTIAL_FILE=$credentialWslPath", "/usr/bin/python3", $labScriptWsl, "--state-root", $LabStateRoot, "--windows-backend", $LabWindowsBackend, "--json", $Command) + $Arguments
+    } else {
+        $labArgs = @("-d", $LabDistro, "-u", "amnezia-lab", "-e", "/usr/bin/python3", $labScriptWsl, "--state-root", $LabStateRoot, "--windows-backend", $LabWindowsBackend, "--json", $Command) + $Arguments
+    }
     Invoke-External "wsl.exe" $labArgs
 }
 
@@ -799,9 +1030,10 @@ if (-not $SkipBuild) {
         $repoWsl = Convert-ToWslPath $RepoRoot
         $buildWsl = "$repoWsl/deploy/build-linux"
         $linuxExports = @()
-        if (-not [string]::IsNullOrWhiteSpace($qtRootPath)) {
-            $linuxExports += "export QT_ROOT_PATH=$(Quote-Sh (Convert-ToWslPath $qtRootPath))"
-        }
+        $wslQtRootPath = Resolve-WslQtRootPath
+        Assert-WslQtReady $wslQtRootPath
+        Assert-LinuxQtCacheBinding $buildWsl $wslQtRootPath
+        $linuxExports += "export QT_ROOT_PATH=$(Quote-Sh $wslQtRootPath)"
         $wslQifRootPath = Resolve-WslQifRootPath
         $linuxExports += "export QIF_ROOT_PATH=$(Quote-Sh $wslQifRootPath)"
         $linuxExports += "export AMNEZIA_BUILD_JOBS=$(Quote-Sh ([string] $buildJobs))"
@@ -1001,11 +1233,28 @@ Invoke-External "python" $manifestArgs
 
 if (-not $NoBundleUpdatesInWindowsClient -and ($BuildPlatform -contains "windows")) {
     Write-Step "Build Windows release client with bundled update payload"
-    Build-WindowsInstaller $OutDir
+    $previousIfwBinaryCreator = $env:AMNEZIA_IFW_BINARYCREATOR
+    $previousIfwFrameworkVersion = $env:AMNEZIA_IFW_FRAMEWORK_VERSION
+    try {
+        $env:AMNEZIA_IFW_BINARYCREATOR = New-WindowsOuterBinaryCreator
+        Build-WindowsInstaller $OutDir
+    } finally {
+        if ($null -eq $previousIfwBinaryCreator) {
+            Remove-Item Env:\AMNEZIA_IFW_BINARYCREATOR -ErrorAction SilentlyContinue
+        } else {
+            $env:AMNEZIA_IFW_BINARYCREATOR = $previousIfwBinaryCreator
+        }
+        if ($null -eq $previousIfwFrameworkVersion) {
+            Remove-Item Env:\AMNEZIA_IFW_FRAMEWORK_VERSION -ErrorAction SilentlyContinue
+        } else {
+            $env:AMNEZIA_IFW_FRAMEWORK_VERSION = $previousIfwFrameworkVersion
+        }
+    }
     $adminInstallerDir = Join-Path $RepoRoot "dist\selfhosted-windows-client\$Version"
     New-Item -ItemType Directory -Force -Path $adminInstallerDir | Out-Null
     $adminInstallerSource = Join-Path $RepoRoot "deploy\build\AmneziaVPN_${Version}_windows_x64.exe"
     Assert-ExistingFile $adminInstallerSource "Bundled Windows release client"
+    Assert-WindowsOuterIfwMetadata $adminInstallerSource
     $adminInstallerTarget = Join-Path $adminInstallerDir "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
     Copy-Item -LiteralPath $adminInstallerSource -Destination $adminInstallerTarget -Force
     Write-Host "Bundled Windows release client: $adminInstallerTarget"
@@ -1020,7 +1269,7 @@ if ($LabLane -ne "off") {
         if ($LabLane -eq "release") {
             throw "Release lab requires the final bundled outer artifact; do not use -NoBundleUpdatesInWindowsClient for the release lane."
         }
-        $outerForLab = ""
+        throw "Candidate release-lab runs also require the exact outer self-hosted wrapper artifact; rebuild with bundling enabled."
     }
     Write-Step "Run disposable release lab against exact built artifacts ($LabLane lane)"
     $suiteArgs = @("--run-id", $LabRunId)
@@ -1050,6 +1299,19 @@ if ($LabLane -ne "off") {
     $manifestPath = Join-Path $OutDir "manifest.json"
     Assert-ExistingFile $manifestPath "Release-lab signed manifest"
     $suiteArgs += @("--manifest", (Convert-ToWslPath $manifestPath))
+    if ([string]::IsNullOrWhiteSpace($LabBaselineManifest)) {
+        $LabBaselineManifest = Join-Path $RepoRoot "dist\selfhosted-updates\$LabBaselineVersion\manifest.json"
+    }
+    Assert-ExistingFile $LabBaselineManifest "Release-lab baseline signed manifest"
+    $suiteArgs += @("--baseline-manifest", (Convert-ToWslPath $LabBaselineManifest))
+    if ($RequirePlatform -contains "linux-headless-x64") {
+        if ([string]::IsNullOrWhiteSpace($LabHeadlessBaselineReceipt) -or [string]::IsNullOrWhiteSpace($LabHeadlessCandidateReceipt)) {
+            throw "Headless release-lab runs require baseline and candidate verified provisioning receipts."
+        }
+        Assert-ExistingFile $LabHeadlessBaselineReceipt "Release-lab baseline headless receipt"
+        Assert-ExistingFile $LabHeadlessCandidateReceipt "Release-lab candidate headless receipt"
+        $suiteArgs += @("--headless-baseline-receipt", (Convert-ToWslPath $LabHeadlessBaselineReceipt), "--headless-candidate-receipt", (Convert-ToWslPath $LabHeadlessCandidateReceipt))
+    }
     if ([string]::IsNullOrWhiteSpace($LabManifestPublicKey)) {
         throw "Release-lab signed manifest public key is required"
     }
@@ -1059,6 +1321,10 @@ if ($LabLane -ne "off") {
         $suiteArgs += @("--outer-artifact", (Convert-ToWslPath $outerForLab))
     }
     Invoke-ReleaseLab "run-suite" $suiteArgs | Out-Null
+    if ($LabLane -eq "release") {
+        Write-Step "Validate self-hosted publication through the owned client flow"
+        Invoke-ReleaseLab "publish-validation" @("--run-id", $LabRunId) | Out-Null
+    }
     $gateArgs = @("--run-id", $LabRunId, "--lane", $LabLane, "--artifact-dir", (Convert-ToWslPath $ArtifactDir))
     if (-not [string]::IsNullOrWhiteSpace($outerForLab)) {
         $gateArgs += @("--outer-artifact", (Convert-ToWslPath $outerForLab))

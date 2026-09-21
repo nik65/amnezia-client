@@ -8,12 +8,15 @@ var windowsMainServiceConfigSnapshot = null;
 var windowsUpgradeAdminRightsAcquired = false;
 var windowsUpgradePrepareFailureReason = "";
 var windowsMainServiceConfigSnapshotFailureReason = "";
+var windowsMainServiceConfigSnapshotFailureOutput = "";
+var windowsServiceSnapshotAttempt = 0;
 var windowsUpgradeReplacementRequested = false;
 var windowsUpgradeContinuationRequested = false;
 var windowsUpgradeNextRequested = false;
 var windowsUpgradeCommitRequested = false;
 var windowsInstallerLogSession = "installer-" + new Date().getTime();
 var windowsServiceUpgradeJournalPath = "C:/Program Files/AmneziaVPN-Recovery/upgrade-service-journal.json";
+var windowsServiceRecoveryRootPath = "C:/Program Files/AmneziaVPN-Recovery";
 
 function writeWindowsInstallerLog(phase, detail)
 {
@@ -41,7 +44,7 @@ function writeWindowsInstallerLog(phase, detail)
         + "$Files=[array](Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending); "
         + "$Files | Where-Object LastWriteTimeUtc -lt ([DateTime]::UtcNow.AddDays(-14)) | Remove-Item -Force -ErrorAction SilentlyContinue; "
         + "if (Test-Path -LiteralPath $Path) { $PathItem=Get-Item -LiteralPath $Path -Force; if ($PathItem.PSIsContainer -or ($PathItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $PathItem.Length -ge 256KB) { return } }; "
-        + "$Record=New-Object System.Collections.Specialized.OrderedDictionary; $Record.Add('schema',1); $Record.Add('utc',[DateTime]::UtcNow.ToString('o')); $Record.Add('phase',$Phase); $Record.Add('detail',$Detail); "
+        + "$Record=New-Object System.Collections.Specialized.OrderedDictionary; $Record.Add('schema',1); $Record.Add('utc',[DateTime]::UtcNow.ToString('o')); $Record.Add('phase',$Phase); $Record.Add('detail',$Detail); $Record.Add('user',[Security.Principal.WindowsIdentity]::GetCurrent().Name); $Record.Add('sid',[Security.Principal.WindowsIdentity]::GetCurrent().User.Value); $Record.Add('isElevated',([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)); $Record.Add('isSystem',([Security.Principal.WindowsIdentity]::GetCurrent().IsSystem)); "
         + "$Line=$Record | ConvertTo-Json -Compress; [IO.File]::AppendAllText($Path,$Line+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false))); "
         + "$Files=[array](Get-ChildItem -LiteralPath $Root -File -Filter 'installer-*.jsonl' | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } | Sort-Object LastWriteTimeUtc -Descending); "
         + "if ($Files.Count -gt 20) { $Files | Select-Object -Skip 20 | Remove-Item -Force -ErrorAction SilentlyContinue }; "
@@ -142,11 +145,12 @@ function windowsLegacyMaintenanceToolProcessState()
         + "if ([string]::Equals($ExecutablePath,$Expected64,[StringComparison]::OrdinalIgnoreCase) "
         + "-or [string]::Equals($ExecutablePath,$Expected86,[StringComparison]::OrdinalIgnoreCase)) { exit 10 } }; "
         + "exit 0 } catch { exit 97 } }";
+    script = script.replace("& { param($Path64,$Path86) ",
+        "& { $Path64=" + windowsPowerShellLiteral(appInstalledUninstallerPath)
+        + "; $Path86=" + windowsPowerShellLiteral(appInstalledUninstallerPath_x86) + "; ");
     var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
                                    ["-NoLogo", "-NoProfile", "-NonInteractive",
-                                    "-WindowStyle", "Hidden", "-Command", script,
-                                    appInstalledUninstallerPath,
-                                    appInstalledUninstallerPath_x86]);
+                                    "-WindowStyle", "Hidden", "-Command", script]);
     if (result.length < 2) {
         return -1;
     }
@@ -209,6 +213,87 @@ function waitForWindowsLegacyUninstaller()
     return {
         status: uninstallerPostcondition,
         processState: uninstallerProcessState,
+        oldInstallationPresent: oldInstallationPresent
+    };
+}
+
+function nonWindowsLegacyMaintenanceToolProcessState(uninstallerPath)
+{
+    // Qt IFW's execute() returns only after the bootstrap process exits.  On
+    // Linux/macOS an elevated or detached child may still be removing the
+    // installation, so inspect the exact maintenance-tool path before using
+    // the portable installation-path postcondition.
+    var result = installer.execute("/bin/ps", ["-eo", "pid=,args="]);
+    if (result.length < 2) {
+        return -1;
+    }
+    if (Number(result[1]) !== 0) {
+        return -1;
+    }
+    var output = String(result[0] || "");
+    var lines = output.split(/\r?\n/);
+    for (var index = 0; index < lines.length; ++index) {
+        if (lines[index].indexOf(uninstallerPath) !== -1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+function waitForNonWindowsLegacyUninstaller(uninstallerPath, uninstallerExitCode)
+{
+    // On Linux and macOS the maintenance tool has no reliable Windows
+    // service probe.  The bootstrap exit code is diagnostic only: first prove
+    // whether the exact maintenance-tool process is still alive, then require
+    // the installation path to remain absent for four samples.  A terminal
+    // nonzero bootstrap with no child is a failure, not a reason to wait ten
+    // minutes and mask the original crash.
+    var absentQuiescentChecks = 0;
+    var presentStoppedChecks = 0;
+    var oldInstallationPresent = true;
+    var processState = -1;
+    var lastWaitState = "";
+    console.log("Non-Windows legacy uninstaller bootstrap exit code: "
+                + uninstallerExitCode);
+    for (var i = 0; i < 1200; i++) {
+        sleep(500);
+        oldInstallationPresent = appInstalled();
+        processState = nonWindowsLegacyMaintenanceToolProcessState(uninstallerPath);
+        var waitState = (oldInstallationPresent ? "path-present" : "path-absent")
+                + "-process-" + processState;
+        if (waitState !== lastWaitState) {
+            console.log("Non-Windows legacy uninstaller state: " + waitState);
+            lastWaitState = waitState;
+        }
+        if (!oldInstallationPresent && processState === 0) {
+            absentQuiescentChecks++;
+            presentStoppedChecks = 0;
+        } else {
+            absentQuiescentChecks = 0;
+            if (oldInstallationPresent && processState === 0) {
+                presentStoppedChecks++;
+            } else {
+                presentStoppedChecks = 0;
+            }
+        }
+        if (absentQuiescentChecks >= 4) {
+            return {
+                status: "removed",
+                processState: processState,
+                oldInstallationPresent: false
+            };
+        }
+        if (presentStoppedChecks >= 4 && uninstallerExitCode !== 0) {
+            return {
+                status: "failed-terminal",
+                processState: processState,
+                oldInstallationPresent: true
+            };
+        }
+    }
+    return {
+        status: processState === 1 ? "timeout-active" : "timeout-unknown",
+        processState: processState,
         oldInstallationPresent: oldInstallationPresent
     };
 }
@@ -459,41 +544,257 @@ function windowsServiceIdentityFailureReason(identity, expectedStart, allowDisab
     return "identity-mismatch";
 }
 
-function queryWindowsMainServiceSnapshot(serviceName)
+function prepareWindowsServiceRecoveryRoot()
 {
-    // The payload is a compressed, source-embedded C# helper. Keeping the
-    // helper here makes it available before extraction and avoids localized
-    // `sc` text as well as separate CIM/registry/recovery races.
-    var sourceGzipBase64 = "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";
-    var script = "& { param($ServiceName) $ErrorActionPreference='Stop'; try { "
-        + "$Bytes=[Convert]::FromBase64String('" + sourceGzipBase64 + "'); "
-        + "$SnapshotInput=New-Object IO.MemoryStream(,$Bytes); $SnapshotGzip=New-Object IO.Compression.GzipStream($SnapshotInput,[IO.Compression.CompressionMode]::Decompress); "
-        + "$SnapshotReader=New-Object IO.StreamReader($SnapshotGzip); $Source=$SnapshotReader.ReadToEnd(); $SnapshotReader.Dispose(); $SnapshotInput.Dispose(); "
-        + "Add-Type -TypeDefinition $Source -Language CSharp; "
-        + "[AmneziaServiceSnapshotNative]::Read($ServiceName) | ConvertTo-Json -Compress -Depth 8; exit 0 } catch { "
-        + "$Code=97; if ($_.Exception -is [ComponentModel.Win32Exception]) { $Code=$_.Exception.NativeErrorCode }; "
-        + "if ($Code -lt 1 -or $Code -gt 16384) { $Code=97 }; exit $Code } }";
+    // The IFW process and the elevated PowerShell child do not necessarily
+    // share the same token. Establish one protected, LocalSystem/Admin-owned
+    // directory before any transport file is created, and fail closed if a
+    // pre-existing directory is a reparse point or retains inherited access.
+    var script = "& { param($Root) $ErrorActionPreference='Stop'; try { if (Test-Path -LiteralPath $Root) { $Item=Get-Item -LiteralPath $Root -Force; if (-not $Item.PSIsContainer -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { exit 91 } } else { New-Item -ItemType Directory -Path $Root | Out-Null; & 'C:\\Windows\\System32\\icacls.exe' $Root '/inheritance:r' | Out-Null; if ($LASTEXITCODE -ne 0) { exit 92 }; & 'C:\\Windows\\System32\\icacls.exe' $Root '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null; if ($LASTEXITCODE -ne 0) { exit 93 } }; $Acl=[IO.Directory]::GetAccessControl($Root); if (-not $Acl.AreAccessRulesProtected) { exit 94 }; $OwnerSid=(New-Object Security.Principal.NTAccount($Acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value; if ($OwnerSid -ne 'S-1-5-18' -and $OwnerSid -ne 'S-1-5-32-544') { exit 95 }; exit 0 } catch { exit 97 } }";
+    script = script.replace("& { param($Root) ", "& { $Root=" + windowsPowerShellLiteral(windowsServiceRecoveryRootPath) + "; ");
+    script = script.replace("'*S-1-5-32-544:(OI)(CI)F'", "'*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)(RX)'");
     var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
                                    ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-                                    "-Command", script, serviceName]);
-    var exitCode = result.length >= 2 ? Number(result[1]) : -1;
-    if (exitCode !== 0) {
-        windowsMainServiceConfigSnapshotFailureReason = "identity-query-exit-" + exitCode;
-        return null;
-    }
+                                    "-Command", script]);
+    return result.length >= 2 && Number(result[1]) === 0;
+}
+
+function windowsServiceTransportToken()
+{
+    return windowsInstallerLogSession + "-" + (++windowsServiceSnapshotAttempt)
+            + "-" + new Date().getTime();
+}
+
+function windowsPowerShellLiteral(value)
+{
+    return "'" + String(value).replace(/'/g, "''") + "'";
+}
+
+function readWindowsServiceTransportEnvelope(path, token, kind, allowError)
+{
+    var text = "";
     try {
-        var snapshot = JSON.parse(String(result[0] || ""));
-        if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)) {
-            windowsMainServiceConfigSnapshotFailureReason = "identity-json-invalid";
+        text = installer.readFile(path, "UTF-8");
+        if (typeof text !== "string" || text.length === 0) {
+            windowsMainServiceConfigSnapshotFailureOutput = kind + "-read-empty";
             return null;
         }
-        return snapshot;
+        var envelope = JSON.parse(text.replace(/^\uFEFF/, "").trim());
+        if (envelope === null || typeof envelope !== "object" || Array.isArray(envelope)
+                || Number(envelope.schema) !== 1 || envelope.kind !== kind
+                || envelope.token !== token
+                || (!allowError && envelope.status !== "ok")
+                || typeof envelope.exists !== "boolean"
+                || !isStrictWindowsServiceNumber(envelope.size)
+                || envelope.size < 0 || envelope.size > 65536) {
+            windowsMainServiceConfigSnapshotFailureOutput = kind + "-envelope-invalid-length-"
+                    + text.length;
+            return null;
+        }
+        return envelope;
     } catch (error) {
-        windowsMainServiceConfigSnapshotFailureReason = "identity-json-invalid";
+        windowsMainServiceConfigSnapshotFailureOutput = kind + "-parse-error-length-"
+                + text.length;
         return null;
     }
 }
 
+function writeWindowsServiceTransportScript(path, tempPath, source)
+{
+    // Qt IFW's Windows execute bridge has an effective command-line boundary
+    // below the inline service helper size. Write the trusted generated
+    // helper in short UTF-8 chunks, then atomically publish it in the already
+    // protected Recovery directory and invoke it through PowerShell -File.
+    if (/[^\x00-\x7F]/.test(source)) {
+        return false;
+    }
+    var chunkSize = 1200;
+    var offset = 0;
+    var first = true;
+    while (offset < source.length) {
+        var chunk = source.substr(offset, chunkSize);
+        var command = first
+                ? "& { $Temp=" + windowsPowerShellLiteral(tempPath)
+                  + "; if(Test-Path -LiteralPath $Temp){exit 94}; [IO.File]::WriteAllText($Temp,"
+                  + windowsPowerShellLiteral(chunk)
+                  + ",(New-Object Text.UTF8Encoding($false))); exit 0 }"
+                : "& { $Temp=" + windowsPowerShellLiteral(tempPath)
+                  + "; if(-not (Test-Path -LiteralPath $Temp)){exit 95}; [IO.File]::AppendAllText($Temp,"
+                  + windowsPowerShellLiteral(chunk)
+                  + ",(New-Object Text.UTF8Encoding($false))); exit 0 }";
+        var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                                       ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                                        "-Command", command]);
+        if (result.length < 2 || Number(result[1]) !== 0) {
+            return false;
+        }
+        first = false;
+        offset += chunk.length;
+    }
+    var publish = "& { $Temp=" + windowsPowerShellLiteral(tempPath)
+        + "; $Path=" + windowsPowerShellLiteral(path)
+        + "; if(-not (Test-Path -LiteralPath $Temp)){exit 96}; $Item=Get-Item -LiteralPath $Temp -Force; if($Item.PSIsContainer -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $Item.Length -ne "
+        + String(source.length) + "){exit 97}; if(Test-Path -LiteralPath $Path){exit 98}; [IO.File]::Move($Temp,$Path); $Published=Get-Item -LiteralPath $Path -Force; if($Published.PSIsContainer -or ($Published.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $Published.Length -ne "
+        + String(source.length) + "){exit 99}; exit 0 }";
+    var published = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                                      ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                                       "-Command", publish]);
+    return published.length >= 2 && Number(published[1]) === 0;
+}
+
+function cleanupWindowsServiceTransportFiles(paths)
+{
+    var script = "& { param($Root,$Output,$Status,$OutputTemp,$StatusTemp,$Helper,$HelperTemp) $ErrorActionPreference='Stop'; try { $RootItem=Get-Item -LiteralPath $Root -Force; if (-not $RootItem.PSIsContainer -or ($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { exit 90 }; $RootAcl=[IO.Directory]::GetAccessControl($Root); if (-not $RootAcl.AreAccessRulesProtected) { exit 90 }; $RootFull=[IO.Path]::GetFullPath($Root).TrimEnd('\\'); $Paths=New-Object System.Collections.ArrayList; [void]$Paths.Add($Output); [void]$Paths.Add($Status); [void]$Paths.Add($OutputTemp); [void]$Paths.Add($StatusTemp); [void]$Paths.Add($Helper); [void]$Paths.Add($HelperTemp); foreach($Path in $Paths){ if ([string]::IsNullOrWhiteSpace($Path)) { continue }; $Full=[IO.Path]::GetFullPath($Path); if (-not $Full.StartsWith($RootFull+'\\',[StringComparison]::OrdinalIgnoreCase)) { exit 91 }; if (Test-Path -LiteralPath $Full){ $Item=Get-Item -LiteralPath $Full -Force; if ($Item.PSIsContainer -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint)){ exit 92 }; Remove-Item -LiteralPath $Full -Force -ErrorAction Stop }; if (Test-Path -LiteralPath $Full){ exit 93 } }; exit 0 } catch { exit 97 } }";
+    script = script.replace("& { param($Root,$Output,$Status,$OutputTemp,$StatusTemp,$Helper,$HelperTemp) ",
+        "& { $Root=" + windowsPowerShellLiteral(windowsServiceRecoveryRootPath)
+        + "; $Output=" + windowsPowerShellLiteral(paths.output)
+        + "; $Status=" + windowsPowerShellLiteral(paths.status)
+        + "; $OutputTemp=" + windowsPowerShellLiteral(paths.outputTemp)
+        + "; $StatusTemp=" + windowsPowerShellLiteral(paths.statusTemp)
+        + "; $Helper=" + windowsPowerShellLiteral(paths.helper)
+        + "; $HelperTemp=" + windowsPowerShellLiteral(paths.helperTemp) + "; ");
+    var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                                   ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                                    "-Command", script]);
+    return result.length >= 2 && Number(result[1]) === 0;
+}
+
+function queryWindowsMainServiceSnapshot(serviceName)
+{
+    var sourceGzipBase64 = "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";
+
+    if (!prepareWindowsServiceRecoveryRoot()) {
+        windowsMainServiceConfigSnapshotFailureReason = "identity-recovery-root-unavailable";
+        return null;
+    }
+    writeWindowsInstallerLog("service-snapshot-root", "prepared");
+    // PowerShell 5.1 launched through IFW can return exit 0 with empty stdout
+    // after the installer has gained admin rights. Use a protected Recovery
+    // directory and two per-call envelopes: a status record proves that the
+    // helper ran, while the snapshot record carries only bounded typed JSON.
+    var token = windowsServiceTransportToken();
+    var snapshotPath = windowsServiceRecoveryRootPath + "/service-snapshot-" + token + ".json";
+    var statusPath = windowsServiceRecoveryRootPath + "/service-snapshot-" + token + ".status.json";
+    var snapshotTempPath = snapshotPath + ".tmp-" + token;
+    var statusTempPath = statusPath + ".tmp-" + token;
+    var helperPath = windowsServiceRecoveryRootPath + "/service-snapshot-helper-" + token + ".ps1";
+    var helperTempPath = helperPath + ".tmp-" + token;
+    var script = "& { param($ServiceName,$OutputPath,$StatusPath,$Nonce) $ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $WarningPreference='SilentlyContinue'; $OutputTemp=$OutputPath+'.tmp-'+$Nonce; $StatusTemp=$StatusPath+'.tmp-'+$Nonce; $Write={ param($Path,$Record,$Temp) $Json=$Record | ConvertTo-Json -Compress -Depth 12; if([string]::IsNullOrWhiteSpace([string]$Json) -or $Json.Length -gt 65536){ throw 'envelope-size' }; $Bytes=(New-Object Text.UTF8Encoding($false)).GetBytes([string]$Json); $Stream=New-Object IO.FileStream($Temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); try{$Stream.Write($Bytes,0,$Bytes.Length);$Stream.Flush($true)}finally{$Stream.Dispose()}; if(Test-Path -LiteralPath $Path){throw 'envelope-exists'}; [IO.File]::Move($Temp,$Path) }; $Exists=$false; $Size=0; try { $Bytes=[Convert]::FromBase64String('" + sourceGzipBase64 + "'); $SnapshotInput=New-Object IO.MemoryStream(,$Bytes); $SnapshotGzip=New-Object IO.Compression.GzipStream($SnapshotInput,[IO.Compression.CompressionMode]::Decompress); $SnapshotReader=New-Object IO.StreamReader($SnapshotGzip); $Source=$SnapshotReader.ReadToEnd(); $SnapshotReader.Dispose(); $SnapshotGzip.Dispose(); $SnapshotInput.Dispose(); Add-Type -TypeDefinition $Source -Language CSharp; $Snapshot=([AmneziaServiceSnapshotNative]::Read($ServiceName) | ConvertFrom-Json); $Json=$Snapshot | ConvertTo-Json -Compress -Depth 8; if([string]::IsNullOrWhiteSpace([string]$Json) -or $Json.Length -gt 65536){throw 'snapshot-size'}; $Envelope=New-Object System.Collections.Specialized.OrderedDictionary; $Envelope.Add('schema',1); $Envelope.Add('kind','service-snapshot'); $Envelope.Add('token',$Nonce); $Envelope.Add('phase','complete'); $Envelope.Add('status','ok'); $Envelope.Add('errorCategory',''); $Envelope.Add('exists',$true); $Envelope.Add('size',$Json.Length); $Envelope.Add('snapshot',$Snapshot); & $Write $OutputPath $Envelope $OutputTemp; $Item=Get-Item -LiteralPath $OutputPath -Force; if($Item.PSIsContainer -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $Item.Length -gt 65536){throw 'snapshot-file-invalid'}; $Status=New-Object System.Collections.Specialized.OrderedDictionary; $Status.Add('schema',1); $Status.Add('kind','service-snapshot-status'); $Status.Add('token',$Nonce); $Status.Add('phase','complete'); $Status.Add('status','ok'); $Status.Add('errorCategory',''); $Status.Add('exists',$true); $Status.Add('size',[int64]$Item.Length); & $Write $StatusPath $Status $StatusTemp; exit 0 } catch { $Exists=[IO.File]::Exists($OutputPath); if($Exists){try{$Size=[IO.FileInfo]::new($OutputPath).Length}catch{$Size=0}}; try { $Status=New-Object System.Collections.Specialized.OrderedDictionary; $Status.Add('schema',1); $Status.Add('kind','service-snapshot-status'); $Status.Add('token',$Nonce); $Status.Add('phase','failed'); $Status.Add('status','error'); $Status.Add('errorCategory',('helper-'+$_.Exception.GetType().Name)); $Status.Add('exists',$Exists); $Status.Add('size',[int64]$Size); if(-not (Test-Path -LiteralPath $StatusPath)){ & $Write $StatusPath $Status $StatusTemp } } catch {}; if(Test-Path -LiteralPath $OutputTemp){try{Remove-Item -LiteralPath $OutputTemp -Force -ErrorAction SilentlyContinue}catch{}}; if(Test-Path -LiteralPath $StatusTemp){try{Remove-Item -LiteralPath $StatusTemp -Force -ErrorAction SilentlyContinue}catch{}}; $Code=97; if($_.Exception -is [ComponentModel.Win32Exception]){$Code=$_.Exception.NativeErrorCode}; if($Code -lt 1 -or $Code -gt 16384){$Code=97}; exit $Code } }";
+    script = script.replace("([AmneziaServiceSnapshotNative]::Read($ServiceName) | ConvertFrom-Json)", "([AmneziaServiceSnapshotNative]::Read($ServiceName))");
+    script = script.replace("$Status.Add('errorCategory',('helper-'+$_.Exception.GetType().Name));", "$Status.Add('errorCategory',('helper-'+$_.Exception.GetType().Name)); $Status.Add('errorText',(([string]$_.Exception.Message).Replace([Environment]::NewLine,' ')).Substring(0,[Math]::Min(256,(([string]$_.Exception.Message).Replace([Environment]::NewLine,' ')).Length))); ");
+    script = script.replace("if(Test-Path -LiteralPath $Path){throw 'envelope-exists'}; [IO.File]::Move($Temp,$Path)", "if(Test-Path -LiteralPath $Path){throw 'envelope-exists'}; [IO.File]::Move($Temp,$Path); $Acl=[IO.File]::GetAccessControl($Path); $Acl.SetAccessRuleProtection($true,$true); $Read=New-Object Security.AccessControl.FileSystemAccessRule('S-1-5-32-545','ReadAndExecute','Allow'); [void]$Acl.AddAccessRule($Read); [IO.File]::SetAccessControl($Path,$Acl)");
+    script = script.replace("$Read=New-Object Security.AccessControl.FileSystemAccessRule('S-1-5-32-545','ReadAndExecute','Allow')", "$Read=[Security.AccessControl.FileSystemAccessRule]::new((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')),[Security.AccessControl.FileSystemRights]::ReadAndExecute,[Security.AccessControl.AccessControlType]::Allow)");
+    script = script.replace("& { param($ServiceName,$OutputPath,$StatusPath,$Nonce) ",
+        "& { $ServiceName=" + windowsPowerShellLiteral(serviceName)
+        + "; $OutputPath=" + windowsPowerShellLiteral(snapshotPath)
+        + "; $StatusPath=" + windowsPowerShellLiteral(statusPath)
+        + "; $Nonce=" + windowsPowerShellLiteral(token) + "; ");
+    if (!writeWindowsServiceTransportScript(helperPath, helperTempPath, script)) {
+        windowsMainServiceConfigSnapshotFailureReason = "identity-helper-write-failed";
+        cleanupWindowsServiceTransportFiles({
+            output: snapshotPath, status: statusPath,
+            outputTemp: snapshotTempPath, statusTemp: statusTempPath,
+            helper: helperPath, helperTemp: helperTempPath
+        });
+        return null;
+    }
+    var helperReadback = "";
+    try {
+        helperReadback = installer.readFile(helperPath, "UTF-8");
+    } catch (error) {
+        helperReadback = "";
+    }
+    if (typeof helperReadback !== "string" || helperReadback !== script) {
+        windowsMainServiceConfigSnapshotFailureReason = "identity-helper-readback-mismatch";
+        cleanupWindowsServiceTransportFiles({
+            output: snapshotPath, status: statusPath,
+            outputTemp: snapshotTempPath, statusTemp: statusTempPath,
+            helper: helperPath, helperTemp: helperTempPath
+        });
+        return null;
+    }
+    var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+                                   ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+                                    "-ExecutionPolicy", "Bypass", "-File", helperPath]);
+    var exitCode = result.length >= 2 ? Number(result[1]) : -1;
+    if (exitCode !== 0) {
+        var failedStatus = readWindowsServiceTransportEnvelope(statusPath, token,
+                                                               "service-snapshot-status", true);
+        windowsMainServiceConfigSnapshotFailureReason = "identity-query-exit-" + exitCode;
+        windowsMainServiceConfigSnapshotFailureOutput = failedStatus === null
+                ? "status-missing"
+                : ("status-" + failedStatus.phase + "-" + failedStatus.status
+                   + "-error-" + String(failedStatus.errorCategory || "unknown")
+                   + "-exists-" + failedStatus.exists + "-size-" + failedStatus.size).substr(0, 160);
+        writeWindowsInstallerLog("service-snapshot-transport",
+                                 windowsMainServiceConfigSnapshotFailureOutput);
+        cleanupWindowsServiceTransportFiles({
+            output: snapshotPath, status: statusPath,
+            outputTemp: snapshotTempPath, statusTemp: statusTempPath,
+            helper: helperPath, helperTemp: helperTempPath
+        });
+        return null;
+    }
+    var snapshotText = "";
+    var statusEnvelope = null;
+    var snapshotEnvelope = null;
+    var cleanupResult = null;
+    try {
+        statusEnvelope = readWindowsServiceTransportEnvelope(statusPath, token,
+                                                              "service-snapshot-status");
+        snapshotEnvelope = readWindowsServiceTransportEnvelope(snapshotPath, token,
+                                                                 "service-snapshot");
+        if (statusEnvelope === null || statusEnvelope.phase !== "complete"
+                || snapshotEnvelope === null || snapshotEnvelope.phase !== "complete"
+                || snapshotEnvelope.exists !== true || statusEnvelope.exists !== true) {
+            windowsMainServiceConfigSnapshotFailureReason = "identity-transport-status-invalid";
+            windowsMainServiceConfigSnapshotFailureOutput = statusEnvelope === null
+                    ? (windowsMainServiceConfigSnapshotFailureOutput || "status-missing")
+                    : ("status-" + statusEnvelope.phase + "-"
+                      + statusEnvelope.status + "-exists-" + statusEnvelope.exists
+                      + "-size-" + statusEnvelope.size).substr(0, 160);
+            return null;
+        }
+        snapshotText = JSON.stringify(snapshotEnvelope.snapshot);
+    } catch (error) {
+        windowsMainServiceConfigSnapshotFailureReason = "identity-file-read-error";
+        return null;
+    } finally {
+        cleanupResult = cleanupWindowsServiceTransportFiles({
+            output: snapshotPath, status: statusPath,
+            outputTemp: snapshotTempPath, statusTemp: statusTempPath,
+            helper: helperPath, helperTemp: helperTempPath
+        });
+    }
+    if (!cleanupResult) {
+        windowsMainServiceConfigSnapshotFailureReason = "identity-file-cleanup-failed";
+        return null;
+    }
+    if (typeof snapshotText !== "string" || snapshotText.length === 0) {
+        windowsMainServiceConfigSnapshotFailureReason = "identity-file-read-empty";
+        windowsMainServiceConfigSnapshotFailureOutput = "length-0";
+        return null;
+    }
+    try {
+        var snapshot = JSON.parse(snapshotText.replace(/^\uFEFF/, "").trim());
+        if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+            windowsMainServiceConfigSnapshotFailureReason = "identity-json-invalid";
+            windowsMainServiceConfigSnapshotFailureOutput = ("type-"
+                    + (snapshot === null ? "null" : Array.isArray(snapshot) ? "array" : typeof snapshot)
+                    + "-length-" + snapshotText.length).substr(0, 160);
+            return null;
+        }
+        return snapshot;
+    } catch (error) {
+        var rawSnapshotOutput = snapshotText.replace(/[^A-Za-z0-9._:{}\[\],"'\\-]/g, "-");
+        windowsMainServiceConfigSnapshotFailureReason = "identity-json-invalid";
+        windowsMainServiceConfigSnapshotFailureOutput = ("parse-error-length-"
+                    + snapshotText.length + "-prefix-" + rawSnapshotOutput.substr(0, 96)).substr(0, 160);
+        console.log("Windows service snapshot JSON file invalid; length="
+                    + snapshotText.length + ", prefix=" + rawSnapshotOutput.substr(0, 96));
+        return null;
+    }
+}
 function queryWindowsMainServiceIdentity(serviceName)
 {
     var snapshot = queryWindowsMainServiceSnapshot(serviceName);
@@ -523,12 +824,18 @@ function persistWindowsServiceUpgradeJournal(snapshot)
     var script = "& { param($Path,$ServiceName,$Start,$Actions,$Flag,$FlagRaw) $ErrorActionPreference='Stop'; $Temp=''; $BackupPath=''; "
         + "$TestAcl={ param($Target,$Directory) try { $Item=Get-Item -LiteralPath $Target -Force; if ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }; $Acl=if ($Directory) { [IO.Directory]::GetAccessControl($Target) } else { [IO.File]::GetAccessControl($Target) }; if (-not $Acl.AreAccessRulesProtected) { return $false }; $Allowed='S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'; $OwnerSid=(New-Object Security.Principal.NTAccount($Acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value; if ($Allowed -notcontains $OwnerSid) { return $false }; $Dangerous=[Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::CreateDirectories -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::WriteAttributes -bor [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership; foreach ($Rule in $Acl.Access) { if ($Rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and ($Rule.FileSystemRights -band $Dangerous) -ne 0) { $Sid=$Rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value; if ($Allowed -notcontains $Sid) { return $false } } }; return $true } catch { return $false } }; "
         + "try { $Root=[IO.Path]::GetDirectoryName($Path); if (Test-Path -LiteralPath $Root) { if (-not [bool](& $TestAcl $Root $true)) { exit 92 } } else { New-Item -ItemType Directory -Path $Root | Out-Null; & 'C:\\Windows\\System32\\icacls.exe' $Root '/inheritance:r' | Out-Null; if ($LASTEXITCODE -ne 0) { exit 93 }; & 'C:\\Windows\\System32\\icacls.exe' $Root '/grant:r' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null; if ($LASTEXITCODE -ne 0 -or -not [bool](& $TestAcl $Root $true)) { exit 94 } }; "
-        + "$Temp=$Path+'.tmp-'+[Guid]::NewGuid().ToString('N'); $Record=New-Object System.Collections.Specialized.OrderedDictionary; $Record.Add('schema',1); $Record.Add('serviceName',$ServiceName); $Record.Add('phase','prepared'); $Record.Add('start',$Start); $Record.Add('failureActions',$Actions); $Record.Add('failureActionsFlag',$Flag); $Record.Add('failureActionsFlagRaw',$FlagRaw); $Json=$Record | ConvertTo-Json -Compress; $Bytes=(New-Object Text.UTF8Encoding($false)).GetBytes($Json); $Stream=New-Object IO.FileStream($Temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); try { $Stream.Write($Bytes,0,$Bytes.Length); $Stream.Flush($true) } finally { $Stream.Dispose() }; if (-not [bool](& $TestAcl $Temp $false)) { exit 95 }; if (Test-Path -LiteralPath $Path) { if (-not [bool](& $TestAcl $Path $false)) { exit 96 }; $BackupPath=$Path+'.bak-'+[Guid]::NewGuid().ToString('N'); [IO.File]::Replace($Temp,$Path,$BackupPath,$true); if (-not (Test-Path -LiteralPath $Path)) { exit 98 }; if (Test-Path -LiteralPath $BackupPath) { Remove-Item -LiteralPath $BackupPath -Force -ErrorAction Stop } } else { [IO.File]::Move($Temp,$Path) }; if (Test-Path -LiteralPath $Temp) { exit 98 }; if (-not [bool](& $TestAcl $Path $false)) { exit 99 }; exit 0 } catch { $CleanupOk=$true; if ($Temp -and (Test-Path -LiteralPath $Temp)) { try { Remove-Item -LiteralPath $Temp -Force -ErrorAction Stop } catch { $CleanupOk=$false } }; if ($BackupPath -and (Test-Path -LiteralPath $BackupPath)) { try { if (-not (Test-Path -LiteralPath $Path)) { [IO.File]::Move($BackupPath,$Path) } else { Remove-Item -LiteralPath $BackupPath -Force -ErrorAction Stop } } catch { $CleanupOk=$false } }; if (-not $CleanupOk) { exit 98 }; exit 97 } }";
+        + "$Temp=$Path+'.tmp-'+[Guid]::NewGuid().ToString('N'); $Record=New-Object System.Collections.Specialized.OrderedDictionary; $Record.Add('schema',1); $Record.Add('serviceName',$ServiceName); $Record.Add('phase','prepared'); $Record.Add('start',$Start); $Record.Add('failureActions',$Actions); $Record.Add('failureActionsFlag',$Flag); $Record.Add('failureActionsFlagRaw',$FlagRaw); $Json=$Record | ConvertTo-Json -Compress; $Bytes=(New-Object Text.UTF8Encoding($false)).GetBytes($Json); $Stream=New-Object IO.FileStream($Temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); try { $Stream.Write($Bytes,0,$Bytes.Length); $Stream.Flush($true) } finally { $Stream.Dispose() }; $TempAcl=[IO.File]::GetAccessControl($Temp); $TempAcl.SetAccessRuleProtection($true,$true); [IO.File]::SetAccessControl($Temp,$TempAcl); if (-not [bool](& $TestAcl $Temp $false)) { exit 95 }; if (Test-Path -LiteralPath $Path) { if (-not [bool](& $TestAcl $Path $false)) { exit 96 }; $BackupPath=$Path+'.bak-'+[Guid]::NewGuid().ToString('N'); [IO.File]::Replace($Temp,$Path,$BackupPath,$true); if (-not (Test-Path -LiteralPath $Path)) { exit 98 }; if (Test-Path -LiteralPath $BackupPath) { Remove-Item -LiteralPath $BackupPath -Force -ErrorAction Stop } } else { [IO.File]::Move($Temp,$Path) }; if (Test-Path -LiteralPath $Temp) { exit 98 }; if (-not [bool](& $TestAcl $Path $false)) { exit 99 }; exit 0 } catch { $CleanupOk=$true; if ($Temp -and (Test-Path -LiteralPath $Temp)) { try { Remove-Item -LiteralPath $Temp -Force -ErrorAction Stop } catch { $CleanupOk=$false } }; if ($BackupPath -and (Test-Path -LiteralPath $BackupPath)) { try { if (-not (Test-Path -LiteralPath $Path)) { [IO.File]::Move($BackupPath,$Path) } else { Remove-Item -LiteralPath $BackupPath -Force -ErrorAction Stop } } catch { $CleanupOk=$false } }; if (-not $CleanupOk) { exit 98 }; exit 97 } }";
+    script = script.replace("'*S-1-5-32-544:(OI)(CI)F'", "'*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)(RX)'");
+    script = script.replace("& { param($Path,$ServiceName,$Start,$Actions,$Flag,$FlagRaw) ",
+        "& { $Path=" + windowsPowerShellLiteral(windowsServiceUpgradeJournalPath)
+        + "; $ServiceName=" + windowsPowerShellLiteral("AmneziaVPN-service")
+        + "; $Start=" + windowsPowerShellLiteral(snapshot.start)
+        + "; $Actions=" + windowsPowerShellLiteral(snapshot.failureActions)
+        + "; $Flag=" + windowsPowerShellLiteral(snapshot.failureActionsFlag)
+        + "; $FlagRaw=" + windowsPowerShellLiteral(snapshot.failureActionsFlagRaw) + "; ");
     var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
                                    ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-                                    "-Command", script, windowsServiceUpgradeJournalPath,
-                                    "AmneziaVPN-service", snapshot.start, snapshot.failureActions,
-                                    snapshot.failureActionsFlag, snapshot.failureActionsFlagRaw]);
+                                     "-Command", script]);
     return result.length >= 2 && Number(result[1]) === 0;
 }
 
@@ -537,15 +844,45 @@ function readWindowsServiceUpgradeJournal()
     if (!installer.fileExists(windowsServiceUpgradeJournalPath)) {
         return null;
     }
-    var script = "& { param($Path) $ErrorActionPreference='Stop'; try { $Item=Get-Item -LiteralPath $Path -Force; $Root=Get-Item -LiteralPath ([IO.Path]::GetDirectoryName($Path)) -Force; if ($Item.PSIsContainer -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or -not $Root.PSIsContainer -or ($Root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { exit 91 }; $Acl=[IO.Directory]::GetAccessControl($Root.FullName); $Allowed='S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'; $OwnerSid=(New-Object Security.Principal.NTAccount($Acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value; if (-not $Acl.AreAccessRulesProtected -or $Allowed -notcontains $OwnerSid) { exit 92 }; $Dangerous=[Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership; foreach ($Rule in $Acl.Access) { if ($Rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and ($Rule.FileSystemRights -band $Dangerous) -ne 0 -and $Allowed -notcontains $Rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value) { exit 92 } }; $FileAcl=[IO.File]::GetAccessControl($Item.FullName); if (-not $FileAcl.AreAccessRulesProtected) { exit 92 }; Get-Content -LiteralPath $Item.FullName -Raw; exit 0 } catch { exit 97 } }";
+    if (!prepareWindowsServiceRecoveryRoot()) {
+        return null;
+    }
+    var token = windowsServiceTransportToken();
+    var outputPath = windowsServiceRecoveryRootPath + "/service-journal-read-" + token + ".json";
+    var outputTempPath = outputPath + ".tmp-" + token;
+    var script = "& { param($Path,$OutputPath,$Nonce) $ErrorActionPreference='Stop'; $Temp=$OutputPath+'.tmp-'+$Nonce; try { $Item=Get-Item -LiteralPath $Path -Force; $Root=Get-Item -LiteralPath ([IO.Path]::GetDirectoryName($Path)) -Force; if ($Item.PSIsContainer -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or -not $Root.PSIsContainer -or ($Root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { exit 91 }; $Acl=[IO.Directory]::GetAccessControl($Root.FullName); $Allowed='S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'; $OwnerSid=(New-Object Security.Principal.NTAccount($Acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value; if (-not $Acl.AreAccessRulesProtected -or $Allowed -notcontains $OwnerSid) { exit 92 }; $Dangerous=[Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership; foreach ($Rule in $Acl.Access) { if ($Rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and ($Rule.FileSystemRights -band $Dangerous) -ne 0 -and $Allowed -notcontains $Rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value) { exit 92 } }; $FileAcl=[IO.File]::GetAccessControl($Item.FullName); if (-not $FileAcl.AreAccessRulesProtected -or $Item.Length -gt 65536) { exit 93 }; $Text=[IO.File]::ReadAllText($Item.FullName,(New-Object Text.UTF8Encoding($false))); if([string]::IsNullOrWhiteSpace($Text)){exit 94}; $Record=New-Object System.Collections.Specialized.OrderedDictionary; $Record.Add('schema',1); $Record.Add('kind','service-journal-read'); $Record.Add('token',$Nonce); $Record.Add('phase','complete'); $Record.Add('status','ok'); $Record.Add('errorCategory',''); $Record.Add('exists',$true); $Record.Add('size',[int64]$Item.Length); $Record.Add('content',$Text); $Json=$Record | ConvertTo-Json -Compress -Depth 8; if($Json.Length -gt 65536){exit 95}; $Bytes=(New-Object Text.UTF8Encoding($false)).GetBytes([string]$Json); $Stream=New-Object IO.FileStream($Temp,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); try{$Stream.Write($Bytes,0,$Bytes.Length);$Stream.Flush($true)}finally{$Stream.Dispose()}; if(Test-Path -LiteralPath $OutputPath){exit 96}; [IO.File]::Move($Temp,$OutputPath); exit 0 } catch { if($Temp -and (Test-Path -LiteralPath $Temp)){try{Remove-Item -LiteralPath $Temp -Force -ErrorAction SilentlyContinue}catch{}}; exit 97 } }";
+    script = script.replace("if(Test-Path -LiteralPath $OutputPath){exit 96}; [IO.File]::Move($Temp,$OutputPath); exit 0", "if(Test-Path -LiteralPath $OutputPath){exit 96}; [IO.File]::Move($Temp,$OutputPath); $Acl=[IO.File]::GetAccessControl($OutputPath); $Acl.SetAccessRuleProtection($true,$true); $Read=New-Object Security.AccessControl.FileSystemAccessRule('S-1-5-32-545','ReadAndExecute','Allow'); [void]$Acl.AddAccessRule($Read); [IO.File]::SetAccessControl($OutputPath,$Acl); exit 0");
+    script = script.replace("$Read=New-Object Security.AccessControl.FileSystemAccessRule('S-1-5-32-545','ReadAndExecute','Allow')", "$Read=[Security.AccessControl.FileSystemAccessRule]::new((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')),[Security.AccessControl.FileSystemRights]::ReadAndExecute,[Security.AccessControl.AccessControlType]::Allow)");
+    script = script.replace("& { param($Path,$OutputPath,$Nonce) ",
+        "& { $Path=" + windowsPowerShellLiteral(windowsServiceUpgradeJournalPath)
+        + "; $OutputPath=" + windowsPowerShellLiteral(outputPath)
+        + "; $Nonce=" + windowsPowerShellLiteral(token) + "; ");
     var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
                                    ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-                                    "-Command", script, windowsServiceUpgradeJournalPath]);
+                                    "-Command", script]);
     if (result.length < 2 || Number(result[1]) !== 0) {
+        cleanupWindowsServiceTransportFiles({
+            output: outputPath, status: "", outputTemp: outputTempPath, statusTemp: ""
+        });
+        return null;
+    }
+    var envelope = null;
+    try {
+        envelope = readWindowsServiceTransportEnvelope(outputPath, token,
+                                                        "service-journal-read");
+    } catch (error) {
+        envelope = null;
+    } finally {
+        cleanupWindowsServiceTransportFiles({
+            output: outputPath, status: "", outputTemp: outputTempPath, statusTemp: ""
+        });
+    }
+    if (envelope === null || envelope.exists !== true
+            || typeof envelope.content !== "string" || envelope.content.length === 0) {
         return null;
     }
     try {
-        return JSON.parse(String(result[0] || ""));
+        return JSON.parse(envelope.content.replace(/^\uFEFF/, "").trim());
     } catch (error) {
         return null;
     }
@@ -554,9 +891,11 @@ function readWindowsServiceUpgradeJournal()
 function clearWindowsServiceUpgradeJournal()
 {
     var script = "& { param($Path) $ErrorActionPreference='Stop'; try { if (-not (Test-Path -LiteralPath $Path)) { exit 0 }; $Item=Get-Item -LiteralPath $Path -Force; $Root=Get-Item -LiteralPath ([IO.Path]::GetDirectoryName($Path)) -Force; if ($Item.PSIsContainer -or ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($Root.Attributes -band [IO.FileAttributes]::ReparsePoint)) { exit 91 }; $Acl=[IO.Directory]::GetAccessControl($Root.FullName); $Allowed='S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'; $OwnerSid=(New-Object Security.Principal.NTAccount($Acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value; if (-not $Acl.AreAccessRulesProtected -or $Allowed -notcontains $OwnerSid) { exit 92 }; $Dangerous=[Security.AccessControl.FileSystemRights]::WriteData -bor [Security.AccessControl.FileSystemRights]::AppendData -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership; foreach ($Rule in $Acl.Access) { if ($Rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and ($Rule.FileSystemRights -band $Dangerous) -ne 0 -and $Allowed -notcontains $Rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value) { exit 92 } }; $FileAcl=[IO.File]::GetAccessControl($Item.FullName); if (-not $FileAcl.AreAccessRulesProtected) { exit 92 }; Remove-Item -LiteralPath $Item.FullName -Force; if (Test-Path -LiteralPath $Path) { exit 92 }; exit 0 } catch { exit 97 } }";
+    script = script.replace("& { param($Path) ",
+        "& { $Path=" + windowsPowerShellLiteral(windowsServiceUpgradeJournalPath) + "; ");
     var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
                                    ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-                                    "-Command", script, windowsServiceUpgradeJournalPath]);
+                                    "-Command", script]);
     return result.length >= 2 && Number(result[1]) === 0;
 }
 
@@ -570,6 +909,7 @@ function queryWindowsMainServiceConfig(serviceName)
     // helper returns identity and recovery data from QueryServiceConfig*;
     // no localized command output is parsed here.
     windowsMainServiceConfigSnapshotFailureReason = "";
+    windowsMainServiceConfigSnapshotFailureOutput = "";
     var snapshot = queryWindowsMainServiceSnapshot(serviceName);
     if (snapshot === null) {
         return null;
@@ -1294,7 +1634,7 @@ function Controller () {
 
                 if (appInstalled()) {
                     if (runningOnWindows() && !prepareWindowsMainServiceForUpgrade()) {
-                        writeWindowsInstallerLog("service-preflight", windowsUpgradePrepareFailureReason);
+                        writeWindowsInstallerLog("service-preflight", windowsUpgradePrepareFailureReason + "-" + windowsServiceConfigSnapshotFailureDetail() + (windowsMainServiceConfigSnapshotFailureOutput ? "-" + windowsMainServiceConfigSnapshotFailureOutput : ""));
                         releaseWindowsUpgradeAdminRights();
                         QMessageBox.critical(
                             "windows.service.upgrade.prepare.failed",
@@ -1339,10 +1679,17 @@ function Controller () {
                         var uninstallerPath = availableUninstallers[0];
                         console.log("Starting uninstallation " + uninstallerPath);
                         writeWindowsInstallerLog("legacy-uninstaller-start", "1");
-                        var resultArray = installer.execute(uninstallerPath);
-                        var uninstallerExitCode = resultArray.length >= 2
-                                ? Number(resultArray[1]) : -1;
+                        var uninstallerArgs = ["--accept-messages", "--accept-licenses",
+                                               "--confirm-command", "purge"];
+                        var windowsUninstallerResult = installer.execute(uninstallerPath,
+                                                            uninstallerArgs);
+                        var uninstallerExitCode = windowsUninstallerResult.length >= 2
+                                ? Number(windowsUninstallerResult[1]) : -1;
                         console.log("Uninstaller bootstrap finished with code: " + uninstallerExitCode);
+                        if (windowsUninstallerResult.length >= 1 && String(windowsUninstallerResult[0] || "") !== "") {
+                            console.log("Uninstaller bootstrap output: "
+                                        + String(windowsUninstallerResult[0]).substr(0, 2048));
+                        }
                         writeWindowsInstallerLog("legacy-uninstaller-exit", String(uninstallerExitCode));
                     }
 
@@ -1355,7 +1702,10 @@ function Controller () {
                     // A genuine cancellation is recognized only after both the
                     // installed path and process state have remained quiescent;
                     // an active/unknown timeout must never re-arm the service.
-                    var uninstallerOutcome = waitForWindowsLegacyUninstaller();
+                    var uninstallerOutcome = runningOnWindows()
+                            ? waitForWindowsLegacyUninstaller()
+                            : waitForNonWindowsLegacyUninstaller(uninstallerPath,
+                                                                 uninstallerExitCode);
                     var uninstallerPostcondition = uninstallerOutcome.status;
                     if (uninstallerPostcondition !== "removed") {
                         writeWindowsInstallerLog("legacy-uninstaller-postcondition",

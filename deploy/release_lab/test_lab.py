@@ -11,9 +11,9 @@ from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 try:
-    from .lab import ANDROID_SANDBOX_DISABLED_REASON, AUTOMATED_PROFILE_IDS, SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
+    from .lab import ANDROID_SANDBOX_DISABLED_REASON, AUTOMATED_PROFILE_IDS, SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, build_hyperv_matrix_aggregation, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
 except ImportError:  # direct invocation from this directory
-    from lab import ANDROID_SANDBOX_DISABLED_REASON, AUTOMATED_PROFILE_IDS, SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
+    from lab import ANDROID_SANDBOX_DISABLED_REASON, AUTOMATED_PROFILE_IDS, SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, build_hyperv_matrix_aggregation, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
 
 
 class ReleaseLabContractTests(unittest.TestCase):
@@ -862,6 +862,126 @@ class ReleaseLabContractTests(unittest.TestCase):
         self.assertEqual(observed["thin-upgrade"], [("baseline-thin", "baseline-thin", 2, "reinstall", "1.0.0.0"), ("candidate-thin", "thin", 1, "update", "2.0.0.0")])
         self.assertEqual(observed["outer-upgrade"], [("baseline-outer", "baseline-outer", 4, "reinstall", "1.0.0.0"), ("candidate-outer", "outer", 3, "update", "2.0.0.0")])
         self.assertEqual(set(observed), {"thin-clean", "thin-upgrade", "thin-reinstall", "outer-clean", "outer-upgrade", "outer-reinstall"})
+
+    def _valid_hyperv_matrix_fixture(self):
+        run = {
+            "run_id": "matrix-run", "windows_backend": "hyperv",
+            "baseline_version": "1.0.0.0", "candidate_version": "2.0.0.0",
+            "artifacts": {"windows-x64": {"sha256": "a" * 64, "size": 10}},
+            "baseline_artifacts": {"windows-x64": {"sha256": "b" * 64, "size": 11}},
+            "outer_artifact": {"sha256": "c" * 64, "size": 12},
+            "baseline_outer_artifact": {"sha256": "d" * 64, "size": 13},
+        }
+        specs = windows_case_specs(run)
+        profile = {"case_receipts": [], "steps": [], "hyperv_cases": {}}
+
+        def receipt(case_id, action, artifact, role, version):
+            return {
+                "schema": 1, "run_id": run["run_id"], "profile": "windows-x64",
+                "case_id": case_id, "artifact": dict(artifact), "artifact_sha256": artifact["sha256"],
+                "artifact_size": artifact["size"], "artifact_role": role,
+                "artifact_source": {"transport": "hyperv-powershell-direct", "hash_verified": True},
+                "baseline_version": run["baseline_version"], "candidate_version": run["candidate_version"],
+                "guest_marker": f"amnezia-release-lab:{run['run_id']}:windows-x64",
+                "transport": "hyperv-powershell-direct", "origin": "guest", "injected": False,
+                "action": action, "steps": [{"id": action, "passed": True}],
+                "assertion": {"passed": True, "installed_version": version, "artifact_sha256": artifact["sha256"]},
+                "observed_at": "2026-09-15T00:00:00Z",
+            }
+
+        for index, (case_id, case_spec) in enumerate(specs.items(), 1):
+            vm_id = f"vm-{index}"; parent = f"{index:064x}"
+            case_steps = []
+            profile["hyperv_cases"][case_id] = {"case_id": case_id, "state": "reset", "vm_id": vm_id, "parent_sha256": parent}
+            probe = {"transport": "hyperv-powershell-direct", "origin": "guest", "injected": False, "vm_id": vm_id, "parent_sha256": parent}
+            profile["steps"].append({"id": "probe", "case_id": case_id, "action": "probe", "passed": True, "probe": probe})
+            for stage, artifact, action, version in case_spec:
+                role = "baseline" if stage.startswith("baseline-") else "candidate"
+                guest = receipt(case_id, action, artifact, role, version)
+                case_steps.append({"stage": stage, "action": action, "passed": True, "guest_receipt": guest, "vm_id": vm_id, "parent_sha256": parent})
+                profile["steps"].append({"id": action, "case_id": case_id, "stage": stage, "action": action, "passed": True, "guest_receipt": guest, "transport": "hyperv-powershell-direct", "vm_id": vm_id, "parent_sha256": parent})
+            final_artifact = case_spec[-1][1]
+            health = receipt(case_id, "service-health", final_artifact, "candidate", run["candidate_version"])
+            profile["case_receipts"].append({"case_id": case_id, "steps": case_steps, "service_health": health, "vm_id": vm_id, "parent_sha256": parent})
+        interactive = receipt("outer-interactive", "interactive-collect", run["outer_artifact"], "candidate", run["candidate_version"])
+        interactive["interactive_verified"] = True
+        interactive["assertion"]["interactive_passed"] = True
+        interactive["installed_app_window"] = {"vm_id": "vm-interactive", "screenshot": {"archive": {}}}
+        interactive["hyperv_ui"] = {"screenshot_archive": {}}
+        interactive["archive_attempt_nonce"] = "attempt"
+        profile["hyperv_cases"]["outer-interactive"] = {"case_id": "outer-interactive", "state": "reset", "vm_id": "vm-interactive", "parent_sha256": "e" * 64}
+        profile["interactive_receipt"] = interactive
+        return run, profile
+
+    def test_hyperv_matrix_aggregation_preserves_guest_receipts_and_canonical_steps(self):
+        run, profile = self._valid_hyperv_matrix_fixture()
+        original = json.dumps(profile["case_receipts"], sort_keys=True)
+        with patch("release_lab.lab.validate_hyperv_interactive_archives"):
+            matrix = build_hyperv_matrix_aggregation(run, profile, Path(tempfile.mkdtemp()))
+        self.assertEqual(matrix["origin"], "controller")
+        self.assertTrue(matrix["controller_created"])
+        self.assertEqual(matrix["case_ids"], list(windows_case_specs(run)))
+        self.assertEqual({step["id"] for step in matrix["steps"]}, {"probe", "reinstall", "update", "service-health"})
+        self.assertEqual(json.dumps(profile["case_receipts"], sort_keys=True), original)
+        self.assertEqual(matrix["case_receipts"][0]["case_id"], "thin-clean")
+        self.assertEqual(matrix["case_receipts"][-1]["case_id"], "outer-reinstall")
+
+    def test_hyperv_matrix_aggregation_rejects_partial_or_unbound_evidence(self):
+        run, profile = self._valid_hyperv_matrix_fixture()
+        with patch("release_lab.lab.validate_hyperv_interactive_archives"):
+            for mutate, message in (
+                (lambda p: p["case_receipts"].pop(), "exact six"),
+                (lambda p: p["case_receipts"].__setitem__(0, dict(p["case_receipts"][1])), "exact six"),
+                (lambda p: p["case_receipts"][0]["steps"][0]["guest_receipt"].__setitem__("case_id", "outer-clean"), "case identity"),
+                (lambda p: p["steps"].__setitem__(0, {**p["steps"][0], "passed": False}), "probe"),
+                (lambda p: p["steps"][1].__setitem__("vm_id", "foreign-vm"), "controller action"),
+                (lambda p: p.pop("interactive_receipt"), "interactive"),
+                (lambda p: p["interactive_receipt"].__setitem__("interactive_verified", False), "interactive"),
+            ):
+                candidate = json.loads(json.dumps(profile))
+                mutate(candidate)
+                with self.assertRaisesRegex(LabError, message):
+                    build_hyperv_matrix_aggregation(run, candidate, Path(tempfile.mkdtemp()))
+
+    def test_hyperv_archive_keeps_guest_receipt_separate_from_controller_matrix(self):
+        run, profile = self._valid_hyperv_matrix_fixture()
+        with patch("release_lab.lab.validate_hyperv_interactive_archives"):
+            matrix = build_hyperv_matrix_aggregation(run, profile, Path(tempfile.mkdtemp()))
+        health = dict(profile["case_receipts"][-1]["service_health"])
+        profile["controller_evidence"] = {"hyperv_binding": {"vm_id": "vm-6", "case_id": "outer-reinstall", "parent_sha256": "6" * 64, "transport": "hyperv-powershell-direct", "archived": True}, "interactive_verified": True, "interactive_receipt": profile["interactive_receipt"]}
+        profile["matrix_aggregation"] = matrix
+        profile["evidence"] = health
+        profile["status"] = "evidence-collected"
+        run["profiles"] = {"windows-x64": profile}
+        controller = LabController(Path(tempfile.mkdtemp()), test_mode=True)
+        controller.save_state({"schema": 1, "lab_id": "lab", "runs": {run["run_id"]: run}})
+        record = controller.archive_guest_evidence(run["run_id"], "windows-x64")
+        self.assertEqual(record["receipt"]["value"], health)
+        self.assertEqual(record["matrix_aggregation"]["origin"], "controller")
+        self.assertEqual(record["guest_binding"], profile["controller_evidence"]["hyperv_binding"])
+        archived = json.loads(Path(record["receipt"]["archive_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(archived, health)
+        self.assertNotIn("hyperv_binding", archived)
+
+    def test_hyperv_collect_then_archive_keeps_guest_receipt_untouched(self):
+        run, profile = self._valid_hyperv_matrix_fixture()
+        original_guest = json.loads(json.dumps(profile["case_receipts"][-1]["service_health"], sort_keys=True))
+        profile["last_case_id"] = "outer-reinstall"
+        run["profiles"] = {"windows-x64": profile}
+        controller = LabController(Path(tempfile.mkdtemp()), test_mode=True)
+        controller.save_state({"schema": 1, "lab_id": "lab", "runs": {run["run_id"]: run}})
+        with patch("release_lab.lab.validate_hyperv_interactive_archives"):
+            collected = controller.collect(run["run_id"], "windows-x64")
+        self.assertEqual(collected, original_guest)
+        self.assertNotIn("hyperv_binding", collected)
+        self.assertNotIn("interactive_receipt", collected)
+        saved_profile = controller.get_run(run["run_id"])["profiles"]["windows-x64"]
+        self.assertIn("hyperv_binding", saved_profile["controller_evidence"])
+        self.assertNotIn("hyperv_binding", saved_profile["evidence"])
+        record = controller.archive_guest_evidence(run["run_id"], "windows-x64")
+        archived = json.loads(Path(record["receipt"]["archive_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(archived, original_guest)
+        self.assertIn("controller_evidence", record)
 
     def test_hyperv_adapter_forwards_expected_artifact_role(self):
         source = (Path(__file__).parent / "windows_host" / "hyperv_adapter.ps1").read_text(encoding="utf-8")

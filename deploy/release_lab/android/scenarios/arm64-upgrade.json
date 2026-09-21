@@ -49,7 +49,7 @@
     "host_routes_or_firewall": false
   },
   "real_app_server_update": "same-run-app-request-log-readback",
-  "expected_baseline_outcome": "baseline-abi-blocked",
+  "expected_baseline_outcome": "baseline-abi-blocked-only-with-live-native-error",
   "controller_receipt": {
     "env": "AMNEZIA_ANDROID_LAB_CONTROLLER_RECEIPT",
     "origin": "guest",

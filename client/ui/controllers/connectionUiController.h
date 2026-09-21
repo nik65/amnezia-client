@@ -3,6 +3,8 @@
 
 #include <QObject>
 
+#include <functional>
+
 #include "core/controllers/connectionController.h"
 #include "core/utils/errorCodes.h"
 #include "core/utils/routeModes.h"
@@ -60,6 +62,13 @@ private:
     Vpn::ConnectionState getCurrentConnectionState();
     void notifyConnectionBlocked(ErrorCode errorCode);
 
+    // Runs the deferred connection step as soon as the privileged companion
+    // service is reachable. Returns immediately: the wait is timer driven inside
+    // ConnectionController and never blocks the GUI thread, and a timeout keeps
+    // the existing service error (ErrorCode::AmneziaServiceNotRunning).
+    void runWhenServiceIsReady(std::function<void()> action);
+    void onServiceReadyWaitFinished(bool serviceReady);
+
     ConnectionController* m_connectionController;
     ServersController* m_serversController;
 
@@ -68,6 +77,8 @@ private:
     QString m_connectionStateText;
 
     Vpn::ConnectionState m_state;
+
+    std::function<void()> m_pendingConnectionStep;
 };
 
 #endif

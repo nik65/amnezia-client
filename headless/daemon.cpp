@@ -269,28 +269,25 @@ bool Daemon::start(QString *error)
 
 void Daemon::stop()
 {
-    // Tear down an active backend before closing the control plane. Errors are
-    // deliberately not exposed during process shutdown; the daemon is going
-    // away and the next start will report any remaining host state.
+    // Retire the routing/DNS receipt while the owned interface is still live.
+    // If guarded cleanup fails, leave the backend and receipt owned for
+    // explicit recovery; never report a clean shutdown for partial work.
     m_routingRefreshTimer.stop();
     m_updateTimer.stop();
     m_healthTimer.stop();
-    BackendResult backendResult { true, {}, {} };
-    if (m_backendOwned) backendResult = m_vpnBackend.disconnect();
-    // Keep policy routes in place until the tunnel process has stopped.  This
-    // avoids a window in which traffic can fall back to the underlay.
-    const RoutingResult routingResult = !backendResult.ok
-            ? RoutingResult { false, QStringLiteral("backend_stop_failed"),
-                              QStringLiteral("VPN backend did not stop; routing teardown was withheld") }
-            : m_routingOwned ? m_routingController.disconnect()
-                             : RoutingResult { true, {}, {} };
-    if (backendResult.ok) m_backendOwned = false;
+    const RoutingResult routingResult = m_routingOwned
+            ? m_routingController.disconnect() : RoutingResult { true, {}, {} };
     if (routingResult.ok) m_routingOwned = false;
+    BackendResult backendResult { true, {}, {} };
+    if (routingResult.ok && m_backendOwned) backendResult = m_vpnBackend.disconnect();
+    if (routingResult.ok && backendResult.ok) m_backendOwned = false;
     m_state = (!routingResult.ok || !backendResult.ok)
             ? QStringLiteral("cleanup_failed") : QStringLiteral("disconnected");
     m_backendConnectedTimer.invalidate();
-    m_activeProfile.clear();
-    m_activeProfileData.reset();
+    if (routingResult.ok && backendResult.ok) {
+        m_activeProfile.clear();
+        m_activeProfileData.reset();
+    }
     m_startPhase = StartPhase::NotStarted;
 
     const auto clients = m_clientBuffers.keys();
@@ -545,22 +542,27 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
         return statusResponse(request.requestId);
     }
     case Command::Disconnect: {
-        const BackendResult result = m_backendOwned
-                ? m_vpnBackend.disconnect() : BackendResult { true, {}, {} };
-        if (result.ok) m_backendOwned = false;
-        const RoutingResult routingResult = !result.ok
-                ? RoutingResult { false, QStringLiteral("backend_stop_failed"),
-                                  QStringLiteral("VPN backend did not stop; routing cleanup was withheld") }
-                : m_routingOwned ? m_routingController.disconnect()
-                                 : RoutingResult { true, {}, {} };
-        if (routingResult.ok) m_routingOwned = false;
+        // Clear the route receipt before wg-quick removes the owned interface
+        // and its table routes. A failed route cleanup must leave both owners
+        // intact so the operation remains recoverable.
         m_routingRefreshTimer.stop();
-        if (!result.ok || !routingResult.ok) {
+        const RoutingResult routingResult = m_routingOwned
+                ? m_routingController.disconnect() : RoutingResult { true, {}, {} };
+        if (routingResult.ok) m_routingOwned = false;
+        if (!routingResult.ok) {
             m_state = QStringLiteral("cleanup_failed");
-            const QString code = !result.ok ? result.code : routingResult.code;
             const QString message = QStringLiteral("disconnect did not complete; recovery is required");
-            return encodeError(request.requestId, code.isEmpty()
-                               ? QStringLiteral("cleanup_failed") : code, message);
+            return encodeError(request.requestId, routingResult.code.isEmpty()
+                               ? QStringLiteral("cleanup_failed") : routingResult.code, message);
+        }
+        const BackendResult backendResult = m_backendOwned
+                ? m_vpnBackend.disconnect() : BackendResult { true, {}, {} };
+        if (backendResult.ok) m_backendOwned = false;
+        if (!backendResult.ok) {
+            m_state = QStringLiteral("cleanup_failed");
+            const QString message = QStringLiteral("disconnect did not complete; recovery is required");
+            return encodeError(request.requestId, backendResult.code.isEmpty()
+                               ? QStringLiteral("cleanup_failed") : backendResult.code, message);
         }
         m_state = QStringLiteral("disconnected");
         m_backendConnectedTimer.invalidate();

@@ -17,6 +17,10 @@ packages:
   - passwd
   - dpkg
   - coreutils
+  - wireguard-tools
+  - libqt6core6t64
+  - libqt6network6t64
+  - systemd-resolved
 ssh_pwauth: false
 disable_root: true
 users:

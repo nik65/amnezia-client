@@ -617,6 +617,7 @@ RoutingResult HeadlessRoutingController::disconnect()
     m_policyRevision.clear();
     m_policyContentHash.clear();
     m_policySource.clear();
+    m_policyEndpoint.clear();
     m_policyResolvedSites = {};
     m_hasPolicy = false;
     m_policyMetadata.reset();

@@ -15,7 +15,7 @@
     "adb_server_port": 5039,
     "adb_server_socket": "tcp:127.0.0.1:5039",
     "emulator_port": 5556
-    ,"gpu_mode": "software"
+    ,"gpu_mode": "swangle"
   },
   "sdk": {
     "repository_metadata_url": "https://dl.google.com/android/repository/repository2-3.xml",
@@ -75,8 +75,11 @@
     "fixture_attempt_nonce_env": "AMNEZIA_ANDROID_UPDATE_ATTEMPT_NONCE",
     "fixture_guest_endpoint_source": "same-run-planned-server-context",
     "fixture_guest_port": 17865,
-    "fixture_http_paths": ["/manifest.json", "/files/artifacts/<candidate-sha256>"],
+    "fixture_http_paths": ["/manifest.json", "/files/artifacts/<candidate-sha256>/<manifest-artifact-filename>"],
     "fixture_runtime_gateway": "10.0.2.2-observed-inside-guest",
+    "fixture_request_log_max_bytes": 1048576,
+    "fixture_request_log_max_records": 4096,
+    "fixture_attempt_reset": "single-use-run-and-nonce-bound",
     "vpn_udp_passthrough": "pending-network-gate",
     "fail_closed_until_verified": true
   }

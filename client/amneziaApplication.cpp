@@ -905,6 +905,19 @@ AmneziaApplication::~AmneziaApplication()
         qFatal("VPN worker stopped without transferring VpnConnection to its destruction thread");
     }
 
+    // Destroy the QML engine before the C++ models it renders. Every QML
+    // SortFilterProxyModel keeps a raw sourceModel pointer plus the connection
+    // Qt installs in QAbstractProxyModel::setSourceModel; destroying a source
+    // model first makes that connection re-enter
+    // QSortFilterProxyModel::setSourceModel from the model's destroyed() signal
+    // while the model is already inside ~QObject, and
+    // find_source_sort_column() then calls columnCount() through QObject's
+    // vtable (slot 15 is past its last entry) -> execute-violation crash.
+    if (m_engine) {
+        delete m_engine;
+        m_engine = nullptr;
+    }
+
     // Keep the authoritative lock while controllers, update timers and the VPN
     // worker are torn down. Otherwise a new process could initialize a second
     // Core while this one still owns stale per-process state.
@@ -912,10 +925,6 @@ AmneziaApplication::~AmneziaApplication()
     m_vpnConnection.reset();
     m_containerProps.reset();
     m_protocolProps.reset();
-    if (m_engine) {
-        delete m_engine;
-        m_engine = nullptr;
-    }
     if (m_nam) {
         delete m_nam;
         m_nam = nullptr;

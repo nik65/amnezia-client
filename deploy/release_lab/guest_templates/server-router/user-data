@@ -54,5 +54,5 @@ runcmd:
   - [systemctl, enable, --now, qemu-guest-agent.service]
   - [docker, pull, docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662]
   - [docker, image, inspect, docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662]
-  - [bash, -c, "systemctl is-active --quiet docker.service && systemctl is-active --quiet qemu-guest-agent.service && docker image inspect docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662 >/dev/null && runuser -u lab -- sudo -n true && tmp=$(mktemp /var/lib/amnezia-lab/.READY.XXXXXX) && printf 'profile=server-router\\nimage=ubuntu24-cloud-amd64\\nphase=ready\\nwan_after_seal=disabled\\ncandidate_credentials=absent\\ndocker_service=running\\nqga_service=running\\npasswordless_sudo=verified\\nbusybox_image=docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662\\nrouter_mode=guest-only\\nos_ready=true\\n' > $tmp && chmod 0644 $tmp && mv -f $tmp /var/lib/amnezia-lab/READY"]
+  - [/usr/local/sbin/amnezia-lab-guest-marker]
 final_message: 'amnezia-lab server-router provisioning complete; seal and remove WAN before candidate testing'

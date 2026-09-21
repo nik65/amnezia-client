@@ -10,6 +10,18 @@ endif()
 set(CPACK_PACKAGE_INSTALL_DIRECTORY AmneziaVPN)
 set(CPACK_PACKAGE_EXECUTABLES       AmneziaVPN AmneziaVPN)
 set(CPACK_PRE_BUILD_SCRIPTS         ${CMAKE_CURRENT_LIST_DIR}/sign_binaries.cmake)
+if(LINUX AND NOT ANDROID)
+    string(LENGTH "${AMNEZIA_QTIFF_EXPECTED_SHA256}" _qtiff_hash_length)
+    if(NOT _qtiff_hash_length EQUAL 64 OR NOT AMNEZIA_QTIFF_EXPECTED_SHA256 MATCHES "^[0-9a-f]+$")
+        message(FATAL_ERROR "Missing exact selected-kit Qt TIFF plugin hash")
+    endif()
+    configure_file(
+        ${CMAKE_CURRENT_LIST_DIR}/prune_unused_qtiff.cmake.in
+        ${CMAKE_BINARY_DIR}/prune_unused_qtiff.cmake
+        @ONLY
+    )
+    list(APPEND CPACK_PRE_BUILD_SCRIPTS ${CMAKE_BINARY_DIR}/prune_unused_qtiff.cmake)
+endif()
 set(CPACK_POST_BUILD_SCRIPTS        ${CMAKE_CURRENT_LIST_DIR}/sign_packages.cmake)
 set(CPACK_PROJECT_CONFIG_FILE       ${CMAKE_CURRENT_LIST_DIR}/CPackOptions.cmake)
 set(CPACK_RESOURCE_FILE_LICENSE     ${CMAKE_SOURCE_DIR}/deploy/data/LICENSE.txt)
@@ -93,6 +105,17 @@ if (APPLE AND NOT IOS AND NOT MACOS_NE)
     )
 endif()
 
+if(WIN32 AND DEFINED ENV{AMNEZIA_IFW_BINARYCREATOR} AND NOT "$ENV{AMNEZIA_IFW_BINARYCREATOR}" STREQUAL "")
+    file(TO_CMAKE_PATH "$ENV{AMNEZIA_IFW_BINARYCREATOR}" _amnezia_ifw_binarycreator)
+    set(CPACK_IFW_BINARYCREATOR_EXECUTABLE "${_amnezia_ifw_binarycreator}")
+    if(NOT DEFINED ENV{AMNEZIA_IFW_FRAMEWORK_VERSION} OR "$ENV{AMNEZIA_IFW_FRAMEWORK_VERSION}" STREQUAL "")
+        message(FATAL_ERROR "A custom IFW binarycreator requires a verified AMNEZIA_IFW_FRAMEWORK_VERSION")
+    endif()
+    if(NOT "$ENV{AMNEZIA_IFW_FRAMEWORK_VERSION}" MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+        message(FATAL_ERROR "AMNEZIA_IFW_FRAMEWORK_VERSION must be a semantic numeric IFW version")
+    endif()
+    set(CPACK_IFW_FRAMEWORK_VERSION_FORCED "$ENV{AMNEZIA_IFW_FRAMEWORK_VERSION}")
+endif()
 include(CPackIFW)
 cpack_ifw_configure_component(AmneziaVPN
     VERSION ${AMNEZIAVPN_VERSION}

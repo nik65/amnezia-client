@@ -122,6 +122,16 @@ int main(int argc, char **argv)
             QString::fromLocal8Bit(argv[6]),
             QString::fromLocal8Bit(argv[7]));
     }
+    if (argc == 5 &&
+        QString::fromLocal8Bit(argv[1]) ==
+            QStringLiteral("split-tunnel-cleanup-helper")) {
+        QCoreApplication app(argc, argv);
+        Logger::init(true);
+        return WindowsSplitTunnel::runCleanupHelper(
+            QString::fromLocal8Bit(argv[2]),
+            QString::fromLocal8Bit(argv[3]),
+            QString::fromLocal8Bit(argv[4]));
+    }
     if (argc == 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("cleanup-firewall")) {
         QCoreApplication app(argc, argv);
         Logger::init(true);

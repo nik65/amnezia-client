@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QDeadlineTimer>
+#include <QElapsedTimer>
 #include <QJsonObject>
 #include <QPair>
 #include <QStringList>
@@ -69,11 +70,30 @@ public:
 
     bool isServiceReady() const;
 
+    // Non-blocking readiness gate for the privileged companion service.
+    //
+    // isServiceReady() probes the service through IpcClient, whose connect and
+    // replica lookups are bounded by ~1 s timeouts, and the Windows installer
+    // (re)starts the service - so the first connection attempt after an upgrade
+    // can be made while the service is still coming up. Blocking the GUI thread
+    // (or pumping it with QCoreApplication::processEvents() from inside a
+    // connection operation) is not acceptable, so the wait is timer driven:
+    // requestServiceReady() returns immediately and answers exactly once through
+    // serviceReadyWaitFinished(), either as soon as the service is reachable or
+    // when the bounded wait expires. Both outcomes are logged with their reason;
+    // after a timeout the caller keeps the existing
+    // ErrorCode::AmneziaServiceNotRunning behaviour and its user-visible text.
+    void requestServiceReady();
+
     bool isContainerSupported(DockerContainer container) const;
 
 signals:
     void connectionStateChanged(Vpn::ConnectionState state);
     void serverRoutingRulesChanged(int serverIndex);
+
+    // Emitted exactly once per requestServiceReady(): true when the privileged
+    // companion service answered, false when the bounded wait expired.
+    void serviceReadyWaitFinished(bool serviceReady);
     void openConnectionRequested(const QString &serverId, int serverIndex,
                                  DockerContainer container,
                                  const QJsonObject &vpnConfiguration);
@@ -192,6 +212,8 @@ private:
     void cancelClientManagedSitesResolve();
     void scheduleClientManagedSitesResolveRetry(int serverIndex);
 
+    void onServiceReadyWaitTick();
+
     SecureServersRepository* m_serversRepository;
     SecureAppSettingsRepository* m_appSettingsRepository;
     VpnConnection* m_vpnConnection;
@@ -199,6 +221,9 @@ private:
     QTimer m_serverRoutingRulesSyncTimer;
     QTimer m_serverRoutingRulesClientResolveTimer;
     QTimer m_clientManagedSitesLookupTimeoutTimer;
+    QTimer m_serviceReadyWaitTimer;
+    QElapsedTimer m_serviceReadyWaitElapsed;
+    bool m_serviceReadyWaitActive = false;
     bool m_isServerRoutingRulesSyncInProgress = false;
     bool m_serverRoutingRulesSyncPendingRefresh = false;
     int m_serverRoutingRulesSyncFastRetryCount = 0;

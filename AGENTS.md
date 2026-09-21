@@ -60,7 +60,7 @@ The root agent is orchestration-only: it may read files and inspect status or
 metadata, but must not write code or execute build, test, install, network, or
 other executable commands. Delegate practical implementation, diagnostics,
 builds, tests, and live checks to subagents. Every subagent at every depth must
-be spawned explicitly with model `gpt-5.6-sol` and reasoning effort `low`;
+be spawned explicitly with model `gpt-5.6-luna` and reasoning effort `high`;
 never use inherited, unspecified, or different model or reasoning settings.
 
 ## Multi-agent audit policy
@@ -81,4 +81,4 @@ or user-defined numeric limit or fixed count on subagents; runtime and service
 capacity remain authoritative. Do not count queued, failed, interrupted, or
 duplicate reviews as completed. The root agent only orchestrates this process;
 practical auditing, implementation, review, builds, tests, and live checks
-belong to delegated subagents using `gpt-5.6-sol` with reasoning effort `low`.
+belong to delegated subagents using `gpt-5.6-luna` with reasoning effort `high`.

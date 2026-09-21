@@ -130,10 +130,26 @@ validate_channel_layout() {
                     || fail 64 'invalid publication state entry name'
                 check_trusted_regular_file "$entry" 'publication state entry'
                 ;;
+            .publish-history.*)
+                printf '%s\n' "$name" | grep -Eq '^\.publish-history\.[0-9a-f]{48}$' \
+                    || fail 64 'invalid publication history entry name'
+                check_trusted_regular_file "$entry" 'publication history entry'
+                ;;
             .publish-state-tmp.*)
                 printf '%s\n' "$name" | grep -Eq '^\.publish-state-tmp\.[0-9a-f]{48}$' \
                     || fail 64 'invalid publication state staging entry name'
                 check_trusted_regular_file "$entry" 'publication state staging entry'
+                ;;
+            amnezia-update-health-*)
+                # The update-host installer drops a transient root-owned 0444
+                # health sentinel into this same pinned directory while it
+                # rebuilds the serving containers, and removes it before it
+                # commits. Tolerate only that exact protocol entry: the client
+                # probes the channel before it refreshes the update host, so an
+                # interrupted host transaction must not wedge publication.
+                printf '%s\n' "$name" | grep -Eq '^amnezia-update-health-[0-9a-f]{48}$' \
+                    || fail 64 'invalid update-host health sentinel entry name'
+                check_trusted_regular_file "$entry" 'update-host health sentinel entry'
                 ;;
             *)
                 fail 64 "update directory is not a dedicated channel: $name"
@@ -278,6 +294,7 @@ validate_identity_args() {
     [ "$expected_file_count" -le "$MAX_FILES" ] || fail 64 'too many bundled publication files'
     STATE_PATH="$PINNED_ROOT/.publish-state.$RUN_ID"
     STATE_TMP="$PINNED_ROOT/.publish-state-tmp.$RUN_ID"
+    HISTORY_PATH="$PINNED_ROOT/.publish-history.$RUN_ID"
 }
 
 read_publication_state() {
@@ -345,6 +362,14 @@ write_publication_state() {
     as_root sync -f -- "$STATE_TMP" || fail 74 'unable to persist publication state staging entry'
     as_root mv -fT -- "$STATE_TMP" "$STATE_PATH" || fail 73 'unable to replace publication state'
     as_root sync -f -- "$PINNED_ROOT" || fail 74 'unable to persist publication state replacement'
+    if ! as_root test -e "$HISTORY_PATH"; then
+        as_root install -o "$TRUSTED_UID" -g "$TRUSTED_GID" -m 0644 /dev/null "$HISTORY_PATH" \
+            || fail 73 'unable to create publication history'
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$STATE_MAGIC" "$RUN_ID" "$expected" "$candidate" "$metadata_sha" "$expected_file_count" "$new_phase" \
+        | as_root tee -a -- "$HISTORY_PATH" >/dev/null \
+        || fail 73 'unable to append publication history'
+    as_root sync -f -- "$HISTORY_PATH" || fail 74 'unable to persist publication history'
     STATE_TMP=
     state_magic=$STATE_MAGIC
     state_run_id=$RUN_ID

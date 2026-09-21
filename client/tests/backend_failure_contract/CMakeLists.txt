@@ -4,6 +4,7 @@ project(BackendFailureContractTests LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
 find_package(Qt6 REQUIRED COMPONENTS Core)
 
 enable_testing()
@@ -15,7 +16,8 @@ add_executable(backend_failure_contract_tests
     "${CLIENT_ROOT}/daemon/daemonerrors.h"
     "${CLIENT_ROOT}/core/utils/errorCodes.h"
     "${CLIENT_ROOT}/core/utils/selfhostedUpdatePolicy.h"
-    "${CLIENT_ROOT}/core/protocols/wireGuardProtocol.h"
+    "${CLIENT_ROOT}/core/protocols/wireGuardProtocolBinding.h"
+    "${CLIENT_ROOT}/mozilla/controllerimpl.h"
 )
 
 target_include_directories(backend_failure_contract_tests PRIVATE "${CLIENT_ROOT}")

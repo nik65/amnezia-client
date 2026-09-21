@@ -143,6 +143,13 @@ public:
                 .arg(arguments.at(1), servers.join(QStringLiteral(" ")), domains.join(QStringLiteral(" "))) };
         }
         if (program == QStringLiteral("ip")
+            && arguments.contains(QStringLiteral("table"))
+            && arguments.contains(QStringLiteral("51821"))
+            && missingFullTunnelTable) {
+            return { false, fullTunnelTableFailureExitCode,
+                     fullTunnelTableFailureMessage, {} };
+        }
+        if (program == QStringLiteral("ip")
             && arguments.endsWith(QStringLiteral("main"))) {
             return { true, 0, {}, mainRouteOutput };
         }
@@ -229,6 +236,9 @@ public:
     bool emitBypassWithoutFullTunnel = false;
     bool emitFullTunnelRuleWithoutTable = false;
     bool ipAvailable = true;
+    bool missingFullTunnelTable = false;
+    int fullTunnelTableFailureExitCode = 2;
+    QString fullTunnelTableFailureMessage = QStringLiteral("Error: ipv4: FIB table does not exist.\nDump terminated");
     bool resolvectlAvailable = true;
     int batchCalls = 0;
     QList<QList<QStringList>> batchContents;
@@ -361,6 +371,72 @@ private slots:
         QCOMPARE(runner->calls.constLast().arguments.at(1), QStringLiteral("del"));
         QCOMPARE(reconciler.status().value(QStringLiteral("interface")).toString(), QString());
         QVERIFY(reconciler.status().value(QStringLiteral("routes")).toArray().isEmpty());
+    }
+
+    void freshGuestMissingManagedTableIsClean()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->missingFullTunnelTable = true;
+        LinuxRouteReconciler reconciler(
+                runner, temporaryDirectory.filePath(QStringLiteral("routes.json")));
+        const QJsonObject status = reconciler.status();
+        QVERIFY2(!status.value(QStringLiteral("recoveryRequired")).toBool(),
+                 qPrintable(status.value(QStringLiteral("lastError")).toString()));
+        QCOMPARE(status.value(QStringLiteral("lastError")).toString(), QString());
+        QVERIFY(status.value(QStringLiteral("routes")).toArray().isEmpty());
+    }
+
+    void managedTablePermissionFailureStillFailsClosed()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->missingFullTunnelTable = true;
+        runner->fullTunnelTableFailureExitCode = 1;
+        runner->fullTunnelTableFailureMessage = QStringLiteral("RTNETLINK answers: Operation not permitted");
+        LinuxRouteReconciler reconciler(
+                runner, temporaryDirectory.filePath(QStringLiteral("routes.json")));
+        const QJsonObject status = reconciler.status();
+        QVERIFY(status.value(QStringLiteral("recoveryRequired")).toBool());
+        QCOMPARE(status.value(QStringLiteral("lastError")).toString(),
+                 QStringLiteral("load_state_rejected:kernel_snapshot"));
+    }
+
+    void managedTableParseFailureStillFailsClosed()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->missingFullTunnelTable = true;
+        runner->fullTunnelTableFailureExitCode = 2;
+        runner->fullTunnelTableFailureMessage = QStringLiteral("Error: invalid table selector");
+        LinuxRouteReconciler reconciler(
+                runner, temporaryDirectory.filePath(QStringLiteral("routes.json")));
+        const QJsonObject status = reconciler.status();
+        QVERIFY(status.value(QStringLiteral("recoveryRequired")).toBool());
+        QCOMPARE(status.value(QStringLiteral("lastError")).toString(),
+                 QStringLiteral("load_state_rejected:kernel_snapshot"));
+    }
+
+    void managedTableMixedDiagnosticStillFailsClosed()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->missingFullTunnelTable = true;
+        runner->fullTunnelTableFailureExitCode = 2;
+        runner->fullTunnelTableFailureMessage = QStringLiteral(
+                "Error: ipv4: FIB table does not exist.\n"
+                "Dump terminated\n"
+                "RTNETLINK answers: Operation not permitted");
+        LinuxRouteReconciler reconciler(
+                runner, temporaryDirectory.filePath(QStringLiteral("routes.json")));
+        const QJsonObject status = reconciler.status();
+        QVERIFY(status.value(QStringLiteral("recoveryRequired")).toBool());
+        QCOMPARE(status.value(QStringLiteral("lastError")).toString(),
+                 QStringLiteral("load_state_rejected:kernel_snapshot"));
     }
 
     void acceptsNumericLinkScopeInCapturedFullAndSplitRoutes()
@@ -1842,6 +1918,193 @@ private slots:
         for (const FakeCommandRunner::Call &call : runner->calls) {
             QVERIFY(!call.arguments.contains(QStringLiteral("501")));
         }
+    }
+
+    void allExceptDisconnectClearsOwnedKernelBeforeBackendDown()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("all-except.json"));
+        const QString bypassRoute = QStringLiteral("10.8.1.4");
+        const QString foreignRule =
+                QStringLiteral("1000: from all to 85.208.87.69 lookup main");
+        const QString v4Rules =
+                QStringLiteral("1001: from all to %1 lookup main\n%2\n"
+                               "1100: from all lookup 51821\n")
+                        .arg(bypassRoute, foreignRule);
+        const QString v6Rules = QStringLiteral("1100: from all lookup 51821\n");
+        const QString v4Table = QStringLiteral(
+                "0.0.0.0/1 dev wg0 proto 186 scope link\n"
+                "128.0.0.0/1 dev wg0 proto 186 scope link\n");
+        const QString v6Table = QStringLiteral(
+                "::/1 dev wg0 proto 186 scope link\n"
+                "8000::/1 dev wg0 proto 186 scope link\n");
+
+        // This is the exact receipt shape produced by an all-except profile:
+        // table 51821, owned bypass/full priorities 1001/1100, and one
+        // underlay bypass selector. Keep the foreign priority 1000 visible.
+        QFile state(statePath);
+        QVERIFY(state.open(QIODevice::WriteOnly));
+        QVERIFY(state.write(QJsonDocument(QJsonObject {
+            { QStringLiteral("version"), 2 },
+            { QStringLiteral("mode"), QStringLiteral("all-except") },
+            { QStringLiteral("interface"), QStringLiteral("wg0") },
+            { QStringLiteral("routes"), QJsonArray() },
+            { QStringLiteral("bypassRoutes"), QJsonArray { bypassRoute } },
+            { QStringLiteral("criticalBypassRoutes"), QJsonArray { bypassRoute } },
+            { QStringLiteral("bypassRulePriority"), 1001 },
+            { QStringLiteral("fullRulePriority"), 1100 },
+            { QStringLiteral("dnsInterface"), QString() },
+            { QStringLiteral("dnsServers"), QJsonArray() },
+            { QStringLiteral("dnsDomains"), QJsonArray() },
+            { QStringLiteral("postconditionDiagnostics"), QJsonObject() },
+            { QStringLiteral("needsReapply"), false },
+        }).toJson(QJsonDocument::Compact)) > 0);
+        state.close();
+
+        const auto makeRunner = [&]() {
+            auto runner = std::make_shared<FakeCommandRunner>();
+            runner->capturedOutputs = { v4Rules, v6Rules };
+            runner->fullTunnelInstalled = true;
+            runner->managedBypassRoutes.insert(bypassRoute);
+            runner->foreignBypassRules = { foreignRule };
+            runner->fullTunnelIpv4Output = v4Table;
+            runner->fullTunnelIpv6Output = v6Table;
+            return runner;
+        };
+        const auto simulateBackendDown = [&](const std::shared_ptr<FakeCommandRunner> &runner) {
+            // wg-quick down removes the interface and table 51821, but it
+            // cannot prove ownership of the receipt-bound rules after the
+            // interface disappears. This is the failure state from the old
+            // backend-first disconnect order.
+            runner->fullTunnelInstalled = false;
+            runner->missingFullTunnelTable = true;
+            runner->emitBypassWithoutFullTunnel = true;
+            runner->emitFullTunnelRuleWithoutTable = true;
+        };
+
+        // Reproduce the old order: backend-down first leaves rules with no
+        // owned table, so cleanup must fail closed before issuing mutations.
+        auto failedRunner = makeRunner();
+        LinuxRouteReconciler failed(
+                failedRunner, statePath);
+        QVERIFY2(!failed.status().value(QStringLiteral("recoveryRequired")).toBool(),
+                 qPrintable(failed.status().value(QStringLiteral("lastError")).toString()));
+        simulateBackendDown(failedRunner);
+        const RouteReconcileResult ambiguous = failed.clear();
+        QVERIFY(!ambiguous.ok);
+        QCOMPARE(ambiguous.code, QStringLiteral("full_tunnel_ownership_ambiguous"));
+        QVERIFY(failedRunner->calls.isEmpty());
+
+        // The corrected order clears the owned rules/table while the backend
+        // is still live; only then may backend-down remove the interface.
+        auto cleanRunner = makeRunner();
+        LinuxRouteReconciler clean(cleanRunner, statePath);
+        QVERIFY2(!clean.status().value(QStringLiteral("recoveryRequired")).toBool(),
+                 qPrintable(clean.status().value(QStringLiteral("lastError")).toString()));
+        const RouteReconcileResult cleared = clean.clear();
+        QVERIFY2(cleared.ok, qPrintable(cleared.message));
+        QVERIFY(cleanRunner->managedBypassRoutes.isEmpty());
+        QVERIFY(!cleanRunner->fullTunnelInstalled);
+        QVERIFY(cleanRunner->foreignBypassRules.contains(foreignRule));
+        QVERIFY(std::none_of(cleanRunner->calls.cbegin(), cleanRunner->calls.cend(),
+                             [](const auto &call) {
+            return call.arguments.contains(QStringLiteral("priority"))
+                && call.arguments.contains(QStringLiteral("1000"));
+        }));
+        QCOMPARE(clean.status().value(QStringLiteral("mode")).toString(),
+                 QStringLiteral("only-forward"));
+        simulateBackendDown(cleanRunner);
+        QVERIFY(cleanRunner->foreignBypassRules.contains(foreignRule));
+        QVERIFY(!clean.status().value(QStringLiteral("recoveryRequired")).toBool());
+    }
+
+    void allExceptDisconnectPersistsRestartableControllerReceipt()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString routeStatePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        const QString controllerStatePath = temporaryDirectory.filePath(QStringLiteral("routing-controller.json"));
+        const QString endpoint = QStringLiteral("http://10.8.1.4:17864/rules.json");
+        const QString policyHash = QStringLiteral("sha256:") + QString(64, QLatin1Char('a'));
+
+        QFile routeState(routeStatePath);
+        QVERIFY(routeState.open(QIODevice::WriteOnly));
+        QVERIFY(routeState.write(QJsonDocument(QJsonObject {
+            { QStringLiteral("version"), 2 },
+            { QStringLiteral("mode"), QStringLiteral("all-except") },
+            { QStringLiteral("interface"), QStringLiteral("wg0") },
+            { QStringLiteral("routes"), QJsonArray() },
+            { QStringLiteral("bypassRoutes"), QJsonArray { QStringLiteral("10.8.1.4") } },
+            { QStringLiteral("criticalBypassRoutes"), QJsonArray { QStringLiteral("10.8.1.4") } },
+            { QStringLiteral("bypassRulePriority"), 1001 },
+            { QStringLiteral("fullRulePriority"), 1100 },
+            { QStringLiteral("dnsInterface"), QString() },
+            { QStringLiteral("dnsServers"), QJsonArray() },
+            { QStringLiteral("dnsDomains"), QJsonArray() },
+            { QStringLiteral("postconditionDiagnostics"), QJsonObject() },
+            { QStringLiteral("needsReapply"), false },
+        }).toJson(QJsonDocument::Compact)) > 0);
+        routeState.close();
+
+        const QJsonObject metadata {
+            { QStringLiteral("schemaVersion"), 1 },
+            { QStringLiteral("policyType"), QStringLiteral("legacy") },
+            { QStringLiteral("revision"), policyHash },
+            { QStringLiteral("contentHash"), policyHash },
+            { QStringLiteral("declaredContentHash"), policyHash },
+            { QStringLiteral("contentMatchesDeclaration"), true },
+            { QStringLiteral("trustState"), QStringLiteral("unsigned") },
+            { QStringLiteral("acceptedAt"), QStringLiteral("2026-09-15T09:00:00.000Z") },
+            { QStringLiteral("source"), endpoint },
+        };
+        QFile controllerState(controllerStatePath);
+        QVERIFY(controllerState.open(QIODevice::WriteOnly));
+        QVERIFY(controllerState.write(QJsonDocument(QJsonObject {
+            { QStringLiteral("version"), 2 },
+            { QStringLiteral("activeProfile"), QStringLiteral("all-except-profile") },
+            { QStringLiteral("activeInterface"), QStringLiteral("wg0") },
+            { QStringLiteral("policyRevision"), policyHash },
+            { QStringLiteral("policyContentHash"), policyHash },
+            { QStringLiteral("policySource"), endpoint },
+            { QStringLiteral("policyEndpoint"), endpoint },
+            { QStringLiteral("policyResolvedSites"), QJsonObject() },
+            { QStringLiteral("policyLoaded"), true },
+            { QStringLiteral("policyMetadata"), metadata },
+            { QStringLiteral("routingDegraded"), false },
+            { QStringLiteral("routingError"), QString() },
+            { QStringLiteral("needsReapply"), false },
+            { QStringLiteral("recoveryRequired"), false },
+        }).toJson(QJsonDocument::Compact)) > 0);
+        controllerState.close();
+
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->capturedOutputs = {
+            QStringLiteral("1001: from all to 10.8.1.4 lookup main\n"
+                           "1100: from all lookup 51821\n"),
+            QStringLiteral("1100: from all lookup 51821\n"),
+            QStringLiteral("0.0.0.0/1 dev wg0 proto 186 scope link\n"
+                           "128.0.0.0/1 dev wg0 proto 186 scope link\n"),
+            QStringLiteral("::/1 dev wg0 proto 186 scope link\n"
+                           "8000::/1 dev wg0 proto 186 scope link\n"),
+        };
+        runner->fullTunnelInstalled = true;
+        runner->managedBypassRoutes.insert(QStringLiteral("10.8.1.4"));
+        runner->foreignBypassRules = {
+            QStringLiteral("1000: from all to 85.208.87.69 lookup main")
+        };
+
+        HeadlessRoutingController controller(runner, routeStatePath);
+        QVERIFY2(!controller.status().value(QStringLiteral("recoveryRequired")).toBool(),
+                 qPrintable(controller.status().value(QStringLiteral("lastError")).toString()));
+        QVERIFY2(controller.disconnect().ok, "all-except disconnect should persist a clean receipt");
+        QCOMPARE(controller.status().value(QStringLiteral("policyEndpoint")).toString(), QString());
+
+        HeadlessRoutingController restarted(runner, routeStatePath);
+        QVERIFY2(!restarted.status().value(QStringLiteral("recoveryRequired")).toBool(),
+                 qPrintable(restarted.status().value(QStringLiteral("lastError")).toString()));
+        QCOMPARE(restarted.status().value(QStringLiteral("activeProfile")).toString(), QString());
+        QCOMPARE(restarted.status().value(QStringLiteral("policyEndpoint")).toString(), QString());
     }
 
     void allExceptKeepsVpnInternalPolicyEndpointOnTunnel()

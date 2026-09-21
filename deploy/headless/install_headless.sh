@@ -48,6 +48,14 @@ RECOVERY_MARKER="$TRANSACTION_ROOT/.headless-provisioning-recovery-required"
  # makes provisioning and an in-process update mutually exclusive; never
  # install over binaries while the daemon owns the update transaction.
 TRANSACTION_LOCK_PATH="$TRANSACTION_ROOT/updates/update.lock"
+# Capture whether the transaction root existed before this invocation.  The
+# fresh-state gate runs after the private lock setup below, so it must not
+# treat the root and updates directory created by this invocation as a
+# preexisting installation.
+TRANSACTION_ROOT_PREEXISTING=0
+if [[ -e "$TRANSACTION_ROOT" || -L "$TRANSACTION_ROOT" ]]; then
+    TRANSACTION_ROOT_PREEXISTING=1
+fi
 install -d -o root -g root -m 0755 /var/lib
 if [[ -e "$TRANSACTION_ROOT" || -L "$TRANSACTION_ROOT" ]]; then
     if [[ -L "$TRANSACTION_ROOT" || ! -d "$TRANSACTION_ROOT" ]]; then
@@ -84,6 +92,12 @@ if ! flock -n 9; then
     echo "another headless provisioning transaction is already running" >&2
     exit 4
 fi
+release_shared_lock() {
+    if [[ "${LOCK_CREATED:-0}" -eq 1 && -e "$TRANSACTION_LOCK_PATH" && ! -L "$TRANSACTION_LOCK_PATH" \
+        && "$(stat -c '%d:%i' -- "$TRANSACTION_LOCK_PATH" 2>/dev/null || true)" == "${LOCK_IDENTITY:-}" ]]; then
+        rm -f -- "$TRANSACTION_LOCK_PATH" || return 1
+    fi
+}
 # Cover validation failures and --recover exits before the transaction trap is
 # installed.  The descriptor remains open until shell exit, so this exact
 # unlink cannot race another owner acquiring the path.
@@ -173,8 +187,9 @@ payload = {
 managed_names = ("amneziad", "amnezia-cli", "amneziad.service", "update-public-key.pem")
 backup_files = {}
 for name in managed_names:
-    item = target.parent / Path(backup_dir).name / name if backup_dir else None
-    missing = target.parent / Path(backup_dir).name / (".missing-" + name) if backup_dir else None
+    backup_root = target.parent / ".headless-provisioning-transactions" / Path(backup_dir).name if backup_dir else None
+    item = backup_root / name if backup_root else None
+    missing = backup_root / (".missing-" + name) if backup_root else None
     if item is not None and item.is_file() and not item.is_symlink():
         digest = hashlib.sha256(item.read_bytes()).hexdigest()
         stat_result = item.stat()
@@ -204,7 +219,7 @@ for name in managed_names:
         backup_files[name] = {
             "present": False,
             "kind": "missing",
-            "sha256": "",
+            "sha256": hashlib.sha256(missing.read_bytes()).hexdigest(),
             "size": 0,
             "mode": stat.S_IMODE(stat_result.st_mode),
             "owner": stat_result.st_uid,
@@ -407,7 +422,7 @@ PY
     if [[ "$phase" != "starting" && "$phase" != "committing" && "$phase" != "committed" ]]; then
         verify_recovery_backup "$backup_dir" || { echo "headless provisioning backup is not safe to recover" >&2; return 1; }
     fi
-    local had_errexit=0 recovery_ok=1
+    local had_errexit=0 recovery_ok=1 marker_retired=0
     case "$-" in *e*) had_errexit=1;; esac
     set +e
     if [[ "$phase" == "starting" ]]; then
@@ -453,25 +468,45 @@ PY
         else
             case "$(systemctl is-enabled amneziad.service 2>/dev/null || true)" in
                 enabled|linked|linked-runtime|generated|transient) systemctl disable amneziad.service >/dev/null 2>&1 || recovery_ok=0 ;;
-                disabled|not-found|masked) ;;
+                disabled|not-found|masked|"") ;;
                 *) recovery_ok=0 ;;
             esac
-            case "$(systemctl is-enabled amneziad.service 2>/dev/null || true)" in disabled|not-found|masked) ;; *) recovery_ok=0 ;; esac
-            if systemctl is-active --quiet amneziad.service 2>/dev/null; then recovery_ok=0; fi
+            # `systemctl is-enabled` may print an empty state after the unit
+            # file has been removed and daemon-reload has run.  Require the
+            # stronger LoadState=not-found proof and reject a live unit, while
+            # treating that documented empty is-enabled output as benign.
+            if [[ "$(systemctl show amneziad.service -p LoadState --value 2>/dev/null || true)" != "not-found" ]]; then
+                echo "headless provisioning recovery found a residual fresh service unit" >&2
+                recovery_ok=0
+            fi
+            if systemctl is-active --quiet amneziad.service 2>/dev/null; then
+                echo "headless provisioning recovery found a running fresh service" >&2
+                recovery_ok=0
+            fi
         fi
     fi
     if [[ "$journal_mode" == "fresh" && "$phase" != "starting" && "$phase" != "committing" && "$phase" != "committed" ]]; then
         for state_dir in /etc/amnezia/profiles /etc/amnezia /run/amnezia; do
-            rmdir -- "$state_dir" >/dev/null 2>&1 || [[ ! -e "$state_dir" ]] || recovery_ok=0
+            if ! rmdir -- "$state_dir" >/dev/null 2>&1 && [[ -e "$state_dir" ]]; then
+                echo "headless provisioning recovery could not remove fresh state directory: $state_dir" >&2
+                recovery_ok=0
+            fi
         done
     fi
     if [[ "$group_created" == "true" && "$phase" != "starting" && "$phase" != "committing" && "$phase" != "committed" \
         && -n "$(getent group amnezia || true)" ]]; then
-        groupdel --system amnezia >/dev/null 2>&1 || recovery_ok=0
+        if ! groupdel amnezia >/dev/null 2>&1; then
+            echo "headless provisioning recovery could not remove the fresh amnezia group" >&2
+            recovery_ok=0
+        fi
     fi
     if [[ "$recovery_ok" -eq 1 ]]; then
-        rm -rf -- "$backup_dir" || recovery_ok=0
+        if ! rm -rf -- "$backup_dir"; then
+            echo "headless provisioning recovery could not remove its backup directory" >&2
+            recovery_ok=0
+        fi
         if [[ -e "$TRANSACTION_BASE" ]] && ! rmdir -- "$TRANSACTION_BASE" >/dev/null 2>&1; then
+            echo "headless provisioning recovery could not remove its transaction directory" >&2
             recovery_ok=0
         fi
         if [[ "$recovery_ok" -eq 1 ]]; then
@@ -479,7 +514,25 @@ PY
             fsync_path_directory "$TRANSACTION_ROOT" 2>/dev/null || recovery_ok=0
         fi
         if [[ "$recovery_ok" -eq 1 && "$journal_mode" == "fresh" ]]; then
-            rmdir -- /var/lib/amnezia >/dev/null 2>&1 || true
+            # Retire the journal and recovery marker while descriptor 9 still
+            # owns the exact lock inode. Only after all rollback proof is
+            # durable may the lock path be unlinked; the following rmdir calls
+            # are best-effort and never remove non-empty or foreign content.
+            if ! clear_recovery_required; then
+                echo "headless provisioning recovery marker could not be retired before lock release" >&2
+                recovery_ok=0
+            else
+                marker_retired=1
+            fi
+            if [[ "$recovery_ok" -eq 1 ]] && ! release_shared_lock; then
+                echo "headless provisioning recovery could not release its owned lock inode" >&2
+                recovery_ok=0
+            fi
+            if [[ "$recovery_ok" -eq 1 ]]; then
+                rmdir -- "$TRANSACTION_ROOT/updates" >/dev/null 2>&1 || true
+                rmdir -- "$TRANSACTION_ROOT" >/dev/null 2>&1 || true
+                fsync_path_directory /var/lib 2>/dev/null || true
+            fi
         fi
     fi
     if [[ "$had_errexit" -eq 1 ]]; then set -e; fi
@@ -488,11 +541,13 @@ PY
         echo "headless provisioning recovery is incomplete; refusing a new transaction" >&2
         return 1
     fi
-    clear_recovery_required || {
-        mark_recovery_required || true
-        echo "headless provisioning recovery marker could not be retired" >&2
-        return 1
-    }
+    if [[ "$marker_retired" -eq 0 ]]; then
+        clear_recovery_required || {
+            mark_recovery_required || true
+            echo "headless provisioning recovery marker could not be retired" >&2
+            return 1
+        }
+    fi
     echo "headless provisioning transaction recovered exactly" >&2
     return 0
 }
@@ -513,6 +568,8 @@ if [[ -e "$TRANSACTION_JOURNAL" || -L "$TRANSACTION_JOURNAL" ]]; then
         exit 5
     fi
     recover_transaction || exit 5
+    echo "headless provisioning recovery completed; rerun the requested transaction" >&2
+    exit 4
 fi
 PRIVATE_INPUTS_ROOT=""
 if ! PRIVATE_INPUTS_ROOT="$(mktemp -d /tmp/amnezia-headless-inputs.XXXXXX)"; then
@@ -529,13 +586,21 @@ cleanup_private_inputs() {
         rm -rf -- "$PRIVATE_INPUTS_ROOT"
     fi
 }
-release_shared_lock() {
-    if [[ "${LOCK_CREATED:-0}" -eq 1 && -e "$TRANSACTION_LOCK_PATH" && ! -L "$TRANSACTION_LOCK_PATH" \
-        && "$(stat -c '%d:%i' -- "$TRANSACTION_LOCK_PATH" 2>/dev/null || true)" == "${LOCK_IDENTITY:-}" ]]; then
-        rm -f -- "$TRANSACTION_LOCK_PATH" || return 1
+cleanup_pretransaction() {
+    local status=$?
+    trap - EXIT
+    if ! cleanup_private_inputs; then status=5; fi
+    if ! release_shared_lock; then status=5; fi
+    if [[ "${TRANSACTION_ROOT_PREEXISTING:-1}" -eq 0 ]]; then
+        # Only remove the empty transaction scaffolding created by this
+        # invocation. A foreign/non-empty path is preserved and remains a
+        # visible operator recovery condition.
+        rmdir -- "$TRANSACTION_ROOT/updates" >/dev/null 2>&1 || true
+        rmdir -- "$TRANSACTION_ROOT" >/dev/null 2>&1 || true
     fi
+    exit "$status"
 }
-trap cleanup_private_inputs EXIT
+trap cleanup_pretransaction EXIT
 if ! python3 - "$SOURCE_PACKAGE_ROOT" "$PRIVATE_INPUTS_ROOT" "$PUBLIC_KEY" "$VERIFIED_RECEIPT" <<'PY'
 import hashlib
 import os
@@ -676,12 +741,18 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 allowed_socket = root / "amneziad.sock"
+allowed_lock = root / "amneziad.sock.lock"
 def check(path: Path) -> None:
     metadata = path.lstat()
     if path == allowed_socket and stat.S_ISSOCK(metadata.st_mode):
         if (metadata.st_uid != 0 or metadata.st_gid != grp.getgrnam("amnezia").gr_gid
                 or stat.S_IMODE(metadata.st_mode) != 0o660):
             raise SystemExit(f"managed runtime socket is not exactly root:amnezia 0660: {path}")
+        return
+    if path == allowed_lock and stat.S_ISREG(metadata.st_mode):
+        if (metadata.st_uid != 0 or metadata.st_gid != grp.getgrnam("amnezia").gr_gid
+                or stat.S_IMODE(metadata.st_mode) not in {0o600, 0o640, 0o660}):
+            raise SystemExit(f"managed daemon lock is not exactly root:amnezia with private mode: {path}")
         return
     if stat.S_ISLNK(metadata.st_mode):
         raise SystemExit(f"managed state contains a symlink: {path}")
@@ -777,7 +848,14 @@ if [[ -e "$TRANSACTION_BASE" || -L "$TRANSACTION_BASE" ]]; then
     echo "headless provisioning refuses unresolved transaction backup state; recover it first" >&2
     exit 4
 fi
-if [[ "$MODE" == "fresh" && ("$EXISTING_COMPONENTS" -ne 0 || "$STATE_DIR_COUNT" -ne 0) ]]; then
+# /var/lib/amnezia is created above to hold the no-clobber lock.  Exclude only
+# that directory when it was absent at process start; every other state path,
+# and an already-existing transaction root, remains a hard fresh-install
+# blocker.
+if [[ "$TRANSACTION_ROOT_PREEXISTING" -eq 0 && "$STATE_DIR_COUNT" -gt 0 ]]; then
+    STATE_DIR_COUNT=$((STATE_DIR_COUNT - 1))
+fi
+if [[ "$MODE" == "fresh" && ("$EXISTING_COMPONENTS" -ne 0 || "$STATE_DIR_COUNT" -ne 0 || "$TRANSACTION_ROOT_PREEXISTING" -ne 0) ]]; then
     echo "a partial, complete, or preexisting-state installation already exists; pass 'upgrade' explicitly after adoption/backup" >&2
     exit 4
 fi
@@ -1004,6 +1082,12 @@ backup_file() {
     else
         touch "$BACKUP_DIR/.missing-$name"
     fi
+    # Missing tags are newly created controller-owned root data; normalize only
+    # those tags. Real copied files retain their original numeric ownership so
+    # upgrade rollback restores metadata such as root:amnezia 0640 keys.
+    if [[ -f "$BACKUP_DIR/.missing-$name" ]]; then
+        chown root:root "$BACKUP_DIR/.missing-$name" || return 1
+    fi
     if [[ -f "$BACKUP_DIR/$name" ]]; then
         fsync_regular_path "$BACKUP_DIR/$name"
     elif [[ -f "$BACKUP_DIR/.missing-$name" ]]; then
@@ -1022,6 +1106,15 @@ if [[ "$MODE" == "fresh" ]]; then
     groupadd --system amnezia
     GROUP_CREATED=true
 fi
+# The shipped unit declares StateDirectory=amnezia (Group=amnezia), so systemd
+# recursively chowns the whole /var/lib/amnezia subtree to root:amnezia at the
+# first service start unless the directory already matches.  That chown would
+# invalidate the backup ownership metadata already recorded in the transaction
+# journal, so normalize the transaction root to the state the unit requires
+# before any service start.  Idempotent: the same chown/chmod as the end of the
+# successful fresh path, just early enough.
+chown root:amnezia "$TRANSACTION_ROOT" || exit 4
+chmod 0750 "$TRANSACTION_ROOT" || exit 4
 if [[ "$MODE" == "upgrade" && "$SERVICE_WAS_ENABLED" == "masked" ]]; then
     systemctl unmask amneziad.service
 fi
@@ -1040,6 +1133,25 @@ install -o root -g root -m 0755 "$PACKAGE_ROOT/amneziad" /usr/local/bin/amneziad
 install -o root -g root -m 0755 "$PACKAGE_ROOT/amnezia-cli" /usr/local/bin/amnezia-cli
 install -D -o root -g root -m 0644 "$PACKAGE_ROOT/amneziad.service" "$SERVICE_TARGET"
 install -o root -g root -m 0644 "$PUBLIC_KEY" /etc/amnezia/update-public-key.pem
+# Packages released up to and including 5.0.1.37 ship a unit that lists
+# /run/amneziawg in ReadWritePaths=.  systemd refuses to start such a unit
+# when the path does not exist (status=226/NAMESPACE), and /run is a tmpfs
+# that is empty again on every boot, so the directory has to exist for each
+# start and not only for the first one.  Create it now and register it in
+# tmpfiles.d so hosts that still carry a legacy unit keep starting after a
+# reboot as well.  The directory is unused by the current unit, which stages
+# under /run/amnezia.
+if grep -Eq '^[[:space:]]*ReadWritePaths=.*/run/amneziawg([[:space:]]|$)' "$SERVICE_TARGET"; then
+    install -d -o root -g root -m 0755 /run/amneziawg
+    install -d -o root -g root -m 0755 /etc/tmpfiles.d
+    printf '%s\n' \
+        '# Created by the headless provisioning transaction: /run is a tmpfs and' \
+        '# units shipped up to 5.0.1.37 list /run/amneziawg in ReadWritePaths=.' \
+        'd /run/amneziawg 0755 root root -' \
+        > /etc/tmpfiles.d/amnezia-headless-runtime.conf
+    chmod 0644 /etc/tmpfiles.d/amnezia-headless-runtime.conf
+    systemd-tmpfiles --create /etc/tmpfiles.d/amnezia-headless-runtime.conf >/dev/null 2>&1 || true
+fi
 if [[ -L /etc/amnezia/update-public-key.pem || ! -f /etc/amnezia/update-public-key.pem \
     || "$(sha256sum /etc/amnezia/update-public-key.pem | awk '{print tolower($1)}')" != "${EXPECTED_KEY_SHA256,,}" ]]; then
     echo "installed trust anchor hash does not match the verified private source" >&2

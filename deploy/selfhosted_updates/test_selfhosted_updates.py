@@ -530,7 +530,15 @@ def transactional_fake_docker_source() -> str:
         if args[:2] == ["network", "inspect"]:
             network_name, network = resolve_network(args[-1])
             if network is None:
-                print(f"Error: No such network: {{args[-1]}}", file=sys.stderr)
+                absent_style = os.environ.get("FAKE_DOCKER_NETWORK_ABSENT_STYLE")
+                if absent_style == "daemon":
+                    print(f"Error response from daemon: network {{args[-1]}} not found", file=sys.stderr)
+                elif absent_style == "daemon-wrong":
+                    print("Error response from daemon: network another-network not found", file=sys.stderr)
+                elif absent_style == "daemon-mixed":
+                    print(f"Error response from daemon: network {{args[-1]}} not found\\npermission denied", file=sys.stderr)
+                else:
+                    print(f"Error: No such network: {{args[-1]}}", file=sys.stderr)
                 complete("network-inspect", 1)
             template = option("-f") or ""
             if ".Id" in template:
@@ -1310,7 +1318,48 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("preexisting-state installation already exists", installer)
         self.assertIn("systemctl disable amneziad.service", installer)
         self.assertIn('rmdir -- "$state_dir"', installer)
-        self.assertIn('groupdel --system amnezia', installer)
+        self.assertIn('groupdel amnezia', installer)
+
+    def test_headless_fresh_gate_excludes_only_controller_created_transaction_root(self) -> None:
+        installer = (REPO_ROOT / "deploy/headless/install_headless.sh").read_text(encoding="utf-8")
+        preexisting = installer.index("TRANSACTION_ROOT_PREEXISTING=0")
+        root_setup = installer.index('install -d -o root -g root -m 0755 /var/lib')
+        state_scan = installer.index("for candidate in /var/lib/amnezia /run/amnezia /etc/amnezia /etc/amnezia/profiles")
+        fresh_gate = installer.index('if [[ "$MODE" == "fresh" && ("$EXISTING_COMPONENTS"')
+        self.assertLess(preexisting, root_setup)
+        self.assertLess(root_setup, state_scan)
+        self.assertLess(state_scan, fresh_gate)
+        self.assertIn('STATE_DIR_COUNT=$((STATE_DIR_COUNT - 1))', installer[fresh_gate - 500:fresh_gate + 250])
+        self.assertIn('"$TRANSACTION_ROOT_PREEXISTING" -ne 0', installer[fresh_gate:fresh_gate + 250])
+
+    def test_headless_validation_exit_cleans_private_inputs_and_owned_lock(self) -> None:
+        installer = (REPO_ROOT / "deploy/headless/install_headless.sh").read_text(encoding="utf-8")
+        cleanup = installer.index("cleanup_pretransaction()")
+        trap = installer.index("trap cleanup_pretransaction EXIT", cleanup)
+        transaction_validation = installer.index("if ! python3 - \"$SOURCE_PACKAGE_ROOT\"", trap)
+        self.assertLess(cleanup, trap)
+        self.assertLess(trap, transaction_validation)
+        self.assertIn("cleanup_private_inputs", installer[cleanup:trap + 80])
+        self.assertIn("release_shared_lock", installer[cleanup:trap + 80])
+        self.assertIn('stat -c \'%d:%i\'', installer)
+        self.assertIn('target.parent / ".headless-provisioning-transactions"', installer)
+        self.assertIn('chown root:root "$BACKUP_DIR/.missing-$name"', installer)
+        self.assertNotIn('chown root:root "$BACKUP_DIR/$name"', installer)
+        self.assertIn('hashlib.sha256(missing.read_bytes()).hexdigest()', installer)
+        self.assertIn('allowed_lock = root / "amneziad.sock.lock"', installer)
+        self.assertIn('metadata.st_gid != grp.getgrnam("amnezia").gr_gid', installer)
+        self.assertIn('"$TRANSACTION_ROOT/updates"', installer)
+        self.assertIn('rmdir -- "$TRANSACTION_ROOT"', installer)
+        self.assertIn('TRANSACTION_ROOT_PREEXISTING:-1', installer)
+        self.assertIn('release_shared_lock; then', installer)
+        self.assertIn('mark_recovery_required || true', installer)
+        self.assertIn('systemctl show amneziad.service -p LoadState --value', installer)
+        self.assertIn('residual fresh service unit', installer)
+        self.assertIn('disabled|not-found|masked|""', installer)
+        self.assertLess(installer.index('if ! clear_recovery_required'), installer.index('if [[ "$recovery_ok" -eq 1 ]] && ! release_shared_lock'))
+        self.assertIn('recovery completed; rerun the requested transaction', installer)
+        self.assertIn('echo "headless provisioning recovery completed; rerun the requested transaction" >&2\n    exit 4', installer)
+        self.assertEqual(installer.count('release_shared_lock() {'), 1)
 
     def test_headless_standalone_manifest_writes_through_private_staging(self) -> None:
         helper = (REPO_ROOT / "deploy/headless/make_headless_manifest.py").read_text(encoding="utf-8")
@@ -2583,7 +2632,9 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("$androidExportScript = $androidExports -join", local_release)
         self.assertIn("Ensure-WslJava", setup_release)
         self.assertIn('Assert-ExistingFile $env:QT_ANDROID_KEYSTORE_PATH "QT_ANDROID_KEYSTORE_PATH"', local_release)
-        self.assertIn('Assert-QtTargetKit $qtRootPath "gcc_64"', local_release)
+        self.assertIn("Resolve-WslQtRootPath", local_release)
+        self.assertIn("Assert-WslQtReady $wslQtRootPath", local_release)
+        self.assertIn("Assert-LinuxQtCacheBinding $buildWsl $wslQtRootPath", local_release)
         self.assertIn('"android_arm64_v8a"', local_release)
         self.assertIn("export QT_ROOT_PATH=", local_release)
         self.assertIn("export QIF_ROOT_PATH=", local_release)
@@ -2842,7 +2893,18 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("if (config.empty())", split_tunnel)
         self.assertIn("std::numeric_limits<USHORT>::max()", split_tunnel)
         self.assertIn("GetLastError() == ERROR_INSUFFICIENT_BUFFER", split_tunnel)
-        self.assertIn("m_splitTunnelManager->stop();\n      return true;", windows_daemon.replace("\r\n", "\n"))
+        windows_daemon = windows_daemon.replace("\r\n", "\n")
+        down = windows_daemon[
+            windows_daemon.index("if (op == Down)") :
+            windows_daemon.index("if (config.m_vpnDisabledApps.length() > 0)", windows_daemon.index("if (op == Down)"))
+        ]
+        self.assertIn("stopSplitTunnelAndFailure", windows_daemon)
+        self.assertIn("splitTunnelFailureOr", windows_daemon)
+        self.assertIn("const DaemonError failure", down)
+        self.assertIn("emit backendFailure(failure);", down)
+        self.assertIn("return false;", down)
+        self.assertIn("return true;", down)
+        self.assertNotIn("m_splitTunnelManager->stop();\n      return true;", down)
         self.assertIn("isRouteAddCandidate", router_win)
         self.assertIn("address.isMulticast()", router_win)
         self.assertIn("minPublicBypassPrefixLength = 16", router_win)
@@ -3039,8 +3101,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.1.38)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2186)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.1.39)", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2187)", cmake)
         self.assertRegex(headless_cmake, r'set\(HEADLESS_BUILD_VERSION "5\.0\.1\.(37|38)"\)')
         self.assertRegex(readme, r"current self-hosted release line is `5\.0\.1\.(37|38)`")
         self.assertRegex(readme, r"`versionCode` `218[56]`")
@@ -3098,6 +3160,21 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("std::make_shared<RealCommandRunner>(stagingRoot)", daemon)
         self.assertIn("--staging-root /run/amnezia", service)
         self.assertIn("ReadWritePaths=/run/amnezia", service)
+        self.assertIn("RuntimeDirectory=amnezia", service)
+        self.assertNotIn("ReadWritePaths=/run/amnezia /run/amneziawg", service)
+        self.assertNotIn("StateDirectory=amnezia", service)
+
+    def test_local_release_uses_durable_private_runtime_config(self) -> None:
+        source = (REPO_ROOT / "deploy/selfhosted_updates/local_release.ps1").read_text(encoding="utf-8")
+        self.assertIn("RuntimeConfigPath", source)
+        self.assertIn("AmneziaReleaseLab\\runtime.json", source)
+        self.assertIn("LabHyperVCredentialFile", source)
+        self.assertIn("LabHyperVCredentialWslFile", source)
+        self.assertIn("Assert-WslPrivateCredentialFile", source)
+        self.assertIn("must be durable and outside temporary directories", source)
+        self.assertIn("S-1-5-18", source)
+        self.assertIn("/usr/bin/env", source)
+        self.assertIn("AMNEZIA_HYPERV_CREDENTIAL_FILE=$credentialWslPath", source)
 
     def test_headless_update_archive_has_two_managed_files_and_provisioning_is_separate(self) -> None:
         update_manager = (REPO_ROOT / "headless/headlessUpdateManager.cpp").read_text(encoding="utf-8")
@@ -3119,6 +3196,11 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('"codenames":["noble"]', build_script)
         self.assertIn('"backendModes"', build_script)
         local_release = (REPO_ROOT / "deploy/selfhosted_updates/local_release.ps1").read_text(encoding="utf-8")
+        cpack_ifw = (REPO_ROOT / "cmake/CPack.cmake").read_text(encoding="utf-8")
+        self.assertIn("$sourceBase --version", local_release)
+        self.assertIn("AMNEZIA_IFW_FRAMEWORK_VERSION = $Matches[1]", local_release)
+        self.assertIn("CPACK_IFW_FRAMEWORK_VERSION_FORCED", cpack_ifw)
+        self.assertLess(cpack_ifw.index("CPACK_IFW_FRAMEWORK_VERSION_FORCED"), cpack_ifw.index("include(CPackIFW)"))
         self.assertIn('@("windows", "linux", "android", "headless")', local_release)
         self.assertIn('PSBoundParameters.ContainsKey("BuildPlatform")', local_release)
         self.assertIn('$headlessArtifactPresent', local_release)
@@ -5080,6 +5162,57 @@ class SourceContractTests(unittest.TestCase):
                 self.assertFalse(
                     (tmp_path / "trust-anchor/amnezia/.client-update-host-transaction").exists()
                 )
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh is required")
+    def test_update_host_accepts_docker_daemon_absent_network_message(self) -> None:
+        """Docker's current missing-network diagnostic is an expected absence."""
+        sh = find_sh()
+        assert sh
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            initial = initial_transactional_docker_state()
+            initial["networks"] = {}
+            installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                tmp_path, initial
+            )
+            env["FAKE_DOCKER_NETWORK_ABSENT_STYLE"] = "daemon"
+            completed = subprocess.run(
+                [sh, str(installer), shell_absolute_path(host_dir)],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=45,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            final_state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertIn("amnezia-dns-net", final_state["networks"])
+            self.assertNotIn("Docker failed while querying network ID", completed.stderr)
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh is required")
+    def test_update_host_rejects_wrong_or_mixed_daemon_network_message(self) -> None:
+        sh = find_sh()
+        assert sh
+        for style in ("daemon-wrong", "daemon-mixed"):
+            with self.subTest(style=style), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                initial = initial_transactional_docker_state()
+                initial["networks"] = {}
+                installer, host_dir, state_path, env = prepare_transactional_installer_harness(
+                    tmp_path, initial
+                )
+                env["FAKE_DOCKER_NETWORK_ABSENT_STYLE"] = style
+                completed = subprocess.run(
+                    [sh, str(installer), shell_absolute_path(host_dir)],
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=45,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn("Docker failed while querying network ID", completed.stderr)
+                self.assertEqual(json.loads(state_path.read_text(encoding="utf-8"))["networks"], {})
 
     @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
     def test_update_host_journal_sync_and_remove_failures_are_explicit(self) -> None:
@@ -7843,8 +7976,38 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertNotEqual(opening_brace, -1, f"missing function body: {signature}")
 
         depth = 0
+        quote = None
+        escaped = False
+        line_comment = False
+        block_comment = False
         for offset in range(opening_brace, len(source)):
             character = source[offset]
+            following = source[offset + 1] if offset + 1 < len(source) else ""
+            if line_comment:
+                if character in "\r\n":
+                    line_comment = False
+                continue
+            if block_comment:
+                if character == "*" and following == "/":
+                    block_comment = False
+                continue
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == quote:
+                    quote = None
+                continue
+            if character == "/" and following == "/":
+                line_comment = True
+                continue
+            if character == "/" and following == "*":
+                block_comment = True
+                continue
+            if character in ('"', "'", "`"):
+                quote = character
+                continue
             if character == "{":
                 depth += 1
             elif character == "}":
@@ -8383,7 +8546,7 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         )
         close_client = controller.find("isDesktopAppProcessRunningMessageLoop()")
         prepare_service = controller.find("prepareWindowsMainServiceForUpgrade()")
-        launch_uninstaller = controller.find("installer.execute(uninstallerPath)")
+        launch_uninstaller = controller.find("installer.execute(uninstallerPath,")
         self.assertGreaterEqual(close_client, 0)
         self.assertGreater(prepare_service, close_client)
         self.assertGreater(launch_uninstaller, prepare_service)
@@ -8393,7 +8556,7 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertIn("installer.setCanceled()", prepare_failure)
         self.assertIn("return;", prepare_failure)
         wait_for_uninstall = controller.find(
-            "var uninstallerOutcome = waitForWindowsLegacyUninstaller();",
+            "var uninstallerOutcome = runningOnWindows()",
             launch_uninstaller,
         )
         uninstaller_launch = controller[launch_uninstaller:wait_for_uninstall]
@@ -8415,8 +8578,12 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertNotIn("return;", uninstaller_launch)
         self.assertIn("availableUninstallers.length > 1", controller)
         self.assertIn("availableUninstallers.length === 1", controller)
-        self.assertEqual(controller.count("installer.execute(uninstallerPath)"), 1)
+        self.assertEqual(controller.count("installer.execute(uninstallerPath,"), 1)
+        self.assertIn('"--accept-messages", "--accept-licenses"', controller)
+        self.assertIn('"--confirm-command", "purge"', controller)
         self.assertIn('uninstallerPostcondition !== "removed"', postcondition)
+        self.assertIn("waitForWindowsLegacyUninstaller()", uninstaller_launch + postcondition)
+        self.assertIn("waitForNonWindowsLegacyUninstaller(", uninstaller_launch + postcondition)
         self.assertGreaterEqual(confirm_still_installed, 0)
         self.assertGreater(restore_service, confirm_still_installed)
         self.assertGreater(cancel_install, restore_service)
@@ -8455,6 +8622,18 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         self.assertIn("removedQuiescentChecks >= 4", wait_helper)
         self.assertIn("presentQuiescentChecks >= 20", wait_helper)
 
+        non_windows_wait_helper = self.function_body(
+            "function waitForNonWindowsLegacyUninstaller",
+            self.qif_control_script,
+        )
+        self.assertIn("for (var i = 0; i < 1200; i++)", non_windows_wait_helper)
+        self.assertIn("sleep(500)", non_windows_wait_helper)
+        self.assertIn("absentQuiescentChecks++", non_windows_wait_helper)
+        self.assertIn("absentQuiescentChecks = 0", non_windows_wait_helper)
+        self.assertIn("absentQuiescentChecks >= 4", non_windows_wait_helper)
+        self.assertIn('"timeout-active"', non_windows_wait_helper)
+        self.assertIn('"timeout-unknown"', non_windows_wait_helper)
+
         process_probe = self.function_body(
             "function windowsLegacyMaintenanceToolProcessState",
             self.qif_control_script,
@@ -8481,7 +8660,7 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
             self.qif_control_script,
         )
         consent = controller.find("windowsUpgradeReplacementRequested = true")
-        launch_uninstaller = controller.find("installer.execute(uninstallerPath)")
+        launch_uninstaller = controller.find("installer.execute(uninstallerPath,")
         cleanup_succeeded = controller.find("windowsUpgradeContinuationRequested = true")
         direct_continuation = controller.find(
             'continueWindowsUpgradeInstallation("cleanup-success")'
@@ -8855,6 +9034,64 @@ process.stdout.write(JSON.stringify(outcome));
         self.assertEqual(flapped["pathSamples"], 8)
         self.assertEqual(flapped["processSamples"], 1)
 
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required")
+    def test_qif_non_windows_legacy_wait_requires_child_or_removed_path(self) -> None:
+        harness = f"""
+function sleep(milliseconds) {{}}
+var presentStates = JSON.parse(process.argv[1]);
+var processOutputs = JSON.parse(process.argv[2]);
+var pathSample = 0;
+var processSample = 0;
+function appInstalled() {{
+    return presentStates[Math.min(pathSample++, presentStates.length - 1)];
+}}
+var installer = {{ execute: function(path, args) {{
+    return [processOutputs[Math.min(processSample++, processOutputs.length - 1)], 0];
+}} }};
+function nonWindowsLegacyMaintenanceToolProcessState(uninstallerPath)
+{{
+{self.function_body("function nonWindowsLegacyMaintenanceToolProcessState", self.qif_control_script)}
+}}
+function waitForNonWindowsLegacyUninstaller(uninstallerPath, uninstallerExitCode)
+{{
+{self.function_body("function waitForNonWindowsLegacyUninstaller", self.qif_control_script)}
+}}
+var outcome = waitForNonWindowsLegacyUninstaller("/opt/AmneziaVPN/maintenancetool", 6);
+outcome.pathSamples = pathSample;
+outcome.processSamples = processSample;
+process.stdout.write(JSON.stringify(outcome));
+"""
+
+        def run_wait(present: list[bool], processes: list[str]) -> dict[str, object]:
+            completed = subprocess.run(
+                [
+                    shutil.which("node"),
+                    "-e",
+                    harness,
+                    json.dumps(present),
+                    json.dumps(processes),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            return json.loads(completed.stdout[completed.stdout.rfind("{"):])
+
+        removed = run_wait(
+            [True, True, True, False, False, False, False],
+            [" 42 /opt/AmneziaVPN/maintenancetool --remove"] * 3 + [""] * 4,
+        )
+        self.assertEqual(removed["status"], "removed")
+        self.assertEqual(removed["pathSamples"], 7)
+        self.assertEqual(removed["processSamples"], 7)
+
+        terminal = run_wait([True] * 4, [""] * 4)
+        self.assertEqual(terminal["status"], "failed-terminal")
+        self.assertEqual(terminal["pathSamples"], 4)
+        self.assertEqual(terminal["processSamples"], 4)
+        self.assertTrue(terminal["oldInstallationPresent"])
+
     @unittest.skipUnless(find_windows_powershell(), "Windows PowerShell 5.1 is required")
     def test_qif_windows_legacy_process_probe_matches_exact_executable_path(self) -> None:
         process_probe = self.function_body(
@@ -8862,7 +9099,7 @@ process.stdout.write(JSON.stringify(outcome));
             self.qif_control_script,
         )
         script_assignment = re.search(
-            r'var script = (?P<expression>.*?);\s*var result = installer\.execute',
+            r'var script = (?P<expression>.*?);\s*script = script\.replace',
             process_probe,
             flags=re.DOTALL,
         )
@@ -9230,7 +9467,7 @@ process.stdout.write(JSON.stringify(outcome));
         )
 
         uninstall_launch = controller.find(
-            "var resultArray = installer.execute(uninstallerPath);"
+            "var windowsUninstallerResult = installer.execute(uninstallerPath,"
         )
         cleanup_postcondition = controller.find(
             "!windowsUpgradeCleanupIsComplete()"
@@ -9239,6 +9476,11 @@ process.stdout.write(JSON.stringify(outcome));
             "} else if (installer.isUninstaller())"
         )
         self.assertGreaterEqual(uninstall_launch, 0)
+        self.assertIn(
+            'var uninstallerArgs = ["--accept-messages", "--accept-licenses",',
+            controller,
+        )
+        self.assertIn('"--confirm-command", "purge"', controller)
         self.assertGreater(cleanup_postcondition, uninstall_launch)
         self.assertLess(cleanup_postcondition, uninstaller_dispatch)
 

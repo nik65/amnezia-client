@@ -1,11 +1,14 @@
 #include <QCoreApplication>
+#include <QEventLoop>
+#include <QMetaType>
 #include <QJsonValue>
+#include <QScopedPointer>
 #include <QTextStream>
 
 #include <limits>
 
 #include "core/utils/errorCodes.h"
-#include "core/protocols/wireGuardProtocol.h"
+#include "core/protocols/wireGuardProtocolBinding.h"
 #include "core/utils/selfhostedUpdatePolicy.h"
 #include "daemon/daemonerrors.h"
 
@@ -50,44 +53,19 @@ namespace
         }
     };
 
-    struct FakeProtocol
+    class FakeController final : public ControllerImpl
     {
-        enum class State
-        {
-            Disconnected,
-            Connecting,
-            Connected,
-            Error,
-        };
+    public:
+        void initialize(const Device *, const Keys *) override {}
+        void activate(const QJsonObject &) override {}
+        void deactivate() override {}
+        void checkStatus() override {}
+        void getBackendLogs(std::function<void(const QString &)>&&) override {}
+        void cleanupBackendLogs() override {}
 
-        amnezia::wireguardProtocolPolicy::BackendFailureLatch failureLatch;
-        State state = State::Disconnected;
-
-        void backendFailure()
-        {
-            failureLatch.latch();
-            state = State::Error;
-        }
-
-        void connected()
-        {
-            if (failureLatch.acceptsConnectionEvent()) {
-                state = State::Connected;
-            }
-        }
-
-        void disconnected()
-        {
-            if (failureLatch.acceptsConnectionEvent()) {
-                state = State::Disconnected;
-            }
-        }
-
-        void explicitRetry()
-        {
-            failureLatch.beginAttempt();
-            state = State::Connecting;
-        }
+        void emitBackendFailure(DaemonError error) { emit backendFailure(error); }
+        void emitConnected() { emit connected(QStringLiteral("test")); }
+        void emitDisconnected() { emit disconnected(); }
     };
 
 }
@@ -132,6 +110,11 @@ int main(int argc, char *argv[])
     CHECK(amnezia::wireguardProtocolPolicy::errorCodeForDaemonFailure(
               DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_CLEANUP_FAILED)
           == amnezia::ErrorCode::SplitTunnelConfigurationCleanupFailed);
+    CHECK(daemonErrorLegacyIpcValue(DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_TIMEOUT) == 4);
+    CHECK(daemonErrorTypedReasonIpcValue(DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_TIMEOUT) == 5);
+    CHECK(daemonErrorFromIpcValues(4, 6) == DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_WAIT_FAILED);
+    CHECK(daemonErrorFromIpcValues(4) == DaemonError::ERROR_SPLIT_TUNNEL_EXCLUDE_FAILURE);
+    CHECK(daemonErrorFromIpcValues(255, 6) == DaemonError::ERROR_FATAL);
     CHECK(!isDaemonFailureIpcValue(0));
     CHECK(isDaemonFailureIpcValue(2));
     CHECK(isDaemonFailureIpcValue(7));
@@ -145,17 +128,65 @@ int main(int argc, char *argv[])
     CHECK(!QJsonValue(QStringLiteral("2")).isDouble());
     CHECK(!QJsonValue().isDouble());
 
-    // Late transport events cannot erase a latched backend failure.
-    FakeProtocol protocol;
-    protocol.backendFailure();
-    protocol.connected();
-    protocol.disconnected();
-    CHECK(protocol.failureLatch.isLatched());
-    CHECK(protocol.state == FakeProtocol::State::Error);
-    protocol.explicitRetry();
-    protocol.connected();
-    CHECK(!protocol.failureLatch.isLatched());
-    CHECK(protocol.state == FakeProtocol::State::Connected);
+    // Exercise the production ControllerImpl signal binding with queued Qt
+    // delivery. The setter mirrors VpnProtocol::setLastError's state effect,
+    // while the signal/latch ordering is the actual production binding.
+    FakeController controller;
+    QObject receiver;
+    amnezia::wireguardProtocolPolicy::BackendFailureLatch failureLatch;
+    amnezia::ErrorCode lastError = amnezia::ErrorCode::NoError;
+    bool connected = false;
+    bool errorState = false;
+    const auto setLastError = [&](amnezia::ErrorCode error) {
+        lastError = error;
+        if (error != amnezia::ErrorCode::NoError) {
+            errorState = true;
+        }
+    };
+    const auto setConnectionState = [&](bool next) { connected = next; };
+    amnezia::wireguardProtocolPolicy::bindControllerSignals(
+            &controller, &receiver, &failureLatch, setLastError, setConnectionState,
+            Qt::QueuedConnection);
+
+    controller.emitConnected();
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    CHECK(connected);
+
+    controller.emitBackendFailure(DaemonError::ERROR_SPLIT_TUNNEL_CONFIG_TIMEOUT);
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    CHECK(failureLatch.isLatched());
+    CHECK(lastError == amnezia::ErrorCode::SplitTunnelConfigurationTimeout);
+    CHECK(errorState);
+    CHECK(QMetaType::fromType<DaemonError>().id() != QMetaType::UnknownType);
+
+    controller.emitConnected();
+    controller.emitDisconnected();
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    CHECK(errorState);
+
+    // A queued signal from the retired attempt is bound to its context and
+    // must be discarded when that context is retired for the retry.
+    QScopedPointer<QObject> attemptContext(new QObject());
+    amnezia::wireguardProtocolPolicy::BackendFailureLatch retryLatch;
+    bool retryConnected = false;
+    amnezia::wireguardProtocolPolicy::bindControllerSignals(
+            &controller, attemptContext.get(), &retryLatch,
+            [](amnezia::ErrorCode) {},
+            [&retryConnected](bool next) { retryConnected = next; },
+            Qt::QueuedConnection);
+    controller.emitConnected();
+    controller.emitBackendFailure(DaemonError::ERROR_FATAL);
+    attemptContext.reset(new QObject());
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    CHECK(!retryLatch.isLatched());
+    CHECK(!retryConnected);
+
+    failureLatch.beginAttempt();
+    setLastError(amnezia::ErrorCode::NoError);
+    controller.emitConnected();
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
+    CHECK(!failureLatch.isLatched());
+    CHECK(connected);
 
     return runner.finish();
 }

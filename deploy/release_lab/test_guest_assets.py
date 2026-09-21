@@ -53,6 +53,13 @@ class GuestAssetContractTests(unittest.TestCase):
         self.assertIn('APT::Install-Recommends "false";', gui)
         self.assertIn("AutomaticLogin=lab", gui)
 
+    def test_server_router_ready_marker_uses_single_checked_helper(self):
+        template = (ROOT / "guest_templates" / "server-router" / "user-data").read_text(encoding="utf-8")
+        self.assertIn("path: /usr/local/sbin/amnezia-lab-guest-marker", template)
+        self.assertIn("- [/usr/local/sbin/amnezia-lab-guest-marker]", template)
+        runcmd = template.split("runcmd:", 1)[1]
+        self.assertNotIn("mktemp /var/lib/amnezia-lab/.READY", runcmd)
+
 
 if __name__ == "__main__":
     unittest.main()

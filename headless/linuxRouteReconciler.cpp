@@ -1265,7 +1265,27 @@ LinuxRouteReconciler::RuleSnapshot LinuxRouteReconciler::readRuleSnapshot() cons
     };
     for (const QStringList &arguments : tableQueries) {
         const CommandResult result = m_runner->runCaptured(executable, arguments);
-        if (!result.ok) return snapshot;
+        if (!result.ok) {
+            // iproute2 returns status 2 and this exact diagnostic when a
+            // numeric table has never been created. On a fresh guest that is
+            // the clean empty-table state; permission and parse failures must
+            // remain invalid snapshots and continue to fail closed.
+            QString diagnostic = result.message.trimmed();
+            const QString backendFailurePrefix = QStringLiteral("backend executable failed: ");
+            if (diagnostic.startsWith(backendFailurePrefix, Qt::CaseInsensitive)) {
+                diagnostic.remove(0, backendFailurePrefix.size());
+            }
+            const bool missingTable = result.exitCode == 2
+                    && result.output.isEmpty()
+                    && (diagnostic.compare(
+                                QStringLiteral("Error: ipv4: FIB table does not exist.\nDump terminated"),
+                                Qt::CaseInsensitive) == 0
+                        || diagnostic.compare(
+                                QStringLiteral("Error: ipv6: FIB table does not exist.\nDump terminated"),
+                                Qt::CaseInsensitive) == 0);
+            if (missingTable) continue;
+            return snapshot;
+        }
         const QStringList lines = result.output.split(QRegularExpression(QStringLiteral("[\\r\\n]")),
                                                        Qt::SkipEmptyParts);
         for (const QString &line : lines) {

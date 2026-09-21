@@ -48,6 +48,29 @@ class HyperVBackendContractTests(unittest.TestCase):
         self.assertNotIn("Stop-VM -Name", adapter)
         self.assertNotIn("New-PSSession -VMName", adapter)
 
+    def test_controller_hyperv_kwargs_match_native_adapter_param_ast(self):
+        command = (
+            "$tokens=$null;$errors=$null;"
+            f"$ast=[System.Management.Automation.Language.Parser]::ParseFile('{ADAPTER}',[ref]$tokens,[ref]$errors);"
+            "if($errors.Count){exit 1};"
+            "$p=$ast.ParamBlock.Parameters|ForEach-Object{$_.Name.VariablePath.UserPath};"
+            "$p|ConvertTo-Json -Compress"
+        )
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            check=False, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        declared = set(json.loads(result.stdout))
+        controller_kwargs = {
+            "CaseId", "ArtifactPath", "ArtifactSha256", "ArtifactSize", "Stage",
+            "GuestAction", "ExpectedSha256", "ExpectedVersion", "BaselineVersion",
+            "CandidateVersion", "RunnerPath", "RunnerSha256", "UiHelperPath",
+            "UiHelperSha256", "LauncherPath", "LauncherSha256", "ExpectedArtifactSha256",
+            "TokenEvidencePath",
+        }
+        self.assertTrue(controller_kwargs.issubset(declared), sorted(controller_kwargs - declared))
+
     def test_ui_helper_is_guest_bound_without_host_input_automation(self):
         helper = UI_HELPER.read_text(encoding="utf-8")
         self.assertIn("Get-CimInstance Win32_Process", helper)

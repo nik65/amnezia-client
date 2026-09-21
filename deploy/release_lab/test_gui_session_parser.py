@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import pytest
 from pathlib import Path
 
 
@@ -13,7 +14,7 @@ ROOT = Path(__file__).resolve().parent
 def test_linux_gui_session_helper_selects_active_lab_x11(tmp_path: Path) -> None:
     bash = shutil.which("bash")
     if bash is None or os.name == "nt":
-        return
+        pytest.skip("GUI session parser fixture requires a native POSIX bash runtime")
     source = (ROOT / "guest_runners" / "linux-release-lab.sh").read_text(encoding="utf-8")
     match = re.search(r"  gui_session_proof\(\) \{\n(.*?)\n  \}\n  gui_session_json=", source, re.DOTALL)
     assert match, "GUI session helper was not found"

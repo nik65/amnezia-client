@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "daemon/daemonerrors.h"
+#include "windowssplittunnelpolicy.h"
 
 // Note: the ws2tcpip.h import must come before the others.
 // clang-format off
@@ -42,6 +43,10 @@ class WindowsSplitTunnel final {
                                     const QString& abortEventHandle,
                                     const QString& parentProcessHandle,
                                     const QString& configSize);
+  /** Runs the isolated CLEAR_CONFIGURATION/GET_STATE helper process. */
+  static int runCleanupHelper(const QString& driverHandle,
+                              const QString& abortEventHandle,
+                              const QString& parentProcessHandle);
 
   /**
    * @brief Releases any WFP objects owned by a surviving driver session.
@@ -75,7 +80,7 @@ class WindowsSplitTunnel final {
   // Fetches and Pushed needed info to move to engaged mode
   bool start(int inetAdapterIndex, int vpnAdapterIndex = 0);
   // Deletes Rules and puts the driver into passive mode
-  void stop();
+  bool stop();
 
   // Returns true if the split-tunnel driver is now up and running.
   bool isRunning();
@@ -116,6 +121,7 @@ class WindowsSplitTunnel final {
   static DRIVER_STATE getState(HANDLE driverIO);
   static bool resetDriver(HANDLE driverIO);
   bool applyConfigurationBounded(const std::vector<uint8_t>& config);
+  bool runCleanupHelperBounded();
   void quarantineConfigurationHelper(HANDLE job, HANDLE process,
                                      HANDLE abortEvent, DaemonError failure,
                                      DWORD waitError = ERROR_SUCCESS,
@@ -128,6 +134,7 @@ class WindowsSplitTunnel final {
   HANDLE m_quarantinedHelperProcess = nullptr;
   HANDLE m_quarantinedHelperAbortEvent = nullptr;
   DaemonError m_lastFailure = DaemonError::ERROR_NONE;
+  windowsSplitTunnelPolicy::CleanupGate m_cleanupGate;
   DRIVER_STATE getState();
   QString stateString();
 

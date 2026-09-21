@@ -233,7 +233,8 @@ def atomic_copy_file(source: Path, target: Path) -> None:
             staged_path = Path(staged.name)
             with source.open("rb") as input_file:
                 shutil.copyfileobj(input_file, staged, length=1024 * 1024)
-            os.fchmod(staged.fileno(), stat.S_IMODE(source.stat().st_mode))
+            if os.name != "nt":
+                os.fchmod(staged.fileno(), stat.S_IMODE(source.stat().st_mode))
             staged.flush()
             os.fsync(staged.fileno())
         os.replace(staged_path, target)
@@ -253,7 +254,8 @@ def atomic_write_bytes(target: Path, contents: bytes) -> None:
             staged_path = Path(staged.name)
             staged.write(contents)
             existing_mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o644
-            os.fchmod(staged.fileno(), existing_mode)
+            if os.name != "nt":
+                os.fchmod(staged.fileno(), existing_mode)
             staged.flush()
             os.fsync(staged.fileno())
         os.replace(staged_path, target)
@@ -1517,8 +1519,12 @@ def main() -> int:
                 )
             rollback_file_names[reservation_key] = (artifact_path.name, platform)
             target = rollback_dir / artifact_path.name
+            # Record the source digest before the copy so the verification
+            # below compares the published file against a pre-recorded
+            # expectation instead of re-hashing the copied file itself
+            # (a comparison that could only ever succeed).
+            rollback_digest = sha256(artifact_path)
             atomic_copy_file(artifact_path, target)
-            rollback_digest = sha256(target)
             if sha256(target) != rollback_digest:
                 raise SystemExit(
                     f"rollback artifact changed while it was copied: {artifact_path}"

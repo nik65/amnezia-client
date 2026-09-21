@@ -31,3 +31,7 @@ def test_wrong_cli_hash_or_outer_binding_fails_closed():
  with pytest.raises(HeadlessNativeQgaError,match="ownership"):c.trigger_rollback("a"*64)
 def test_marker_contract_is_o_excl_root_owned_and_durable():
  assert "os.O_EXCL|os.O_NOFOLLOW" in MARKER and "os.fsync" in MARKER and "os.chown(p,0,0)" in MARKER
+
+def test_rollback_uses_json_cli_envelope():
+ assert ROLLBACK_ARGV==["/usr/local/bin/amnezia-cli","--socket","/run/amnezia/amneziad.sock","--json","update-rollback"]
+ assert "'--json','update-rollback'" in ROLLBACK

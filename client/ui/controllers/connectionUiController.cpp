@@ -6,6 +6,7 @@
     #include <QApplication>
 #endif
 #include <QCoreApplication>
+#include <QDebug>
 
 #include "amneziaApplication.h"
 #include "core/controllers/serversController.h"
@@ -24,6 +25,8 @@ ConnectionUiController::ConnectionUiController(ConnectionController* connectionC
             &ConnectionUiController::serverRoutingRulesChanged);
 
     connect(this, &ConnectionUiController::connectButtonClicked, this, &ConnectionUiController::toggleConnection, Qt::QueuedConnection);
+    connect(m_connectionController, &ConnectionController::serviceReadyWaitFinished, this,
+            &ConnectionUiController::onServiceReadyWaitFinished);
 
     m_state = Vpn::ConnectionState::Disconnected;
     m_connectionStateText = QCoreApplication::translate("ConnectionController", "Connect");
@@ -37,12 +40,15 @@ void ConnectionUiController::openConnection()
         return;
     }
 
-    ErrorCode errorCode = m_connectionController->openConnection(serverId);
-
-    if (errorCode != ErrorCode::NoError) {
-        notifyConnectionBlocked(errorCode);
-        return;
-    }
+    // The privileged companion service is installed and started by the installer,
+    // so the first connection after an upgrade can arrive while it is still coming
+    // up. Wait for it asynchronously instead of failing with 103.
+    runWhenServiceIsReady([this, serverId]() {
+        const ErrorCode errorCode = m_connectionController->openConnection(serverId);
+        if (errorCode != ErrorCode::NoError) {
+            notifyConnectionBlocked(errorCode);
+        }
+    });
 }
 
 void ConnectionUiController::closeConnection()
@@ -57,6 +63,14 @@ ErrorCode ConnectionUiController::getLastConnectionError()
 
 void ConnectionUiController::onConnectionStateChanged(Vpn::ConnectionState state)
 {
+    if (m_pendingConnectionStep && state != Vpn::ConnectionState::Disconnected
+        && state != Vpn::ConnectionState::Preparing && state != Vpn::ConnectionState::Error
+        && state != Vpn::ConnectionState::Unknown) {
+        // A connection sequence started elsewhere (auto-connect, tray, platform
+        // service) while this request was still waiting: the deferred step is stale.
+        m_pendingConnectionStep = nullptr;
+    }
+
     m_state = state;
 
     m_isConnected = false;
@@ -142,14 +156,50 @@ void ConnectionUiController::toggleConnection()
             return;
         }
 
-        const ErrorCode errorCode = m_connectionController->isConnectionSupported(serverId);
-        if (errorCode != ErrorCode::NoError) {
-            notifyConnectionBlocked(errorCode);
-            return;
-        }
+        runWhenServiceIsReady([this, serverId]() {
+            const ErrorCode errorCode = m_connectionController->isConnectionSupported(serverId);
+            if (errorCode != ErrorCode::NoError) {
+                notifyConnectionBlocked(errorCode);
+                return;
+            }
 
-        emit prepareConfig();
+            emit prepareConfig();
+        });
     }
+}
+
+void ConnectionUiController::runWhenServiceIsReady(std::function<void()> action)
+{
+    if (m_connectionController->isServiceReady()) {
+        action();
+        return;
+    }
+
+    if (m_pendingConnectionStep) {
+        qInfo() << "ConnectionUiController: replacing the connection request that is still"
+                << "waiting for the privileged companion service";
+    }
+    m_pendingConnectionStep = std::move(action);
+    m_connectionController->requestServiceReady();
+}
+
+void ConnectionUiController::onServiceReadyWaitFinished(bool serviceReady)
+{
+    std::function<void()> action = std::move(m_pendingConnectionStep);
+    m_pendingConnectionStep = nullptr;
+
+    if (!action) {
+        return;
+    }
+
+    if (serviceReady) {
+        action();
+        return;
+    }
+
+    qWarning() << "ConnectionUiController: privileged companion service did not become reachable in"
+               << "time; reporting the unchanged service-not-running error";
+    notifyConnectionBlocked(ErrorCode::AmneziaServiceNotRunning);
 }
 
 void ConnectionUiController::notifyConnectionBlocked(ErrorCode errorCode)

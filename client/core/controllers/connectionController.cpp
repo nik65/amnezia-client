@@ -59,6 +59,16 @@ constexpr int serverRoutingRulesClientResolveCycleDeadlineMs = 10 * 60 * 1000;
 constexpr int serverRoutingRulesRequestDeadlineMs = 6000;
 constexpr qsizetype serverRoutingRulesMaxPayloadBytes = 4 * 1024 * 1024;
 
+// The privileged companion service is installed and started by the Windows
+// installer. Right after an upgrade the desktop app can be started while the
+// service is still coming up, so the first connection attempt may find the
+// service missing. The wait for it is timer driven (see requestServiceReady())
+// and never blocks the GUI thread; every single readiness probe stays bounded
+// by the IPC timeouts in IpcClient, which is why one probe can take longer than
+// serviceReadyPollIntervalMs.
+constexpr int serviceReadyWaitTimeoutMs = 10 * 1000;
+constexpr int serviceReadyPollIntervalMs = 250;
+
 QString serverRoutingRulesSyncUrl(const QString &host)
 {
     const QString syncHost = host.trimmed().isEmpty()
@@ -377,6 +387,11 @@ ConnectionController::ConnectionController(SecureServersRepository* serversRepos
     m_clientManagedSitesLookupTimeoutTimer.setSingleShot(true);
     connect(&m_clientManagedSitesLookupTimeoutTimer, &QTimer::timeout,
             this, &ConnectionController::onClientManagedSiteResolveTimeout);
+
+    m_serviceReadyWaitTimer.setSingleShot(false);
+    m_serviceReadyWaitTimer.setInterval(serviceReadyPollIntervalMs);
+    connect(&m_serviceReadyWaitTimer, &QTimer::timeout, this,
+            &ConnectionController::onServiceReadyWaitTick);
 }
 
 bool ConnectionController::isConnected() const
@@ -2254,6 +2269,51 @@ bool ConnectionController::isServiceReady() const
 #else
     return true;
 #endif
+}
+
+void ConnectionController::requestServiceReady()
+{
+    // The service already answers: report it on the next event-loop turn so the
+    // caller is not re-entered from the middle of its own connection sequence.
+    if (isServiceReady()) {
+        QTimer::singleShot(0, this, [this]() { emit serviceReadyWaitFinished(true); });
+        return;
+    }
+
+    // One shared wait for all callers inside the bounded window; the pending
+    // caller owns what happens with the answer.
+    if (m_serviceReadyWaitActive) {
+        return;
+    }
+
+    m_serviceReadyWaitActive = true;
+    m_serviceReadyWaitElapsed.start();
+    qInfo() << "ConnectionController: privileged companion service is not reachable, waiting up to"
+            << serviceReadyWaitTimeoutMs << "ms without blocking the UI thread";
+    m_serviceReadyWaitTimer.start(serviceReadyPollIntervalMs);
+}
+
+void ConnectionController::onServiceReadyWaitTick()
+{
+    const qint64 waitedMs = m_serviceReadyWaitElapsed.elapsed();
+
+    if (isServiceReady()) {
+        m_serviceReadyWaitTimer.stop();
+        m_serviceReadyWaitActive = false;
+        qInfo() << "ConnectionController: privileged companion service became reachable after"
+                << waitedMs << "ms";
+        emit serviceReadyWaitFinished(true);
+        return;
+    }
+
+    if (waitedMs >= serviceReadyWaitTimeoutMs) {
+        m_serviceReadyWaitTimer.stop();
+        m_serviceReadyWaitActive = false;
+        qWarning() << "ConnectionController: privileged companion service did not answer within"
+                   << serviceReadyWaitTimeoutMs << "ms; keeping the existing"
+                   << "ErrorCode::AmneziaServiceNotRunning (\"Background service is not running\")";
+        emit serviceReadyWaitFinished(false);
+    }
 }
 
 bool ConnectionController::isContainerSupported(DockerContainer container) const

@@ -18,7 +18,7 @@ AVD_NAME="${AMNEZIA_ANDROID_AVD_NAME:-amnezia-release-api${API_LEVEL}}"
 ADB_SERVER_PORT="${AMNEZIA_ANDROID_ADB_PORT:-5039}"
 EMULATOR_PORT="${AMNEZIA_ANDROID_EMULATOR_PORT:-5556}"
 SERIAL="${AMNEZIA_ANDROID_SERIAL:-emulator-${EMULATOR_PORT}}"
-GPU_MODE="${AMNEZIA_ANDROID_GPU_MODE:-software}"
+GPU_MODE="${AMNEZIA_ANDROID_GPU_MODE:-swangle}"
 ADB_SERVER_SOCKET="tcp:127.0.0.1:${ADB_SERVER_PORT}"
 
 PACKAGE="org.amnezia.vpn"
@@ -52,6 +52,16 @@ APP_MANIFEST_REQUEST=0
 APP_APK_REQUEST=0
 APP_RESULT_STATUS=app-selfhosted-update-pending
 EXPECTED_BASELINE_ABI_BLOCKER="${AMNEZIA_ANDROID_EXPECTED_BASELINE_ABI_BLOCKER:-true}"
+UPDATE_STATE_FILE="${WORK_HOME}/app-update-state.json"
+ATTEMPT_STATE_FILE="${WORK_HOME}/fixture-attempt-state.json"
+UPDATE_ATTEMPT_STARTED_AT=0
+UPDATE_ATTEMPT_FINISHED_AT=0
+UPDATE_MANIFEST_SHA=""
+UPDATE_APK_SHA=""
+UPDATE_MANIFEST_SIZE=0
+UPDATE_APK_SIZE=0
+FIXTURE_LOG_MAX_BYTES=1048576
+FIXTURE_LOG_MAX_RECORDS=4096
 
 sdk_lock_path() {
   printf '%s\n' "${AMNEZIA_ANDROID_SDK_LOCK:-${WORK_HOME}/sdk-lock-api${API_LEVEL}-tools13114758.json}"
@@ -777,7 +787,10 @@ PY
 
 probe() {
   assert_owned_target
-  ensure_guest_network
+  # Probe is an OS/emulator readiness check. It must not consume or validate
+  # an app-update fixture context before the controller has planned this run's
+  # nonce and endpoint.
+  ensure_guest_offline
   local abi bridge sdk package_dump
   abi="$(adb_cmd shell getprop ro.product.cpu.abilist | tr -d '\r')"
   bridge="$(adb_cmd shell getprop ro.dalvik.vm.native.bridge | tr -d '\r')"
@@ -826,6 +839,22 @@ if field == "version":
     print(artifact.get(field) or doc["version"])
 else:
     print(artifact[field])
+PY
+}
+
+manifest_artifact_url() {
+  local kind="$1" manifest
+  if [[ "$kind" == release ]]; then manifest="${AMNEZIA_ANDROID_RELEASE_MANIFEST:-}"; else manifest="${AMNEZIA_ANDROID_BASELINE_MANIFEST:-}"; fi
+  [[ -n "$manifest" && -f "$manifest" ]] || return 1
+  python3 - "$manifest" <<'PY'
+import base64, json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+payload = doc["payload"] + "=" * (-len(doc["payload"]) % 4)
+decoded = json.loads(base64.b64decode(payload).decode("utf-8"))
+url = decoded["platforms"]["android-arm64-v8a"]["url"]
+if not isinstance(url, str) or not url.startswith("files/artifacts/"):
+    raise SystemExit("manifest Android ARM64 URL is invalid")
+print("/" + url.lstrip("/"))
 PY
 }
 
@@ -904,6 +933,16 @@ assert_native_runtime() {
   [[ "$maps" == *'/lib/arm64/'* ]] || die "no exact ARM64 native library mapping observed in app process"
 }
 
+assert_no_fresh_app_signal11() {
+  local log_file="$1" pid
+  while read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if grep -Eq "Process ${pid} exited due to signal 11 \(Segmentation fault\)" "$log_file"; then
+      die "candidate app process ${pid} crashed with SIG11 during the fresh launch window"
+    fi
+  done < <(sed -n 's/.*ActivityManager: Process org\.amnezia\.vpn (pid \([0-9][0-9]*\)) has died.*/\1/p' "$log_file" | sort -u)
+}
+
 diagnostic_fixture_download() {
   local out_dir="$1" expected_manifest_sha="$2" expected_apk_sha="$3"
   [[ -s "${WORK_HOME}/fixture-network.json" ]] || die "same-run fixture network marker is required for app update"
@@ -928,22 +967,49 @@ diagnostic_fixture_download() {
 }
 
 reset_fixture_attempt_log() {
+  [[ "$FIXTURE_ATTEMPT_NONCE" =~ ^[A-Za-z0-9._-]{16,128}$ ]] || die "fixture attempt nonce is missing or malformed"
+  if [[ -s "$ATTEMPT_STATE_FILE" ]]; then
+    local prior
+    prior="$(python3 - "$ATTEMPT_STATE_FILE" "$RUN_ID" "$PROFILE_ID" "$FIXTURE_ATTEMPT_NONCE" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+if doc.get("run_id") != sys.argv[2] or doc.get("profile") != sys.argv[3] or doc.get("attempt_nonce") != sys.argv[4]:
+    raise SystemExit("fixture attempt marker belongs to another run/profile/nonce")
+if doc.get("reset_used") is True:
+    raise SystemExit("fixture attempt nonce was already consumed")
+print("ok")
+PY
+  )" || die "fixture attempt nonce is stale or already consumed"
+    [[ "$prior" == ok ]] || die "fixture attempt state is invalid"
+  fi
   local base="http://${FIXTURE_GUEST_ENDPOINT}:17865"
   local remote="/data/local/tmp/amnezia-lab-${RUN_ID}-reset.json"
-  adb_cmd shell "toybox wget -q -O '${remote}' '${base}/__lab__/attempt/reset?nonce=${FIXTURE_ATTEMPT_NONCE}'" \
+  UPDATE_ATTEMPT_STARTED_AT="$(date +%s)"
+  adb_cmd shell "toybox wget -q -O '${remote}' '${base}/__lab__/attempt/reset?nonce=${FIXTURE_ATTEMPT_NONCE}&run_id=${RUN_ID}'" \
     || die "fixture attempt reset endpoint failed"
   adb_cmd shell "grep -q 'reset' '${remote}'" || die "fixture attempt reset receipt was not observed"
+  python3 - "$ATTEMPT_STATE_FILE" "$RUN_ID" "$PROFILE_ID" "$FIXTURE_ATTEMPT_NONCE" "$UPDATE_ATTEMPT_STARTED_AT" <<'PY'
+import json, os, pathlib, sys
+out = pathlib.Path(sys.argv[1])
+out.parent.mkdir(parents=True, exist_ok=True)
+doc = {"run_id": sys.argv[2], "profile": sys.argv[3], "attempt_nonce": sys.argv[4], "reset_used": True, "started_at": int(sys.argv[5]), "pid": os.getpid()}
+tmp = out.with_name(out.name + ".tmp")
+tmp.write_text(json.dumps(doc, sort_keys=True) + "\n", encoding="utf-8")
+os.replace(tmp, out)
+PY
 }
 
 tighten_fixture_to_app_uid() {
   local uid
   uid="$(adb_cmd shell dumpsys package "$PACKAGE" | sed -n 's/.*userId=\([0-9][0-9]*\).*/\1/p' | head -n1 | tr -d '\r')"
   [[ "$uid" =~ ^[0-9]+$ ]] || die "Android package UID could not be read for app-only fixture gate"
-  adb_cmd shell "iptables -A OUTPUT -d ${FIXTURE_GUEST_ENDPOINT} -p tcp --dport 17865 -m owner --uid-owner ${uid} -j ACCEPT && iptables -D OUTPUT -d 10.0.2.2 -p tcp --dport ${FIXTURE_HOST_PORT} -j ACCEPT" \
+  # The filter hook observes the post-DNAT destination. Match the runtime
+  # gateway/fixed hostfwd port and app UID; the guest endpoint is pre-DNAT.
+  adb_cmd shell "iptables -A OUTPUT -d 10.0.2.2 -p tcp --dport ${FIXTURE_HOST_PORT} -m owner --uid-owner ${uid} -j ACCEPT && iptables -D OUTPUT -d 10.0.2.2 -p tcp --dport ${FIXTURE_HOST_PORT} -j ACCEPT" \
     >/dev/null || die "could not restrict fixture egress to the Amnezia package UID"
   local rules
   rules="$(adb_cmd shell iptables -S OUTPUT | tr -d '\r')"
-  grep -Eq -- "-d ${FIXTURE_GUEST_ENDPOINT//./\\.}(/32)? .*--dport 17865 .*--uid-owner ${uid} -j ACCEPT" <<<"$rules" \
+  grep -Eq -- "-d 10\\.0\\.2\\.2(/32)? .*--dport ${FIXTURE_HOST_PORT} .*--uid-owner ${uid} -j ACCEPT" <<<"$rules" \
     || die "app-only fixture UID rule was not observed"
   printf '%s\n' "$uid" >"${WORK_HOME}/fixture-app-uid.txt"
 }
@@ -954,29 +1020,55 @@ restore_fixture_peer_access() {
 }
 
 read_fixture_request_log() {
-  local out_dir="$1" base="http://${FIXTURE_GUEST_ENDPOINT}:17865"
+  local out_dir="$1" expected_manifest_sha="$2" expected_apk_sha="$3" expected_apk_path="$4" expected_manifest_size="$5" expected_apk_size="$6"
+  local base="http://${FIXTURE_GUEST_ENDPOINT}:17865"
   local remote="/data/local/tmp/amnezia-lab-${RUN_ID}-requests.jsonl"
   local local_log="${out_dir}/fixture-request-log.jsonl"
-  adb_cmd shell "toybox wget -q -O '${remote}' '${base}/__lab__/request-log?nonce=${FIXTURE_ATTEMPT_NONCE}'" \
+  [[ -s "$ATTEMPT_STATE_FILE" ]] || die "fixture attempt state is absent"
+  adb_cmd shell "toybox wget -q -O '${remote}' '${base}/__lab__/request-log?nonce=${FIXTURE_ATTEMPT_NONCE}&run_id=${RUN_ID}'" \
     || die "fixture request-log readback failed"
   adb_cmd pull "$remote" "$local_log" >/dev/null || die "fixture request-log could not be read back"
+  [[ "$(stat -c %s "$local_log")" -le "$FIXTURE_LOG_MAX_BYTES" ]] || die "fixture request-log exceeds bounded size"
+  UPDATE_ATTEMPT_FINISHED_AT="$(($(date +%s) + 5))"
   local summary
-  summary="$(python3 - "$local_log" "$RUN_ID" "$expected_hash" <<'PY'
+  summary="$(python3 - "$local_log" "$RUN_ID" "$PROFILE_ID" "$FIXTURE_ATTEMPT_NONCE" "$expected_manifest_sha" "$expected_apk_sha" "$expected_apk_path" "$expected_manifest_size" "$expected_apk_size" "$UPDATE_ATTEMPT_STARTED_AT" "$UPDATE_ATTEMPT_FINISHED_AT" "$FIXTURE_LOG_MAX_RECORDS" <<'PY'
 import json, sys
-path, run_id, expected_sha = sys.argv[1:]
-rows = [json.loads(line) for line in open(path, encoding="utf-8") if line.strip()]
-manifest = [row for row in rows if row.get("path", "").split("?", 1)[0] == "/manifest.json" and row.get("status") == 200]
-apk = [row for row in rows if row.get("path", "").startswith("/files/artifacts/") and row.get("status") == 200]
+path, run_id, profile, nonce, manifest_sha, apk_sha, apk_path, manifest_size, apk_size, started, finished, max_records = sys.argv[1:]
+rows = []
+with open(path, encoding="utf-8") as stream:
+    for line_number, line in enumerate(stream, 1):
+        if line_number > int(max_records):
+            raise SystemExit("app request log exceeds bounded record count")
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"invalid app request log record {line_number}: {exc}")
+        if not isinstance(row, dict):
+            raise SystemExit("app request log contains a non-object record")
+        rows.append(row)
+for row in rows:
+    if row.get("run_id") != run_id or row.get("attempt_nonce") != nonce:
+        raise SystemExit("app request log has a foreign run or attempt nonce")
+    if not isinstance(row.get("timestamp"), (int, float)) or not (float(started) - 5 <= float(row["timestamp"]) <= float(finished)):
+        raise SystemExit("app request log record is outside the measurement window")
+    if row.get("status") not in (200, 404):
+        raise SystemExit("app request log contains a failure or truncation marker")
+manifest = [row for row in rows if row.get("method") == "GET" and row.get("path") == "/manifest.json" and row.get("status") == 200]
+apk = [row for row in rows if row.get("method") == "GET" and row.get("path") == apk_path and row.get("status") == 200]
+if any(row.get("method") == "GET" and row.get("status") == 200 and row.get("path") not in ("/manifest.json", apk_path) for row in rows):
+    raise SystemExit("app request log contains an unexpected successful path")
 if not manifest or not apk:
     if not manifest:
         raise SystemExit("app request log lacks manifest GET")
     print(json.dumps({"manifest_get": True, "apk_get": False, "manifest_requests": len(manifest), "apk_requests": 0}, sort_keys=True))
     raise SystemExit(3)
-if any(row.get("run_id") != run_id for row in manifest + apk):
-    raise SystemExit("app request log has a foreign run id")
-if apk[-1].get("sha256", "").lower() != expected_sha.lower():
-    raise SystemExit("app request log APK digest differs from planned candidate")
-print(json.dumps({"manifest_get": True, "apk_get": True, "manifest_requests": len(manifest), "apk_requests": len(apk), "apk_sha256": apk[-1]["sha256"]}, sort_keys=True))
+if any(row.get("sha256", "").lower() != manifest_sha.lower() or row.get("bytes") != int(manifest_size) or row.get("content_length") != int(manifest_size) for row in manifest):
+    raise SystemExit("app request log manifest hash or size differs from planned manifest")
+if any(row.get("sha256", "").lower() != apk_sha.lower() or row.get("bytes") != int(apk_size) or row.get("content_length") != int(apk_size) for row in apk):
+    raise SystemExit("app request log APK hash or size differs from planned candidate")
+print(json.dumps({"manifest_get": True, "apk_get": True, "manifest_requests": len(manifest), "apk_requests": len(apk), "manifest_sha256": manifest[-1]["sha256"], "apk_sha256": apk[-1]["sha256"], "manifest_size": int(manifest_size), "apk_size": int(apk_size)}, sort_keys=True))
 PY
   )" || {
     local rc=$?
@@ -991,14 +1083,56 @@ PY
   APP_UPDATE_REQUEST_LOG=1
   APP_MANIFEST_REQUEST=1
   APP_APK_REQUEST=1
-  APP_UPDATE_REQUEST_LOG=1
   printf '%s\n' "$summary" >"${out_dir}/fixture-request-summary.json"
   return 0
 }
 
+persist_update_state() {
+  local status="$1" manifest_sha="$2" apk_sha="$3" manifest_size="$4" apk_size="$5"
+  python3 - "$UPDATE_STATE_FILE" "$RUN_ID" "$PROFILE_ID" "$FIXTURE_ATTEMPT_NONCE" "$status" \
+    "$manifest_sha" "$apk_sha" "$manifest_size" "$apk_size" "$APP_UPDATE_REQUEST_LOG" \
+    "$APP_MANIFEST_REQUEST" "$APP_APK_REQUEST" "$APP_UPDATE_EVIDENCE" "$UPDATE_ATTEMPT_STARTED_AT" \
+    "$UPDATE_ATTEMPT_FINISHED_AT" <<'PY'
+import json, pathlib, os, sys
+out = pathlib.Path(sys.argv[1])
+out.parent.mkdir(parents=True, exist_ok=True)
+doc = {
+    "run_id": sys.argv[2], "profile": sys.argv[3], "attempt_nonce": sys.argv[4], "status": sys.argv[5],
+    "manifest_sha256": sys.argv[6], "apk_sha256": sys.argv[7], "manifest_size": int(sys.argv[8]),
+    "apk_size": int(sys.argv[9]), "request_log_read_back": sys.argv[10] == "1",
+    "manifest_get": sys.argv[11] == "1", "apk_get": sys.argv[12] == "1",
+    "app_flow_evidence": sys.argv[13] == "1", "started_at": int(sys.argv[14] or 0),
+    "finished_at": int(sys.argv[15] or 0), "pid": os.getpid(),
+}
+tmp = out.with_name(out.name + ".tmp")
+tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+os.replace(tmp, out)
+PY
+}
+
+load_update_state() {
+  [[ -s "$UPDATE_STATE_FILE" ]] || die "app update state is absent; refusing to infer a result"
+  local values
+  values="$(python3 - "$UPDATE_STATE_FILE" "$RUN_ID" "$PROFILE_ID" "$FIXTURE_ATTEMPT_NONCE" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+if doc.get("run_id") != sys.argv[2] or doc.get("profile") != sys.argv[3] or doc.get("attempt_nonce") != sys.argv[4]:
+    raise SystemExit("app update state identity mismatch")
+if not isinstance(doc.get("status"), str) or doc["status"] not in ("app-selfhosted-update-pass", "app-selfhosted-update-pending", "baseline-abi-blocked"):
+    raise SystemExit("app update state status is invalid")
+print(" ".join((doc["status"], str(int(doc.get("request_log_read_back") is True)), str(int(doc.get("manifest_get") is True)), str(int(doc.get("apk_get") is True)), str(int(doc.get("app_flow_evidence") is True)), str(int(doc.get("started_at", 0))), str(int(doc.get("finished_at", 0))), str(doc.get("manifest_sha256", "")), str(doc.get("apk_sha256", "")), str(int(doc.get("manifest_size", 0))), str(int(doc.get("apk_size", 0))))) )
+PY
+  )" || die "app update state cannot be read"
+  read -r APP_RESULT_STATUS APP_UPDATE_REQUEST_LOG APP_MANIFEST_REQUEST APP_APK_REQUEST APP_UPDATE_EVIDENCE UPDATE_ATTEMPT_STARTED_AT UPDATE_ATTEMPT_FINISHED_AT UPDATE_MANIFEST_SHA UPDATE_APK_SHA UPDATE_MANIFEST_SIZE UPDATE_APK_SIZE <<<"$values"
+  [[ -n "${AMNEZIA_ANDROID_RELEASE_MANIFEST:-}" && -f "$AMNEZIA_ANDROID_RELEASE_MANIFEST" ]] || die "candidate signed manifest is absent during receipt readback"
+  [[ "$(sha256sum "$AMNEZIA_ANDROID_RELEASE_MANIFEST" | awk '{print tolower($1)}')" == "$UPDATE_MANIFEST_SHA" ]] || die "candidate manifest changed after app update evidence"
+  [[ "$(artifact_hash release)" == "$UPDATE_APK_SHA" ]] || die "candidate APK digest changed after app update evidence"
+  [[ "$(stat -c %s "$AMNEZIA_ANDROID_RELEASE_MANIFEST")" == "$UPDATE_MANIFEST_SIZE" ]] || die "candidate manifest size changed after app update evidence"
+}
+
 install_baseline() {
   assert_owned_target
-  ensure_guest_network
+  ensure_guest_offline
   local apk="${1:-${AMNEZIA_ANDROID_BASELINE_APK:-}}"
   if [[ -z "$apk" ]]; then
     apk="${AMNEZIA_ANDROID_ARTIFACT_DIR:-${REPO_ROOT}/dist/selfhosted-local-artifacts/${BASELINE_VERSION}}/${BASELINE_APK_NAME}"
@@ -1022,6 +1156,7 @@ install_baseline() {
   local baseline_log="${RECEIPTS_DIR}/baseline-logcat-$(date -u +%Y%m%dT%H%M%SZ).txt"
   adb_cmd logcat -b all -d -t 2000 >"$baseline_log"
   assert_native_runtime "$baseline_log"
+  assert_no_fresh_app_signal11 "$baseline_log"
   local abi
   abi="$(adb_cmd shell dumpsys package "$PACKAGE" | grep -E 'primaryCpuAbi|legacyNativeLibraryDir' || true)"
   grep -q 'arm64-v8a' <<<"$abi" || log "package ABI is not exposed by dumpsys; Native Bridge evidence remains required"
@@ -1096,12 +1231,17 @@ test_update() {
   assert_owned_target
   ensure_guest_network
   local apk="$(resolve_apk "${1:-${AMNEZIA_ANDROID_RELEASE_APK:-}}")"
-  local expected_hash expected_code expected_version baseline_code
+  local expected_hash expected_manifest_sha expected_apk_path expected_code expected_version baseline_code expected_manifest_size expected_apk_size
   expected_hash="$(artifact_hash release)"
   expected_code="$(artifact_code release)"
   expected_version="$(artifact_version release)"
   baseline_code="$(artifact_code baseline)"
   [[ "$FIXTURE_ATTEMPT_NONCE" =~ ^[A-Za-z0-9._-]{16,128}$ ]] || die "real app update requires a fresh fixture attempt nonce"
+  [[ -n "${AMNEZIA_ANDROID_RELEASE_MANIFEST:-}" && -f "$AMNEZIA_ANDROID_RELEASE_MANIFEST" ]] || die "candidate signed manifest is required for app request evidence"
+  expected_manifest_sha="$(sha256sum "$AMNEZIA_ANDROID_RELEASE_MANIFEST" | awk '{print tolower($1)}')"
+  expected_apk_path="$(manifest_artifact_url release)"
+  expected_manifest_size="$(stat -c %s "$AMNEZIA_ANDROID_RELEASE_MANIFEST")"
+  expected_apk_size="$(stat -c %s "$apk")"
   assert_sha256 "$apk" "$expected_hash"
   assert_apk_arm64_elf "$apk"
   [[ "$(package_version_code)" == "$baseline_code" ]] || die "installer scenario requires baseline versionCode $baseline_code"
@@ -1110,6 +1250,7 @@ test_update() {
   mkdir -p "$run_dir"
   adb_cmd shell "test -f '${LAB_STATE_PATH}'" || die "baseline persistent marker is missing"
   reset_fixture_attempt_log
+  persist_update_state "app-selfhosted-update-pending" "$expected_manifest_sha" "$expected_hash" "$expected_manifest_size" "$expected_apk_size"
   tighten_fixture_to_app_uid
   # Launch the real application update flow. During this window, only the app's
   # package UID may reach the fixture endpoint. The fixture request log is read
@@ -1118,39 +1259,51 @@ test_update() {
   adb_cmd shell monkey -p "$PACKAGE" 1 >"${run_dir}/launch.txt" 2>&1
   if ! wait_ui_present 'Update' "${run_dir}/update-ui.xml" 45; then
     restore_fixture_peer_access
-    read_fixture_request_log "$run_dir" 2>/dev/null || true
-    if [[ "$EXPECTED_BASELINE_ABI_BLOCKER" == true && "$APP_MANIFEST_REQUEST" == 1 && "$APP_APK_REQUEST" == 0 ]]; then
+    read_fixture_request_log "$run_dir" "$expected_manifest_sha" "$expected_hash" "$expected_apk_path" "$expected_manifest_size" "$expected_apk_size" 2>/dev/null || true
+    adb_cmd logcat -b all -d -t 2000 >"${run_dir}/baseline-blocker-logcat.txt" || true
+    if [[ "$EXPECTED_BASELINE_ABI_BLOCKER" == true && "$APP_MANIFEST_REQUEST" == 1 && "$APP_APK_REQUEST" == 0 ]] \
+      && grep -Eiq 'org\.amnezia\.vpn.*(SIGILL|UnsatisfiedLinkError|dlopen failed|NativeBridge)' "${run_dir}/baseline-blocker-logcat.txt"; then
       APP_RESULT_STATUS=baseline-abi-blocked
+      persist_update_state "$APP_RESULT_STATUS" "$expected_manifest_sha" "$expected_hash" "$expected_manifest_size" "$expected_apk_size"
       cat >"${run_dir}/result.txt" <<EOF
 scenario=app-selfhosted-update
 status=EXPECTED_BASELINE_ABI_BLOCKED
 reason=baseline-arm64-native-bridge-blocked-before-apk-download
-manifest_get=verified
-apk_get=not-requested
+manifest_get=$APP_MANIFEST_REQUEST
+apk_get=$APP_APK_REQUEST
+abi_failure_evidence=verified
 EOF
       log "expected baseline ABI blocker: manifest GET observed, APK GET not requested"
       return 0
     fi
+    local pending_reason=supported-app-test-channel-not-configured
+    if [[ "$APP_MANIFEST_REQUEST" == 1 && "$APP_APK_REQUEST" == 0 ]]; then
+      pending_reason=unknown-manifest-only-failure
+    fi
     cat >"${run_dir}/result.txt" <<EOF
 scenario=app-selfhosted-update
 status=PENDING
-reason=supported-app-test-channel-not-configured
-diagnostic_manifest_get=verified
-diagnostic_apk_get=verified
+reason=$pending_reason
+request_log_read_back=$APP_UPDATE_REQUEST_LOG
+diagnostic_manifest_get=$APP_MANIFEST_REQUEST
+diagnostic_apk_get=$APP_APK_REQUEST
 EOF
+    persist_update_state "$APP_RESULT_STATUS" "$expected_manifest_sha" "$expected_hash" "$expected_manifest_size" "$expected_apk_size"
     log "app self-hosted update is pending: supported app test channel was not configured"
     return 0
   fi
   if ! wait_ui_text 'Update' "${run_dir}/update-ui-click.xml" 5; then
     restore_fixture_peer_access
-    read_fixture_request_log "$run_dir" 2>/dev/null || true
+    read_fixture_request_log "$run_dir" "$expected_manifest_sha" "$expected_hash" "$expected_apk_path" "$expected_manifest_size" "$expected_apk_size" 2>/dev/null || true
     cat >"${run_dir}/result.txt" <<EOF
 scenario=app-selfhosted-update
 status=PENDING
 reason=app-update-action-not-clickable
-diagnostic_manifest_get=verified
-diagnostic_apk_get=verified
+request_log_read_back=$APP_UPDATE_REQUEST_LOG
+diagnostic_manifest_get=$APP_MANIFEST_REQUEST
+diagnostic_apk_get=$APP_APK_REQUEST
 EOF
+    persist_update_state "$APP_RESULT_STATUS" "$expected_manifest_sha" "$expected_hash" "$expected_manifest_size" "$expected_apk_size"
     log "app self-hosted update is pending: app update action was not clickable"
     return 0
   fi
@@ -1171,12 +1324,16 @@ EOF
   ui_dump "${run_dir}/ui-after-confirm.xml" || die "could not capture installer UI"
   wait_ui_text 'Done' "${run_dir}/ui-done.xml" 90 || die "package installer did not show Done"
   restore_fixture_peer_access
-  read_fixture_request_log "$run_dir" || {
+  read_fixture_request_log "$run_dir" "$expected_manifest_sha" "$expected_hash" "$expected_apk_path" "$expected_manifest_size" "$expected_apk_size" || {
     cat >"${run_dir}/result.txt" <<EOF
 scenario=app-selfhosted-update
 status=PENDING
 reason=app-request-log-readback-did-not-confirm-manifest-and-apk-GET
+request_log_read_back=$APP_UPDATE_REQUEST_LOG
+manifest_get=$APP_MANIFEST_REQUEST
+apk_get=$APP_APK_REQUEST
 EOF
+    persist_update_state "$APP_RESULT_STATUS" "$expected_manifest_sha" "$expected_hash" "$expected_manifest_size" "$expected_apk_size"
     log "app self-hosted update is pending: fixture request log did not prove both app GETs"
     return 0
   }
@@ -1187,11 +1344,13 @@ EOF
   adb_cmd shell monkey -p "$PACKAGE" 1 >"${run_dir}/launch.txt" 2>&1
   adb_cmd logcat -b all -d -t 2000 >"${run_dir}/logcat.txt"
   assert_native_runtime "${run_dir}/logcat.txt"
+  assert_no_fresh_app_signal11 "${run_dir}/logcat.txt"
   cat >"${run_dir}/result.txt" <<EOF
 scenario=app-selfhosted-update
 real_app_server_update=diagnostic-fixture-http-readback-only
-manifest_get=verified
-apk_get=verified
+request_log_read_back=$APP_UPDATE_REQUEST_LOG
+manifest_get=$APP_MANIFEST_REQUEST
+apk_get=$APP_APK_REQUEST
 baseline_version=$(artifact_version baseline)
 release_version=$expected_version
 baseline_version_code=$baseline_code
@@ -1210,6 +1369,7 @@ EOF
 app_update_log_evidence=$APP_UPDATE_EVIDENCE
 app_selfhosted_update=$([ "$APP_UPDATE_EVIDENCE" = 1 ] && printf verified || printf pending)
 EOF
+  persist_update_state "$APP_RESULT_STATUS" "$expected_manifest_sha" "$expected_hash" "$expected_manifest_size" "$expected_apk_size"
   log "fixture diagnostic download and package-installer flow completed; app self-hosted update remains pending"
 }
 
@@ -1225,6 +1385,7 @@ collect() {
   capture_identity >"${out}/identity.txt"
   if [[ -n "${AMNEZIA_ANDROID_BASELINE_MANIFEST:-}" && -n "${AMNEZIA_ANDROID_RELEASE_MANIFEST:-}" ]] \
     && [[ "$(package_version_code)" == "$(artifact_code release)" ]]; then
+    load_update_state
     write_controller_receipt "$APP_RESULT_STATUS"
   fi
   log "collected $out"
@@ -1239,7 +1400,7 @@ write_controller_receipt() {
   baseline_version="$(artifact_version baseline)"
   candidate_version="$(artifact_version release)"
   fixture_receipt="$(find "$ARTIFACTS_DIR" -type f -name fixture-http-receipt.txt -print 2>/dev/null | sort | tail -n 1)"
-  FIXTURE_MARKER="${WORK_HOME}/fixture-network.json" FIXTURE_RECEIPT="$fixture_receipt" APP_REQUEST_LOG="$APP_UPDATE_REQUEST_LOG" APP_MANIFEST_REQUEST="$APP_MANIFEST_REQUEST" APP_APK_REQUEST="$APP_APK_REQUEST" APP_EVIDENCE="$APP_UPDATE_EVIDENCE" \
+  FIXTURE_MARKER="${WORK_HOME}/fixture-network.json" FIXTURE_RECEIPT="$fixture_receipt" APP_REQUEST_LOG="$APP_UPDATE_REQUEST_LOG" APP_MANIFEST_REQUEST="$APP_MANIFEST_REQUEST" APP_APK_REQUEST="$APP_APK_REQUEST" APP_EVIDENCE="$APP_UPDATE_EVIDENCE" APP_NONCE="$FIXTURE_ATTEMPT_NONCE" APP_STARTED_AT="$UPDATE_ATTEMPT_STARTED_AT" APP_FINISHED_AT="$UPDATE_ATTEMPT_FINISHED_AT" APP_MANIFEST_SHA="$UPDATE_MANIFEST_SHA" APP_APK_SHA="$UPDATE_APK_SHA" APP_MANIFEST_SIZE="$UPDATE_MANIFEST_SIZE" APP_APK_SIZE="$UPDATE_APK_SIZE" \
   python3 - "$CONTROLLER_RECEIPT" "$status" "${RUN_ARTIFACT:-candidate.apk}" "$baseline_version" "$baseline_code" "$baseline_sha" \
     "$candidate_version" "$candidate_code" "$candidate_sha" "$RUN_ID" "$PROFILE_ID" \
     "$AVD_NAME" "$SERIAL" "$(<"$PID_FILE")" "$(<"$UUID_FILE")" \
@@ -1256,6 +1417,14 @@ doc = {
     "profile": profile,
     "artifact": artifact,
     "artifact_sha256": cs,
+    "artifact_size": int(os.environ.get("APP_APK_SIZE", "0") or 0),
+    "artifact_role": "candidate",
+    "artifact_source": {
+        "transport": "android-adapter",
+        "kind": "app-selfhosted-update-http-readback",
+        "hash_verified": os.environ.get("APP_APK_REQUEST") == "1" and os.environ.get("APP_EVIDENCE") == "1",
+        "path": artifact,
+    },
     "baseline_version": bv,
     "candidate_version": cv,
     "observed_at": datetime.now(timezone.utc).isoformat(),
@@ -1284,14 +1453,20 @@ doc = {
         {"name": "baselineInstall", "passed": True},
         {"name": "baselineLaunchNative", "passed": True},
         {"name": "offlineGuestFirewall", "passed": True},
-        {"name": "fixtureManifestGet", "passed": True},
-        {"name": "fixtureApkGet", "passed": True},
+         {"name": "fixtureManifestGet", "passed": os.environ.get("APP_MANIFEST_REQUEST") == "1"},
+         {"name": "fixtureApkGet", "passed": os.environ.get("APP_APK_REQUEST") == "1"},
         {"name": "appSelfHostedUpdate", "passed": status == "app-selfhosted-update-pass", "status": "observed" if status == "app-selfhosted-update-pass" else "PENDING"},
         {"name": "candidateVersionReadback", "passed": status == "app-selfhosted-update-pass", "status": "observed" if status == "app-selfhosted-update-pass" else "PENDING"},
         {"name": "nativeBridgeAfterUpdate", "passed": status == "app-selfhosted-update-pass", "status": "observed" if status == "app-selfhosted-update-pass" else "PENDING"},
         {"name": "collect", "passed": True}
     ]
 }
+for step in doc["steps"]:
+    step.setdefault("transport", "android-adapter")
+    step.setdefault("artifact_sha256", cs)
+    step.setdefault("artifact_size", int(os.environ.get("APP_APK_SIZE", "0") or 0))
+    step.setdefault("artifact_role", "candidate")
+    step.setdefault("artifact_source", doc["artifact_source"])
 if pathlib.Path(os.environ.get("FIXTURE_RECEIPT", "")).is_file():
     doc["fixture_http"] = json.loads(pathlib.Path(os.environ["FIXTURE_RECEIPT"]).read_text(encoding="utf-8"))
 doc["app_request_log"] = {
@@ -1299,9 +1474,12 @@ doc["app_request_log"] = {
     "manifest_get": os.environ.get("APP_MANIFEST_REQUEST") == "1",
     "apk_get": os.environ.get("APP_APK_REQUEST") == "1",
     "app_flow_evidence": os.environ.get("APP_EVIDENCE") == "1",
+    "attempt_nonce": os.environ.get("APP_NONCE", ""),
+    "measurement_window": {"started_at": int(os.environ.get("APP_STARTED_AT", "0") or 0), "finished_at": int(os.environ.get("APP_FINISHED_AT", "0") or 0)},
+    "planned_readback": {"manifest_sha256": os.environ.get("APP_MANIFEST_SHA", ""), "manifest_size": int(os.environ.get("APP_MANIFEST_SIZE", "0") or 0), "apk_sha256": os.environ.get("APP_APK_SHA", ""), "apk_size": int(os.environ.get("APP_APK_SIZE", "0") or 0)},
 }
 if status == "baseline-abi-blocked":
-    doc["baseline_outcome"] = {"classification": "baseline-abi-blocked", "manifest_get": True, "apk_get": False}
+    doc["baseline_outcome"] = {"classification": "baseline-abi-blocked", "manifest_get": os.environ.get("APP_MANIFEST_REQUEST") == "1", "apk_get": os.environ.get("APP_APK_REQUEST") == "1"}
 path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
 }
@@ -1389,8 +1567,10 @@ reset_lab() {
   rm -f -- "$PID_FILE" "$UUID_FILE" "$SERIAL_FILE"
   rm -f -- "${AVD_HOME}/${AVD_NAME}.ini" "${AVD_HOME}/${AVD_NAME}.lab-profile" \
     "${WORK_HOME}/avd-identity.nonce" "${WORK_HOME}/network-gate.ok" \
-    "${WORK_HOME}/fixture-network.json" \
-    "${WORK_HOME}/offline-boot.json" "${WORK_HOME}/emulator.starttime" \
+     "${WORK_HOME}/fixture-network.json" \
+     "$ATTEMPT_STATE_FILE" "$UPDATE_STATE_FILE" \
+     "${WORK_HOME}/fixture-app-uid.txt" \
+     "${WORK_HOME}/offline-boot.json" "${WORK_HOME}/emulator.starttime" \
     "${WORK_HOME}/emulator-launcher.pid" \
     "${SERVER_PID_FILE}" "${SERVER_STARTTIME_FILE}"
   rm -rf -- "${AVD_HOME}/${AVD_NAME}.avd"

@@ -11,8 +11,6 @@ User=root
 Group=amnezia
 RuntimeDirectory=amnezia
 RuntimeDirectoryMode=0750
-StateDirectory=amnezia
-StateDirectoryMode=0750
 UMask=0007
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 NoNewPrivileges=true
@@ -27,7 +25,7 @@ Restart=on-failure
 RestartSec=2
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/run/amnezia /run/amneziawg /var/lib/amnezia
+ReadWritePaths=/run/amnezia /var/lib/amnezia
 ReadWritePaths=@CMAKE_INSTALL_FULL_BINDIR@
 
 [Install]

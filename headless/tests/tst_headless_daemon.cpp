@@ -54,7 +54,19 @@ public:
             m_interfacePresent = true;
         } else if (program == QStringLiteral("wg-quick")
                    && arguments.contains(QStringLiteral("down"))) {
+            if (failWireGuardDown) return { false, 1, QStringLiteral("simulated backend stop failure") };
             m_interfacePresent = false;
+        }
+        if (program == QStringLiteral("resolvectl")
+            && arguments.value(0) == QStringLiteral("dns")) {
+            m_dnsBindingPresent = true;
+        } else if (program == QStringLiteral("resolvectl")
+                   && arguments.value(0) == QStringLiteral("domain")) {
+            m_dnsBindingPresent = true;
+        } else if (program == QStringLiteral("resolvectl")
+                   && arguments.value(0) == QStringLiteral("revert")) {
+            if (failDnsRevert) return { false, 1, QStringLiteral("simulated DNS revert failure") };
+            m_dnsBindingPresent = false;
         }
         if (reentrantHook) {
             auto hook = std::move(reentrantHook);
@@ -81,8 +93,12 @@ public:
                 : CommandResult { false, 1, QStringLiteral("interface absent"), {} };
         }
         if (program == QStringLiteral("resolvectl")
-            && arguments == QStringList { QStringLiteral("status") }) {
-            return { true, 0, {}, resolverStatusOutput };
+            && (arguments == QStringList { QStringLiteral("status") }
+                || (arguments.size() == 2
+                    && arguments.at(0) == QStringLiteral("status")
+                    && !arguments.at(1).trimmed().isEmpty()))) {
+            return { true, 0, {}, m_dnsBindingPresent ? resolverStatusOutput
+                                                       : QStringLiteral("Global\n") };
         }
         if (program == QStringLiteral("wg")
             && arguments.contains(QStringLiteral("showconf"))) {
@@ -114,6 +130,9 @@ public:
     QList<Call> calls;
     bool m_wireGuardAvailable = false;
     bool m_interfacePresent = false;
+    bool m_dnsBindingPresent = true;
+    bool failDnsRevert = false;
+    bool failWireGuardDown = false;
     QString resolverStatusOutput;
     std::function<void()> reentrantHook;
 };
@@ -362,6 +381,8 @@ private slots:
             { QStringLiteral("name"), QStringLiteral("Work VPN") },
             { QStringLiteral("protocol"), QStringLiteral("wireguard") },
             { QStringLiteral("configPath"), configPath },
+            { QStringLiteral("dnsServers"), QJsonArray { QStringLiteral("10.8.1.53") } },
+            { QStringLiteral("dnsDomains"), QJsonArray { QStringLiteral("~.") } },
         };
         ProfileStore preloadedStore(storePath);
         QVERIFY(preloadedStore.load());
@@ -372,6 +393,9 @@ private slots:
         auto runner = std::make_shared<FakeCommandRunner>(true);
         Daemon daemon(socketPath, storePath, runner);
         QVERIFY(daemon.start());
+        runner->resolverStatusOutput = QStringLiteral(
+                "Global\nLink 7 (wg0)\n    DNS Servers: 10.8.1.53\n"
+                "    DNS Domain: ~.\n");
 
         QLocalSocket client;
         client.connectToServer(socketPath, QIODevice::ReadWrite);
@@ -398,11 +422,212 @@ private slots:
                                                     .value(QStringLiteral("result")).toObject();
         QCOMPARE(disconnectedStatus.value(QStringLiteral("state")).toString(),
                  QStringLiteral("disconnected"));
-        QCOMPARE(runner->calls.size(), 2);
+        QVERIFY(runner->calls.size() >= 6);
         const QStringList expectedUpArguments { QStringLiteral("up"), configPath };
         const QStringList expectedDownArguments { QStringLiteral("down"), configPath };
         QCOMPARE(runner->calls.constFirst().arguments, expectedUpArguments);
         QCOMPARE(runner->calls.constLast().arguments, expectedDownArguments);
+        const auto revert = std::find_if(runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.program == QStringLiteral("resolvectl")
+                && call.arguments == QStringList { QStringLiteral("revert"), QStringLiteral("wg0") };
+        });
+        QVERIFY(revert != runner->calls.cend());
+        QVERIFY(std::distance(runner->calls.cbegin(), revert)
+                < runner->calls.size() - 1);
+    }
+
+    void routingCleanupFailureKeepsBackendForRetry()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString socketPath = temporaryDirectory.filePath(QStringLiteral("amneziad.sock"));
+        const QString storePath = temporaryDirectory.filePath(QStringLiteral("profiles.json"));
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("work.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("[Interface]\n");
+        config.close();
+
+        ProfileStore store(storePath);
+        QVERIFY(store.load());
+        Profile profile;
+        QVERIFY(store.fromJson(QJsonObject {
+            { QStringLiteral("id"), QStringLiteral("work") },
+            { QStringLiteral("name"), QStringLiteral("Work VPN") },
+            { QStringLiteral("protocol"), QStringLiteral("wireguard") },
+            { QStringLiteral("configPath"), configPath },
+            { QStringLiteral("dnsServers"), QJsonArray { QStringLiteral("10.8.1.53") } },
+            { QStringLiteral("dnsDomains"), QJsonArray { QStringLiteral("~.") } },
+        }, profile));
+        QVERIFY(store.add(profile));
+
+        auto runner = std::make_shared<FakeCommandRunner>(true);
+        Daemon daemon(socketPath, storePath, runner);
+        QVERIFY(daemon.start());
+        runner->resolverStatusOutput = QStringLiteral(
+                "Global\nLink 7 (wg0)\n    DNS Servers: 10.8.1.53\n"
+                "    DNS Domain: ~.\n");
+        QLocalSocket client;
+        client.connectToServer(socketPath, QIODevice::ReadWrite);
+        QVERIFY(client.waitForConnected(1000));
+        sendRequest(client, Request {
+            Command::Connect, QStringLiteral("connect-1"),
+            QJsonObject { { QStringLiteral("profile"), QStringLiteral("work") } },
+        });
+        QVERIFY(readResponse(client).object().value(QStringLiteral("ok")).toBool());
+
+        runner->failDnsRevert = true;
+        sendRequest(client, Request { Command::Disconnect, QStringLiteral("disconnect-fail"), {} });
+        const QJsonObject failed = readResponse(client).object();
+        QCOMPARE(failed.value(QStringLiteral("ok")).toBool(), false);
+        QCOMPARE(failed.value(QStringLiteral("error")).toObject()
+                         .value(QStringLiteral("code")).toString(),
+                 QStringLiteral("dns_clear_failed"));
+        QVERIFY(std::none_of(runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.program == QStringLiteral("wg-quick")
+                && call.arguments.value(0) == QStringLiteral("down");
+        }));
+
+        sendRequest(client, Request { Command::Status, QStringLiteral("status-failed"), {} });
+        const QJsonObject status = readResponse(client).object()
+                                       .value(QStringLiteral("result")).toObject();
+        QCOMPARE(status.value(QStringLiteral("state")).toString(), QStringLiteral("cleanup_failed"));
+        QCOMPARE(status.value(QStringLiteral("activeProfile")).toString(), QStringLiteral("work"));
+
+        runner->failDnsRevert = false;
+        sendRequest(client, Request { Command::Disconnect, QStringLiteral("disconnect-retry"), {} });
+        const QJsonObject retried = readResponse(client).object()
+                                        .value(QStringLiteral("result")).toObject();
+        QCOMPARE(retried.value(QStringLiteral("state")).toString(), QStringLiteral("disconnected"));
+        client.disconnectFromServer();
+        daemon.stop();
+    }
+
+    void backendCleanupFailureRetainsBackendForBackendOnlyRetry()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString socketPath = temporaryDirectory.filePath(QStringLiteral("amneziad.sock"));
+        const QString storePath = temporaryDirectory.filePath(QStringLiteral("profiles.json"));
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("work.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("[Interface]\n");
+        config.close();
+
+        ProfileStore store(storePath);
+        QVERIFY(store.load());
+        Profile profile;
+        QVERIFY(store.fromJson(QJsonObject {
+            { QStringLiteral("id"), QStringLiteral("work") },
+            { QStringLiteral("name"), QStringLiteral("Work VPN") },
+            { QStringLiteral("protocol"), QStringLiteral("wireguard") },
+            { QStringLiteral("configPath"), configPath },
+            { QStringLiteral("dnsServers"), QJsonArray { QStringLiteral("10.8.1.53") } },
+            { QStringLiteral("dnsDomains"), QJsonArray { QStringLiteral("~.") } },
+        }, profile));
+        QVERIFY(store.add(profile));
+
+        auto runner = std::make_shared<FakeCommandRunner>(true);
+        Daemon daemon(socketPath, storePath, runner);
+        QVERIFY(daemon.start());
+        runner->resolverStatusOutput = QStringLiteral(
+                "Global\nLink 7 (wg0)\n    DNS Servers: 10.8.1.53\n"
+                "    DNS Domain: ~.\n");
+        QLocalSocket client;
+        client.connectToServer(socketPath, QIODevice::ReadWrite);
+        QVERIFY(client.waitForConnected(1000));
+        sendRequest(client, Request {
+            Command::Connect, QStringLiteral("connect-1"),
+            QJsonObject { { QStringLiteral("profile"), QStringLiteral("work") } },
+        });
+        QVERIFY(readResponse(client).object().value(QStringLiteral("ok")).toBool());
+
+        runner->failWireGuardDown = true;
+        sendRequest(client, Request { Command::Disconnect, QStringLiteral("disconnect-fail"), {} });
+        const QJsonObject failed = readResponse(client).object();
+        QCOMPARE(failed.value(QStringLiteral("ok")).toBool(), false);
+        QCOMPARE(failed.value(QStringLiteral("error")).toObject()
+                         .value(QStringLiteral("code")).toString(),
+                 QStringLiteral("disconnect_failed"));
+        const qsizetype revertCountAfterFailure = std::count_if(
+                runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.program == QStringLiteral("resolvectl")
+                && call.arguments.value(0) == QStringLiteral("revert");
+        });
+
+        runner->failWireGuardDown = false;
+        sendRequest(client, Request { Command::Disconnect, QStringLiteral("disconnect-retry"), {} });
+        const QJsonObject retried = readResponse(client).object()
+                                        .value(QStringLiteral("result")).toObject();
+        QCOMPARE(retried.value(QStringLiteral("state")).toString(), QStringLiteral("disconnected"));
+        QCOMPARE(std::count_if(runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.program == QStringLiteral("resolvectl")
+                && call.arguments.value(0) == QStringLiteral("revert");
+        }), revertCountAfterFailure);
+        client.disconnectFromServer();
+        daemon.stop();
+    }
+
+    void gracefulStopPreservesReceiptWhenRoutingCleanupFails()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString socketPath = temporaryDirectory.filePath(QStringLiteral("amneziad.sock"));
+        const QString storePath = temporaryDirectory.filePath(QStringLiteral("profiles.json"));
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("work.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("[Interface]\n");
+        config.close();
+
+        ProfileStore store(storePath);
+        QVERIFY(store.load());
+        Profile profile;
+        QVERIFY(store.fromJson(QJsonObject {
+            { QStringLiteral("id"), QStringLiteral("work") },
+            { QStringLiteral("name"), QStringLiteral("Work VPN") },
+            { QStringLiteral("protocol"), QStringLiteral("wireguard") },
+            { QStringLiteral("configPath"), configPath },
+            { QStringLiteral("dnsServers"), QJsonArray { QStringLiteral("10.8.1.53") } },
+            { QStringLiteral("dnsDomains"), QJsonArray { QStringLiteral("~.") } },
+        }, profile));
+        QVERIFY(store.add(profile));
+
+        auto runner = std::make_shared<FakeCommandRunner>(true);
+        Daemon daemon(socketPath, storePath, runner);
+        QVERIFY(daemon.start());
+        runner->resolverStatusOutput = QStringLiteral(
+                "Global\nLink 7 (wg0)\n    DNS Servers: 10.8.1.53\n"
+                "    DNS Domain: ~.\n");
+        QLocalSocket client;
+        client.connectToServer(socketPath, QIODevice::ReadWrite);
+        QVERIFY(client.waitForConnected(1000));
+        sendRequest(client, Request {
+            Command::Connect, QStringLiteral("connect-1"),
+            QJsonObject { { QStringLiteral("profile"), QStringLiteral("work") } },
+        });
+        QVERIFY(readResponse(client).object().value(QStringLiteral("ok")).toBool());
+
+        runner->failDnsRevert = true;
+        daemon.stop();
+        QVERIFY(std::none_of(runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.program == QStringLiteral("wg-quick")
+                && call.arguments.value(0) == QStringLiteral("down");
+        }));
+        QFile receipt(temporaryDirectory.filePath(QStringLiteral("managed-routes.json")));
+        QVERIFY(receipt.exists());
+        QVERIFY(receipt.open(QIODevice::ReadOnly));
+        QVERIFY(QJsonDocument::fromJson(receipt.readAll()).object()
+                        .value(QStringLiteral("dnsInterface")).toString() == QStringLiteral("wg0"));
+        receipt.close();
+
+        runner->failDnsRevert = false;
+        daemon.stop();
+        QVERIFY(std::any_of(runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.program == QStringLiteral("wg-quick")
+                && call.arguments.value(0) == QStringLiteral("down");
+        }));
     }
 
     void reentrantMutatingRequestIsRejectedButStatusRemainsReadable()

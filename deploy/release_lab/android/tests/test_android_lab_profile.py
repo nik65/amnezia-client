@@ -11,6 +11,9 @@ import base64
 import re
 import subprocess
 import sys
+import threading
+import time
+import urllib.request
 import pytest
 from pathlib import Path
 
@@ -30,7 +33,7 @@ def test_profile_is_pinned_for_arm_translation() -> None:
     assert profile["coverage"] == "translated-arm64"
     assert profile["host"]["default_workspace_root"] == "/var/lib/amnezia-release-lab/android"
     assert profile["host"]["emulator_port"] == 5556
-    assert profile["host"]["gpu_mode"] == "software"
+    assert profile["host"]["gpu_mode"] == "swangle"
     assert profile["sdk"]["package_revision_policy"].startswith("resolve-current-official")
     assert profile["guest"]["abi_under_test"] == "arm64-v8a"
     assert profile["guest"]["host_abi"] == "x86_64"
@@ -42,6 +45,9 @@ def test_profile_is_pinned_for_arm_translation() -> None:
     assert profile["network"]["fixture_attempt_nonce_env"] == "AMNEZIA_ANDROID_UPDATE_ATTEMPT_NONCE"
     assert profile["network"]["fixture_guest_endpoint_source"] == "same-run-planned-server-context"
     assert profile["network"]["fixture_runtime_gateway"] == "10.0.2.2-observed-inside-guest"
+    assert profile["network"]["fixture_request_log_max_bytes"] == 1048576
+    assert profile["network"]["fixture_request_log_max_records"] == 4096
+    assert profile["network"]["fixture_attempt_reset"] == "single-use-run-and-nonce-bound"
     assert profile["artifacts"]["release_version_code"] == 2186
     assert profile["artifacts"]["previous_version_code"] == 2185
     assert re.fullmatch(r"[0-9a-f]{64}", profile["artifacts"]["release_sha256"])
@@ -86,15 +92,36 @@ def test_driver_is_scoped_and_fail_closed() -> None:
     assert "APP_UPDATE_REQUEST_LOG" in source
     assert "tighten_fixture_to_app_uid" in source
     assert "request-log?nonce=" in source
+    assert "&run_id=${RUN_ID}" in source
+    assert "app-update-state.json" in source
+    assert "fixture-attempt-state.json" in source
+    assert "persist_update_state" in source
+    assert "load_update_state" in source
+    assert "-d 10.0.2.2 -p tcp --dport ${FIXTURE_HOST_PORT} -m owner --uid-owner" in source
+    assert "expected_manifest_sha" in source
+    assert "expected_manifest_size" in source
+    assert 'row.get("method") == "GET"' in source
+    assert "content_length" in source
+    assert "request-log exceeds bounded" in source
+    assert "abi_failure_evidence=verified" in source
+    assert "unknown-manifest-only-failure" in source
+    assert "# Probe is an OS/emulator readiness check." in source
+    probe_block = source[source.index("probe()") : source.index("resolve_apk()")]
+    assert "ensure_guest_offline" in probe_block
+    assert '"name": "fixtureManifestGet", "passed": True' not in source
+    assert '"name": "fixtureApkGet", "passed": True' not in source
     assert "run requires baseline-apk candidate-apk baseline-manifest candidate-manifest" in source
     assert "ensure_guest_offline" in source
     assert "emulator.starttime" in source
     assert "-qemu -uuid" in source
-    assert "GPU_MODE=\"${AMNEZIA_ANDROID_GPU_MODE:-software}\"" in source
+    assert "GPU_MODE=\"${AMNEZIA_ANDROID_GPU_MODE:-swangle}\"" in source
     assert "-gpu \"$GPU_MODE\"" in source
     assert "getprop ro.boot.qemu.avd_name" in source
     assert "getprop ro.dalvik.vm.native.bridge" in source
     assert "libndk_translation" in source
+    assert "assert_no_fresh_app_signal11" in source
+    assert 'assert_no_fresh_app_signal11 "$baseline_log"' in source
+    assert 'assert_no_fresh_app_signal11 "${run_dir}/logcat.txt"' in source
     assert "--abi arm64-v8a" in source
     assert "adb kill-server" not in source
     assert "host_routes_or_firewall" in source
@@ -121,12 +148,12 @@ def test_driver_has_no_shell_syntax_errors_when_bash_is_available() -> None:
     # A Windows Python process cannot pass a drive-letter path to WSL bash.
     # The same check runs natively in the Linux CI/release environment.
     if ":" in str(DRIVER):
-        return
+        pytest.skip("bash syntax check requires a POSIX bash runtime")
     bash = "bash"
     try:
         result = subprocess.run([bash, "-n", str(DRIVER)], capture_output=True, text=True)
     except FileNotFoundError:
-        return
+        pytest.skip("bash executable is unavailable")
     assert result.returncode == 0, result.stderr
 
 
@@ -152,7 +179,7 @@ def test_scenarios_keep_update_and_network_gates_separate() -> None:
     assert "adb install -r" in upgrade["forbidden_shortcuts"]
     assert upgrade["network"]["required_for_this_scenario"] is False
     assert upgrade["real_app_server_update"] == "same-run-app-request-log-readback"
-    assert upgrade["expected_baseline_outcome"] == "baseline-abi-blocked"
+    assert upgrade["expected_baseline_outcome"] == "baseline-abi-blocked-only-with-live-native-error"
     assert upgrade["controller_receipt"]["required_status"] == "app-selfhosted-update-pass"
     assert upgrade["controller_receipt"]["origin"] == "guest"
     assert upgrade["controller_receipt"]["transport"] == "android-adapter"
@@ -163,7 +190,7 @@ def test_scenarios_keep_update_and_network_gates_separate() -> None:
 
 def test_reference_manifest_artifact_matches_pinned_receipt() -> None:
     if not REFERENCE_MANIFEST.exists():
-        return
+        pytest.skip("reference manifest is unavailable in this checkout")
     doc = json.loads(REFERENCE_MANIFEST.read_text(encoding="utf-8"))
     encoded = doc["payload"] + "=" * (-len(doc["payload"]) % 4)
     payload = json.loads(base64.b64decode(encoded).decode("utf-8"))
@@ -186,6 +213,20 @@ def test_consumer_fixture_rejects_unsigned_manifest(tmp_path: Path) -> None:
         sys.path.remove(str(ROOT))
 
 
+def test_consumer_fixture_binds_exact_manifest_artifact_path() -> None:
+    sys.path.insert(0, str(ROOT))
+    try:
+        from consumer_fixture_server import artifact_path_from_manifest
+        digest = "a" * 64
+        payload = {"platforms": {"android-arm64-v8a": {"url": f"files/artifacts/{digest}/AmneziaVPN_1.0_android9%2B_arm64-v8a.apk"}}}
+        document = {"payload": base64.b64encode(json.dumps(payload).encode()).decode()}
+        assert artifact_path_from_manifest(document, digest) == f"/files/artifacts/{digest}/AmneziaVPN_1.0_android9%2B_arm64-v8a.apk"
+        with pytest.raises(SystemExit):
+            artifact_path_from_manifest(document, "b" * 64)
+    finally:
+        sys.path.remove(str(ROOT))
+
+
 def test_consumer_fixture_records_run_bound_hash_readback() -> None:
     source = (ROOT / "consumer_fixture_server.py").read_text(encoding="utf-8")
     assert "X-Amnezia-Run-Id" in source
@@ -193,3 +234,32 @@ def test_consumer_fixture_records_run_bound_hash_readback() -> None:
     assert '"run_id": fixture["run_id"]' in source
     assert '"sha256": sha256_value' in source
     assert 'parser.add_argument("--attempt-nonce", required=True)' in source
+    assert '"attempt_nonce": fixture["attempt_nonce"]' in source
+    assert '"timestamp": time.time()' in source
+    assert 'prefix = f"/files/artifacts/{expected_sha256.lower()}/"' in source
+    assert "MAX_REQUEST_LOG_BYTES" in source
+    assert "MAX_REQUEST_RECORDS" in source
+    assert "attempt reset already consumed" in source
+    assert 'run_id = query.get("run_id", [""])[0]' in source
+
+def test_real_fixture_internal_health_is_unlogged_and_android_health_is_only_cleared_row(tmp_path: Path) -> None:
+    sys.path.insert(0,str(ROOT))
+    try:
+        from consumer_fixture_server import FixtureHandler,ThreadingHTTPServer
+        log=tmp_path/"requests.jsonl";log.write_bytes(b"")
+        server=ThreadingHTTPServer(("127.0.0.1",0),FixtureHandler);server.fixture={"run_id":"run","attempt_nonce":"n"*48,"request_log":log,"request_lock":threading.Lock(),"request_count":0,"request_log_limited":False,"reset_used":False}
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start();base=f"http://127.0.0.1:{server.server_port}"
+        internal=base+"/__lab__/health?run_id=run&nonce="+"n"*48
+        assert json.loads(urllib.request.urlopen(internal,timeout=2).read())["status"]=="ok"
+        assert json.loads(urllib.request.urlopen(internal,timeout=2).read())["status"]=="ok" and log.read_bytes()==b""
+        android=urllib.request.urlopen(base+"/healthz",timeout=2).read()
+        for _ in range(20):
+            rows=log.read_text().splitlines()
+            if rows:break
+            time.sleep(.01)
+        assert len(rows)==1 and json.loads(rows[0])["sha256"]==__import__("hashlib").sha256(android).hexdigest()
+        reset=base+"/__lab__/attempt/reset?run_id=run&nonce="+"n"*48
+        assert json.loads(urllib.request.urlopen(reset,timeout=2).read())=={"status":"reset","run_id":"run"} and log.read_bytes()==b""
+    finally:
+        if "server" in locals():server.shutdown();server.server_close();thread.join(timeout=2)
+        sys.path.remove(str(ROOT))

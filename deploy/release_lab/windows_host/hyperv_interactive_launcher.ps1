@@ -9,6 +9,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
+Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
 function Fail([string] $Message) { throw "hyperv-interactive-launcher: $Message" }
 if ($RunId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$' -or $CaseId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$') { Fail 'run/case identity is invalid' }
 $markerPath = Join-Path $GuestRoot 'run-marker.txt'
@@ -25,11 +26,18 @@ if ($explorer.Count -ne 1 -or [int]$explorer[0].SessionId -ne [System.Diagnostic
 $procInfo = @(Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop)[0]
 $request = [ordered]@{
     schema = 1; run_id = $RunId; case_id = $CaseId; profile = 'windows-x64'; state = 'waiting';
-    artifact_sha256 = $artifactHash; launcher_path = $MyInvocation.MyCommand.Path; launcher_sha256 = (Get-FileHash -LiteralPath $MyInvocation.MyCommand.Path -Algorithm SHA256).Hash.ToLowerInvariant();
+    artifact_sha256 = $artifactHash; artifact_path = [IO.Path]::GetFullPath($ArtifactPath); launcher_path = $MyInvocation.MyCommand.Path; launcher_sha256 = (Get-FileHash -LiteralPath $MyInvocation.MyCommand.Path -Algorithm SHA256).Hash.ToLowerInvariant();
     launcher_pid = [int]$PID; launcher_start_time = [string]$procInfo.CreationDate; launcher_session_id = [int][System.Diagnostics.Process]::GetCurrentProcess().SessionId;
     launcher_user = [string]$identity.Name; launcher_user_sid = [string]$identity.User.Value; installer_pid = $null; created_at = [DateTime]::UtcNow.ToString('o')
 }
 $tmp = "$PendingPath.tmp"; $request | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding UTF8; Move-Item -LiteralPath $tmp -Destination $PendingPath -Force
 $process = Start-Process -FilePath $ArtifactPath -ArgumentList @('--accept-messages','--accept-licenses','--confirm-command','install','AmneziaSelfHostedUpdate=true') -PassThru -WindowStyle Normal
-$request.installer_pid = [int]$process.Id; $request.state = 'waiting'; $tmp = "$PendingPath.tmp"; $request | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding UTF8; Move-Item -LiteralPath $tmp -Destination $PendingPath -Force
+$request.installer_pid = [int]$process.Id; $request.installer_start_time = [string]$process.StartTime.ToUniversalTime().ToString('o'); $request.state = 'running'; $tmp = "$PendingPath.tmp"; $request | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding UTF8; Move-Item -LiteralPath $tmp -Destination $PendingPath -Force
+$completed = $process.WaitForExit(900000)
+if (-not $completed) {
+    $request.state = 'timeout'; $request.exit_code = $null; $request.completed_at = [DateTime]::UtcNow.ToString('o'); $tmp = "$PendingPath.tmp"; $request | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding UTF8; Move-Item -LiteralPath $tmp -Destination $PendingPath -Force
+    Fail 'interactive installer exceeded the bounded 15 minute timeout'
+}
+$request.state = 'completed'; $request.exit_code = [int]$process.ExitCode; $request.completed_at = [DateTime]::UtcNow.ToString('o'); $tmp = "$PendingPath.tmp"; $request | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding UTF8; Move-Item -LiteralPath $tmp -Destination $PendingPath -Force
+if ([int]$process.ExitCode -ne 0) { Fail "interactive installer exited with $($process.ExitCode)" }
 $request | ConvertTo-Json -Compress

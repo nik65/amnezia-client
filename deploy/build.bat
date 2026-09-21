@@ -131,6 +131,8 @@ goto :eof
 
 :: bakes IFW installer
 :do_ifw
+:: drop stale CPack staging so a leftover/locked directory cannot break packaging
+if exist "%BUILD_DIR%\_CPack_Packages" rmdir /s /q "%BUILD_DIR%\_CPack_Packages"
 @echo on
 cd "%BUILD_DIR%" && cpack -G IFW -D "QTIFWDIR=%QIF_ROOT_PATH%" || goto :fail
 @echo off
@@ -138,6 +140,8 @@ goto :eof
 
 :: bakes WIX installer
 :do_wix
+:: drop stale CPack staging so a leftover/locked directory cannot break packaging
+if exist "%BUILD_DIR%\_CPack_Packages" rmdir /s /q "%BUILD_DIR%\_CPack_Packages"
 @echo on
 cd "%BUILD_DIR%" && cpack -G WIX -D "WIX_BIN_DIR=%WIX_ROOT_PATH%" || goto :fail
 @echo off
