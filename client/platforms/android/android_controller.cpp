@@ -365,6 +365,43 @@ bool AndroidController::isPlay()
     return callActivityMethod<jboolean>("isPlay", "()Z");
 }
 
+QJsonObject AndroidController::getSubscriptionPlans()
+{
+    QJniObject plans = callActivityMethod<jstring>("getSubscriptionPlans", "()Ljava/lang/String;");
+    return QJsonDocument::fromJson(plans.toString().toUtf8()).object();
+}
+
+QJsonObject AndroidController::queryPurchases()
+{
+    QJniObject purchases = callActivityMethod<jstring>("queryPurchases", "()Ljava/lang/String;");
+    return QJsonDocument::fromJson(purchases.toString().toUtf8()).object();
+}
+
+QJsonObject AndroidController::acknowledgePurchase(const QString &purchaseToken)
+{
+    QJniObject result = callActivityMethod<jstring, jstring>(
+        "acknowledgePurchase", "(Ljava/lang/String;)Ljava/lang/String;",
+        QJniObject::fromString(purchaseToken).object<jstring>());
+    return QJsonDocument::fromJson(result.toString().toUtf8()).object();
+}
+
+QJsonObject AndroidController::purchaseSubscription(const QString &offerToken)
+{
+    QJniObject result = callActivityMethod<jstring, jstring>(
+        "purchaseSubscription", "(Ljava/lang/String;)Ljava/lang/String;",
+        QJniObject::fromString(offerToken).object<jstring>());
+    return QJsonDocument::fromJson(result.toString().toUtf8()).object();
+}
+
+QJsonObject AndroidController::upgradeSubscription(const QString &offerToken, const QString &oldPurchaseToken)
+{
+    QJniObject result = callActivityMethod<jstring, jstring, jstring>(
+        "upgradeSubscription", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+        QJniObject::fromString(offerToken).object<jstring>(),
+        QJniObject::fromString(oldPurchaseToken).object<jstring>());
+    return QJsonDocument::fromJson(result.toString().toUtf8()).object();
+}
+
 int AndroidController::installApk(const QString &fileName)
 {
     return callActivityMethod<jint>("installApk", "(Ljava/lang/String;)I",
