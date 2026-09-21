@@ -748,6 +748,7 @@ void CoreController::checkForAppUpdates()
         return;
     }
     m_updateController->checkForUpdates();
+}
 
 void CoreController::updateTranslator(const QLocale &locale)
 {

@@ -92,6 +92,7 @@ signals:
     void escapePressed();
     void closeTopDrawer();
 
+    void showChangelogDrawer();
     void imeHeightChanged(int height);
     void safeAreaTopMarginChanged();
     void safeAreaBottomMarginChanged();

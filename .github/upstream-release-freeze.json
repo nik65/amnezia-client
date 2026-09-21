@@ -1,13 +1,13 @@
 {
-  "baselineTag": "5.0.1.5",
+  "baselineTag": "5.0.3.0",
   "frozen": true,
-  "frozenAt": "2026-08-24T20:32:35+00:00",
-  "frozenReleaseSha": "7d4f3e0f5090b74903609179653d1f669d2ad08a",
-  "frozenTag": "5.0.1.5",
-  "lastSyncedUpstreamDev": "7d4f3e0f5090b74903609179653d1f669d2ad08a",
-  "latestObservedTag": "5.0.1.5",
+  "frozenAt": "2026-09-21T17:24:31+00:00",
+  "frozenReleaseSha": "de93650a90739b87bb47a632872ea9d0adc9412f",
+  "frozenTag": "5.0.3.0",
+  "lastSyncedUpstreamDev": "94b51df24790bf52427afe82d81c87a95460bdfd",
+  "latestObservedTag": "5.0.3.0",
   "schema": 1,
   "targetBranch": "dev",
-  "updatedAt": "2026-08-24T20:32:35+00:00",
+  "updatedAt": "2026-09-21T17:24:31+00:00",
   "upstreamRepo": "amnezia-vpn/amnezia-client"
 }

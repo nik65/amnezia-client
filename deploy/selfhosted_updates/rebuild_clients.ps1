@@ -61,7 +61,7 @@ if ([string]::IsNullOrWhiteSpace($LogDir)) {
 
 function Get-ProjectVersion {
     $cmakeLists = Get-Content -LiteralPath (Join-Path $RepoRoot "CMakeLists.txt") -Raw
-    if ($cmakeLists -notmatch "set\(AMNEZIAVPN_VERSION\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\)") {
+    if ($cmakeLists -notmatch "set\(\s*AMNEZIAVPN_VERSION\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)(?:\s+[^)]*)?\)") {
         throw "Could not read AMNEZIAVPN_VERSION from CMakeLists.txt"
     }
     return $Matches[1]

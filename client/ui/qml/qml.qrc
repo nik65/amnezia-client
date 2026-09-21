@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/ui/qml">
+        <file>Components/ChangelogDrawer.qml</file>
         <file>Components/UpdateSupportDrawer.qml</file>
         <file>Components/AdLabel.qml</file>
         <file>Components/ConnectButton.qml</file>
@@ -129,7 +130,6 @@
         <file>Pages2/PageSettingsSplitTunneling.qml</file>
         <file>Pages2/PageSettingsNewsNotifications.qml</file>
         <file>Pages2/PageSettingsNewsDetail.qml</file>
-        <file>Pages2/PageUpdate.qml</file>
         <file>Pages2/PageProtocolAwgClientSettings.qml</file>
         <file>Pages2/PageProtocolWireGuardClientSettings.qml</file>
         <file>Pages2/PageSetupWizardApiFreeInfo.qml</file>
