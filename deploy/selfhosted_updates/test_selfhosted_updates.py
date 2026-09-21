@@ -3377,8 +3377,8 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("go build -v", tun2socks_recipe)
         self.assertIn('env="conanbuild"', tun2socks_recipe)
 
-        self.assertIn('version = "1.0.2"', libxray_recipe)
-        self.assertIn('"1.0.2":', libxray_conandata)
+        self.assertIn('version = "1.0.3"', libxray_recipe)
+        self.assertIn('patches/0001-add-16kb-page-support-amnezia-libxray.patch', libxray_conandata)
 
         for key in (
             "sendPayload",
