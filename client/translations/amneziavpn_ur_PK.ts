@@ -6,47 +6,47 @@
     <message>
         <location filename="../ui/controllers/allowedDnsUiController.cpp" line="33"/>
         <source>The address does not look like a valid IP address</source>
-        <translation type="unfinished"></translation>
+        <translation>یہ پتہ ایک درست IP پتے جیسا نہیں لگتا</translation>
     </message>
     <message>
         <location filename="../ui/controllers/allowedDnsUiController.cpp" line="38"/>
         <source>New DNS server added: %1</source>
-        <translation type="unfinished"></translation>
+        <translation>نیا DNS سرور شامل ہو گیا: %1</translation>
     </message>
     <message>
         <location filename="../ui/controllers/allowedDnsUiController.cpp" line="40"/>
         <source>DNS server already exists: %1</source>
-        <translation type="unfinished"></translation>
+        <translation>DNS سرور پہلے ہی موجود ہے: %1</translation>
     </message>
     <message>
         <location filename="../ui/controllers/allowedDnsUiController.cpp" line="49"/>
         <source>DNS server removed: %1</source>
-        <translation type="unfinished"></translation>
+        <translation>DNS سرور ہٹا دیا گیا: %1</translation>
     </message>
     <message>
         <location filename="../ui/controllers/allowedDnsUiController.cpp" line="56"/>
         <source>Can&apos;t open file: %1</source>
-        <translation type="unfinished">فائل نہیں کھول سکتا: %1</translation>
+        <translation>فائل نہیں کھول سکتا: %1</translation>
     </message>
     <message>
         <location filename="../ui/controllers/allowedDnsUiController.cpp" line="62"/>
         <source>Failed to parse JSON data from file: %1</source>
-        <translation type="unfinished">فائل سے JSON ڈیٹا پارس کرنے میں ناکامی: %1</translation>
+        <translation>فائل سے JSON ڈیٹا پارس کرنے میں ناکامی: %1</translation>
     </message>
     <message>
         <location filename="../ui/controllers/allowedDnsUiController.cpp" line="67"/>
         <source>The JSON data is not an array in file: %1</source>
-        <translation type="unfinished">فائل میں JSON ڈیٹا ایک ایرے نہیں ہے: %1</translation>
+        <translation>فائل میں JSON ڈیٹا ایک ایرے نہیں ہے: %1</translation>
     </message>
     <message>
         <location filename="../ui/controllers/allowedDnsUiController.cpp" line="86"/>
         <source>Import completed</source>
-        <translation type="unfinished">واردات مکمل ہوگئی ہے</translation>
+        <translation>واردات مکمل ہوگئی ہے</translation>
     </message>
     <message>
         <location filename="../ui/controllers/allowedDnsUiController.cpp" line="107"/>
         <source>Export completed</source>
-        <translation type="unfinished">ایکسپورٹ مکمل ہوگیا</translation>
+        <translation>ایکسپورٹ مکمل ہوگیا</translation>
     </message>
 </context>
 <context>
@@ -55,17 +55,17 @@
         <location filename="../ui/models/api/apiAccountInfoModel.cpp" line="33"/>
         <location filename="../ui/models/api/apiAccountInfoModel.cpp" line="38"/>
         <source>Active</source>
-        <translation type="unfinished"></translation>
+        <translation>فعال</translation>
     </message>
     <message>
         <location filename="../ui/models/api/apiAccountInfoModel.cpp" line="37"/>
         <source>Inactive</source>
-        <translation type="unfinished"></translation>
+        <translation>غیر فعال</translation>
     </message>
     <message>
         <location filename="../ui/models/api/apiAccountInfoModel.cpp" line="51"/>
         <source>%1 out of %2</source>
-        <translation type="unfinished"></translation>
+        <translation>%2 میں سے %1</translation>
     </message>
 </context>
 <context>
@@ -73,26 +73,7 @@
     <message>
         <location filename="../ui/models/api/apiServicesModel.cpp" line="77"/>
         <source>&lt;p&gt;&lt;a style=&quot;color: #EB5757;&quot;&gt;Not available in your region. If you have VPN enabled, disable it, return to the previous screen, and try again.&lt;/a&gt;</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
-    <name>AppSplitTunnelingController</name>
-    <message>
-        <source>Application added: %1</source>
-        <translation type="vanished">ایپلیکیشن شامل ہوگیا: %1</translation>
-    </message>
-    <message>
-        <source>The application has already been added</source>
-        <translation type="vanished">یہ ایپلیکیشن پہلے سے شامل کیا گیا ہے</translation>
-    </message>
-    <message>
-        <source>The selected applications have been added</source>
-        <translation type="vanished">منتخب شدہ ایپلیکیشنز شامل کردی گئی ہیں</translation>
-    </message>
-    <message>
-        <source>Application removed: %1</source>
-        <translation type="vanished">ایپلیکیشن ہٹا دی گئی: %1</translation>
+        <translation>&lt;p&gt;&lt;a style=&quot;color: #EB5757;&quot;&gt;آپ کے علاقے میں دستیاب نہیں ہے۔ اگر آپ کا VPN آن ہے تو اسے بند کریں، پچھلی اسکرین پر واپس جائیں اور دوبارہ کوشش کریں۔&lt;/a&gt;</translation>
     </message>
 </context>
 <context>
@@ -100,22 +81,22 @@
     <message>
         <location filename="../ui/controllers/appSplitTunnelingUiController.cpp" line="28"/>
         <source>Application added: %1</source>
-        <translation type="unfinished">ایپلیکیشن شامل ہوگیا: %1</translation>
+        <translation>ایپلیکیشن شامل ہوگیا: %1</translation>
     </message>
     <message>
         <location filename="../ui/controllers/appSplitTunnelingUiController.cpp" line="30"/>
         <source>The application has already been added</source>
-        <translation type="unfinished">یہ ایپلیکیشن پہلے سے شامل کیا گیا ہے</translation>
+        <translation>یہ ایپلیکیشن پہلے سے شامل کیا گیا ہے</translation>
     </message>
     <message>
         <location filename="../ui/controllers/appSplitTunnelingUiController.cpp" line="40"/>
         <source>The selected applications have been added</source>
-        <translation type="unfinished">منتخب شدہ ایپلیکیشنز شامل کردی گئی ہیں</translation>
+        <translation>منتخب شدہ ایپلیکیشنز شامل کردی گئی ہیں</translation>
     </message>
     <message>
         <location filename="../ui/controllers/appSplitTunnelingUiController.cpp" line="50"/>
         <source>Application removed: %1</source>
-        <translation type="unfinished">ایپلیکیشن ہٹا دی گئی: %1</translation>
+        <translation>ایپلیکیشن ہٹا دی گئی: %1</translation>
     </message>
 </context>
 <context>
@@ -123,40 +104,27 @@
     <message>
         <location filename="../ui/qml/Controls2/CaptchaDialogType.qml" line="18"/>
         <source>Enter the digits from the image to continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھنے کے لیے تصویر میں دیے گئے ہندسے درج کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Controls2/CaptchaDialogType.qml" line="199"/>
+        <location filename="../ui/qml/Controls2/CaptchaDialogType.qml" line="228"/>
         <source>Digits from the image</source>
-        <translation type="unfinished"></translation>
+        <translation>تصویر میں دیے گئے ہندسے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Controls2/CaptchaDialogType.qml" line="202"/>
+        <location filename="../ui/qml/Controls2/CaptchaDialogType.qml" line="231"/>
         <source>_ _ _ _ _ _</source>
-        <translation type="unfinished"></translation>
+        <translation>_ _ _ _ _ _</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Controls2/CaptchaDialogType.qml" line="224"/>
+        <location filename="../ui/qml/Controls2/CaptchaDialogType.qml" line="254"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Controls2/CaptchaDialogType.qml" line="241"/>
+        <location filename="../ui/qml/Controls2/CaptchaDialogType.qml" line="271"/>
         <source>Close</source>
-        <translation type="unfinished">بند</translation>
-    </message>
-</context>
-<context>
-    <name>ChangelogDrawer</name>
-    <message>
-        <location filename="../ui/qml/Components/ChangelogDrawer.qml" line="70"/>
-        <source>Update</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Components/ChangelogDrawer.qml" line="96"/>
-        <source>Skip</source>
-        <translation type="unfinished"></translation>
+        <translation>بند</translation>
     </message>
 </context>
 <context>
@@ -165,63 +133,6 @@
         <location filename="../ui/qml/Components/ConnectButton.qml" line="54"/>
         <source>Unable to disconnect during configuration preparation</source>
         <translation>تشکیل کی تیاری کے دوران منقطع ہونا ممکن نہیں ہے</translation>
-    </message>
-</context>
-<context>
-    <name>ConnectionController</name>
-    <message>
-        <location filename="../ui/controllers/connectionUiController.cpp" line="29"/>
-        <location filename="../ui/controllers/connectionUiController.cpp" line="83"/>
-        <location filename="../ui/controllers/connectionUiController.cpp" line="98"/>
-        <location filename="../ui/controllers/connectionUiController.cpp" line="104"/>
-        <source>Connect</source>
-        <translation>جوڑنا</translation>
-    </message>
-    <message>
-        <source>The selected protocol is not supported on the current platform</source>
-        <translation type="vanished">منتخب کردہ پروٹوکول موجودہ پلیٹ فارم پر تعاون یافتہ نہیں ہے</translation>
-    </message>
-    <message>
-        <source>VPN Protocols is not installed.
- Please install VPN container at first</source>
-        <translation type="vanished">وی پی این پروٹوکول انسٹال نہیں ہے,براہ کرم پہلےوی پی این کنٹینر انسٹال کریں</translation>
-    </message>
-    <message>
-        <source>unable to create configuration</source>
-        <translation type="vanished">تشکیل تیار کرنے میں ناکام</translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/connectionUiController.cpp" line="62"/>
-        <source>Connecting...</source>
-        <translation>جوڑاجارھاھے....</translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/connectionUiController.cpp" line="69"/>
-        <source>Connected</source>
-        <translation>جوڑاجارھاھے</translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/connectionUiController.cpp" line="78"/>
-        <source>Reconnecting...</source>
-        <translation>دوبارہ جوڑنےکی کوشش...</translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/connectionUiController.cpp" line="88"/>
-        <source>Disconnecting...</source>
-        <translation>منقطع کرنا...</translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/connectionUiController.cpp" line="93"/>
-        <source>Preparing...</source>
-        <translation>تیاری کیا جا رہا ہے...</translation>
-    </message>
-    <message>
-        <source>Settings updated successfully, reconnnection...</source>
-        <translation type="vanished">ترتیب ک ھوگی،دوبارہ جوڑنےکی کوشش...</translation>
-    </message>
-    <message>
-        <source>Settings updated successfully</source>
-        <translation type="vanished">دوبارہ ترتیب تاذہ کامیاب</translation>
     </message>
 </context>
 <context>
@@ -243,41 +154,62 @@
     </message>
 </context>
 <context>
+    <name>ConnectionUiController</name>
+    <message>
+        <location filename="../ui/controllers/connectionUiController.cpp" line="59"/>
+        <source>Connecting...</source>
+        <translation>منسلک ہو رہا ہے...</translation>
+    </message>
+    <message>
+        <location filename="../ui/controllers/connectionUiController.cpp" line="66"/>
+        <source>Connected</source>
+        <translation>منسلک</translation>
+    </message>
+    <message>
+        <location filename="../ui/controllers/connectionUiController.cpp" line="75"/>
+        <source>Reconnecting...</source>
+        <translation>دوبارہ منسلک ہو رہا ہے...</translation>
+    </message>
+    <message>
+        <location filename="../ui/controllers/connectionUiController.cpp" line="80"/>
+        <location filename="../ui/controllers/connectionUiController.cpp" line="95"/>
+        <location filename="../ui/controllers/connectionUiController.cpp" line="101"/>
+        <location filename="../ui/controllers/connectionUiController.h" line="65"/>
+        <source>Connect</source>
+        <translation>منسلک کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/controllers/connectionUiController.cpp" line="85"/>
+        <source>Disconnecting...</source>
+        <translation>منقطع ہو رہا ہے...</translation>
+    </message>
+    <message>
+        <location filename="../ui/controllers/connectionUiController.cpp" line="90"/>
+        <source>Preparing...</source>
+        <translation>تیاری کیا جا رہا ہے...</translation>
+    </message>
+</context>
+<context>
     <name>ContextMenuType</name>
     <message>
-        <location filename="../ui/qml/Controls2/ContextMenuType.qml" line="41"/>
+        <location filename="../ui/qml/Controls2/ContextMenuType.qml" line="55"/>
         <source>C&amp;ut</source>
         <translation>ک&amp;اٹنا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Controls2/ContextMenuType.qml" line="46"/>
+        <location filename="../ui/qml/Controls2/ContextMenuType.qml" line="60"/>
         <source>&amp;Copy</source>
         <translation>&amp;کاپی</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Controls2/ContextMenuType.qml" line="51"/>
+        <location filename="../ui/qml/Controls2/ContextMenuType.qml" line="65"/>
         <source>&amp;Paste</source>
         <translation>چ&amp;سپاںکریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Controls2/ContextMenuType.qml" line="58"/>
+        <location filename="../ui/qml/Controls2/ContextMenuType.qml" line="72"/>
         <source>&amp;SelectAll</source>
         <translation>&amp;تمام منتخب کریں</translation>
-    </message>
-</context>
-<context>
-    <name>ExportController</name>
-    <message>
-        <source>Access error!</source>
-        <translation type="vanished">رساءی ناممکن!</translation>
-    </message>
-</context>
-<context>
-    <name>ExportUiController</name>
-    <message>
-        <location filename="../ui/controllers/selfhosted/exportUiController.cpp" line="129"/>
-        <source>Logs file was not saved</source>
-        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -309,7 +241,8 @@
         <location filename="../ui/qml/Components/HomeSplitTunnelingDrawer.qml" line="46"/>
         <source>Enabled 
 Can&apos;t be disabled for current server</source>
-        <translation>فعال کو موجودہ سرور کے لیے غیر فعال نہیں کیا جا سکتا</translation>
+        <translation>فعال 
+موجودہ سرور کے لیے غیر فعال نہیں کیا جا سکتا</translation>
     </message>
     <message>
         <location filename="../ui/qml/Components/HomeSplitTunnelingDrawer.qml" line="64"/>
@@ -335,153 +268,83 @@ Can&apos;t be disabled for current server</source>
     </message>
 </context>
 <context>
-    <name>ImportController</name>
-    <message>
-        <source>Unable to open file</source>
-        <translation type="vanished">فائل کو کھولنے سے قاصر ہے</translation>
-    </message>
-    <message>
-        <source>Invalid configuration file</source>
-        <translation type="vanished">غلط کنفیگریشن فائل</translation>
-    </message>
-    <message>
-        <source>Scanned %1 of %2.</source>
-        <translation type="vanished">سکین%1 کی%2.</translation>
-    </message>
-</context>
-<context>
     <name>ImportUiController</name>
     <message>
         <location filename="../ui/controllers/importUiController.cpp" line="185"/>
         <source>Scanned %1 of %2.</source>
-        <translation type="unfinished">سکین%1 کی%2.</translation>
-    </message>
-</context>
-<context>
-    <name>InstallController</name>
-    <message>
-        <source>%1 installed successfully. </source>
-        <translation type="vanished">%1 کامیابی سےنصب. </translation>
-    </message>
-    <message>
-        <source>%1 is already installed on the server. </source>
-        <translation type="vanished">%1 پہلے ہی سرور پر انسٹال ہے. </translation>
-    </message>
-    <message>
-        <source>
-Added containers that were already installed on the server</source>
-        <translation type="vanished">
-وہ کنٹینرز شامل کیے گئے جو پہلے سے سرور پر نصب تھے</translation>
-    </message>
-    <message>
-        <source>
-Already installed containers were found on the server. All installed containers have been added to the application</source>
-        <translation type="vanished">
-سرور پر پہلے سے نصب کنٹینرز پائے گئے۔ تمام نصب کنٹینرز کو ایپلی کیشن میں شامل کر دیا گیا ہے</translation>
-    </message>
-    <message>
-        <source>Settings updated successfully</source>
-        <translation type="vanished">ترتیب کامیابی کے ساتھ اپ ڈیٹ ہو گئی</translation>
-    </message>
-    <message>
-        <source>Server &apos;%1&apos; was rebooted</source>
-        <translation type="vanished">سرور %1 دوبارہ چالو کیا گیا تھا</translation>
-    </message>
-    <message>
-        <source>Server &apos;%1&apos; was removed</source>
-        <translation type="vanished">سرور %1 ہٹا دیا گیا تھا</translation>
-    </message>
-    <message>
-        <source>All containers from server &apos;%1&apos; have been removed</source>
-        <translation type="vanished">سرور &apos;%1&apos; سے تمام کنٹینرز ہٹا دیے گئے ہیں</translation>
-    </message>
-    <message>
-        <source>%1 has been removed from the server &apos;%2&apos;</source>
-        <translation type="vanished">سرور &apos;%2&apos; سے %1 ہٹا دیا گیا ہے</translation>
-    </message>
-    <message>
-        <source>%1 cached profile cleared</source>
-        <translation type="vanished">%1 کیش کردہ پروفائل ختم کر دی گئی</translation>
-    </message>
-    <message>
-        <source>Please login as the user</source>
-        <translation type="vanished">براہ کرم صارف کے طور پر لاگ ان کریں</translation>
-    </message>
-    <message>
-        <source>Server added successfully</source>
-        <translation type="vanished">سرور کامیابی سے شامل کیا گیا</translation>
+        <translation>سکین%1 کی%2.</translation>
     </message>
 </context>
 <context>
     <name>InstallUiController</name>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="124"/>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="166"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="132"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="174"/>
         <source>%1 installed successfully. </source>
-        <translation type="unfinished">%1 کامیابی سےنصب. </translation>
+        <translation>%1 کامیابی سےنصب. </translation>
     </message>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="126"/>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="168"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="134"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="176"/>
         <source>%1 is already installed on the server. </source>
-        <translation type="unfinished">%1 پہلے ہی سرور پر انسٹال ہے. </translation>
+        <translation>%1 پہلے ہی سرور پر انسٹال ہے. </translation>
     </message>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="130"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="138"/>
         <source>
 Added containers that were already installed on the server</source>
-        <translation type="unfinished">
+        <translation>
 وہ کنٹینرز شامل کیے گئے جو پہلے سے سرور پر نصب تھے</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="172"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="180"/>
         <source>
 Already installed containers were found on the server. All installed containers have been added to the application</source>
-        <translation type="unfinished">
+        <translation>
 سرور پر پہلے سے نصب کنٹینرز پائے گئے۔ تمام نصب کنٹینرز کو ایپلی کیشن میں شامل کر دیا گیا ہے</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="287"/>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="323"/>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="347"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="299"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="340"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="364"/>
         <source>Settings updated successfully</source>
-        <translation type="unfinished"></translation>
+        <translation>ترتیبات کامیابی سے اپ ڈیٹ ہو گئیں</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="425"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="487"/>
         <source>Server &apos;%1&apos; was rebooted</source>
-        <translation type="unfinished">سرور %1 دوبارہ چالو کیا گیا تھا</translation>
+        <translation>سرور %1 دوبارہ چالو کیا گیا تھا</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="439"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="501"/>
         <source>Server &apos;%1&apos; was removed</source>
-        <translation type="unfinished">سرور %1 ہٹا دیا گیا تھا</translation>
+        <translation>سرور %1 ہٹا دیا گیا تھا</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="448"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="510"/>
         <source>All containers from server &apos;%1&apos; have been removed</source>
-        <translation type="unfinished">سرور &apos;%1&apos; سے تمام کنٹینرز ہٹا دیے گئے ہیں</translation>
+        <translation>سرور &apos;%1&apos; سے تمام کنٹینرز ہٹا دیے گئے ہیں</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="474"/>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="492"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="536"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="554"/>
         <source>%1 has been removed from the server &apos;%2&apos;</source>
-        <translation type="unfinished">سرور &apos;%2&apos; سے %1 ہٹا دیا گیا ہے</translation>
+        <translation>سرور &apos;%2&apos; سے %1 ہٹا دیا گیا ہے</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="507"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="569"/>
         <source>%1 cached profile cleared</source>
-        <translation type="unfinished">%1 کیش کردہ پروفائل ختم کر دی گئی</translation>
+        <translation>%1 کیش کردہ پروفائل ختم کر دی گئی</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="561"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="623"/>
         <source>Please login as the user</source>
-        <translation type="unfinished">براہ کرم صارف کے طور پر لاگ ان کریں</translation>
+        <translation>براہ کرم صارف کے طور پر لاگ ان کریں</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="585"/>
+        <location filename="../ui/controllers/selfhosted/installUiController.cpp" line="647"/>
         <source>Server added successfully</source>
-        <translation type="unfinished">سرور کامیابی سے شامل کیا گیا</translation>
+        <translation>سرور کامیابی سے شامل کیا گیا</translation>
     </message>
 </context>
 <context>
@@ -499,20 +362,20 @@ Already installed containers were found on the server. All installed containers 
     <message>
         <location filename="../ui/qml/Components/InstalledAppsDrawer.qml" line="137"/>
         <source>Add selected</source>
-        <translation>ایپلیکیشن کا نام</translation>
+        <translation>منتخب شامل کریں</translation>
     </message>
 </context>
 <context>
     <name>IpSplitTunnelingController</name>
     <message>
-        <location filename="../core/controllers/ipSplitTunnelingController.cpp" line="198"/>
+        <location filename="../core/controllers/ipSplitTunnelingController.cpp" line="224"/>
         <source>Failed to parse JSON data: %1</source>
-        <translation type="unfinished"></translation>
+        <translation>JSON ڈیٹا پارس کرنے میں ناکامی: %1</translation>
     </message>
     <message>
-        <location filename="../core/controllers/ipSplitTunnelingController.cpp" line="203"/>
+        <location filename="../core/controllers/ipSplitTunnelingController.cpp" line="229"/>
         <source>The JSON data is not an array</source>
-        <translation type="unfinished"></translation>
+        <translation>JSON ڈیٹا ایک ارے نہیں ہے</translation>
     </message>
 </context>
 <context>
@@ -520,60 +383,45 @@ Already installed containers were found on the server. All installed containers 
     <message>
         <location filename="../ui/controllers/ipSplitTunnelingUiController.cpp" line="22"/>
         <source>New site added: %1</source>
-        <translation type="unfinished">نیا سائٹ شامل ہوگئی ہے: %1</translation>
+        <translation>نیا سائٹ شامل ہوگئی ہے: %1</translation>
     </message>
     <message>
         <location filename="../ui/controllers/ipSplitTunnelingUiController.cpp" line="31"/>
         <source>Site removed: %1</source>
-        <translation type="unfinished">سائٹ ہٹا دی گئی ہے: %1</translation>
+        <translation>سائٹ ہٹا دی گئی ہے: %1</translation>
     </message>
     <message>
         <location filename="../ui/controllers/ipSplitTunnelingUiController.cpp" line="38"/>
         <source>Site list cleared!</source>
-        <translation type="unfinished"></translation>
+        <translation>سائٹ کی فہرست صاف کر دی گئی!</translation>
     </message>
     <message>
         <location filename="../ui/controllers/ipSplitTunnelingUiController.cpp" line="45"/>
         <source>Can&apos;t open file: %1</source>
-        <translation type="unfinished">فائل نہیں کھول سکتا: %1</translation>
+        <translation>فائل نہیں کھول سکتا: %1</translation>
     </message>
     <message>
         <location filename="../ui/controllers/ipSplitTunnelingUiController.cpp" line="51"/>
         <source>Import completed</source>
-        <translation type="unfinished">واردات مکمل ہوگئی ہے</translation>
+        <translation>واردات مکمل ہوگئی ہے</translation>
     </message>
     <message>
         <location filename="../ui/controllers/ipSplitTunnelingUiController.cpp" line="64"/>
         <source>Export completed</source>
-        <translation type="unfinished">ایکسپورٹ مکمل ہوگیا</translation>
-    </message>
-</context>
-<context>
-    <name>KeyChainClass</name>
-    <message>
-        <source>Read key failed: %1</source>
-        <translation type="vanished">کلید پڑھنے میں ناکامی: %1</translation>
-    </message>
-    <message>
-        <source>Write key failed: %1</source>
-        <translation type="vanished">کلید لکھنے میں ناکامی: %1</translation>
-    </message>
-    <message>
-        <source>Delete key failed: %1</source>
-        <translation type="vanished">کلید حذف کرنے میں ناکامی: %1</translation>
+        <translation>ایکسپورٹ مکمل ہوگیا</translation>
     </message>
 </context>
 <context>
     <name>MinMaxRowType</name>
     <message>
-        <location filename="../ui/qml/Controls2/MinMaxRowType.qml" line="38"/>
+        <location filename="../ui/qml/Controls2/MinMaxRowType.qml" line="78"/>
         <source>Min</source>
-        <translation type="unfinished"></translation>
+        <translation>کم از کم</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Controls2/MinMaxRowType.qml" line="51"/>
+        <location filename="../ui/qml/Controls2/MinMaxRowType.qml" line="113"/>
         <source>Max</source>
-        <translation type="unfinished"></translation>
+        <translation>زیادہ سے زیادہ</translation>
     </message>
 </context>
 <context>
@@ -582,24 +430,22 @@ Already installed containers were found on the server. All installed containers 
         <location filename="../ui/utils/notificationHandler.cpp" line="57"/>
         <location filename="../ui/utils/notificationHandler.cpp" line="64"/>
         <source>AmneziaVPN</source>
-        <translation>The translation of &quot;AmneziaVPN&quot; in Urdu would be:
-
-امنیزیا وی پی ای</translation>
+        <translation>AmneziaVPN</translation>
     </message>
     <message>
         <location filename="../ui/utils/notificationHandler.cpp" line="58"/>
         <source>VPN Connected</source>
-        <translation>وی پی این متصل ہوگیا</translation>
+        <translation>VPN متصل ہوگیا</translation>
     </message>
     <message>
         <location filename="../ui/utils/notificationHandler.cpp" line="65"/>
         <source>VPN Disconnected</source>
-        <translation>وی پی این منقطع ہوگیا</translation>
+        <translation>VPN منقطع ہوگیا</translation>
     </message>
     <message>
         <location filename="../ui/utils/notificationHandler.cpp" line="88"/>
         <source>AmneziaVPN notification</source>
-        <translation>امنیزیا وی پی این کی اطلاعات</translation>
+        <translation>AmneziaVPN کی اطلاعات</translation>
     </message>
     <message>
         <location filename="../ui/utils/notificationHandler.cpp" line="89"/>
@@ -625,652 +471,72 @@ Already installed containers were found on the server. All installed containers 
     <message>
         <location filename="../ui/qml/Pages2/PageDevMenu.qml" line="60"/>
         <source>Gateway endpoint</source>
-        <translation type="unfinished"></translation>
+        <translation>Gateway endpoint</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageDevMenu.qml" line="77"/>
         <source>Save</source>
-        <translation type="unfinished"></translation>
+        <translation>محفوظ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageDevMenu.qml" line="85"/>
         <source>Settings saved</source>
-        <translation type="unfinished">ترتیبات محفوظ ہوگئیں</translation>
+        <translation>ترتیبات محفوظ ہوگئیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageDevMenu.qml" line="99"/>
         <source>Dev gateway environment</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
-    <name>PageFleetCenter</name>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="55"/>
-        <source>VPN connected</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="55"/>
-        <source>VPN disconnected</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="68"/>
-        <source>Choose a server to start protecting this device</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="76"/>
-        <source>Tunnel is up. End-to-end health checks are not available yet.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="76"/>
-        <source>Connect to start monitoring tunnel health.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="87"/>
-        <source>Health has not been observed yet</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="93"/>
-        <source>No recovery data</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="97"/>
-        <source>Suggested recovery: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="99"/>
-        <source>No recovery recommendation pending</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="115"/>
-        <source>No recovery recommendation has been recorded yet</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="117"/>
-        <source>event</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="118"/>
-        <source>observed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="120"/>
-        <source>Latest: %1 · %2</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="129"/>
-        <source>Guardian recovery events will appear here</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="129"/>
-        <source>Guardian timeline will appear when health monitoring is enabled</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="135"/>
-        <source>Android VPN service uploader status is not exposed here</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="137"/>
-        <source>Waiting for uploader health data</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="147"/>
-        <source>Last delivered: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="152"/>
-        <source>Pending: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="162"/>
-        <source>Diagnostics may still be uploaded by the Android VPN service; this page cannot confirm delivery or retry state.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="164"/>
-        <source>No successful delivery reported yet</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="164"/>
-        <source>Open logging settings for local log controls</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="179"/>
-        <source>Safe update status unavailable</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="184"/>
-        <source>Release rollout paused</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="187"/>
-        <source>Signed release policy expired</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="190"/>
-        <source>This app version is outside release eligibility</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="193"/>
-        <source>This device is outside the release cohort</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="198"/>
-        <source>Release channel: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="204"/>
-        <source>Installed from channel: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="210"/>
-        <source>Last receipt channel: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="212"/>
-        <source>No signed release channel recorded</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="218"/>
-        <source>This build does not expose fleet update policy data.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="223"/>
-        <source>Observed signed policy generation: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="229"/>
-        <source>Installed policy generation: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="235"/>
-        <source>Last completed policy generation: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="237"/>
-        <source>No rollout policy generation recorded</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="243"/>
-        <source>Update startup status unavailable</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="247"/>
-        <source>Rollback installer handed off</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="250"/>
-        <source>Update startup check failed; rollback available</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="253"/>
-        <source>Update startup check failed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="256"/>
-        <source>Update startup confirmation pending</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="262"/>
-        <source>Last update passed startup readiness</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="265"/>
-        <source>Last update rolled back</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="268"/>
-        <source>Last update startup check failed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="270"/>
-        <source>No update startup result recorded</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="276"/>
-        <source>Startup receipts and rollback actions are not available.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="286"/>
-        <source>Rollback %1 was handed to the platform installer at %2.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="288"/>
-        <source>Rollback %1 was handed to the platform installer.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="288"/>
-        <source>The rollback was handed to the platform installer.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="294"/>
-        <source>The previous rollback start failed. Rollback %1 can be retried.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="294"/>
-        <source>The previous rollback start failed and can be retried.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="297"/>
-        <source>Version %1 failed its startup gate. Rollback %2 is available.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="299"/>
-        <source>The startup gate failed and a rollback action is ready.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="305"/>
-        <source>The startup gate failed; rollback is temporarily unavailable while the installer is busy.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="308"/>
-        <source>The rollback version is already running; waiting for its startup receipt.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="311"/>
-        <source>Version %1 failed its startup gate; no eligible rollback artifact is available.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="311"/>
-        <source>The startup gate failed; no eligible rollback artifact is available.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="313"/>
-        <source>Version %1 failed its startup gate; rollback is not currently actionable.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="313"/>
-        <source>The startup gate failed; rollback is not currently actionable.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="317"/>
-        <source>Waiting for version %1 until %2.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="320"/>
-        <source>Waiting for version %1 to confirm startup readiness.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="322"/>
-        <source>Waiting for the installed version to confirm startup readiness.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="329"/>
-        <source>Version %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="339"/>
-        <source>No startup receipt has been recorded yet.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="345"/>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="349"/>
-        <source>Review rollback</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="349"/>
-        <source>Review rollback to %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="363"/>
-        <source>%1 B</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="366"/>
-        <source>%1 KiB</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="368"/>
-        <source>%1 MiB</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="378"/>
-        <source>Amnezia will open the approved rollback source outside the app. Check the destination, then complete the platform installer manually.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="380"/>
-        <source>Amnezia will download the rollback package, verify its checksum, and launch the platform installer. The app may close during installation.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="385"/>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="407"/>
-        <source>Rollback is no longer available</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="391"/>
-        <source>Roll back to version %1?</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="391"/>
-        <source>Start rollback?</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="392"/>
-        <source>Start rollback</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="392"/>
-        <source>Cancel</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="413"/>
-        <source>Rollback action started</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="415"/>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="418"/>
-        <source>Could not start rollback</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="424"/>
-        <source>Connection doctor is not available</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="438"/>
-        <source>Report truncated for display</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="443"/>
-        <source>Unable to read the connection doctor report</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="452"/>
-        <source>Doctor report copied</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="588"/>
-        <source>Fleet Center</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="589"/>
-        <source>Connection cockpit, recovery history and current-device operations in one place.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="617"/>
-        <source>System connectivity hint</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="618"/>
-        <source>Reachable</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="618"/>
-        <source>Not reported</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="630"/>
-        <source>Preparing...</source>
-        <translation type="unfinished">تیاری کیا جا رہا ہے...</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="630"/>
-        <source>Disconnect</source>
-        <translation type="unfinished">منقطع کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="630"/>
-        <source>Connect</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="648"/>
-        <source>Safe fleet updates</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="649"/>
-        <source>Signed rollout policy, post-install startup receipts, and guarded rollback.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="715"/>
-        <source>Guardian</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="716"/>
-        <source>Tunnel state, bounded origin reachability checks, and recovery recommendations.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="724"/>
-        <source>Connection health</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="763"/>
-        <source>Open connection doctor</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="780"/>
-        <source>This device</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="781"/>
-        <source>Remote diagnostics delivery and the saved managed-route policy for this device.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="815"/>
-        <source>Retry diagnostics delivery</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="826"/>
-        <source>Diagnostics delivery retry requested</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="838"/>
-        <source>Route policy</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="839"/>
-        <source>Inspect and edit local and server-managed split tunneling rules</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="862"/>
-        <source>Clients</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="863"/>
-        <source>Manage devices using the selected server.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="872"/>
-        <source>Active devices</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="872"/>
-        <source>Manage VPN clients</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="873"/>
-        <source>Review devices connected to this subscription</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="873"/>
-        <source>Create, revoke and inspect client access</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="897"/>
-        <source>Client management requires server administrator access.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="897"/>
-        <source>Choose a server to manage its clients.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="940"/>
-        <source>Connection doctor</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="941"/>
-        <source>Privacy-safe diagnostic snapshot from this device.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="953"/>
-        <source>The report was too large and has been truncated for display and copying.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="971"/>
-        <source>Connection doctor report</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageFleetCenter.qml" line="984"/>
-        <source>Copy report</source>
-        <translation type="unfinished"></translation>
+        <translation>Dev gateway environment</translation>
     </message>
 </context>
 <context>
     <name>PageHome</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageHome.qml" line="97"/>
+        <location filename="../ui/qml/Pages2/PageHome.qml" line="121"/>
         <source>Logging enabled</source>
         <translation>لاگنگ فعال ہے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageHome.qml" line="125"/>
+        <location filename="../ui/qml/Pages2/PageHome.qml" line="149"/>
         <source>Dev gateway enabled</source>
-        <translation type="unfinished"></translation>
+        <translation>Dev gateway enabled</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageHome.qml" line="167"/>
+        <location filename="../ui/qml/Pages2/PageHome.qml" line="191"/>
         <source>Split tunneling enabled</source>
         <translation>سپلٹ ٹنلنگ فعال ہے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageHome.qml" line="167"/>
+        <location filename="../ui/qml/Pages2/PageHome.qml" line="191"/>
         <source>Split tunneling disabled</source>
         <translation>سپلٹ ٹنلنگ غیر فعال ہے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageHome.qml" line="423"/>
+        <location filename="../ui/qml/Pages2/PageHome.qml" line="426"/>
+        <source>AmneziaWG 2.0 is outdated and no longer supported. Continued use requires a fresh installation of the AmneziaWG 3.1 container.</source>
+        <translation>AmneziaWG 2.0 پرانا ہے اور اب سپورٹ نہیں کیا جاتا۔ استعمال جاری رکھنے کے لیے AmneziaWG 3.1 کنٹینر کی نئی تنصیب درکار ہے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageHome.qml" line="472"/>
         <source>Unable change protocol while trying to make an active connection</source>
-        <translation type="unfinished"></translation>
+        <translation>کنکشن بنانے کی کوشش کے دوران پروٹوکول تبدیل نہیں کیا جا سکتا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageHome.qml" line="427"/>
-        <location filename="../ui/qml/Pages2/PageHome.qml" line="629"/>
+        <location filename="../ui/qml/Pages2/PageHome.qml" line="476"/>
+        <location filename="../ui/qml/Pages2/PageHome.qml" line="686"/>
         <source>Cannot change protocol during active connection</source>
-        <translation type="unfinished"></translation>
+        <translation>فعال کنکشن کے دوران پروٹوکول تبدیل نہیں کیا جا سکتا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageHome.qml" line="469"/>
-        <location filename="../ui/qml/Pages2/PageHome.qml" line="583"/>
+        <location filename="../ui/qml/Pages2/PageHome.qml" line="518"/>
+        <location filename="../ui/qml/Pages2/PageHome.qml" line="636"/>
         <source>VPN protocol</source>
-        <translation>وی پی این پروٹوکول</translation>
+        <translation>VPN پروٹوکول</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageHome.qml" line="522"/>
+        <location filename="../ui/qml/Pages2/PageHome.qml" line="571"/>
         <source>Servers</source>
         <translation>سرور</translation>
-    </message>
-    <message>
-        <source>Unable change server while there is an active connection</source>
-        <translation type="vanished">فعال کنکشن موجود ہونے کی وجہ سے سرور تبدیل کرنے میں ناکام ہیں</translation>
     </message>
 </context>
 <context>
@@ -1278,77 +544,122 @@ Already installed containers were found on the server. All installed containers 
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="56"/>
         <source>AmneziaWG settings</source>
-        <translation type="unfinished">امنیزیا وی جی کی ترتیبات</translation>
+        <translation>AmneziaWG کی ترتیبات</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="80"/>
         <source>MTU</source>
-        <translation type="unfinished">ام ٹی یو</translation>
+        <translation>MTU</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="171"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="132"/>
         <source>I1 - First special junk packet</source>
-        <translation type="unfinished"></translation>
+        <translation>I1 - First special junk packet</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="195"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="142"/>
         <source>I2 - Second special junk packet</source>
-        <translation type="unfinished"></translation>
+        <translation>I2 - Second special junk packet</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="219"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="152"/>
         <source>I3 - Third special junk packet</source>
-        <translation type="unfinished"></translation>
+        <translation>I3 - Third special junk packet</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="243"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="162"/>
         <source>I4 - Fourth special junk packet</source>
-        <translation type="unfinished"></translation>
+        <translation>I4 - Fourth special junk packet</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="267"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="172"/>
         <source>I5 - Fifth special junk packet</source>
-        <translation type="unfinished"></translation>
+        <translation>I5 - Fifth special junk packet</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="292"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="189"/>
+        <source>HeaderProtectionKey</source>
+        <translation>HeaderProtectionKey</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="199"/>
+        <source>ContentPaddingAddition - Content padding addition</source>
+        <translation>ContentPaddingAddition - Content padding addition</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="211"/>
+        <source>RekeyAfterTime - Rekey after time</source>
+        <translation>RekeyAfterTime - Rekey after time</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="223"/>
+        <source>RekeyTimeout - Rekey timeout</source>
+        <translation>RekeyTimeout - Rekey timeout</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="235"/>
+        <source>RejectAfterTime - Reject after time</source>
+        <translation>RejectAfterTime - Reject after time</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="247"/>
+        <source>KeepaliveTimeout - Keepalive timeout</source>
+        <translation>KeepaliveTimeout - Keepalive timeout</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="259"/>
+        <source>MaxHandshakeAttempts - Max handshake attempts</source>
+        <translation>MaxHandshakeAttempts - Max handshake attempts</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="276"/>
+        <source>RandomTrailers</source>
+        <translation>RandomTrailers</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="289"/>
+        <source>DisableCookies</source>
+        <translation>DisableCookies</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="306"/>
         <source>Server settings</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور کی ترتیبات</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="303"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="314"/>
         <source>Port</source>
-        <translation type="unfinished">پورٹ</translation>
+        <translation>پورٹ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="423"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="409"/>
         <source>Save</source>
-        <translation type="unfinished"></translation>
+        <translation>محفوظ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="432"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="418"/>
         <source>Save settings?</source>
-        <translation type="unfinished">ترتیبات محفوظ کریں?</translation>
+        <translation>ترتیبات محفوظ کریں?</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="433"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="419"/>
         <source>Only the settings for this device will be changed</source>
-        <translation type="unfinished"></translation>
+        <translation>صرف اس ڈیوائس کی ترتیبات تبدیل ہوں گی</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="434"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="420"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="435"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="421"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="439"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgClientSettings.qml" line="425"/>
         <source>Unable change settings while there is an active connection</source>
-        <translation type="unfinished">جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
+        <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
     </message>
 </context>
 <context>
@@ -1356,7 +667,12 @@ Already installed containers were found on the server. All installed containers 
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="68"/>
         <source>AmneziaWG settings</source>
-        <translation>امنیزیا وی جی کی ترتیبات</translation>
+        <translation>AmneziaWG کی ترتیبات</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="81"/>
+        <source>VPN address subnet</source>
+        <translation>VPN ایڈریس سب نیٹ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="108"/>
@@ -1364,181 +680,182 @@ Already installed containers were found on the server. All installed containers 
         <translation>پورٹ</translation>
     </message>
     <message>
-        <source>MTU</source>
-        <translation type="vanished">ام ٹی یو</translation>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="131"/>
+        <source>Jc - Junk packet count</source>
+        <translation>Jc - Junk packet count</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="553"/>
-        <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
-        <translation>آپ جن لوگوں کے ساتھ آپ نے اس کنکشن کا اشتراک کیا تھا، وہ اس سے مزید جڑ نہیں سکیں گے۔</translation>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="141"/>
+        <source>Jmin - Junk packet minimum size</source>
+        <translation>Jmin - Junk packet minimum size</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="524"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="151"/>
+        <source>Jmax - Junk packet maximum size</source>
+        <translation>Jmax - Junk packet maximum size</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="161"/>
+        <source>S1 - Init packet junk size</source>
+        <translation>S1 - Init packet junk size</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="171"/>
+        <source>S2 - Response packet junk size</source>
+        <translation>S2 - Response packet junk size</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="183"/>
+        <source>S3 - Cookie reply packet junk size</source>
+        <translation>S3 - Cookie reply packet junk size</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="195"/>
+        <source>S4 - Transport packet junk size</source>
+        <translation>S4 - Transport packet junk size</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="207"/>
+        <source>H1 - Init packet magic header</source>
+        <translation>H1 - Init packet magic header</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="219"/>
+        <source>H2 - Response packet magic header</source>
+        <translation>H2 - Response packet magic header</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="231"/>
+        <source>H3 - Underload packet magic header</source>
+        <translation>H3 - Underload packet magic header</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="243"/>
+        <source>H4 - Transport packet magic header</source>
+        <translation>H4 - Transport packet magic header</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="253"/>
+        <source>I1 - Special junk 1</source>
+        <translation>I1 - Special junk 1</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="263"/>
+        <source>I2 - Special junk 2</source>
+        <translation>I2 - Special junk 2</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="273"/>
+        <source>I3 - Special junk 3</source>
+        <translation>I3 - Special junk 3</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="283"/>
+        <source>I4 - Special junk 4</source>
+        <translation>I4 - Special junk 4</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="293"/>
+        <source>I5 - Special junk 5</source>
+        <translation>I5 - Special junk 5</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="310"/>
+        <source>HeaderProtectionKey</source>
+        <translation>HeaderProtectionKey</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="326"/>
+        <source>ContentPaddingAddition - Content padding addition</source>
+        <translation>ContentPaddingAddition - Content padding addition</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="339"/>
+        <source>RekeyAfterTime - Rekey after time</source>
+        <translation>RekeyAfterTime - Rekey after time</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="352"/>
+        <source>RekeyTimeout - Rekey timeout</source>
+        <translation>RekeyTimeout - Rekey timeout</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="365"/>
+        <source>RejectAfterTime - Reject after time</source>
+        <translation>RejectAfterTime - Reject after time</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="378"/>
+        <source>KeepaliveTimeout - Keepalive timeout</source>
+        <translation>KeepaliveTimeout - Keepalive timeout</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="391"/>
+        <source>MaxHandshakeAttempts - Max handshake attempts</source>
+        <translation>MaxHandshakeAttempts - Max handshake attempts</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="408"/>
+        <source>RandomTrailers</source>
+        <translation>RandomTrailers</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="428"/>
+        <source>DisableCookies</source>
+        <translation>DisableCookies</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="467"/>
         <source>Save</source>
         <translation>محفوظ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="81"/>
-        <source>VPN address subnet</source>
-        <translation type="unfinished">وی پی این ایڈریس سب نیٹ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="134"/>
-        <source>Jc - Junk packet count</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="156"/>
-        <source>Jmin - Junk packet minimum size</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="178"/>
-        <source>Jmax - Junk packet maximum size</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="200"/>
-        <source>S1 - Init packet junk size</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="222"/>
-        <source>S2 - Response packet junk size</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="246"/>
-        <source>S3 - Cookie reply packet junk size</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="270"/>
-        <source>S4 - Transport packet junk size</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="292"/>
-        <source>H1 - Init packet magic header</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="317"/>
-        <source>H2 - Response packet magic header</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="342"/>
-        <source>H3 - Underload packet magic header</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="367"/>
-        <source>H4 - Transport packet magic header</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="392"/>
-        <source>I1 - Special junk 1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="415"/>
-        <source>I2 - Special junk 2</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="438"/>
-        <source>I3 - Special junk 3</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="461"/>
-        <source>I4 - Special junk 4</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="484"/>
-        <source>I5 - Special junk 5</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="539"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="482"/>
         <source>The values of the H1-H4 fields must be unique</source>
         <translation>H1 تا H4 فیلڈز کی قیمتیں مخصوص ہونی چاہیے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="547"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="490"/>
         <source>The value of the field S1 + message initiation size (148) must not equal S2 + message response size (92) + S3 + cookie reply size (64) + S4 + transport packet size (32)</source>
-        <translation type="unfinished"></translation>
+        <translation>فیلڈ S1 + پیغام کے آغاز کا سائز (148) کی قدر، S2 + پیغام کے جواب کا سائز (92) + S3 + کوکی جواب کا سائز (64) + S4 + ٹرانسپورٹ پیکٹ کا سائز (32) کے برابر نہیں ہونی چاہیے</translation>
     </message>
     <message>
-        <source>The value of the field S1 + message initiation size (148) must not equal S2 + message response size (92)</source>
-        <translation type="vanished">S1 + پیغام شروع کار (148) کے فیلڈ کی قیمت S2 + پیغام جواب (92) کے سائز کے برابر نہیں ہونی چاہئے</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="552"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="495"/>
         <source>Save settings?</source>
         <translation>ترتیبات محفوظ کریں?</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="554"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="496"/>
+        <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
+        <translation>آپ جن لوگوں کے ساتھ آپ نے اس کنکشن کا اشتراک کیا تھا، وہ اس سے مزید جڑ نہیں سکیں گے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="497"/>
         <source>Continue</source>
         <translation>جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="555"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="498"/>
         <source>Cancel</source>
         <translation>منسوخ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="559"/>
+        <location filename="../ui/qml/Pages2/PageProtocolAwgSettings.qml" line="502"/>
         <source>Unable change settings while there is an active connection</source>
         <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
     </message>
 </context>
 <context>
-    <name>PageProtocolCloakSettings</name>
-    <message>
-        <source>Cloak settings</source>
-        <translation type="vanished">پوشیدہ ترتیب</translation>
-    </message>
-    <message>
-        <source>Disguised as traffic from</source>
-        <translation type="vanished">کے طور پر ٹریفک کی طرح</translation>
-    </message>
-    <message>
-        <source>Port</source>
-        <translation type="vanished">پورٹ</translation>
-    </message>
-    <message>
-        <source>Cipher</source>
-        <translation type="vanished">رمز</translation>
-    </message>
-    <message>
-        <source>Save</source>
-        <translation type="vanished">محفوظ کریں</translation>
-    </message>
-    <message>
-        <source>Unable change settings while there is an active connection</source>
-        <translation type="vanished">جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
-    </message>
-</context>
-<context>
     <name>PageProtocolOpenVpnSettings</name>
-    <message>
-        <source>OpenVPN settings</source>
-        <translation type="vanished">اوپن وی پی این ترتیبات</translation>
-    </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="55"/>
         <source>OpenVPN Settings</source>
-        <translation type="unfinished"></translation>
+        <translation>OpenVPN ترتیبات</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="76"/>
         <source>VPN address subnet</source>
-        <translation>وی پی این ایڈریس سب نیٹ</translation>
+        <translation>VPN ایڈریس سب نیٹ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="94"/>
@@ -1559,37 +876,37 @@ Already installed containers were found on the server. All installed containers 
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="172"/>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="173"/>
         <source>Hash</source>
-        <translation>ہیش</translation>
+        <translation>Hash</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="183"/>
         <source>SHA512</source>
-        <translation type="unfinished"></translation>
+        <translation>SHA512</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="184"/>
         <source>SHA384</source>
-        <translation type="unfinished"></translation>
+        <translation>SHA384</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="185"/>
         <source>SHA256</source>
-        <translation type="unfinished"></translation>
+        <translation>SHA256</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="186"/>
         <source>SHA3-512</source>
-        <translation type="unfinished"></translation>
+        <translation>SHA3-512</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="187"/>
         <source>SHA3-384</source>
-        <translation type="unfinished"></translation>
+        <translation>SHA3-384</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="188"/>
         <source>SHA3-256</source>
-        <translation type="unfinished"></translation>
+        <translation>SHA3-256</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="189"/>
@@ -1599,17 +916,17 @@ Already installed containers were found on the server. All installed containers 
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="190"/>
         <source>BLAKE2b512</source>
-        <translation type="unfinished"></translation>
+        <translation>BLAKE2b512</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="191"/>
         <source>BLAKE2s256</source>
-        <translation type="unfinished"></translation>
+        <translation>BLAKE2s256</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="192"/>
         <source>SHA1</source>
-        <translation type="unfinished"></translation>
+        <translation>SHA1</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="233"/>
@@ -1620,47 +937,47 @@ Already installed containers were found on the server. All installed containers 
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="244"/>
         <source>AES-256-GCM</source>
-        <translation type="unfinished"></translation>
+        <translation>AES-256-GCM</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="245"/>
         <source>AES-192-GCM</source>
-        <translation type="unfinished"></translation>
+        <translation>AES-192-GCM</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="246"/>
         <source>AES-128-GCM</source>
-        <translation type="unfinished"></translation>
+        <translation>AES-128-GCM</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="247"/>
         <source>AES-256-CBC</source>
-        <translation type="unfinished"></translation>
+        <translation>AES-256-CBC</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="248"/>
         <source>AES-192-CBC</source>
-        <translation type="unfinished"></translation>
+        <translation>AES-192-CBC</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="249"/>
         <source>AES-128-CBC</source>
-        <translation type="unfinished"></translation>
+        <translation>AES-128-CBC</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="250"/>
         <source>ChaCha20-Poly1305</source>
-        <translation type="unfinished"></translation>
+        <translation>ChaCha20-Poly1305</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="251"/>
         <source>ARIA-256-CBC</source>
-        <translation type="unfinished"></translation>
+        <translation>ARIA-256-CBC</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="252"/>
         <source>CAMELLIA-256-CBC</source>
-        <translation type="unfinished"></translation>
+        <translation>CAMELLIA-256-CBC</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="253"/>
@@ -1675,7 +992,7 @@ Already installed containers were found on the server. All installed containers 
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="322"/>
         <source>Block DNS requests outside of VPN</source>
-        <translation>وی پی این کے باہر DNS درخواستوں کو بلاک کریں</translation>
+        <translation>VPN کے باہر DNS درخواستوں کو بلاک کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="343"/>
@@ -1694,34 +1011,34 @@ Already installed containers were found on the server. All installed containers 
         <translation>اضافی سرور کنفیگریشن احکامات</translation>
     </message>
     <message>
+        <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="420"/>
+        <source>Save</source>
+        <translation>احفظ</translation>
+    </message>
+    <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="425"/>
         <source>Save settings?</source>
-        <translation type="unfinished">ترتیبات محفوظ کریں?</translation>
+        <translation>ترتیبات محفوظ کریں?</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="426"/>
         <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
-        <translation type="unfinished"></translation>
+        <translation>آپ جن لوگوں کے ساتھ آپ نے اس کنکشن کا اشتراک کیا تھا، وہ اس سے مزید جڑ نہیں سکیں گے۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="427"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="428"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="432"/>
         <source>Unable change settings while there is an active connection</source>
         <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolOpenVpnSettings.qml" line="420"/>
-        <source>Save</source>
-        <translation>احفظ</translation>
     </message>
 </context>
 <context>
@@ -1768,79 +1085,56 @@ Already installed containers were found on the server. All installed containers 
     </message>
 </context>
 <context>
-    <name>PageProtocolShadowSocksSettings</name>
-    <message>
-        <source>Shadowsocks settings</source>
-        <translation type="vanished">شیڈو ساکس ترتیبات</translation>
-    </message>
-    <message>
-        <source>Port</source>
-        <translation type="vanished">پورٹ</translation>
-    </message>
-    <message>
-        <source>Cipher</source>
-        <translation type="vanished">رمز</translation>
-    </message>
-    <message>
-        <source>Save</source>
-        <translation type="vanished">محفوظ کریں</translation>
-    </message>
-    <message>
-        <source>Unable change settings while there is an active connection</source>
-        <translation type="vanished">جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
-    </message>
-</context>
-<context>
     <name>PageProtocolWireGuardClientSettings</name>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardClientSettings.qml" line="58"/>
         <source>WG settings</source>
-        <translation type="unfinished">وائر گارڈ ترتیبات</translation>
+        <translation>WG ترتیبات</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardClientSettings.qml" line="68"/>
         <source>MTU</source>
-        <translation type="unfinished">ام ٹی یو</translation>
+        <translation>MTU</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardClientSettings.qml" line="86"/>
         <source>Server settings</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور کی ترتیبات</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardClientSettings.qml" line="98"/>
         <source>Port</source>
-        <translation type="unfinished">پورٹ</translation>
+        <translation>پورٹ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardClientSettings.qml" line="117"/>
         <source>Save</source>
-        <translation type="unfinished"></translation>
+        <translation>محفوظ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardClientSettings.qml" line="120"/>
         <source>Save settings?</source>
-        <translation type="unfinished">ترتیبات محفوظ کریں?</translation>
+        <translation>ترتیبات محفوظ کریں?</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardClientSettings.qml" line="121"/>
         <source>Only the settings for this device will be changed</source>
-        <translation type="unfinished"></translation>
+        <translation>صرف اس ڈیوائس کی ترتیبات تبدیل ہوں گی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardClientSettings.qml" line="122"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardClientSettings.qml" line="123"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardClientSettings.qml" line="127"/>
         <source>Unable change settings while there is an active connection</source>
-        <translation type="unfinished">جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
+        <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
     </message>
 </context>
 <context>
@@ -1848,12 +1142,12 @@ Already installed containers were found on the server. All installed containers 
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardSettings.qml" line="59"/>
         <source>WG settings</source>
-        <translation>وائر گارڈ ترتیبات</translation>
+        <translation>WG ترتیبات</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardSettings.qml" line="70"/>
         <source>VPN address subnet</source>
-        <translation type="unfinished">وی پی این ایڈریس سب نیٹ</translation>
+        <translation>VPN ایڈریس سب نیٹ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardSettings.qml" line="89"/>
@@ -1861,256 +1155,270 @@ Already installed containers were found on the server. All installed containers 
         <translation>پورٹ</translation>
     </message>
     <message>
+        <location filename="../ui/qml/Pages2/PageProtocolWireGuardSettings.qml" line="115"/>
+        <source>Save</source>
+        <translation>محفوظ کریں</translation>
+    </message>
+    <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardSettings.qml" line="120"/>
         <source>Save settings?</source>
-        <translation type="unfinished">ترتیبات محفوظ کریں?</translation>
+        <translation>ترتیبات محفوظ کریں?</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardSettings.qml" line="121"/>
         <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
-        <translation type="unfinished"></translation>
+        <translation>آپ جن لوگوں کے ساتھ آپ نے اس کنکشن کا اشتراک کیا تھا، وہ اس سے مزید جڑ نہیں سکیں گے۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardSettings.qml" line="122"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardSettings.qml" line="123"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>MTU</source>
-        <translation type="vanished">ام ٹی یو</translation>
+        <translation>منسوخ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolWireGuardSettings.qml" line="127"/>
         <source>Unable change settings while there is an active connection</source>
         <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
     </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolWireGuardSettings.qml" line="115"/>
-        <source>Save</source>
-        <translation>محفوظ کریں</translation>
-    </message>
 </context>
 <context>
     <name>PageProtocolXrayFlowSettings</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="46"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="49"/>
         <source>Flow</source>
-        <translation type="unfinished"></translation>
+        <translation>Flow</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="53"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="56"/>
         <source>Empty</source>
-        <translation type="unfinished"></translation>
+        <translation>خالی</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="103"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="97"/>
+        <source>xtls-rprx-vision is available only with the RAW (TCP) transport.</source>
+        <translation>xtls-rprx-vision صرف RAW (TCP) ٹرانسپورٹ کے ساتھ دستیاب ہے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="118"/>
         <source>Save</source>
-        <translation type="unfinished"></translation>
+        <translation>محفوظ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="105"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="120"/>
         <source>Save settings?</source>
-        <translation type="unfinished">ترتیبات محفوظ کریں?</translation>
+        <translation>ترتیبات محفوظ کریں?</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="106"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="121"/>
         <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
-        <translation type="unfinished"></translation>
+        <translation>آپ جن لوگوں کے ساتھ آپ نے اس کنکشن کا اشتراک کیا تھا، وہ اس سے مزید جڑ نہیں سکیں گے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="107"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="122"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="108"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="123"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="111"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayFlowSettings.qml" line="126"/>
         <source>Unable change settings while there is an active connection</source>
-        <translation type="unfinished">جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
+        <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
     </message>
 </context>
 <context>
     <name>PageProtocolXraySecuritySettings</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="46"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="51"/>
         <source>Security</source>
-        <translation type="unfinished"></translation>
+        <translation>Security</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="53"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="58"/>
         <source>None</source>
-        <translation type="unfinished"></translation>
+        <translation>کوئی نہیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="65"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="70"/>
         <source>TLS</source>
-        <translation type="unfinished"></translation>
+        <translation>TLS</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="77"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="82"/>
         <source>Reality</source>
-        <translation type="unfinished"></translation>
+        <translation>Reality</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="98"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="99"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="95"/>
+        <source>REALITY is not supported with the mKCP transport. Use None or TLS.</source>
+        <translation>REALITY، mKCP ٹرانسپورٹ کے ساتھ سپورٹ نہیں کیا جاتا۔ None یا TLS استعمال کریں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="115"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="116"/>
         <source>ALPN</source>
-        <translation type="unfinished"></translation>
+        <translation>ALPN</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="141"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="142"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="203"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="204"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="160"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="161"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="232"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="233"/>
         <source>Fingerprint</source>
-        <translation type="unfinished"></translation>
+        <translation>Fingerprint</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="182"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="244"/>
-        <source>Server Name (SNI)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="270"/>
-        <source>Save</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="272"/>
-        <source>Save settings?</source>
-        <translation type="unfinished">ترتیبات محفوظ کریں?</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="273"/>
-        <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="274"/>
-        <source>Continue</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="203"/>
         <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="275"/>
-        <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <source>Server Name (SNI)</source>
+        <translation>سرور کا نام (SNI)</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="278"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="212"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="284"/>
+        <source>Enter a valid IP address or domain name</source>
+        <translation>ایک درست IP پتہ یا ڈومین نام درج کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="308"/>
+        <source>Save</source>
+        <translation>محفوظ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="315"/>
+        <source>Save settings?</source>
+        <translation>ترتیبات محفوظ کریں?</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="316"/>
+        <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
+        <translation>آپ جن لوگوں کے ساتھ آپ نے اس کنکشن کا اشتراک کیا تھا، وہ اس سے مزید جڑ نہیں سکیں گے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="317"/>
+        <source>Continue</source>
+        <translation>جاری رکھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="318"/>
+        <source>Cancel</source>
+        <translation>منسوخ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySecuritySettings.qml" line="321"/>
         <source>Unable change settings while there is an active connection</source>
-        <translation type="unfinished">جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
+        <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
     </message>
 </context>
 <context>
     <name>PageProtocolXraySettings</name>
     <message>
-        <source>XRay settings</source>
-        <translation type="vanished">XRay کی ترتیبات</translation>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="39"/>
+        <source>Empty</source>
+        <translation>خالی</translation>
     </message>
     <message>
-        <source>Disguised as traffic from</source>
-        <translation type="vanished">کے طور پر ٹریفک کی طرح</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="78"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="82"/>
         <source>You have read-only access to this server. XRay settings cannot be edited.</source>
-        <translation type="unfinished"></translation>
+        <translation>اس سرور پر آپ کو صرف پڑھنے کی رسائی ہے۔ XRay ترتیبات میں تبدیلی نہیں کی جا سکتی۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="89"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="93"/>
         <source>XRay VLESS settings</source>
-        <translation type="unfinished"></translation>
+        <translation>XRay VLESS ترتیبات</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="90"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="94"/>
         <source>More about settings</source>
-        <translation type="unfinished"></translation>
+        <translation>ترتیبات کے بارے میں مزید</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="111"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="115"/>
         <source>Port</source>
-        <translation type="unfinished">پورٹ</translation>
+        <translation>پورٹ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="145"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="116"/>
+        <source>Valid range: 1–65535.</source>
+        <translation>Valid range: 1–65535.</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="161"/>
         <source>Transport</source>
-        <translation type="unfinished"></translation>
+        <translation>Transport</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="159"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="175"/>
         <source>Security</source>
-        <translation type="unfinished"></translation>
+        <translation>Security</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="173"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="189"/>
         <source>Flow</source>
-        <translation type="unfinished"></translation>
+        <translation>Flow</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="198"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="214"/>
         <source>Save</source>
         <translation>محفوظ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="201"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="222"/>
         <source>Save settings?</source>
-        <translation type="unfinished">ترتیبات محفوظ کریں?</translation>
+        <translation>ترتیبات محفوظ کریں?</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="202"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="223"/>
         <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
-        <translation type="unfinished"></translation>
+        <translation>آپ جن لوگوں کے ساتھ آپ نے اس کنکشن کا اشتراک کیا تھا، وہ اس سے مزید جڑ نہیں سکیں گے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="203"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="224"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="204"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="239"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="225"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="260"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="207"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="228"/>
         <source>Unable change settings while there is an active connection</source>
         <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="229"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="250"/>
         <source>Reset settings</source>
-        <translation type="unfinished"></translation>
+        <translation>ترتیبات ری سیٹ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="236"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="256"/>
         <source>Settings were reset to defaults. Tap Save to apply them on the server.</source>
-        <translation type="unfinished"></translation>
+        <translation>ترتیبات ڈیفالٹ پر ری سیٹ کر دی گئیں۔ سرور پر لاگو کرنے کے لیے محفوظ کریں دبائیں۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="238"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="259"/>
         <source>Reset settings?</source>
-        <translation type="unfinished"></translation>
+        <translation>ترتیبات ری سیٹ کریں؟</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="238"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="259"/>
         <source>All XRay settings will be restored to defaults.</source>
-        <translation type="unfinished"></translation>
+        <translation>تمام XRay ترتیبات ڈیفالٹ اقدار پر بحال کر دی جائیں گی۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="239"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXraySettings.qml" line="260"/>
         <source>Reset</source>
-        <translation type="unfinished"></translation>
+        <translation>ری سیٹ</translation>
     </message>
 </context>
 <context>
@@ -2118,1090 +1426,574 @@ Already installed containers were found on the server. All installed containers 
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="31"/>
         <source>Save XRay configuration</source>
-        <translation type="unfinished"></translation>
+        <translation>XRay کنفیگریشن محفوظ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="32"/>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="116"/>
         <source>JSON files (*.json)</source>
-        <translation type="unfinished"></translation>
+        <translation>JSON فائلیں (*.json)</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="41"/>
         <source>Configuration saved</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشن محفوظ ہو گئی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="73"/>
         <source>XRay Configurations</source>
-        <translation type="unfinished"></translation>
+        <translation>XRay کنفیگریشنز</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="79"/>
         <source>Create configuration based on current settings</source>
-        <translation type="unfinished"></translation>
+        <translation>موجودہ ترتیبات کی بنیاد پر کنفیگریشن بنائیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="93"/>
         <source>Export settings</source>
-        <translation type="unfinished"></translation>
+        <translation>ترتیبات برآمد کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="110"/>
         <source>Import settings</source>
-        <translation type="unfinished"></translation>
+        <translation>ترتیبات درآمد کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="111"/>
         <source>In JSON format</source>
-        <translation type="unfinished"></translation>
+        <translation>JSON فارمیٹ میں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="115"/>
         <source>Open XRay configuration</source>
-        <translation type="unfinished"></translation>
+        <translation>XRay کنفیگریشن کھولیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="121"/>
         <source>Failed to import configuration</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشن درآمد کرنے میں ناکامی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="123"/>
         <source>Configuration imported successfully</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشن کامیابی سے درآمد ہو گئی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="140"/>
         <source>Configurations</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشنز</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="160"/>
         <source>No saved configurations yet.
 Create one from the current settings.</source>
-        <translation type="unfinished"></translation>
+        <translation>ابھی کوئی محفوظ کنفیگریشن نہیں ہے۔
+موجودہ ترتیبات سے ایک بنائیں۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="236"/>
         <source>Apply configuration</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشن لاگو کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="251"/>
         <source>Export configuration</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشن برآمد کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="266"/>
         <source>Delete configuration</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشن حذف کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="276"/>
         <source>Delete configuration?</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشن حذف کریں؟</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="277"/>
         <source>This action cannot be undone.</source>
-        <translation type="unfinished"></translation>
+        <translation>یہ کارروائی واپس نہیں لی جا سکتی۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="278"/>
         <source>Delete</source>
-        <translation type="unfinished"></translation>
+        <translation>حذف کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXraySnapshots.qml" line="278"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
 </context>
 <context>
     <name>PageProtocolXrayTransportSettings</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="46"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="61"/>
         <source>Transport</source>
-        <translation type="unfinished"></translation>
+        <translation>Transport</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="54"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="69"/>
         <source>RAW (TCP)</source>
-        <translation type="unfinished"></translation>
+        <translation>RAW (TCP)</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="66"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="81"/>
         <source>XHTTP</source>
-        <translation type="unfinished"></translation>
+        <translation>XHTTP</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="67"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="82"/>
         <source>Advanced users</source>
-        <translation type="unfinished"></translation>
+        <translation>ماہر صارفین</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="79"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="94"/>
         <source>mKCP</source>
-        <translation type="unfinished"></translation>
+        <translation>mKCP</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="101"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="116"/>
         <source>mKCP Settings</source>
-        <translation type="unfinished"></translation>
+        <translation>mKCP ترتیبات</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="110"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="125"/>
         <source>TTI</source>
-        <translation type="unfinished"></translation>
+        <translation>TTI</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="111"/>
-        <source>Default: %1 ms</source>
-        <comment>mKCP TTI</comment>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="126"/>
+        <source>Transmission time interval (ms). Valid range: 10–100.</source>
+        <translation>Transmission time interval (ms). Valid range: 10–100.</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="123"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="145"/>
         <source>uplinkCapacity</source>
-        <translation type="unfinished"></translation>
+        <translation>uplinkCapacity</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="124"/>
-        <source>Default: %1 Mbit/s</source>
-        <comment>mKCP uplink</comment>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="146"/>
+        <source>Uplink capacity (MB/s). Maximum: 2147483647.</source>
+        <translation>Uplink capacity (MB/s). Maximum: 2147483647.</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="136"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="165"/>
         <source>downlinkCapacity</source>
-        <translation type="unfinished"></translation>
+        <translation>downlinkCapacity</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="137"/>
-        <source>Default: %1 Mbit/s</source>
-        <comment>mKCP downlink</comment>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="166"/>
+        <source>Downlink capacity (MB/s). Maximum: 2147483647.</source>
+        <translation>Downlink capacity (MB/s). Maximum: 2147483647.</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="149"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="185"/>
         <source>readBufferSize</source>
-        <translation type="unfinished"></translation>
+        <translation>readBufferSize</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="150"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="163"/>
-        <source>Default: %1 MiB</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="186"/>
+        <source>Read buffer size (MB). Range: 1–2147483647.</source>
+        <translation>Read buffer size (MB). Range: 1–2147483647.</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="162"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="205"/>
         <source>writeBufferSize</source>
-        <translation type="unfinished"></translation>
+        <translation>writeBufferSize</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="174"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="206"/>
+        <source>Write buffer size (MB). Range: 1–2147483647.</source>
+        <translation>Write buffer size (MB). Range: 1–2147483647.</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="224"/>
         <source>Congestion</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="195"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="196"/>
-        <source>Mode</source>
-        <translation type="unfinished">موڈ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="237"/>
-        <source>HTTP Profile</source>
-        <translation type="unfinished"></translation>
+        <translation>Congestion</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="246"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="247"/>
+        <source>Mode</source>
+        <translation>موڈ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="289"/>
+        <source>HTTP Profile</source>
+        <translation>HTTP پروفائل</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="299"/>
         <source>Host</source>
-        <translation type="unfinished">The term &quot;Host&quot; in the context of SFTP (Secure File Transfer Protocol) can be translated into Urdu as:
-
-میزبان</translation>
+        <translation>میزبان</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="258"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="308"/>
+        <source>Enter a valid IP address or domain name</source>
+        <translation>ایک درست IP پتہ یا ڈومین نام درج کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="319"/>
         <source>Path</source>
-        <translation type="unfinished"></translation>
+        <translation>Path</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="272"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="273"/>
-        <source>Headers template</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="327"/>
+        <source>Path must start with &quot;/&quot;</source>
+        <translation>راستہ &quot;/&quot; سے شروع ہونا چاہیے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="315"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="316"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="340"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="341"/>
         <source>UplinkHTTPMethod</source>
-        <translation type="unfinished"></translation>
+        <translation>UplinkHTTPMethod</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="355"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="381"/>
         <source>Disable gRPC Header</source>
-        <translation type="unfinished"></translation>
+        <translation>gRPC ہیڈر بند کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="356"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="382"/>
         <source>noGRPCHeader</source>
-        <translation type="unfinished"></translation>
+        <translation>noGRPCHeader</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="367"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="393"/>
         <source>Disable SSE Header</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="368"/>
-        <source>noSSEHeader</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="383"/>
-        <source>Session &amp; Sequence</source>
-        <translation type="unfinished"></translation>
+        <translation>SSE ہیڈر بند کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="394"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="395"/>
+        <source>noSSEHeader</source>
+        <translation>noSSEHeader</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="409"/>
+        <source>Session &amp; Sequence</source>
+        <translation>سیشن اور ترتیب</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="421"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="422"/>
         <source>SessionPlacement</source>
-        <translation type="unfinished"></translation>
+        <translation>SessionPlacement</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="437"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="438"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="463"/>
         <source>SessionKey</source>
-        <translation type="unfinished"></translation>
+        <translation>SessionKey</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="480"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="481"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="483"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="484"/>
         <source>SeqPlacement</source>
-        <translation type="unfinished"></translation>
+        <translation>SeqPlacement</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="521"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="525"/>
         <source>SeqKey</source>
-        <translation type="unfinished"></translation>
+        <translation>SeqKey</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="535"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="536"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="545"/>
+        <source>Header/Cookie apply only in Packet-up mode</source>
+        <translation>ہیڈر/کوکی صرف Packet-up موڈ میں لاگو ہوتے ہیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="546"/>
         <source>UplinkDataPlacement</source>
-        <translation type="unfinished"></translation>
+        <translation>UplinkDataPlacement</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="576"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="587"/>
         <source>UplinkDataKey</source>
-        <translation type="unfinished"></translation>
+        <translation>UplinkDataKey</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="590"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="606"/>
         <source>Traffic Shaping</source>
-        <translation type="unfinished"></translation>
+        <translation>ٹریفک شیپنگ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="599"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="615"/>
         <source>UplinkChunkSize</source>
-        <translation type="unfinished"></translation>
+        <translation>UplinkChunkSize</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="614"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="616"/>
+        <source>Uplink chunk size in bytes. Maximum: 2147483647. 0 = off.</source>
+        <translation>Uplink chunk size in bytes. Maximum: 2147483647. 0 = off.</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="635"/>
         <source>scMaxBufferedPosts</source>
-        <translation type="unfinished"></translation>
+        <translation>scMaxBufferedPosts</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="627"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="636"/>
+        <source>Max buffered POSTs. Range: 0–2147483647.</source>
+        <translation>Max buffered POSTs. Range: 0–2147483647.</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="655"/>
         <source>scMaxEachPostBytes</source>
-        <translation type="unfinished"></translation>
+        <translation>scMaxEachPostBytes</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="646"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="677"/>
         <source>scStreamUpServerSecs</source>
-        <translation type="unfinished"></translation>
+        <translation>scStreamUpServerSecs</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="665"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="699"/>
         <source>scMinPostsIntervalMs</source>
-        <translation type="unfinished"></translation>
+        <translation>scMinPostsIntervalMs</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="685"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="722"/>
         <source>Padding and multiplexing</source>
-        <translation type="unfinished"></translation>
+        <translation>پیڈنگ اور ملٹی پلیکسنگ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="691"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="728"/>
         <source>xPadding</source>
-        <translation type="unfinished"></translation>
+        <translation>xPadding</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="703"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="740"/>
         <source>XMux</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="704"/>
-        <source>On</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="704"/>
-        <source>Off</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="733"/>
-        <source>Save</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="735"/>
-        <source>Save settings?</source>
-        <translation type="unfinished">ترتیبات محفوظ کریں?</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="736"/>
-        <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="737"/>
-        <source>Continue</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="738"/>
-        <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>XMux</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="741"/>
+        <source>On</source>
+        <translation>آن</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="741"/>
+        <source>Off</source>
+        <translation>آف</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="770"/>
+        <source>Save</source>
+        <translation>محفوظ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="777"/>
+        <source>Save settings?</source>
+        <translation>ترتیبات محفوظ کریں?</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="778"/>
+        <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
+        <translation>آپ جن لوگوں کے ساتھ آپ نے اس کنکشن کا اشتراک کیا تھا، وہ اس سے مزید جڑ نہیں سکیں گے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="779"/>
+        <source>Continue</source>
+        <translation>جاری رکھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="780"/>
+        <source>Cancel</source>
+        <translation>منسوخ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayTransportSettings.qml" line="783"/>
         <source>Unable change settings while there is an active connection</source>
-        <translation type="unfinished">جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
+        <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
     </message>
 </context>
 <context>
     <name>PageProtocolXrayXPaddingBytesSettings</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="46"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="48"/>
         <source>xPaddingBytes</source>
-        <translation type="unfinished"></translation>
+        <translation>xPaddingBytes</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="54"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="56"/>
         <source>Range</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="86"/>
-        <source>Save</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="88"/>
-        <source>Save settings?</source>
-        <translation type="unfinished">ترتیبات محفوظ کریں?</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="89"/>
-        <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="90"/>
-        <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>حد</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="91"/>
-        <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <source>Save</source>
+        <translation>محفوظ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="93"/>
+        <source>Save settings?</source>
+        <translation>ترتیبات محفوظ کریں?</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="94"/>
+        <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
+        <translation>آپ جن لوگوں کے ساتھ آپ نے اس کنکشن کا اشتراک کیا تھا، وہ اس سے مزید جڑ نہیں سکیں گے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="95"/>
+        <source>Continue</source>
+        <translation>جاری رکھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="96"/>
+        <source>Cancel</source>
+        <translation>منسوخ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingBytesSettings.qml" line="99"/>
         <source>Unable change settings while there is an active connection</source>
-        <translation type="unfinished">جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
+        <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
     </message>
 </context>
 <context>
     <name>PageProtocolXrayXPaddingSettings</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="46"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="48"/>
         <source>xPadding</source>
-        <translation type="unfinished"></translation>
+        <translation>xPadding</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="52"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="54"/>
         <source>xPaddingBytes</source>
-        <translation type="unfinished"></translation>
+        <translation>xPaddingBytes</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="66"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="68"/>
         <source>xPaddingObfsMode</source>
-        <translation type="unfinished"></translation>
+        <translation>xPaddingObfsMode</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="79"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="81"/>
         <source>xPaddingKey</source>
-        <translation type="unfinished"></translation>
+        <translation>xPaddingKey</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="91"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="99"/>
         <source>xPaddingHeader</source>
-        <translation type="unfinished"></translation>
+        <translation>xPaddingHeader</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="105"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="106"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="120"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="121"/>
         <source>xPaddingPlacement</source>
-        <translation type="unfinished"></translation>
+        <translation>xPaddingPlacement</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="148"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="149"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="165"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="166"/>
         <source>xPaddingMethod</source>
-        <translation type="unfinished"></translation>
+        <translation>xPaddingMethod</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="202"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="220"/>
         <source>Save</source>
-        <translation type="unfinished"></translation>
+        <translation>محفوظ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="204"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="222"/>
         <source>Save settings?</source>
-        <translation type="unfinished">ترتیبات محفوظ کریں?</translation>
+        <translation>ترتیبات محفوظ کریں?</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="205"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="223"/>
         <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
-        <translation type="unfinished"></translation>
+        <translation>آپ جن لوگوں کے ساتھ آپ نے اس کنکشن کا اشتراک کیا تھا، وہ اس سے مزید جڑ نہیں سکیں گے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="206"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="224"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="207"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="225"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="210"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXPaddingSettings.qml" line="228"/>
         <source>Unable change settings while there is an active connection</source>
-        <translation type="unfinished">جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
+        <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
     </message>
 </context>
 <context>
     <name>PageProtocolXrayXmuxSettings</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="46"/>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="52"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="61"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="67"/>
         <source>xmux</source>
-        <translation type="unfinished"></translation>
+        <translation>xmux</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="72"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="87"/>
         <source>maxConcurrency</source>
-        <translation type="unfinished"></translation>
+        <translation>maxConcurrency</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="92"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="110"/>
         <source>maxConnections</source>
-        <translation type="unfinished"></translation>
+        <translation>maxConnections</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="112"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="133"/>
         <source>cMaxReuseTimes</source>
-        <translation type="unfinished"></translation>
+        <translation>cMaxReuseTimes</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="132"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="156"/>
         <source>hMaxRequestTimes</source>
-        <translation type="unfinished"></translation>
+        <translation>hMaxRequestTimes</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="152"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="179"/>
         <source>hMaxReusableSecs</source>
-        <translation type="unfinished"></translation>
+        <translation>hMaxReusableSecs</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="170"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="200"/>
         <source>hKeepAlivePeriod</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="199"/>
-        <source>Save</source>
-        <translation type="unfinished"></translation>
+        <translation>hKeepAlivePeriod</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="201"/>
+        <source>HTTP keep-alive period. Integer, may be negative.</source>
+        <translation>HTTP keep-alive period. Integer, may be negative.</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="233"/>
+        <source>Save</source>
+        <translation>محفوظ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="235"/>
         <source>Save settings?</source>
-        <translation type="unfinished">ترتیبات محفوظ کریں?</translation>
+        <translation>ترتیبات محفوظ کریں?</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="202"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="236"/>
         <source>All users with whom you shared a connection with will no longer be able to connect to it.</source>
-        <translation type="unfinished"></translation>
+        <translation>آپ جن لوگوں کے ساتھ آپ نے اس کنکشن کا اشتراک کیا تھا، وہ اس سے مزید جڑ نہیں سکیں گے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="203"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="237"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="204"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="238"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="207"/>
+        <location filename="../ui/qml/Pages2/PageProtocolXrayXmuxSettings.qml" line="241"/>
         <source>Unable change settings while there is an active connection</source>
-        <translation type="unfinished">جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
-    </message>
-</context>
-<context>
-    <name>PageRouteInspector</name>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="19"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="806"/>
-        <source>Route Inspector</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="34"/>
-        <source>Enter a website or IP address</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="36"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="250"/>
-        <source>Current client policy</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="37"/>
-        <source>Ready</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="38"/>
-        <source>Route Inspector previews the saved split tunneling policy. A runtime inspector can replace this preview with the route actually selected by the operating system.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="224"/>
-        <source>Server-managed bypass rules</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="224"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="233"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="307"/>
-        <source>All traffic through VPN</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="228"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="302"/>
-        <source>VPN only for listed sites</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="231"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="305"/>
-        <source>VPN for all sites except listed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="244"/>
-        <source>Connected</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="244"/>
-        <source>Disconnected</source>
-        <translation type="unfinished">منقطع</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="248"/>
-        <source>Checking saved policy...</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="251"/>
-        <source>Inspecting</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="252"/>
-        <source>Reading the current split tunneling mode and matching saved entries.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="260"/>
-        <source>Enter a valid website or IP address</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="312"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="564"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="577"/>
-        <source>Local split tunneling rule</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="315"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="557"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="573"/>
-        <source>Server-managed rule</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="318"/>
-        <source>Multiple route sources</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="321"/>
-        <source>Tunnel safety override</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="324"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="352"/>
-        <source>Installed route state unavailable</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="326"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="551"/>
-        <source>Default route</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="331"/>
-        <source>domain</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="334"/>
-        <source>resolved address</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="337"/>
-        <source>IP address</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="339"/>
-        <source>rule</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="344"/>
-        <source>Outside VPN</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="347"/>
-        <source>Through VPN</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="350"/>
-        <source>Mixed route by address</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="357"/>
-        <source>DNS could not find this host</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="360"/>
-        <source>DNS returned no usable addresses</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="363"/>
-        <source>DNS lookup failed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="366"/>
-        <source>DNS lookup timed out</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="369"/>
-        <source>Routing configuration is unavailable</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="372"/>
-        <source>Scoped IPv6 addresses are not supported</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="374"/>
-        <source>The target could not be inspected</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="432"/>
-        <source>Resolving DNS...</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="433"/>
-        <source>Resolving DNS</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="434"/>
-        <source>Looking up current A and AAAA records before evaluating route rules.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="441"/>
-        <source>Inspection failed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="443"/>
-        <source>The saved policy context is shown above, but a DNS-aware decision could not be completed.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="446"/>
-        <source>DNS-aware policy result</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="451"/>
-        <source>At least one resolved IPv6 address has an unknown route because this client installs split-tunneling site routes for IPv4 only.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="453"/>
-        <source>A definitive route could not be determined from the current runtime state.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="456"/>
-        <source>Matched %1: %2.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="458"/>
-        <source>No saved rule matched; the effective mode selected the default route.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="463"/>
-        <source>IPv4: %1.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="466"/>
-        <source>IPv6: %1.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="473"/>
-        <source>Managed policy revision: %1.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="476"/>
-        <source>The managed policy is expired.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="480"/>
-        <source>Managed policy trust: unsigned. Its digest and revision do not authenticate the publisher.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="482"/>
-        <source>Managed policy trust: %1.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="485"/>
-        <source>The saved managed routes do not match the policy content digest and are inactive.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="491"/>
-        <source>Managed policy lifecycle metadata is invalid, so the policy is inactive.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="493"/>
-        <source>The legacy managed route set failed current safety limits and is inactive.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="495"/>
-        <source>The managed route content digest does not match, so the policy is inactive.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="498"/>
-        <source>This result resolves DNS and evaluates the effective saved policy; it does not yet query the operating system route table.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="540"/>
-        <source>Route report copied</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="550"/>
-        <source>Likely through VPN</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="556"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="567"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="572"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="576"/>
-        <source>Likely outside VPN</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="558"/>
-        <source>The target exactly matches a server-managed bypass entry that is enforced while local split tunneling is disabled.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="560"/>
-        <source>No matching server-managed bypass entry was found, so the default VPN route applies.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="560"/>
-        <source>Site-based split tunneling is disabled, so the default VPN route applies.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="565"/>
-        <source>The target exactly matches a local entry and this mode sends listed sites through the VPN.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="568"/>
-        <source>No matching local entry was found and this mode sends only listed sites through the VPN.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="574"/>
-        <source>The target exactly matches a server-managed bypass entry.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="578"/>
-        <source>The target exactly matches a local bypass entry.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="580"/>
-        <source>No matching bypass entry was found, so the default VPN route applies.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="583"/>
-        <source>The current policy sends all site traffic through the VPN.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="589"/>
-        <source>Limited policy preview</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="590"/>
-        <source>Only exact saved entries were checked because the runtime inspector is unavailable. DNS resolution and subnet matches may change this result.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="605"/>
-        <source>Route unavailable</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="607"/>
-        <source>Runtime inspector</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="608"/>
-        <source>Complete</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="609"/>
-        <source>The runtime inspector did not provide additional details.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="648"/>
-        <source>Reloading saved policy</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="653"/>
-        <source>Saved policy reloaded</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="666"/>
-        <source>Rule update requested</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="668"/>
-        <source>Could not add the route rule</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="807"/>
-        <source>Preview how the current split tunneling policy handles a website or IP address.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="820"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="828"/>
-        <source>Website or IP address</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="821"/>
-        <source>Enter a target to inspect its saved routing policy</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="829"/>
-        <source>For example: example.com or 203.0.113.10</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="832"/>
-        <source>example.com</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="852"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="859"/>
-        <source>Inspect route</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="853"/>
-        <source>Preview the current route policy for the entered target</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="859"/>
-        <source>Inspecting…</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="874"/>
-        <source>Current context</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="882"/>
-        <source>Mode: %1. Source: %2. Status: %3.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="900"/>
-        <source>Mode</source>
-        <translation type="unfinished">موڈ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="916"/>
-        <source>Source</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="932"/>
-        <source>VPN status</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="950"/>
-        <source>Result</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="990"/>
-        <source>Connected-policy estimate · %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1009"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1017"/>
-        <source>Copy route report</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1010"/>
-        <source>Copy the route diagnostic report as JSON</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1033"/>
-        <source>Reload saved route policy</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1034"/>
-        <source>Reload the route policy already stored on this device</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1041"/>
-        <source>Reload saved policy</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1057"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1065"/>
-        <source>Route this target through VPN</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1057"/>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1065"/>
-        <source>Bypass VPN for this target</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1058"/>
-        <source>Add the inspected target to the current local split tunneling list</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1076"/>
-        <source>Disconnect the VPN before changing split tunneling rules.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageRouteInspector.qml" line="1086"/>
-        <source>IPv6 targets can be inspected, but this client currently adds split-tunneling site rules for IPv4 only.</source>
-        <translation type="unfinished"></translation>
+        <translation>جب ایک فعال کنکشن موجود ہو تو ترتیبات کو تبدیل نہیں کیا جا سکتا</translation>
     </message>
 </context>
 <context>
@@ -3229,11 +2021,6 @@ Create one from the current settings.</source>
         <translation>سرور سے %1 کو ہٹا دیں?</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceDnsSettings.qml" line="79"/>
-        <source>Cannot remove AmneziaDNS from running server</source>
-        <translation>آمنیزیا ڈی این ایس کو چل رہے سرور سے ہٹا نہیں سکتے</translation>
-    </message>
-    <message>
         <location filename="../ui/qml/Pages2/PageServiceDnsSettings.qml" line="73"/>
         <source>Continue</source>
         <translation>جاری رہے</translation>
@@ -3243,471 +2030,486 @@ Create one from the current settings.</source>
         <source>Cancel</source>
         <translation>منسوخ کریں</translation>
     </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceDnsSettings.qml" line="79"/>
+        <source>Cannot remove AmneziaDNS from running server</source>
+        <translation>آمنیزیا DNS کو چل رہے سرور سے ہٹا نہیں سکتے</translation>
+    </message>
 </context>
 <context>
     <name>PageServiceMtProxySettings</name>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="215"/>
         <source>Checking...</source>
-        <translation type="unfinished"></translation>
+        <translation>جانچ ہو رہی ہے...</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="218"/>
         <source>Updating</source>
-        <translation type="unfinished"></translation>
+        <translation>اپ ڈیٹ ہو رہا ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="222"/>
         <source>Not deployed</source>
-        <translation type="unfinished"></translation>
+        <translation>تعین نہیں کیا گیا</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="225"/>
         <source>Running</source>
-        <translation type="unfinished"></translation>
+        <translation>چل رہا ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="228"/>
         <source>Stopped</source>
-        <translation type="unfinished"></translation>
+        <translation>رکا ہوا</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="231"/>
         <source>Error</source>
-        <translation type="unfinished">خرابی</translation>
+        <translation>خرابی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="234"/>
         <source>Unknown</source>
-        <translation type="unfinished">نامعلوم</translation>
+        <translation>نامعلوم</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="348"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="349"/>
         <source>MTProxy started</source>
-        <translation type="unfinished"></translation>
+        <translation>MTProxy شروع ہو گیا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="348"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="349"/>
         <source>MTProxy stopped</source>
-        <translation type="unfinished"></translation>
+        <translation>MTProxy رک گیا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="436"/>
-        <source>MTProxy settings</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="437"/>
-        <source>Read more about this settings</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="447"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1831"/>
-        <source>No internet connection. Connect to the internet to change MTProxy settings.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="472"/>
-        <source>Connection</source>
-        <translation type="unfinished">کنکشن</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="476"/>
-        <source>Settings</source>
-        <translation type="unfinished">ترتیبات</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="526"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1371"/>
-        <source>Use Telegram connection link</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="552"/>
-        <source>Deploy MTProxy first</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="569"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="629"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1410"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1465"/>
-        <source>Telegram connection link</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="570"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="630"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1411"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1466"/>
-        <source>MTProxy connection link</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="584"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="643"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="723"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="758"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="799"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1424"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1479"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1796"/>
-        <source>Copied</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="657"/>
-        <source>Or enter the proxy details manually.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="663"/>
-        <source>How to do it</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="705"/>
-        <source>Host</source>
-        <translation type="unfinished">The term &quot;Host&quot; in the context of SFTP (Secure File Transfer Protocol) can be translated into Urdu as:
-
-میزبان</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="741"/>
-        <source>Port</source>
-        <translation type="unfinished">پورٹ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="780"/>
-        <source>Secret</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="812"/>
-        <source>Delete MTProxy</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="815"/>
-        <source>Remove %1 from server?</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="816"/>
-        <source>The proxy will be stopped and all users will lose access.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="817"/>
-        <source>Continue</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="818"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="930"/>
-        <source>Cancel</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="869"/>
-        <source>Enable MTProxy</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="899"/>
-        <source>Base secret</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="362"/>
         <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="910"/>
+        <source>Settings locked: connection timed out (error code %1). Re-open the page to retry.</source>
+        <translation>ترتیبات مقفل: کنکشن کا وقت ختم (خرابی کا کوڈ %1)۔ دوبارہ کوشش کے لیے صفحہ دوبارہ کھولیں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="442"/>
+        <source>MTProxy settings</source>
+        <translation>MTProxy ترتیبات</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="443"/>
+        <source>Read more about this settings</source>
+        <translation>ان ترتیبات کے بارے میں مزید پڑھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="453"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1884"/>
+        <source>No internet connection. Connect to the internet to change MTProxy settings.</source>
+        <translation>انٹرنیٹ کنکشن نہیں ہے۔ MTProxy ترتیبات بدلنے کے لیے انٹرنیٹ سے جڑیں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="478"/>
+        <source>Connection</source>
+        <translation>کنکشن</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="482"/>
+        <source>Settings</source>
+        <translation>ترتیبات</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="532"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1419"/>
+        <source>Use Telegram connection link</source>
+        <translation>Telegram کنکشن لنک استعمال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="558"/>
+        <source>Deploy MTProxy first</source>
+        <translation>پہلے MTProxy تعین کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="574"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="633"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="713"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="748"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="789"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="860"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1849"/>
+        <source>Copied</source>
+        <translation>نقل کر دیا گیا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="619"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="865"/>
+        <source>Telegram connection link</source>
+        <translation>Telegram کنکشن لنک</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="620"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="866"/>
+        <source>MTProxy connection link</source>
+        <translation>MTProxy کنکشن لنک</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="647"/>
+        <source>Or enter the proxy details manually.</source>
+        <translation>یا پراکسی کی تفصیلات دستی طور پر درج کریں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="653"/>
+        <source>How to do it</source>
+        <translation>یہ کیسے کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="695"/>
+        <source>Host</source>
+        <translation>میزبان</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="731"/>
+        <source>Port</source>
+        <translation>پورٹ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="770"/>
+        <source>Secret</source>
+        <translation>Secret</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="802"/>
+        <source>Delete MTProxy</source>
+        <translation>MTProxy حذف کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="805"/>
+        <source>Remove %1 from server?</source>
+        <translation>سرور سے %1 کو ہٹائیں؟</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="806"/>
+        <source>The proxy will be stopped and all users will lose access.</source>
+        <translation>پراکسی روک دیا جائے گا اور تمام صارفین رسائی کھو دیں گے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="807"/>
+        <source>Continue</source>
+        <translation>جاری رکھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="808"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="957"/>
+        <source>Cancel</source>
+        <translation>منسوخ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="880"/>
+        <source>Enable MTProxy</source>
+        <translation>MTProxy فعال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="908"/>
+        <source>Enable MTProxy to edit settings</source>
+        <translation>ترتیبات میں تبدیلی کے لیے MTProxy فعال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="911"/>
+        <source>Cannot reach the server — settings are unavailable</source>
+        <translation>سرور تک نہیں پہنچا جا سکا — ترتیبات دستیاب نہیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="925"/>
+        <source>Base secret</source>
+        <translation>Base secret</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="936"/>
         <source>Not generated</source>
-        <translation type="unfinished"></translation>
+        <translation>جنریٹ نہیں ہوا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="927"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="954"/>
         <source>Generate new secret?</source>
-        <translation type="unfinished"></translation>
+        <translation>Generate new secret?</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="928"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="955"/>
         <source>All existing connection links will stop working. Users will need new links.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="929"/>
-        <source>Generate</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="939"/>
-        <source>New secret saved. It will be applied when MTProxy is started.</source>
-        <translation type="unfinished"></translation>
+        <translation>تمام موجودہ کنکشن لنکس کام کرنا بند کر دیں گے۔ صارفین کو نئے لنکس درکار ہوں گے۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="956"/>
+        <source>Generate</source>
+        <translation>جنریٹ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="966"/>
+        <source>New secret saved. It will be applied when MTProxy is started.</source>
+        <translation>نیا سیکرٹ محفوظ ہو گیا۔ یہ MTProxy شروع ہونے پر لاگو ہوگا۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="984"/>
         <source>Public host / IP</source>
-        <translation type="unfinished"></translation>
+        <translation>پبلک ہوسٹ / IP</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="967"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="975"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1853"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="995"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1003"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1906"/>
         <source>Enter a valid IP address or domain name</source>
-        <translation type="unfinished"></translation>
+        <translation>ایک درست IP پتہ یا ڈومین نام درج کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="992"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1020"/>
         <source>Leave empty to use server IP automatically</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور IP خودکار استعمال کرنے کے لیے خالی چھوڑ دیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1005"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1033"/>
         <source>⚠ This overrides the server IP in connection links. Make sure this host/domain points to your server.</source>
-        <translation type="unfinished"></translation>
+        <translation>⚠ یہ کنکشن لنکس میں سرور IP کو تبدیل کر دیتا ہے۔ یقینی بنائیں کہ یہ ہوسٹ/ڈومین آپ کے سرور کی طرف اشارہ کرتا ہے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1017"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1046"/>
         <source>Server port</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور پورٹ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1039"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1077"/>
         <source>FakeTLS may not work on ports other than 443</source>
-        <translation type="unfinished"></translation>
+        <translation>FakeTLS، 443 کے علاوہ دیگر پورٹس پر کام نہیں کر سکتا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1050"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1088"/>
         <source>The promoted channel is set in @MTProxyBot. Paste the proxy tag here: exactly 32 hexadecimal characters (0-9, A-F), as in the bot message — or leave empty.</source>
-        <translation type="unfinished"></translation>
+        <translation>پروموٹ شدہ چینل @MTProxyBot میں مقرر ہوتا ہے۔ پراکسی ٹیگ یہاں پیسٹ کریں: بالکل 32 ہیکسا ڈیسیمل حروف (0-9, A-F)، جیسا بوٹ کے پیغام میں ہے — یا خالی چھوڑ دیں۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1062"/>
-        <source>MTProxy bot tag (optional)</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1101"/>
+        <source>Promoted channel tag (optional)</source>
+        <translation>پروموٹ شدہ چینل ٹیگ (اختیاری)</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1063"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1102"/>
         <source>32 hex chars from @MTProxyBot (e.g. 3b7b2fa9…)</source>
-        <translation type="unfinished"></translation>
+        <translation>@MTProxyBot سے 32 ہیکس حروف (مثلاً 3b7b2fa9…)</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1084"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1123"/>
         <source>Proxy tag must be exactly 32 hexadecimal characters (0-9, A-F).</source>
-        <translation type="unfinished"></translation>
+        <translation>پراکسی ٹیگ بالکل 32 ہیکسا ڈیسیمل حروف (0-9, A-F) کا ہونا چاہیے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1094"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1133"/>
         <source>Proxy tag must be exactly 32 hexadecimal characters (0-9, A-F). Leave empty if unused.</source>
-        <translation type="unfinished"></translation>
+        <translation>پراکسی ٹیگ بالکل 32 ہیکسا ڈیسیمل حروف (0-9, A-F) کا ہونا چاہیے۔ استعمال نہ ہونے پر خالی چھوڑ دیں۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1113"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1152"/>
         <source>Get a tag from</source>
-        <translation type="unfinished"></translation>
+        <translation>ٹیگ یہاں سے حاصل کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1134"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1148"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1173"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1188"/>
         <source>Transport mode</source>
-        <translation type="unfinished"></translation>
+        <translation>ٹرانسپورٹ موڈ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1149"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1153"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1189"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1193"/>
         <source>FakeTLS</source>
-        <translation type="unfinished"></translation>
+        <translation>FakeTLS</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1149"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1153"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1189"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1193"/>
         <source>Standard MTProto</source>
-        <translation type="unfinished"></translation>
+        <translation>Standard MTProto</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1181"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1222"/>
         <source>FakeTLS domain</source>
-        <translation type="unfinished"></translation>
+        <translation>FakeTLS domain</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1191"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1868"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1237"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1244"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1921"/>
         <source>Enter a valid domain name</source>
-        <translation type="unfinished"></translation>
+        <translation>ایک درست ڈومین نام درج کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1212"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1265"/>
         <source>The domain is encoded into the FakeTLS client secret (ee + base_secret + hex(domain)). It must support HTTPS / TLS 1.3.</source>
-        <translation type="unfinished"></translation>
+        <translation>ڈومین کو FakeTLS کلائنٹ سیکرٹ میں انکوڈ کیا جاتا ہے (ee + base_secret + hex(domain))۔ اسے HTTPS / TLS 1.3 کی سپورٹ ہونی چاہیے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1219"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1272"/>
         <source>⚠ Changing the domain will invalidate all previously issued FakeTLS connection links.</source>
-        <translation type="unfinished"></translation>
+        <translation>⚠ ڈومین بدلنے سے پہلے جاری کردہ تمام FakeTLS کنکشن لنکس بے کار ہو جائیں گے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1232"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1285"/>
         <source>Advanced</source>
-        <translation type="unfinished"></translation>
+        <translation>جدید</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1253"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1307"/>
         <source>Additional secrets</source>
-        <translation type="unfinished"></translation>
+        <translation>Additional secrets</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1261"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1315"/>
         <source>Add extra secrets to allow gradual migration without disconnecting existing users.</source>
-        <translation type="unfinished"></translation>
+        <translation>موجودہ صارفین کو منقطع کیے بغیر بتدریج منتقلی کے لیے اضافی سیکرٹس شامل کریں۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1495"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1516"/>
         <source>Add additional secret</source>
-        <translation type="unfinished"></translation>
+        <translation>Add additional secret</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1510"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1531"/>
         <source>Worker mode</source>
-        <translation type="unfinished"></translation>
+        <translation>Worker mode</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1527"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1548"/>
         <source>Auto</source>
-        <translation type="unfinished"></translation>
+        <translation>خودکار</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1534"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1555"/>
         <source>Manual</source>
-        <translation type="unfinished"></translation>
+        <translation>دستی</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1547"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1568"/>
         <source>Workers are set to 0 automatically for FakeTLS mode.</source>
-        <translation type="unfinished"></translation>
+        <translation>FakeTLS موڈ میں ورکرز کی تعداد خودکار طور پر 0 سیٹ ہو جاتی ہے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1560"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1581"/>
         <source>Workers count</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1587"/>
-        <source>Server is behind NAT / Docker bridge</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1588"/>
-        <source>Enable if your server is not directly accessible from the internet, e.g. Docker or private network</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1605"/>
-        <source>Internal IP</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1614"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1622"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1649"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1657"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1872"/>
-        <source>Enter a valid IPv4 address</source>
-        <translation type="unfinished"></translation>
+        <translation>Workers count</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1640"/>
+        <source>Server is behind NAT / Docker bridge</source>
+        <translation>Server is behind NAT / Docker bridge</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1641"/>
+        <source>Enable if your server is not directly accessible from the internet, e.g. Docker or private network</source>
+        <translation>اگر آپ کا سرور انٹرنیٹ سے براہ راست قابل رسائی نہیں، جیسے Docker یا نجی نیٹ ورک، تو فعال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1658"/>
+        <source>Internal IP</source>
+        <translation>اندرونی IP</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1667"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1675"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1702"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1710"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1925"/>
+        <source>Enter a valid IPv4 address</source>
+        <translation>ایک درست IPv4 پتہ درج کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1693"/>
         <source>External IP</source>
-        <translation type="unfinished"></translation>
+        <translation>بیرونی IP</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1688"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1741"/>
         <source>Diagnostics</source>
-        <translation type="unfinished"></translation>
+        <translation>تشخیص</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1716"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1769"/>
         <source>Public port reachable</source>
-        <translation type="unfinished"></translation>
+        <translation>پبلک پورٹ تک رسائی ممکن</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1720"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1740"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1760"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1780"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1773"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1793"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1813"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1833"/>
         <source>—</source>
-        <translation type="unfinished"></translation>
+        <translation>—</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1720"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1740"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1773"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1793"/>
         <source>Yes</source>
-        <translation type="unfinished"></translation>
+        <translation>ہاں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1720"/>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1740"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1773"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1793"/>
         <source>No</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1736"/>
-        <source>Telegram upstream reachable</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1756"/>
-        <source>Clients connected</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1776"/>
-        <source>Last config refresh</source>
-        <translation type="unfinished"></translation>
+        <translation>نہیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1789"/>
+        <source>Telegram upstream reachable</source>
+        <translation>Telegram اپ اسٹریم تک رسائی ممکن</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1809"/>
+        <source>Clients connected</source>
+        <translation>منسلک کلائنٹس</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1829"/>
+        <source>Last config refresh</source>
+        <translation>آخری کنفیگ ریفریش</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1842"/>
         <source>Stats endpoint</source>
-        <translation type="unfinished"></translation>
+        <translation>Stats endpoint</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1802"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1855"/>
         <source>Refreshing…</source>
-        <translation type="unfinished"></translation>
+        <translation>تازہ ہو رہا ہے…</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1802"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1855"/>
         <source>Tap ↻ to refresh diagnostics</source>
-        <translation type="unfinished"></translation>
+        <translation>تشخیص تازہ کرنے کے لیے ↻ دبائیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1814"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1867"/>
         <source>If you change the settings, the proxy connection link will change. The old link will stop working.</source>
-        <translation type="unfinished"></translation>
+        <translation>اگر آپ ترتیبات بدلیں گے تو پراکسی کنکشن لنک بدل جائے گا۔ پرانا لنک کام کرنا بند کر دے گا۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1828"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1881"/>
         <source>Save</source>
-        <translation type="unfinished"></translation>
+        <translation>محفوظ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1848"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1901"/>
         <source>The port must be in the range of 1 to 65535</source>
-        <translation type="unfinished"></translation>
+        <translation>پورٹ 1 سے 65535 کی حد میں ہونا چاہیے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1860"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1913"/>
         <source>Proxy tag must be exactly 32 hexadecimal characters (0-9, A-F), or leave empty.</source>
-        <translation type="unfinished"></translation>
+        <translation>پراکسی ٹیگ بالکل 32 ہیکسا ڈیسیمل حروف (0-9, A-F) کا ہونا چاہیے، یا خالی چھوڑ دیں۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1875"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1928"/>
         <source>NAT internal IP: enter a valid IPv4 address</source>
-        <translation type="unfinished"></translation>
+        <translation>NAT اندرونی IP: ایک درست IPv4 پتہ درج کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1879"/>
+        <location filename="../ui/qml/Pages2/PageServiceMtProxySettings.qml" line="1932"/>
         <source>NAT external IP: enter a valid IPv4 address</source>
-        <translation type="unfinished"></translation>
+        <translation>NAT بیرونی IP: ایک درست IPv4 پتہ درج کریں</translation>
     </message>
 </context>
 <context>
@@ -3715,19 +2517,17 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSftpSettings.qml" line="23"/>
         <source>Settings updated successfully</source>
-        <translation>ترتیبات کامیابی سے اپ ڈیٹ ہوگئیں</translation>
+        <translation>ترتیبات کامیابی سے اپ ڈیٹ ہو گئیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSftpSettings.qml" line="64"/>
         <source>SFTP settings</source>
-        <translation>ایس ایف ٹی پی ترتیبات</translation>
+        <translation>SFTP ترتیبات</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSftpSettings.qml" line="75"/>
         <source>Host</source>
-        <translation>The term &quot;Host&quot; in the context of SFTP (Secure File Transfer Protocol) can be translated into Urdu as:
-
-میزبان</translation>
+        <translation>میزبان</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSftpSettings.qml" line="85"/>
@@ -3779,42 +2579,24 @@ Create one from the current settings.</source>
         <source>Detailed instructions</source>
         <translation>تفصیلی ہدایات</translation>
     </message>
-    <message>
-        <source>Remove SFTP and all data stored there</source>
-        <translation type="vanished">کو ہٹا دیں اور وہاں ذخیرہ شدہ تمام ڈیٹا کو ختم کر دیں</translation>
-    </message>
-    <message>
-        <source>Remove SFTP and all data stored there?</source>
-        <translation type="vanished">SFTP اور وہاں ذخیرہ کردہ تمام ڈیٹا کو ہٹائیں؟</translation>
-    </message>
-    <message>
-        <source>Continue</source>
-        <translation type="vanished">جاری رہے</translation>
-    </message>
-    <message>
-        <source>Cancel</source>
-        <translation type="vanished">منسوخ کریں</translation>
-    </message>
 </context>
 <context>
     <name>PageServiceSocksProxySettings</name>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="25"/>
         <source>Settings updated successfully</source>
-        <translation type="unfinished"></translation>
+        <translation>ترتیبات کامیابی سے اپ ڈیٹ ہو گئیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="64"/>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="188"/>
         <source>SOCKS5 settings</source>
-        <translation type="unfinished"></translation>
+        <translation>SOCKS5 ترتیبات</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="73"/>
         <source>Host</source>
-        <translation type="unfinished">The term &quot;Host&quot; in the context of SFTP (Secure File Transfer Protocol) can be translated into Urdu as:
-
-میزبان</translation>
+        <translation>میزبان</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="83"/>
@@ -3822,456 +2604,690 @@ Create one from the current settings.</source>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="121"/>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="142"/>
         <source>Copied</source>
-        <translation type="unfinished"></translation>
+        <translation>نقل کر دیا گیا</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="92"/>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="199"/>
         <source>Port</source>
-        <translation type="unfinished">پورٹ</translation>
+        <translation>پورٹ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="111"/>
         <source>User name</source>
-        <translation type="unfinished">صارف کا نام</translation>
+        <translation>صارف کا نام</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="130"/>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="243"/>
         <source>Password</source>
-        <translation type="unfinished">پاس ورڈ</translation>
+        <translation>پاس ورڈ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="220"/>
         <source>Username</source>
-        <translation type="unfinished"></translation>
+        <translation>صارف نام</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="272"/>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="307"/>
         <source>Change connection settings</source>
-        <translation type="unfinished"></translation>
+        <translation>کنکشن کی ترتیبات بدلیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="276"/>
         <source>The port must be in the range of 1 to 65535</source>
-        <translation type="unfinished"></translation>
+        <translation>پورٹ 1 سے 65535 کی حد میں ہونا چاہیے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="280"/>
         <source>Password cannot be empty</source>
-        <translation type="unfinished"></translation>
+        <translation>پاس ورڈ خالی نہیں ہو سکتا</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceSocksProxySettings.qml" line="283"/>
         <source>Username cannot be empty</source>
-        <translation type="unfinished"></translation>
+        <translation>صارف نام خالی نہیں ہو سکتا</translation>
+    </message>
+</context>
+<context>
+    <name>PageServiceTProxySettings</name>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="151"/>
+        <source>TProxy started</source>
+        <translation>TProxy شروع ہو گیا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="151"/>
+        <source>TProxy stopped</source>
+        <translation>TProxy رک گیا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="166"/>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="668"/>
+        <source>Settings locked: connection timed out (error code %1). Re-open the page to retry.</source>
+        <translation>ترتیبات مقفل: کنکشن کا وقت ختم (خرابی کا کوڈ %1)۔ دوبارہ کوشش کے لیے صفحہ دوبارہ کھولیں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="275"/>
+        <source>TProxy settings</source>
+        <translation>TProxy ترتیبات</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="276"/>
+        <source>Read more about Telegram WEB proxy</source>
+        <translation>Telegram WEB پراکسی کے بارے میں مزید پڑھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="286"/>
+        <source>No internet connection. Connect to the internet to change TProxy settings.</source>
+        <translation>انٹرنیٹ کنکشن نہیں ہے۔ TProxy ترتیبات بدلنے کے لیے انٹرنیٹ سے جڑیں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="309"/>
+        <source>Connection</source>
+        <translation>کنکشن</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="313"/>
+        <source>Settings</source>
+        <translation>ترتیبات</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="360"/>
+        <source>Use Telegram WEB proxy link</source>
+        <translation>Telegram WEB پراکسی لنک استعمال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="386"/>
+        <source>Set a hostname first</source>
+        <translation>پہلے ہوسٹ نام سیٹ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="402"/>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="459"/>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="541"/>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="580"/>
+        <source>Copied</source>
+        <translation>نقل کر دیا گیا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="446"/>
+        <source>Telegram connection link</source>
+        <translation>Telegram کنکشن لنک</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="447"/>
+        <source>TProxy WEB proxy link</source>
+        <translation>TProxy WEB پراکسی لنک</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="473"/>
+        <source>Or enter the proxy details manually.</source>
+        <translation>یا پراکسی کی تفصیلات دستی طور پر درج کریں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="479"/>
+        <source>How to do it</source>
+        <translation>یہ کیسے کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="522"/>
+        <source>Host</source>
+        <translation>میزبان</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="560"/>
+        <source>Secret</source>
+        <translation>Secret</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="593"/>
+        <source>Needs a WEB-capable Telegram client (Desktop proof of concept). Classic MTProxy links will not work.</source>
+        <translation>WEB سپورٹ کرنے والا Telegram کلائنٹ درکار ہے (Desktop پر آزمائشی)۔ کلاسک MTProxy لنکس کام نہیں کریں گے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="606"/>
+        <source>Delete TProxy</source>
+        <translation>TProxy حذف کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="609"/>
+        <source>Remove %1 from server?</source>
+        <translation>سرور سے %1 کو ہٹائیں؟</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="616"/>
+        <source>The proxy will be stopped and all users will lose access.</source>
+        <translation>پراکسی روک دیا جائے گا اور تمام صارفین رسائی کھو دیں گے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="617"/>
+        <source>Continue</source>
+        <translation>جاری رکھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="617"/>
+        <source>Cancel</source>
+        <translation>منسوخ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="637"/>
+        <source>Enable TProxy</source>
+        <translation>TProxy فعال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="666"/>
+        <source>Enable TProxy to edit settings</source>
+        <translation>ترتیبات میں تبدیلی کے لیے TProxy فعال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="669"/>
+        <source>Cannot reach the server — settings are unavailable</source>
+        <translation>سرور تک نہیں پہنچا جا سکا — ترتیبات دستیاب نہیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="681"/>
+        <source>Hostname</source>
+        <translation>ہوسٹ نام</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="682"/>
+        <source>proxy.example.com</source>
+        <translation>proxy.example.com</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="697"/>
+        <source>Use lowercase letters, digits, dots and hyphens</source>
+        <translation>چھوٹے انگریزی حروف، ہندسے، نقطے اور ہائفن استعمال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="706"/>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="878"/>
+        <source>Enter a lowercase DNS hostname (A record to this server)</source>
+        <translation>چھوٹے حروف میں DNS ہوسٹ نام درج کریں (اس سرور کی طرف A ریکارڈ)</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="719"/>
+        <source>Required. Point a DNS A record at this server. Do not put a CDN in front.</source>
+        <translation>ضروری ہے۔ DNS A ریکارڈ کو اس سرور کی طرف اشارہ کروائیں۔ اس کے آگے CDN نہ لگائیں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="732"/>
+        <source>ACME email</source>
+        <translation>ACME ای میل</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="733"/>
+        <source>you@example.com</source>
+        <translation>you@example.com</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="748"/>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="757"/>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="882"/>
+        <source>Enter a valid email for the TLS certificate</source>
+        <translation>TLS سرٹیفکیٹ کے لیے ایک درست ای میل درج کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="770"/>
+        <source>Used by Caddy to issue a Let&apos;s Encrypt certificate.</source>
+        <translation>Caddy اسے Let&apos;s Encrypt سرٹیفکیٹ جاری کرنے کے لیے استعمال کرتا ہے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="780"/>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="794"/>
+        <source>Carrier mode</source>
+        <translation>کیریئر موڈ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="820"/>
+        <source>MTProxy workers</source>
+        <translation>MTProxy ورکرز</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTProxySettings.qml" line="860"/>
+        <source>Save</source>
+        <translation>محفوظ کریں</translation>
     </message>
 </context>
 <context>
     <name>PageServiceTelemtSettings</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="163"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="215"/>
         <source>Checking...</source>
-        <translation type="unfinished"></translation>
+        <translation>جانچ ہو رہی ہے...</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="166"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="218"/>
         <source>Updating</source>
-        <translation type="unfinished"></translation>
+        <translation>اپ ڈیٹ ہو رہا ہے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="170"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="222"/>
         <source>Not deployed</source>
-        <translation type="unfinished"></translation>
+        <translation>تعین نہیں کیا گیا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="173"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="225"/>
         <source>Running</source>
-        <translation type="unfinished"></translation>
+        <translation>چل رہا ہے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="176"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="228"/>
         <source>Stopped</source>
-        <translation type="unfinished"></translation>
+        <translation>رکا ہوا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="179"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="231"/>
         <source>Error</source>
-        <translation type="unfinished">خرابی</translation>
+        <translation>خرابی</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="182"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="234"/>
         <source>Unknown</source>
-        <translation type="unfinished">نامعلوم</translation>
+        <translation>نامعلوم</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="294"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="349"/>
         <source>Telemt started</source>
-        <translation type="unfinished"></translation>
+        <translation>Telemt شروع ہو گیا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="294"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="349"/>
         <source>Telemt stopped</source>
-        <translation type="unfinished"></translation>
+        <translation>Telemt رک گیا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="382"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="362"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="910"/>
+        <source>Settings locked: connection timed out (error code %1). Re-open the page to retry.</source>
+        <translation>ترتیبات مقفل: کنکشن کا وقت ختم (خرابی کا کوڈ %1)۔ دوبارہ کوشش کے لیے صفحہ دوبارہ کھولیں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="442"/>
         <source>Telemt settings</source>
-        <translation type="unfinished"></translation>
+        <translation>Telemt ترتیبات</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="383"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="443"/>
         <source>Read more about this settings</source>
-        <translation type="unfinished"></translation>
+        <translation>ان ترتیبات کے بارے میں مزید پڑھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="393"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="453"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1741"/>
         <source>No internet connection. Connect to the internet to change Telemt settings.</source>
-        <translation type="unfinished"></translation>
+        <translation>انٹرنیٹ کنکشن نہیں ہے۔ Telemt ترتیبات بدلنے کے لیے انٹرنیٹ سے جڑیں۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="418"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="478"/>
         <source>Connection</source>
-        <translation type="unfinished">کنکشن</translation>
+        <translation>کنکشن</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="422"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="482"/>
         <source>Settings</source>
-        <translation type="unfinished">ترتیبات</translation>
+        <translation>ترتیبات</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="472"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="532"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1419"/>
         <source>Use Telegram connection link</source>
-        <translation type="unfinished"></translation>
+        <translation>Telegram کنکشن لنک استعمال کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="498"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="558"/>
         <source>Deploy Telemt first</source>
-        <translation type="unfinished"></translation>
+        <translation>پہلے Telemt تعین کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="515"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="575"/>
-        <source>Telegram connection link</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="516"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="576"/>
-        <source>Telemt connection link</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="530"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="589"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="669"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="704"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="745"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1154"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1447"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="574"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="633"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="713"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="748"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="789"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="860"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1706"/>
         <source>Copied</source>
-        <translation type="unfinished"></translation>
+        <translation>نقل کر دیا گیا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="603"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="619"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="865"/>
+        <source>Telegram connection link</source>
+        <translation>Telegram کنکشن لنک</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="620"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="866"/>
+        <source>Telemt connection link</source>
+        <translation>Telemt کنکشن لنک</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="647"/>
         <source>Or enter the proxy details manually.</source>
-        <translation type="unfinished"></translation>
+        <translation>یا پراکسی کی تفصیلات دستی طور پر درج کریں۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="609"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="653"/>
         <source>How to do it</source>
-        <translation type="unfinished"></translation>
+        <translation>یہ کیسے کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="651"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="695"/>
         <source>Host</source>
-        <translation type="unfinished">The term &quot;Host&quot; in the context of SFTP (Secure File Transfer Protocol) can be translated into Urdu as:
-
-میزبان</translation>
+        <translation>میزبان</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="687"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="731"/>
         <source>Port</source>
-        <translation type="unfinished">پورٹ</translation>
+        <translation>پورٹ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="726"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="770"/>
         <source>Secret</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="758"/>
-        <source>Delete Telemt</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="761"/>
-        <source>Remove %1 from server?</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="762"/>
-        <source>The proxy will be stopped and all users will lose access.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="763"/>
-        <source>Continue</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="764"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="863"/>
-        <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>Secret</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="802"/>
+        <source>Delete Telemt</source>
+        <translation>Telemt حذف کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="805"/>
+        <source>Remove %1 from server?</source>
+        <translation>سرور سے %1 کو ہٹائیں؟</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="806"/>
+        <source>The proxy will be stopped and all users will lose access.</source>
+        <translation>پراکسی روک دیا جائے گا اور تمام صارفین رسائی کھو دیں گے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="807"/>
+        <source>Continue</source>
+        <translation>جاری رکھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="808"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="957"/>
+        <source>Cancel</source>
+        <translation>منسوخ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="880"/>
         <source>Enable Telemt</source>
-        <translation type="unfinished"></translation>
+        <translation>Telemt فعال کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="832"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="908"/>
+        <source>Enable Telemt to edit settings</source>
+        <translation>ترتیبات میں تبدیلی کے لیے Telemt فعال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="911"/>
+        <source>Cannot reach the server — settings are unavailable</source>
+        <translation>سرور تک نہیں پہنچا جا سکا — ترتیبات دستیاب نہیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="925"/>
         <source>Base secret</source>
-        <translation type="unfinished"></translation>
+        <translation>Base secret</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="843"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="936"/>
         <source>Not generated</source>
-        <translation type="unfinished"></translation>
+        <translation>جنریٹ نہیں ہوا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="860"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="954"/>
         <source>Generate new secret?</source>
-        <translation type="unfinished"></translation>
+        <translation>Generate new secret?</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="861"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="955"/>
         <source>All existing connection links will stop working. Users will need new links.</source>
-        <translation type="unfinished"></translation>
+        <translation>تمام موجودہ کنکشن لنکس کام کرنا بند کر دیں گے۔ صارفین کو نئے لنکس درکار ہوں گے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="862"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="956"/>
         <source>Generate</source>
-        <translation type="unfinished"></translation>
+        <translation>جنریٹ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="872"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="966"/>
         <source>New secret saved. It will be applied when Telemt is started.</source>
-        <translation type="unfinished"></translation>
+        <translation>نیا سیکرٹ محفوظ ہو گیا۔ یہ Telemt شروع ہونے پر لاگو ہوگا۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="889"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="984"/>
         <source>Public host / IP</source>
-        <translation type="unfinished"></translation>
+        <translation>پبلک ہوسٹ / IP</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="907"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="995"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1003"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1762"/>
+        <source>Enter a valid IP address or domain name</source>
+        <translation>ایک درست IP پتہ یا ڈومین نام درج کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1020"/>
         <source>Leave empty to use server IP automatically</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور IP خودکار استعمال کرنے کے لیے خالی چھوڑ دیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="920"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1033"/>
         <source>⚠ This overrides the server IP in connection links. Make sure this host/domain points to your server.</source>
-        <translation type="unfinished"></translation>
+        <translation>⚠ یہ کنکشن لنکس میں سرور IP کو تبدیل کر دیتا ہے۔ یقینی بنائیں کہ یہ ہوسٹ/ڈومین آپ کے سرور کی طرف اشارہ کرتا ہے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="932"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1046"/>
         <source>Server port</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="959"/>
-        <source>FakeTLS may not work on ports other than 443</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="971"/>
-        <source>Promoted channel tag (optional)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="972"/>
-        <source>leave empty if not needed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="992"/>
-        <source>Get a tag from</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1018"/>
-        <source>Transport mode</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1019"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1023"/>
-        <source>FakeTLS</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1019"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1023"/>
-        <source>Standard MTProto</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1051"/>
-        <source>FakeTLS domain</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور پورٹ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1077"/>
-        <source>The domain is encoded into the FakeTLS client secret (ee + base_secret + hex(domain)). It must support HTTPS / TLS 1.3.</source>
-        <translation type="unfinished"></translation>
+        <source>FakeTLS may not work on ports other than 443</source>
+        <translation>FakeTLS، 443 کے علاوہ دیگر پورٹس پر کام نہیں کر سکتا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1084"/>
-        <source>⚠ Changing the domain will invalidate all previously issued FakeTLS connection links.</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1088"/>
+        <source>The promoted channel is set in @MTProxyBot. Paste the proxy tag here: exactly 32 hexadecimal characters (0-9, A-F), as in the bot message — or leave empty.</source>
+        <translation>پروموٹ شدہ چینل @MTProxyBot میں مقرر ہوتا ہے۔ پراکسی ٹیگ یہاں پیسٹ کریں: بالکل 32 ہیکسا ڈیسیمل حروف (0-9, A-F)، جیسا بوٹ کے پیغام میں ہے — یا خالی چھوڑ دیں۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1097"/>
-        <source>Advanced</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1101"/>
+        <source>Promoted channel tag (optional)</source>
+        <translation>پروموٹ شدہ چینل ٹیگ (اختیاری)</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1118"/>
-        <source>Additional secrets</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1102"/>
+        <source>32 hex chars from @MTProxyBot (e.g. 3b7b2fa9…)</source>
+        <translation>@MTProxyBot سے 32 ہیکس حروف (مثلاً 3b7b2fa9…)</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1126"/>
-        <source>Add extra secrets to allow gradual migration without disconnecting existing users.</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1123"/>
+        <source>Proxy tag must be exactly 32 hexadecimal characters (0-9, A-F).</source>
+        <translation>پراکسی ٹیگ بالکل 32 ہیکسا ڈیسیمل حروف (0-9, A-F) کا ہونا چاہیے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1177"/>
-        <source>Add additional secret</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1133"/>
+        <source>Proxy tag must be exactly 32 hexadecimal characters (0-9, A-F). Leave empty if unused.</source>
+        <translation>پراکسی ٹیگ بالکل 32 ہیکسا ڈیسیمل حروف (0-9, A-F) کا ہونا چاہیے۔ استعمال نہ ہونے پر خالی چھوڑ دیں۔</translation>
     </message>
     <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1152"/>
+        <source>Get a tag from</source>
+        <translation>ٹیگ یہاں سے حاصل کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1173"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1188"/>
+        <source>Transport mode</source>
+        <translation>ٹرانسپورٹ موڈ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1189"/>
         <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1193"/>
-        <source>Worker mode</source>
-        <translation type="unfinished"></translation>
+        <source>FakeTLS</source>
+        <translation>FakeTLS</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1210"/>
-        <source>Auto</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1189"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1193"/>
+        <source>Standard MTProto</source>
+        <translation>Standard MTProto</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1217"/>
-        <source>Manual</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1222"/>
+        <source>FakeTLS domain</source>
+        <translation>FakeTLS domain</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1230"/>
-        <source>Workers are set to 0 automatically for FakeTLS mode.</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1237"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1244"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1777"/>
+        <source>Enter a valid domain name</source>
+        <translation>ایک درست ڈومین نام درج کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1243"/>
-        <source>Workers count</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1265"/>
+        <source>The domain is encoded into the FakeTLS client secret (ee + base_secret + hex(domain)). It must support HTTPS / TLS 1.3.</source>
+        <translation>ڈومین کو FakeTLS کلائنٹ سیکرٹ میں انکوڈ کیا جاتا ہے (ee + base_secret + hex(domain))۔ اسے HTTPS / TLS 1.3 کی سپورٹ ہونی چاہیے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1270"/>
-        <source>Server is behind NAT / Docker bridge</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1272"/>
+        <source>⚠ Changing the domain will invalidate all previously issued FakeTLS connection links.</source>
+        <translation>⚠ ڈومین بدلنے سے پہلے جاری کردہ تمام FakeTLS کنکشن لنکس بے کار ہو جائیں گے۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1271"/>
-        <source>Enable if your server is not directly accessible from the internet, e.g. Docker or private network</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1288"/>
-        <source>Internal IP</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1285"/>
+        <source>Advanced</source>
+        <translation>جدید</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1307"/>
-        <source>External IP</source>
-        <translation type="unfinished"></translation>
+        <source>Additional secrets</source>
+        <translation>Additional secrets</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1339"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1315"/>
+        <source>Add extra secrets to allow gradual migration without disconnecting existing users.</source>
+        <translation>موجودہ صارفین کو منقطع کیے بغیر بتدریج منتقلی کے لیے اضافی سیکرٹس شامل کریں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1516"/>
+        <source>Add additional secret</source>
+        <translation>Add additional secret</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1532"/>
+        <source>Set public IP manually</source>
+        <translation>پبلک IP دستی طور پر سیٹ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1533"/>
+        <source>By default the proxy auto-detects its public IP. Enable to override it manually, e.g. when the server is behind NAT / Docker bridge</source>
+        <translation>بطور ڈیفالٹ پراکسی اپنا پبلک IP خودکار پہچان لیتا ہے۔ اسے دستی طور پر مقرر کرنے کے لیے فعال کریں، مثلاً جب سرور NAT / Docker برج کے پیچھے ہو</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1550"/>
+        <source>Public IP</source>
+        <translation>پبلک IP</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1559"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1567"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1781"/>
+        <source>Enter a valid IPv4 address</source>
+        <translation>ایک درست IPv4 پتہ درج کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1598"/>
         <source>Diagnostics</source>
-        <translation type="unfinished"></translation>
+        <translation>تشخیص</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1367"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1626"/>
         <source>Public port reachable</source>
-        <translation type="unfinished"></translation>
+        <translation>پبلک پورٹ تک رسائی ممکن</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1371"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1391"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1411"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1431"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1630"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1650"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1670"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1690"/>
         <source>—</source>
-        <translation type="unfinished"></translation>
+        <translation>—</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1371"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1391"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1630"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1650"/>
         <source>Yes</source>
-        <translation type="unfinished"></translation>
+        <translation>ہاں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1371"/>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1391"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1630"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1650"/>
         <source>No</source>
-        <translation type="unfinished"></translation>
+        <translation>نہیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1387"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1646"/>
         <source>Telegram upstream reachable</source>
-        <translation type="unfinished"></translation>
+        <translation>Telegram اپ اسٹریم تک رسائی ممکن</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1407"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1666"/>
         <source>Clients connected</source>
-        <translation type="unfinished"></translation>
+        <translation>منسلک کلائنٹس</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1427"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1686"/>
         <source>Last config refresh</source>
-        <translation type="unfinished"></translation>
+        <translation>آخری کنفیگ ریفریش</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1440"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1699"/>
         <source>Stats endpoint</source>
-        <translation type="unfinished"></translation>
+        <translation>Stats endpoint</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1453"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1712"/>
         <source>Refreshing…</source>
-        <translation type="unfinished"></translation>
+        <translation>تازہ ہو رہا ہے…</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1453"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1712"/>
         <source>Tap ↻ to refresh diagnostics</source>
-        <translation type="unfinished"></translation>
+        <translation>تشخیص تازہ کرنے کے لیے ↻ دبائیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1465"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1724"/>
         <source>If you change the settings, the proxy connection link will change. The old link will stop working.</source>
-        <translation type="unfinished"></translation>
+        <translation>اگر آپ ترتیبات بدلیں گے تو پراکسی کنکشن لنک بدل جائے گا۔ پرانا لنک کام کرنا بند کر دے گا۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1478"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1738"/>
         <source>Save</source>
-        <translation type="unfinished"></translation>
+        <translation>محفوظ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1484"/>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1757"/>
         <source>The port must be in the range of 1 to 65535</source>
-        <translation type="unfinished"></translation>
+        <translation>پورٹ 1 سے 65535 کی حد میں ہونا چاہیے</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1769"/>
+        <source>Proxy tag must be exactly 32 hexadecimal characters (0-9, A-F), or leave empty.</source>
+        <translation>پراکسی ٹیگ بالکل 32 ہیکسا ڈیسیمل حروف (0-9, A-F) کا ہونا چاہیے، یا خالی چھوڑ دیں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageServiceTelemtSettings.qml" line="1784"/>
+        <source>Public IP: enter a valid IPv4 address</source>
+        <translation>پبلک IP: ایک درست IPv4 پتہ درج کریں</translation>
     </message>
 </context>
 <context>
@@ -4279,7 +3295,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceTorWebsiteSettings.qml" line="24"/>
         <source>Settings updated successfully</source>
-        <translation>ترتیبات کامیابی سے اپ ڈیٹ ہوگئی ہیں</translation>
+        <translation>ترتیبات کامیابی سے اپ ڈیٹ ہو گئیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceTorWebsiteSettings.qml" line="59"/>
@@ -4299,7 +3315,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceTorWebsiteSettings.qml" line="102"/>
         <source>Use &lt;a href=&quot;https://www.torproject.org/download/&quot; style=&quot;color: #FBB26A;&quot;&gt;Tor Browser&lt;/a&gt; to open this URL.</source>
-        <translation type="unfinished"></translation>
+        <translation>اس یو آر ایل کو کھولنے کے لیے &lt;a href=&quot;https://www.torproject.org/download/&quot; style=&quot;color: #FBB26A;&quot;&gt;Tor Browser&lt;/a&gt; استعمال کریں۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageServiceTorWebsiteSettings.qml" line="117"/>
@@ -4311,22 +3327,6 @@ Create one from the current settings.</source>
         <source>When configuring WordPress set the this onion address as domain.</source>
         <translation>وورڈپریس کو ترتیب دیتے وقت، اس انیون ایڈریس کو ڈومین کے طور پر مقرر کریں.</translation>
     </message>
-    <message>
-        <source>Remove website</source>
-        <translation type="vanished">ویب سائٹ کو ہٹا دیں</translation>
-    </message>
-    <message>
-        <source>The site with all data will be removed from the tor network.</source>
-        <translation type="vanished">تمام ڈیٹا والی سائٹ کو ٹور نیٹ ورک سے ہٹا دیا جائے گا.</translation>
-    </message>
-    <message>
-        <source>Continue</source>
-        <translation type="vanished">جاری رکھیں</translation>
-    </message>
-    <message>
-        <source>Cancel</source>
-        <translation type="vanished">منسوخ کریں</translation>
-    </message>
 </context>
 <context>
     <name>PageSettings</name>
@@ -4336,58 +3336,58 @@ Create one from the current settings.</source>
         <translation>ترتیبات</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettings.qml" line="119"/>
-        <source>Servers</source>
-        <translation>سرور</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettings.qml" line="130"/>
-        <source>Connection</source>
-        <translation>کنکشن</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettings.qml" line="141"/>
-        <source>Application</source>
-        <translation>ایپلیکیشن</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettings.qml" line="152"/>
-        <source>Fleet Center</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettings.qml" line="163"/>
-        <source>Route Inspector</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettings.qml" line="174"/>
-        <source>News &amp; Notifications</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettings.qml" line="190"/>
-        <source>Backup</source>
-        <translation>بیک اپ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettings.qml" line="201"/>
-        <source>About AmneziaVPN</source>
-        <translation>AmneziaVPN کے بارے میں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettings.qml" line="212"/>
-        <source>Dev console</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <location filename="../ui/qml/Pages2/PageSettings.qml" line="85"/>
         <source>Close application</source>
         <translation>براہ کرم ایپلیکیشن بند کریں</translation>
     </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettings.qml" line="117"/>
+        <source>Servers</source>
+        <translation>سرور</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettings.qml" line="128"/>
+        <source>Connection</source>
+        <translation>کنکشن</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettings.qml" line="139"/>
+        <source>Application</source>
+        <translation>ایپلیکیشن</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettings.qml" line="150"/>
+        <source>News &amp; Notifications</source>
+        <translation>خبریں اور اطلاعات</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettings.qml" line="166"/>
+        <source>Backup</source>
+        <translation>بیک اپ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettings.qml" line="177"/>
+        <source>About AmneziaVPN</source>
+        <translation>AmneziaVPN کے بارے میں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettings.qml" line="188"/>
+        <source>Dev console</source>
+        <translation>ڈیو کنسول</translation>
+    </message>
 </context>
 <context>
     <name>PageSettingsAbout</name>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="21"/>
+        <source>You have the latest version of AmneziaVPN</source>
+        <translation>آپ کے پاس AmneziaVPN کا تازہ ترین ورژن ہے</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="25"/>
+        <source>Failed to check for updates</source>
+        <translation>اپ ڈیٹس چیک کرنے میں ناکامی</translation>
+    </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="73"/>
         <source>Support Amnezia</source>
@@ -4396,7 +3396,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="88"/>
         <source>Amnezia is a free and open-source application. You can support the developers if you like it.</source>
-        <translation>ایمنیزیا ایک مفت اور آزاد سورس ایپلیکیشن ہے۔ آپ اگر اسے پسند کریں تو ڈویلپرز کی حمایت کرسکتے ہیں.</translation>
+        <translation>Amnezia ایک مفت اور آزاد سورس ایپلیکیشن ہے۔ آپ اگر اسے پسند کریں تو ڈویلپرز کی حمایت کرسکتے ہیں.</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="98"/>
@@ -4404,88 +3404,79 @@ Create one from the current settings.</source>
         <translation>رابطے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="202"/>
-        <source>Telegram group</source>
-        <translation>ٹیلیگرام گروپ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="203"/>
-        <source>To discuss features</source>
-        <translation>&quot;فیچرز&quot; پر گفتگو کرنے کے لئے</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="206"/>
-        <source>https://t.me/amnezia_vpn_en</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="213"/>
-        <source>support@amnezia.org</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="236"/>
-        <source>Visit official website</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Mail</source>
-        <translation type="vanished">میل</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="214"/>
-        <source>For reviews and bug reports</source>
-        <translation>جائزہ اور بگ رپورٹس کے لئے</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="217"/>
-        <source>mailto:support@amnezia.org</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="224"/>
-        <source>GitHub</source>
-        <translation>گِٹ ہَب</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="225"/>
-        <source>Discover the source code</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="228"/>
-        <source>https://github.com/amnezia-vpn/amnezia-client</source>
-        <translation>https://github.com/amnezia-vpn/amnezia-client</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="235"/>
-        <source>Website</source>
-        <translation>ویب سائٹ</translation>
-    </message>
-    <message>
         <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="131"/>
         <source>Software version: %1</source>
         <translation>سافٹ ویئر ورژن: %1</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="21"/>
-        <source>Checking for updates...</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="25"/>
-        <source>No updates available</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="161"/>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="165"/>
         <source>Check for updates</source>
         <translation>اپ ڈیٹس چیک کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="183"/>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="165"/>
+        <source>Checking...</source>
+        <translation>جانچ ہو رہی ہے...</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="186"/>
         <source>Privacy Policy</source>
         <translation>رازداری کی پالیسی</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="205"/>
+        <source>Telegram group</source>
+        <translation>Telegram گروپ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="206"/>
+        <source>To discuss features</source>
+        <translation>&quot;فیچرز&quot; پر گفتگو کرنے کے لئے</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="209"/>
+        <source>https://telegram.me/amnezia_vpn_en</source>
+        <translation>https://telegram.me/amnezia_vpn_en</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="216"/>
+        <source>support@amnezia.org</source>
+        <translation>support@amnezia.org</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="217"/>
+        <source>For reviews and bug reports</source>
+        <translation>جائزہ اور بگ رپورٹس کے لئے</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="220"/>
+        <source>mailto:support@amnezia.org</source>
+        <translation>mailto:support@amnezia.org</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="227"/>
+        <source>GitHub</source>
+        <translation>GitHub</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="228"/>
+        <source>Discover the source code</source>
+        <translation>سورس کوڈ دیکھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="231"/>
+        <source>https://github.com/amnezia-vpn/amnezia-client</source>
+        <translation>https://github.com/amnezia-vpn/amnezia-client</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="238"/>
+        <source>Website</source>
+        <translation>ویب سائٹ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsAbout.qml" line="239"/>
+        <source>Visit official website</source>
+        <translation>سرکاری ویب سائٹ دیکھیں</translation>
     </message>
 </context>
 <context>
@@ -4493,32 +3484,32 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiAvailableCountries.qml" line="147"/>
         <source>Subscription expired</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرپشن ختم</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiAvailableCountries.qml" line="147"/>
         <source>Subscription expiring soon</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرپشن جلد ختم ہو رہا ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiAvailableCountries.qml" line="166"/>
         <source>Renew subscription</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرپشن تجدید کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiAvailableCountries.qml" line="180"/>
         <source>Location for connection</source>
-        <translation type="unfinished"></translation>
+        <translation>کنکشن کے لیے مقام</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiAvailableCountries.qml" line="209"/>
         <source>Unable change server location while trying to make an active connection</source>
-        <translation type="unfinished"></translation>
+        <translation>کنکشن بنانے کی کوشش کے دوران سرور کا مقام تبدیل نہیں کیا جا سکتا</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiAvailableCountries.qml" line="213"/>
         <source>Unable change server location while there is an active connection</source>
-        <translation type="unfinished"></translation>
+        <translation>فعال کنکشن کے دوران سرور کا مقام تبدیل نہیں کیا جا سکتا</translation>
     </message>
 </context>
 <context>
@@ -4526,57 +3517,57 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiDevices.qml" line="45"/>
         <source>Active Devices</source>
-        <translation type="unfinished"></translation>
+        <translation>فعال ڈیوائسز</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiDevices.qml" line="46"/>
         <source>Manage currently connected devices</source>
-        <translation type="unfinished"></translation>
+        <translation>موجودہ منسلک ڈیوائسز منظم کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiDevices.qml" line="55"/>
         <source>You can find the identifier on the Support tab or, for older versions of the app, by tapping &apos;+&apos; and then the three dots at the top of the page.</source>
-        <translation type="unfinished"></translation>
+        <translation>شناخت کنندہ آپ کو سپورٹ ٹیب میں مل سکتا ہے، یا ایپ کے پرانے ورژنز میں &apos;+&apos; دبا کر اور پھر صفحے کے اوپر تین نقطوں پر ٹیپ کر کے۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiDevices.qml" line="69"/>
         <source> (current device)</source>
-        <translation type="unfinished"></translation>
+        <translation> (موجودہ ڈیوائس)</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiDevices.qml" line="70"/>
         <source>Support tag: </source>
-        <translation type="unfinished"></translation>
+        <translation>سپورٹ ٹیگ: </translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiDevices.qml" line="70"/>
         <source>Last updated: </source>
-        <translation type="unfinished"></translation>
+        <translation>آخری اپ ڈیٹ: </translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiDevices.qml" line="75"/>
         <source>Cannot unlink device during active connection</source>
-        <translation type="unfinished"></translation>
+        <translation>فعال کنکشن کے دوران ڈیوائس ان لنک نہیں کی جا سکتی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiDevices.qml" line="79"/>
         <source>Are you sure you want to unlink this device?</source>
-        <translation type="unfinished"></translation>
+        <translation>کیا آپ واقعی اس ڈیوائس کو ان لنک کرنا چاہتے ہیں؟</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiDevices.qml" line="80"/>
         <source>This will unlink the device from your subscription. You can reconnect it anytime by pressing&#xa0;&quot;Reload API config&quot; in subscription settings on device.</source>
-        <translation type="unfinished"></translation>
+        <translation>یہ ڈیوائس کو آپ کے سبسکرپشن سے ان لنک کر دے گا۔ آپ ڈیوائس پر سبسکرپشن ترتیبات میں &quot;API کنفیگ دوبارہ لوڈ کریں&quot; دبا کر کسی بھی وقت اسے دوبارہ منسلک کر سکتے ہیں۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiDevices.qml" line="81"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiDevices.qml" line="82"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
 </context>
 <context>
@@ -4584,82 +3575,82 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="22"/>
         <source>Windows</source>
-        <translation type="unfinished"></translation>
+        <translation>Windows</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="23"/>
         <source>documentation/instructions/connect-amnezia-premium#windows</source>
-        <translation type="unfinished"></translation>
+        <translation>documentation/instructions/connect-amnezia-premium#windows</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="29"/>
         <source>macOS</source>
-        <translation type="unfinished"></translation>
+        <translation>macOS</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="30"/>
         <source>documentation/instructions/connect-amnezia-premium#macos</source>
-        <translation type="unfinished"></translation>
+        <translation>documentation/instructions/connect-amnezia-premium#macos</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="36"/>
         <source>Android</source>
-        <translation type="unfinished"></translation>
+        <translation>Android</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="37"/>
         <source>documentation/instructions/connect-amnezia-premium#android</source>
-        <translation type="unfinished"></translation>
+        <translation>documentation/instructions/connect-amnezia-premium#android</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="43"/>
         <source>AndroidTV</source>
-        <translation type="unfinished"></translation>
+        <translation>AndroidTV</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="44"/>
         <source>documentation/instructions/android_tv_connect/</source>
-        <translation type="unfinished"></translation>
+        <translation>documentation/instructions/android_tv_connect/</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="50"/>
         <source>iOS</source>
-        <translation type="unfinished"></translation>
+        <translation>iOS</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="51"/>
         <source>documentation/instructions/connect-amnezia-premium#ios</source>
-        <translation type="unfinished"></translation>
+        <translation>documentation/instructions/connect-amnezia-premium#ios</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="57"/>
         <source>Linux</source>
-        <translation type="unfinished"></translation>
+        <translation>Linux</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="58"/>
         <source>documentation/instructions/connect-amnezia-premium#linux</source>
-        <translation type="unfinished"></translation>
+        <translation>documentation/instructions/connect-amnezia-premium#linux</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="64"/>
         <source>Routers</source>
-        <translation type="unfinished"></translation>
+        <translation>راؤٹرز</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="65"/>
         <source>documentation/instructions/connect-amnezia-premium#routers</source>
-        <translation type="unfinished"></translation>
+        <translation>documentation/instructions/connect-amnezia-premium#routers</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="101"/>
         <source>How to connect on another device</source>
-        <translation type="unfinished"></translation>
+        <translation>دوسری ڈیوائس پر کیسے منسلک ہوں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiInstructions.qml" line="102"/>
         <source>Setup guides on the Amnezia website</source>
-        <translation type="unfinished"></translation>
+        <translation>Amnezia ویب سائٹ پر سیٹ اپ گائیڈز</translation>
     </message>
 </context>
 <context>
@@ -4667,82 +3658,82 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="23"/>
         <source>Save AmneziaVPN config</source>
-        <translation type="unfinished">AmneziaVPN ترتیب کو محفوظ کریں</translation>
+        <translation>AmneziaVPN ترتیب کو محفوظ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="60"/>
         <source>Configuration Files</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشن فائلیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="61"/>
         <source>For router setup or the AmneziaWG app</source>
-        <translation type="unfinished"></translation>
+        <translation>راؤٹر سیٹ اپ یا AmneziaWG ایپ کے لیے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="73"/>
         <source>The configuration needs to be reissued</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشن دوبارہ جاری کرنے کی ضرورت ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="135"/>
         <source> configuration file</source>
-        <translation type="unfinished"></translation>
+        <translation> کنفیگریشن فائل</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="149"/>
         <source>Generate a new configuration file</source>
-        <translation type="unfinished"></translation>
+        <translation>نئی کنفیگریشن فائل جنریٹ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="150"/>
         <source>The previously created one will stop working</source>
-        <translation type="unfinished"></translation>
+        <translation>پہلے بنایا گیا کام کرنا بند کر دے گا</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="168"/>
         <source>Revoke the current configuration file</source>
-        <translation type="unfinished"></translation>
+        <translation>موجودہ کنفیگریشن فائل منسوخ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="198"/>
         <source>Config file saved</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگ فائل محفوظ ہو گئی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="212"/>
         <source>The config has been revoked</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگ منسوخ کر دی گئی ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="219"/>
         <source>Generate a new %1 configuration file?</source>
-        <translation type="unfinished"></translation>
+        <translation>نئی %1 کنفیگریشن فائل جنریٹ کریں؟</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="221"/>
         <source>Revoke the current %1 configuration file?</source>
-        <translation type="unfinished"></translation>
+        <translation>موجودہ %1 کنفیگریشن فائل منسوخ کریں؟</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="224"/>
         <source>Your previous configuration file will no longer work, and it will not be possible to connect using it</source>
-        <translation type="unfinished"></translation>
+        <translation>آپ کی پچھلی کنفیگریشن فائل کام نہیں کرے گی اور اس سے منسلک ہونا ممکن نہیں ہوگا</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="225"/>
         <source>Download</source>
-        <translation type="unfinished"></translation>
+        <translation>ڈاؤن لوڈ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="225"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiNativeConfigs.qml" line="226"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
 </context>
 <context>
@@ -4750,137 +3741,137 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="29"/>
         <source>Subscription Status</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرپشن کی حالت</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="38"/>
         <source>Valid Until</source>
-        <translation type="unfinished"></translation>
+        <translation>اس تاریخ تک قابل استعمال</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="47"/>
         <source>Active Connections</source>
-        <translation type="unfinished"></translation>
+        <translation>فعال کنکشنز</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="158"/>
         <source>Subscription expired</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرپشن ختم</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="159"/>
         <source>Subscription expiring soon</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرپشن جلد ختم ہو رہا ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="189"/>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="254"/>
         <source>Renew subscription</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرپشن تجدید کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="277"/>
         <source>Configurations have been updated for some countries. Download and install the updated configuration files</source>
-        <translation type="unfinished"></translation>
+        <translation>کچھ ممالک کے لیے کنفیگریشنز اپ ڈیٹ کی گئی ہیں۔ اپ ڈیٹ شدہ کنفیگریشن فائلیں ڈاؤن لوڈ کر کے انسٹال کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="298"/>
         <source>Subscription Key</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرپشن کی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="320"/>
         <source>Configuration Files</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشن فائلیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="322"/>
         <source>Manage configuration files</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگریشن فائلیں منظم کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="340"/>
         <source>Active Devices</source>
-        <translation type="unfinished"></translation>
+        <translation>فعال ڈیوائسز</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="342"/>
         <source>Manage currently connected devices</source>
-        <translation type="unfinished"></translation>
+        <translation>موجودہ منسلک ڈیوائسز منظم کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="359"/>
         <source>Support</source>
-        <translation type="unfinished"></translation>
+        <translation>سپورٹ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="374"/>
         <source>How to connect on another device</source>
-        <translation type="unfinished"></translation>
+        <translation>دوسری ڈیوائس پر کیسے منسلک ہوں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="399"/>
         <source>Reload API config</source>
-        <translation type="unfinished"></translation>
+        <translation>API کنفیگ دوبارہ لوڈ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="402"/>
         <source>Reload API config?</source>
-        <translation type="unfinished"></translation>
+        <translation>API کنفیگ دوبارہ لوڈ کریں؟</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="403"/>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="441"/>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="478"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="404"/>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="442"/>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="479"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="408"/>
         <source>Cannot reload API config during active connection</source>
-        <translation type="unfinished"></translation>
+        <translation>فعال کنکشن کے دوران API کنفیگ دوبارہ لوڈ نہیں کی جا سکتی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="436"/>
         <source>Unlink this device</source>
-        <translation type="unfinished"></translation>
+        <translation>اس ڈیوائس کو ان لنک کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="439"/>
         <source>Are you sure you want to unlink this device?</source>
-        <translation type="unfinished"></translation>
+        <translation>کیا آپ واقعی اس ڈیوائس کو ان لنک کرنا چاہتے ہیں؟</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="440"/>
         <source>This will unlink the device from your subscription. You can reconnect it anytime by pressing&#xa0;&quot;Reload API config&quot; in subscription settings on device.</source>
-        <translation type="unfinished"></translation>
+        <translation>یہ ڈیوائس کو آپ کے سبسکرپشن سے ان لنک کر دے گا۔ آپ ڈیوائس پر سبسکرپشن ترتیبات میں &quot;API کنفیگ دوبارہ لوڈ کریں&quot; دبا کر کسی بھی وقت اسے دوبارہ منسلک کر سکتے ہیں۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="446"/>
         <source>Cannot unlink device during active connection</source>
-        <translation type="unfinished"></translation>
+        <translation>فعال کنکشن کے دوران ڈیوائس ان لنک نہیں کی جا سکتی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="474"/>
         <source>Remove from application</source>
-        <translation type="unfinished"></translation>
+        <translation>ایپلیکیشن سے ہٹائیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="477"/>
         <source>Remove from application?</source>
-        <translation type="unfinished"></translation>
+        <translation>ایپلیکیشن سے ہٹائیں؟</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiServerInfo.qml" line="483"/>
         <source>Cannot remove server during active connection</source>
-        <translation type="unfinished">چالو کنکشن کے دوران سرور کو ہٹایا نہیں جا سکتا</translation>
+        <translation>چالو کنکشن کے دوران سرور کو ہٹایا نہیں جا سکتا</translation>
     </message>
 </context>
 <context>
@@ -4888,42 +3879,42 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSubscriptionKey.qml" line="93"/>
         <source>Copy key</source>
-        <translation type="unfinished"></translation>
+        <translation>کی کاپی کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSubscriptionKey.qml" line="98"/>
         <source>Copied</source>
-        <translation type="unfinished"></translation>
+        <translation>نقل کر دیا گیا</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSubscriptionKey.qml" line="114"/>
         <source>Save key as a file</source>
-        <translation type="unfinished"></translation>
+        <translation>کی کو فائل کے طور پر محفوظ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSubscriptionKey.qml" line="121"/>
         <source>Save AmneziaVPN config</source>
-        <translation type="unfinished">AmneziaVPN ترتیب کو محفوظ کریں</translation>
+        <translation>AmneziaVPN ترتیب کو محفوظ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSubscriptionKey.qml" line="122"/>
         <source>Config files (*.vpn)</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگ فائلیں (*.vpn)</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSubscriptionKey.qml" line="133"/>
         <source>Config file saved</source>
-        <translation type="unfinished"></translation>
+        <translation>کنفیگ فائل محفوظ ہو گئی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSubscriptionKey.qml" line="150"/>
         <source>Show key text</source>
-        <translation type="unfinished"></translation>
+        <translation>کی کا متن دکھائیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSubscriptionKey.qml" line="191"/>
         <source>To read the QR code in the Amnezia app, tap + in the main menu → &apos;QR code&apos;</source>
-        <translation type="unfinished"></translation>
+        <translation>Amnezia ایپ میں QR کوڈ پڑھنے کے لیے، مین مینو میں + دبائیں → &apos;QR کوڈ&apos;</translation>
     </message>
 </context>
 <context>
@@ -4931,42 +3922,42 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSupport.qml" line="22"/>
         <source>Telegram</source>
-        <translation type="unfinished"></translation>
+        <translation>Telegram</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSupport.qml" line="30"/>
         <source>Email</source>
-        <translation type="unfinished"></translation>
+        <translation>ای میل</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSupport.qml" line="38"/>
         <source>Email Billing &amp; Orders</source>
-        <translation type="unfinished"></translation>
+        <translation>بلنگ اور آرڈرز ای میل</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSupport.qml" line="46"/>
         <source>Website</source>
-        <translation type="unfinished">ویب سائٹ</translation>
+        <translation>ویب سائٹ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSupport.qml" line="81"/>
         <source>Support</source>
-        <translation type="unfinished"></translation>
+        <translation>سپورٹ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSupport.qml" line="82"/>
         <source>Our technical support specialists are available to assist you at any time</source>
-        <translation type="unfinished"></translation>
+        <translation>ہمارے تکنیکی سپورٹ ماہرین کسی بھی وقت آپ کی مدد کے لیے دستیاب ہیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSupport.qml" line="110"/>
         <source>Support tag</source>
-        <translation type="unfinished"></translation>
+        <translation>سپورٹ ٹیگ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApiSupport.qml" line="120"/>
         <source>Copied</source>
-        <translation type="unfinished"></translation>
+        <translation>نقل کر دیا گیا</translation>
     </message>
 </context>
 <context>
@@ -4977,22 +3968,14 @@ Create one from the current settings.</source>
         <translation>فعال کنکشن کے دوران سپلٹ ٹنلنگ کی ترتیبات تبدیل نہیں کی جا سکتیں</translation>
     </message>
     <message>
-        <source>Only the Apps listed here will be accessed through the VPN</source>
-        <translation type="vanished">صرف اس ایپ کو وی پی این کے ذریعے دسترس حاصل کی جائے گی جو یہاں فہرست میں شامل ہے</translation>
-    </message>
-    <message>
-        <source>Apps from the list should not be accessed via VPN</source>
-        <translation type="vanished">فہرست میں شامل ایپ کو وی پی این کے ذریعے دسترس نہیں کیا جائے گا</translation>
-    </message>
-    <message>
         <location filename="../ui/qml/Pages2/PageSettingsAppSplitTunneling.qml" line="49"/>
         <source>Only the apps from the list should have access via VPN</source>
-        <translation type="unfinished"></translation>
+        <translation>صرف فہرست کی ایپس کو VPN کے ذریعے رسائی ہونی چاہیے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsAppSplitTunneling.qml" line="56"/>
         <source>Apps from the list should not have access via VPN</source>
-        <translation type="unfinished"></translation>
+        <translation>فہرست کی ایپس کو VPN کے ذریعے رسائی نہیں ہونی چاہیے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsAppSplitTunneling.qml" line="87"/>
@@ -5007,7 +3990,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsAppSplitTunneling.qml" line="154"/>
         <source>Only &quot;Apps from the list should not have access via VPN&quot; mode is available on Windows</source>
-        <translation type="unfinished"></translation>
+        <translation>Windows پر صرف &quot;فہرست کی ایپس کو VPN کے ذریعے رسائی نہیں ہونی چاہیے&quot; موڈ دستیاب ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsAppSplitTunneling.qml" line="200"/>
@@ -5055,12 +4038,12 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="87"/>
         <source>Enable notifications</source>
-        <translation type="unfinished"></translation>
+        <translation>اطلاعات فعال کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="88"/>
         <source>Enable notifications to show the VPN state in the status bar</source>
-        <translation type="unfinished"></translation>
+        <translation>اسٹیٹس بار میں VPN کی حالت دکھانے کے لیے اطلاعات فعال کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="108"/>
@@ -5090,68 +4073,75 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="155"/>
         <source>Launch application minimized (works with autostart option turned on)</source>
-        <translation type="unfinished"></translation>
+        <translation>ایپلیکیشن کو منیمائز کر کے شروع کریں (آٹو اسٹارٹ آن ہونے پر کام کرتا ہے)</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="180"/>
         <source>News Notification</source>
-        <translation type="unfinished"></translation>
+        <translation>خبروں کی اطلاع</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="181"/>
         <source>Show a notification icon for unread news</source>
-        <translation type="unfinished"></translation>
+        <translation>غیر پڑھی خبروں کے لیے اطلاعی آئیکن دکھائیں</translation>
     </message>
     <message>
-        <source>Launch application minimized</source>
-        <translation type="vanished">ایپلیکیشن کو کمینائز کر کے لانچ کریں</translation>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="201"/>
+        <source>Check for updates automatically</source>
+        <translation>خودکار طور پر اپ ڈیٹس چیک کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="205"/>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="202"/>
+        <source>Check for a new app version at startup</source>
+        <translation>ایپ کے آغاز پر نئے ورژن کی جانچ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="226"/>
         <source>Language</source>
         <translation>زبان</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="221"/>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="242"/>
         <source>Logging</source>
         <translation>لاگنگ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="222"/>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="243"/>
         <source>Enabled</source>
         <translation>فعال</translation>
     </message>
     <message>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="243"/>
         <source>Disabled</source>
-        <translation type="vanished">غیر فعال</translation>
+        <translation>غیر فعال</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="237"/>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="258"/>
         <source>Reset settings and remove all data from the application</source>
         <translation>ترتیبات کو دوبارہ ترتیب کریں اور ایپلیکیشن سے تمام ڈیٹا کو ختم کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="242"/>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="263"/>
         <source>Reset settings and remove all data from the application?</source>
         <translation>ترتیبات کو دوبارہ ترتیب دیں اور ایپلیکیشن سے تمام ڈیٹا کو ہٹا دیں؟</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="243"/>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="264"/>
         <source>All settings will be reset to default. All installed AmneziaVPN services will still remain on the server.</source>
-        <translation>تمام ترتیبات کو معمولی حالت پر لوٹایا جائے گا۔ سب انسٹال کیے گئے امنیزیا وی پی این سروسزسرورپرموجودرہیںگی.</translation>
+        <translation>تمام ترتیبات کو معمولی حالت پر لوٹایا جائے گا۔ سب انسٹال کیے گئے AmneziaVPN سروسزسرورپرموجودرہیںگی.</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="244"/>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="265"/>
         <source>Continue</source>
         <translation>جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="245"/>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="266"/>
         <source>Cancel</source>
         <translation>منسوخ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="249"/>
+        <location filename="../ui/qml/Pages2/PageSettingsApplication.qml" line="270"/>
         <source>Cannot reset settings during active connection</source>
         <translation>چالو کنکشن کے دوران ترتیبات کو دوبارہ ترتیب نہیں دی جا سکتی</translation>
     </message>
@@ -5159,78 +4149,78 @@ Create one from the current settings.</source>
 <context>
     <name>PageSettingsBackup</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="24"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="26"/>
         <source>Settings restored from backup file</source>
         <translation>ترتیبات بیک اپ فائل سے بحال کردی گئی ہیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="67"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="69"/>
         <source>Back up your configuration</source>
         <translation>اپنی ترتیبات کا بیک اپ بنائیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="68"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="70"/>
         <source>You can save your settings to a backup file to restore them the next time you install the application.</source>
         <translation>آپ اپنی ترتیبات کو بیک اپ فائل میں محفوظ کرکے اگلی دفعہ جب آپ ایپلیکیشن کو انسٹال کریں تو انہیں بحال کرنے کے لئے استعمال کرسکتے ہیں۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="86"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="88"/>
         <source>The backup will contain your passwords and private keys for all servers added to AmneziaVPN. Keep this information in a secure place.</source>
         <translation>بیک اپ میں آپ کے تمام سرورز جنہیں AmneziaVPN میں شامل کیا گیا ہے، ان کے پاسورڈ اور نجی کلید شامل ہوں گے۔ اس معلومات کو ایک محفوظ جگہ میں محفوظ رکھیں.</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="100"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="102"/>
         <source>Make a backup</source>
         <translation>ایک بیک اپ بنائیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="107"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="109"/>
         <source>Save backup file</source>
         <translation>بیک اپ فائل کو محفوظ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="108"/>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="141"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="110"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="148"/>
         <source>Backup files (*.backup)</source>
         <translation>بیک اپ فائلیں (*.backup)</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="117"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="119"/>
         <source>Backup file saved</source>
         <translation>بیک اپ فائل محفوظ ہو گئی</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="137"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="141"/>
         <source>Restore from backup</source>
         <translation>بیک اپ سے بحال کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="140"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="147"/>
         <source>Open backup file</source>
         <translation>بیک اپ فائل کو کھولیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="151"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="162"/>
         <source>Import settings from a backup file?</source>
         <translation>بیک اپ فائل سے ترتیبات کو درآمد کریں؟</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="152"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="163"/>
         <source>All current settings will be reset</source>
         <translation>تمام موجودہ ترتیبات کو دوبارہ ترتیب دیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="153"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="164"/>
         <source>Continue</source>
         <translation>جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="154"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="165"/>
         <source>Cancel</source>
         <translation>منسوخ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="158"/>
+        <location filename="../ui/qml/Pages2/PageSettingsBackup.qml" line="169"/>
         <source>Cannot restore backup settings during active connection</source>
         <translation>چالو کنکشن کے دوران بیک اپ ترتیبات کو دوبارہ قائم نہیں کیا جا سکتا</translation>
     </message>
@@ -5241,16 +4231,6 @@ Create one from the current settings.</source>
         <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="49"/>
         <source>Connection</source>
         <translation>کنکشن</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="84"/>
-        <source>When AmneziaDNS is not used or installed</source>
-        <translation>ایمنیزیا ڈی این ایس کو استعمال نہیں کیا گیا ہو یا اسے انسٹال نہیں کیا گیاہے</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="124"/>
-        <source>Allows you to use the VPN only for certain Apps</source>
-        <translation>آپ کو صرف مخصوص ایپلیکیشنز کے لئے وی پی این استعمال کرنے کی اجازت دیتا ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="65"/>
@@ -5265,7 +4245,12 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="83"/>
         <source>DNS servers</source>
-        <translation>ڈی این ایس سرور</translation>
+        <translation>DNS سرور</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="84"/>
+        <source>When AmneziaDNS is not used or installed</source>
+        <translation>Amnezia DNS کو استعمال نہیں کیا گیا ہو یا اسے انسٹال نہیں کیا گیاہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="99"/>
@@ -5275,7 +4260,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="100"/>
         <source>Allows you to select which sites you want to access through the VPN</source>
-        <translation>آپ کو یہ امکان فراہم کرتا ہے کہ آپ وی پی این کے ذریعہ کس سائٹ کو دسترس دینا چاہتے ہیں وہ منتخب کریں</translation>
+        <translation>آپ کو یہ امکان فراہم کرتا ہے کہ آپ VPN کے ذریعہ کس سائٹ کو دسترس دینا چاہتے ہیں وہ منتخب کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="123"/>
@@ -5283,14 +4268,19 @@ Create one from the current settings.</source>
         <translation>ایپ کے بنیاد پر سپلٹ ٹنلنگ</translation>
     </message>
     <message>
+        <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="124"/>
+        <source>Allows you to use the VPN only for certain Apps</source>
+        <translation>آپ کو صرف مخصوص ایپلیکیشنز کے لئے VPN استعمال کرنے کی اجازت دیتا ہے</translation>
+    </message>
+    <message>
         <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="142"/>
         <source>KillSwitch</source>
-        <translation type="unfinished"></translation>
+        <translation>KillSwitch</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsConnection.qml" line="143"/>
         <source>Blocks network connections without VPN</source>
-        <translation type="unfinished"></translation>
+        <translation>VPN کے بغیر نیٹ ورک کنکشنز کو روکتا ہے</translation>
     </message>
 </context>
 <context>
@@ -5303,7 +4293,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsDns.qml" line="59"/>
         <source>DNS servers</source>
-        <translation>ڈی این ایس سرور</translation>
+        <translation>DNS سرور</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsDns.qml" line="67"/>
@@ -5353,7 +4343,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsDns.qml" line="153"/>
         <source>Primary DNS cannot be empty</source>
-        <translation type="unfinished"></translation>
+        <translation>پرائمری DNS خالی نہیں ہو سکتا</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsDns.qml" line="165"/>
@@ -5366,67 +4356,67 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="40"/>
         <source>KillSwitch</source>
-        <translation type="unfinished"></translation>
+        <translation>KillSwitch</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="41"/>
         <source>Enable to ensure network traffic goes through a secure VPN tunnel, preventing accidental exposure of your IP and DNS queries if the connection drops</source>
-        <translation type="unfinished"></translation>
+        <translation>نیٹ ورک ٹریفک محفوظ VPN ٹنل سے گزرے یہ یقینی بنانے کے لیے فعال کریں، تاکہ کنکشن ٹوٹنے پر آپ کا IP اور DNS استفسارات غیر ارادی طور پر ظاہر نہ ہوں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="52"/>
         <source>KillSwitch settings cannot be changed during an active connection</source>
-        <translation type="unfinished"></translation>
+        <translation>فعال کنکشن کے دوران KillSwitch ترتیبات تبدیل نہیں کی جا سکتیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="68"/>
         <source>Soft KillSwitch</source>
-        <translation type="unfinished"></translation>
+        <translation>Soft KillSwitch</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="69"/>
         <source>Internet access is blocked if the VPN disconnects unexpectedly</source>
-        <translation type="unfinished"></translation>
+        <translation>اگر VPN غیر متوقع طور پر منقطع ہو جائے تو انٹرنیٹ رسائی روک دی جاتی ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="92"/>
         <source>Strict KillSwitch</source>
-        <translation type="unfinished"></translation>
+        <translation>Strict KillSwitch</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="93"/>
         <source>Internet connection is blocked even when VPN is turned off manually or hasn&apos;t started</source>
-        <translation type="unfinished"></translation>
+        <translation>VPN دستی طور پر بند ہونے یا شروع نہ ہونے پر بھی انٹرنیٹ کنکشن روک دیا جاتا ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="96"/>
         <source>Just a little heads-up</source>
-        <translation type="unfinished"></translation>
+        <translation>صرف ایک مختصر اطلاع</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="97"/>
         <source>If the VPN disconnects or drops while Strict KillSwitch is enabled, internet access will be blocked. To restore access, reconnect VPN or disable/change the KillSwitch.</source>
-        <translation type="unfinished"></translation>
+        <translation>اگر سخت KillSwitch فعال ہونے کے دوران VPN منقطع ہو جائے تو انٹرنیٹ رسائی روک دی جائے گی۔ رسائی بحال کرنے کے لیے VPN دوبارہ جوڑیں یا KillSwitch بند/تبدیل کریں۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="98"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="99"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="123"/>
         <source>DNS Exceptions</source>
-        <translation type="unfinished"></translation>
+        <translation>DNS استثنیٰ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitch.qml" line="124"/>
         <source>DNS servers listed here will remain accessible when KillSwitch is active.</source>
-        <translation type="unfinished"></translation>
+        <translation>KillSwitch فعال ہونے پر یہاں درج DNS سرورز قابل رسائی رہیں گے۔</translation>
     </message>
 </context>
 <context>
@@ -5434,208 +4424,171 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="44"/>
         <source>DNS Exceptions</source>
-        <translation type="unfinished"></translation>
+        <translation>DNS استثنیٰ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="45"/>
         <source>DNS servers listed here will remain accessible when KillSwitch is active</source>
-        <translation type="unfinished"></translation>
+        <translation>KillSwitch فعال ہونے پر یہاں درج DNS سرورز قابل رسائی رہیں گے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="105"/>
         <source>Delete </source>
-        <translation type="unfinished"></translation>
+        <translation>حذف کریں </translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="106"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="107"/>
         <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>منسوخ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="137"/>
         <source>IPv4 address</source>
-        <translation type="unfinished"></translation>
+        <translation>IPv4 پتہ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="167"/>
         <source>Import / Export addresses</source>
-        <translation type="unfinished"></translation>
+        <translation>پتے درآمد / برآمد کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="174"/>
         <source>Import</source>
-        <translation type="unfinished">درآمد</translation>
+        <translation>درآمد</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="187"/>
         <source>Save address list</source>
-        <translation type="unfinished"></translation>
+        <translation>پتوں کی فہرست محفوظ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="194"/>
         <source>Save addresses</source>
-        <translation type="unfinished"></translation>
+        <translation>پتے محفوظ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="195"/>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="265"/>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="281"/>
         <source>Address files (*.json)</source>
-        <translation type="unfinished"></translation>
+        <translation>پتوں کی فائلیں (*.json)</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="254"/>
         <source>Import address list</source>
-        <translation type="unfinished"></translation>
+        <translation>پتوں کی فہرست درآمد کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="261"/>
         <source>Replace address list</source>
-        <translation type="unfinished"></translation>
+        <translation>پتوں کی فہرست تبدیل کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="264"/>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="280"/>
         <source>Open address file</source>
-        <translation type="unfinished"></translation>
+        <translation>پتوں کی فائل کھولیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsKillSwitchExceptions.qml" line="277"/>
         <source>Add imported addresses to existing ones</source>
-        <translation type="unfinished"></translation>
+        <translation>درآمد شدہ پتے موجودہ پتوں میں شامل کریں</translation>
     </message>
 </context>
 <context>
     <name>PageSettingsLogging</name>
-    <message>
-        <source>Logging is enabled. Note that logs will be automatically disabled after 14 days, and all log files will be deleted.</source>
-        <translation type="vanished">لاگنگ فعال ہے۔ یاد رہے کہ لاگوں کو 14 دنوں کے بعد خود بخود غیر فعال کر دیا جائے گا، اور تمام لاگ فائلیں حذف کردی جائیں گی.</translation>
-    </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="50"/>
         <source>Logging</source>
         <translation>لاگنگ</translation>
     </message>
     <message>
-        <source>Enabling this function will save application&apos;s logs automatically. By default, logging functionality is disabled. Enable log saving in case of application malfunction.</source>
-        <translation type="vanished">اس فعل کو فعال کرنے سے، ایپلیکیشن کے لاگ خود بخود محفوظ ہوجائیں گے۔ پہلے سے، لاگنگ کی فعالیت غیر فعال ہوتی ہے۔ اگر ایپلیکیشن میں کوئی خرابی ہو، تو لاگ کو بچانا فعال کریں.</translation>
-    </message>
-    <message>
-        <source>Save logs</source>
-        <translation type="vanished">لاگوں کو محفوظ کریں</translation>
-    </message>
-    <message>
-        <source>Open folder with logs</source>
-        <translation type="vanished">فائلوں کے فولڈر کو کھولیں</translation>
-    </message>
-    <message>
         <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="51"/>
-        <source>Application and service logs are saved automatically and sent to the configured server.</source>
-        <translation type="unfinished"></translation>
+        <source>Enabling this function will save application&apos;s logs automatically. By default, logging functionality is disabled. Enable log saving in case of application malfunction.</source>
+        <translation>اس فعل کو فعال کرنے سے، ایپلیکیشن کے لاگ خود بخود محفوظ ہوجائیں گے۔ پہلے سے، لاگنگ کی فعالیت غیر فعال ہوتی ہے۔ اگر ایپلیکیشن میں کوئی خرابی ہو، تو لاگ کو بچانا فعال کریں.</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="66"/>
-        <source>This clears local log files. Remote copies remain on the server until retention cleanup.</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="63"/>
+        <source>Enable logs</source>
+        <translation>لاگز فعال کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="74"/>
-        <source>Local logs have been cleaned up</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="80"/>
+        <source>Clear logs</source>
+        <translation>لاگوں کو صاف کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="124"/>
-        <source>Open logs folder</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="138"/>
-        <source>Export logs</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="162"/>
-        <source>Client logs</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="163"/>
-        <source>AmneziaVPN logs</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="173"/>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="199"/>
-        <source>Save</source>
-        <translation>محفوظ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="174"/>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="200"/>
-        <source>Logs files (*.log)</source>
-        <translation>لاگ فائلیں (*.log)</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="183"/>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="208"/>
-        <source>Logs file saved</source>
-        <translation>لاگ فائل محفوظ ہوگئی</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="191"/>
-        <source>Service logs</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="192"/>
-        <source>AmneziaVPN-service logs</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Save logs to file</source>
-        <translation type="vanished">لاگوں کو فائل میں محفوظ کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="65"/>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="85"/>
         <source>Clear logs?</source>
         <translation>کیا آپ لاگوں کو صاف کرنا چاہتے ہیں؟</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="67"/>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="86"/>
         <source>Continue</source>
         <translation>براہ کرم جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="68"/>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="87"/>
         <source>Cancel</source>
         <translation>منسوخ</translation>
     </message>
     <message>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="93"/>
         <source>Logs have been cleaned up</source>
-        <translation type="vanished">تم مسح السجلاتلاگوں کو صاف کر دیا گیا ہے</translation>
+        <translation>تم مسح السجلاتلاگوں کو صاف کر دیا گیا ہے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="60"/>
-        <source>Clear logs</source>
-        <translation>لاگوں کو صاف کریں</translation>
-    </message>
-</context>
-<context>
-    <name>PageSettingsNewsDetail</name>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsNewsDetail.qml" line="87"/>
-        <source>Update</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="143"/>
+        <source>Open logs folder</source>
+        <translation>لاگز فولڈر کھولیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsNewsDetail.qml" line="112"/>
-        <source>Skip</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="157"/>
+        <source>Export logs</source>
+        <translation>لاگز برآمد کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="181"/>
+        <source>Client logs</source>
+        <translation>کلائنٹ لاگز</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="182"/>
+        <source>AmneziaVPN logs</source>
+        <translation>AmneziaVPN لاگز</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="192"/>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="218"/>
+        <source>Save</source>
+        <translation>محفوظ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="193"/>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="219"/>
+        <source>Logs files (*.log)</source>
+        <translation>لاگ فائلیں (*.log)</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="202"/>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="227"/>
+        <source>Logs file saved</source>
+        <translation>لاگ فائل محفوظ ہوگئی</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="210"/>
+        <source>Service logs</source>
+        <translation>سروس لاگز</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsLogging.qml" line="211"/>
+        <source>AmneziaVPN-service logs</source>
+        <translation>AmneziaVPN سروس لاگز</translation>
     </message>
 </context>
 <context>
@@ -5643,7 +4596,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsNewsNotifications.qml" line="33"/>
         <source>News &amp; Notifications</source>
-        <translation type="unfinished"></translation>
+        <translation>خبریں اور اطلاعات</translation>
     </message>
 </context>
 <context>
@@ -5659,14 +4612,29 @@ Create one from the current settings.</source>
         <translation>کوئی نئے انسٹال شدہ کنٹینرز نہیں ملے</translation>
     </message>
     <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="98"/>
+        <source>Check the server for previously installed Amnezia services</source>
+        <translation>سرور پر پہلے سے انسٹال کی گئی Amnezia سروسز کو چیک کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="99"/>
+        <source>Add them to the application if they were not displayed</source>
+        <translation>اگر وہ دکھایا نہیں گیا تو انہیں ایپلیکیشن میں شامل کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="112"/>
+        <source>Reboot server</source>
+        <translation>سرور کو دوبارہ چالو کریں</translation>
+    </message>
+    <message>
         <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="116"/>
         <source>Do you want to reboot the server?</source>
         <translation>کیا آپ سرور کو دوبارہ چالو کرنا چاہتے ہیں؟</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="176"/>
-        <source>Do you want to clear server from Amnezia software?</source>
-        <translation>هل تريد حذف الخادم من Amnezia?کیا آپ سرور کو Amnezia سافٹ ویئر سے صاف کرنا چاہتے ہیں؟</translation>
+        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="117"/>
+        <source>The reboot process may take approximately 30 seconds. Are you sure you wish to proceed?</source>
+        <translation>ریبوٹ کا عمل تقریباً 30 سیکنڈ لے سکتا ہے۔ کیا آپ براہ کرم جاری رکھنا چاہتے ہیں؟</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="118"/>
@@ -5685,26 +4653,6 @@ Create one from the current settings.</source>
         <translation>منسوخ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="98"/>
-        <source>Check the server for previously installed Amnezia services</source>
-        <translation>سرور پر پہلے سے انسٹال کی گئی Amnezia سروسز کو چیک کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="99"/>
-        <source>Add them to the application if they were not displayed</source>
-        <translation>اگر وہ دکھایا نہیں گیا تو انہیں ایپلیکیشن میں شامل کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="112"/>
-        <source>Reboot server</source>
-        <translation>سرور کو دوبارہ چالو کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="117"/>
-        <source>The reboot process may take approximately 30 seconds. Are you sure you wish to proceed?</source>
-        <translation>ریبوٹ کا عمل تقریباً 30 سیکنڈ لے سکتا ہے۔ کیا آپ براہ کرم جاری رکھنا چاہتے ہیں؟</translation>
-    </message>
-    <message>
         <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="123"/>
         <source>Cannot reboot server during active connection</source>
         <translation>چالو کنکشن کے دوران سرور کو دوبارہ چالو نہیں کیا جا سکتا</translation>
@@ -5720,9 +4668,24 @@ Create one from the current settings.</source>
         <translation>کیا آپ ایپلیکیشن سے سرور کو ہٹانا چاہتے ہیں؟</translation>
     </message>
     <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="147"/>
+        <source>All installed AmneziaVPN services will still remain on the server.</source>
+        <translation>سرور پر تمام انسٹال شدہ AmneziaVPN سروسز محفوظ رہیں گے.</translation>
+    </message>
+    <message>
         <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="153"/>
         <source>Cannot remove server during active connection</source>
         <translation>چالو کنکشن کے دوران سرور کو ہٹایا نہیں جا سکتا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="172"/>
+        <source>Clear server from Amnezia software</source>
+        <translation>Amnezia سافٹ ویئر کو سرور سے صاف کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="176"/>
+        <source>Do you want to clear server from Amnezia software?</source>
+        <translation>هل تريد حذف الخادم من Amnezia?کیا آپ سرور کو Amnezia سافٹ ویئر سے صاف کرنا چاہتے ہیں؟</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="177"/>
@@ -5732,7 +4695,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="183"/>
         <source>Cannot clear server from Amnezia software during active connection</source>
-        <translation>چالو کنکشن کے دوران سرور کو ایمنیزیا سافٹ ویئر سے صاف کرنا ممکن نہیں</translation>
+        <translation>چالو کنکشن کے دوران سرور کو Amnezia سافٹ ویئر سے صاف کرنا ممکن نہیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="201"/>
@@ -5749,27 +4712,9 @@ Create one from the current settings.</source>
         <source>Cannot reset API config during active connection</source>
         <translation>چالو کنکشن کے دوران API ترتیبات کو دوبارہ ترتیب نہیں دی جا سکتی</translation>
     </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="147"/>
-        <source>All installed AmneziaVPN services will still remain on the server.</source>
-        <translation>سرور پر تمام انسٹال شدہ AmneziaVPN سروسز محفوظ رہیں گے.</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerData.qml" line="172"/>
-        <source>Clear server from Amnezia software</source>
-        <translation>Amnezia سافٹ ویئر کو سرور سے صاف کریں</translation>
-    </message>
 </context>
 <context>
     <name>PageSettingsServerInfo</name>
-    <message>
-        <source>Server name</source>
-        <translation type="vanished">سرور کا نام</translation>
-    </message>
-    <message>
-        <source>Save</source>
-        <translation type="vanished">محفوظ</translation>
-    </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSettingsServerInfo.qml" line="140"/>
         <source>Protocols</source>
@@ -5787,208 +4732,88 @@ Create one from the current settings.</source>
     </message>
 </context>
 <context>
-    <name>PageSettingsServerManagedSplitTunneling</name>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="75"/>
-        <source>Server routing rules</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="84"/>
-        <source>These rules are stored with the server config and are applied in Amnezia VPN only when this server is active.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="95"/>
-        <source>Force split tunneling</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="96"/>
-        <source>For clients with split tunneling disabled, enable bypass mode and apply these server bypass rules. Clients using the opposite split tunneling mode keep their own settings.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="168"/>
-        <source>Remove </source>
-        <translation type="unfinished">ہٹائیں </translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="168"/>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="295"/>
-        <source>Continue</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="168"/>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="295"/>
-        <source>Cancel</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="200"/>
-        <source>website or IP/subnet</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="239"/>
-        <source>Additional options</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="244"/>
-        <source>Import</source>
-        <translation type="unfinished">درآمد</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="257"/>
-        <source>Save site list</source>
-        <translation type="unfinished">سائٹ کی فہرست کو محفوظ کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="265"/>
-        <source>Save sites</source>
-        <translation type="unfinished">سائٹس کو محفوظ کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="266"/>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="380"/>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="391"/>
-        <source>Sites files (*.json)</source>
-        <translation type="unfinished">سائٹس فائلیں (*.json)</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="284"/>
-        <source>Clear site list</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="294"/>
-        <source>Clear site list?</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="294"/>
-        <source>All sites will be removed from list.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="345"/>
-        <source>Import a list of sites</source>
-        <translation type="unfinished">ایک فہرست کو درآمد کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="378"/>
-        <source>Replace site list</source>
-        <translation type="unfinished">سائٹ کی فہرست کو بدلیں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="380"/>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="391"/>
-        <source>Open sites file</source>
-        <translation type="unfinished">سائٹس فائل کو کھولیں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerManagedSplitTunneling.qml" line="389"/>
-        <source>Add imported sites to existing ones</source>
-        <translation type="unfinished">آمدہ سائٹس کو موجودہ میں شامل کریں</translation>
-    </message>
-</context>
-<context>
     <name>PageSettingsServerProtocol</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="55"/>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="56"/>
         <source> settings</source>
         <translation> ترتیبات</translation>
     </message>
     <message>
-        <source>Clear %1 profile</source>
-        <translation type="vanished">%1 پروفائل کو صاف کریں</translation>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="57"/>
+        <source>This protocol is no longer supported.</source>
+        <translation>یہ پروٹوکول اب سپورٹ نہیں کیا جاتا۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="139"/>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="71"/>
+        <source>AmneziaWG 2.0 is outdated and does not include the latest security improvements, but it will continue to work. Moving to AmneziaWG 3.1 by deploying a new container on the server is recommended for stronger protocol security</source>
+        <translation>AmneziaWG 2.0 پرانا ہے اور اس میں تازہ ترین سیکیورٹی بہتریاں شامل نہیں، تاہم یہ کام کرتا رہے گا۔ مضبوط پروٹوکول سیکیورٹی کے لیے سرور پر نیا کنٹینر تعین کر کے AmneziaWG 3.1 پر منتقل ہونے کی سفارش کی جاتی ہے</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="90"/>
+        <source> connection settings</source>
+        <translation> کنکشن کی ترتیبات</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="99"/>
+        <source>Click the &quot;connect&quot; button to create a connection configuration</source>
+        <translation>کنکشن کنفیگریشن بنانے کے لیے &quot;منسلک کریں&quot; بٹن دبائیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="119"/>
+        <source> server settings</source>
+        <translation> سرور کی ترتیبات</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="151"/>
+        <source>Clear profile</source>
+        <translation>پروفائل صاف کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="154"/>
         <source>Clear %1 profile?</source>
         <translation>کیا آپ واقعی %1 پروفائل کو صاف کرنا چاہتے ہیں؟</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="146"/>
-        <source>Unable to clear %1 profile while there is an active connection</source>
-        <translation>فعال کنکشن کے دوران %1 پروفائل کو صاف نہیں کیا جا سکتا</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="192"/>
-        <source>Cannot remove active container</source>
-        <translation>فعال کنٹینر کو ہٹانا ممکن نہیں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="180"/>
-        <source>Remove </source>
-        <translation>ہٹائیں </translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="185"/>
-        <source>All users with whom you shared a connection will no longer be able to connect to it.</source>
-        <translation>آپ نے جن کے ساتھ کنکشن شئیر کیا تھا، ان تمام صارفین کو اس سے جڑنے کی اجازت نہیں ہوگی.</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="184"/>
-        <source>Remove %1 from server?</source>
-        <translation>کیا آپ سرور سے %1 کو ہٹانا چاہتے ہیں؟</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="56"/>
-        <source>This protocol is no longer supported.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="75"/>
-        <source> connection settings</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="84"/>
-        <source>Click the &quot;connect&quot; button to create a connection configuration</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="104"/>
-        <source> server settings</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="136"/>
-        <source>Clear profile</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="140"/>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="155"/>
         <source>The connection configuration will be deleted for this device only</source>
-        <translation type="unfinished"></translation>
+        <translation>کنکشن کنفیگریشن صرف اس ڈیوائس کے لیے حذف کی جائے گی</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="141"/>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="186"/>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="156"/>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="201"/>
         <source>Continue</source>
         <translation>براہ کرم جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="142"/>
-        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="187"/>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="157"/>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="202"/>
         <source>Cancel</source>
         <translation>منسوخ</translation>
     </message>
-</context>
-<context>
-    <name>PageSettingsServerServices</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerServices.qml" line="61"/>
-        <source>Server routing rules</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="161"/>
+        <source>Unable to clear %1 profile while there is an active connection</source>
+        <translation>فعال کنکشن کے دوران %1 پروفائل کو صاف نہیں کیا جا سکتا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsServerServices.qml" line="62"/>
-        <source>Configure domains and IPs that this server adds to client split tunneling</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="195"/>
+        <source>Remove </source>
+        <translation>ہٹائیں </translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="199"/>
+        <source>Remove %1 from server?</source>
+        <translation>کیا آپ سرور سے %1 کو ہٹانا چاہتے ہیں؟</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="200"/>
+        <source>All users with whom you shared a connection will no longer be able to connect to it.</source>
+        <translation>آپ نے جن کے ساتھ کنکشن شئیر کیا تھا، ان تمام صارفین کو اس سے جڑنے کی اجازت نہیں ہوگی.</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsServerProtocol.qml" line="207"/>
+        <source>Cannot remove active container</source>
+        <translation>فعال کنٹینر کو ہٹانا ممکن نہیں</translation>
     </message>
 </context>
 <context>
@@ -6002,131 +4827,117 @@ Create one from the current settings.</source>
 <context>
     <name>PageSettingsSplitTunneling</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="39"/>
-        <source>Default server does not support split tunneling function</source>
-        <translation>افتراضی سرور سپلٹ ٹنلنگ فعال نہیں کرتا</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="103"/>
-        <source>Addresses from the list should not be accessed via VPN</source>
-        <translation>اس فہرست سے پتوں کا وی پی این کے ذریعے دسترس حاصل نہیں کیا جانا چاہئے</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="144"/>
-        <source>Split tunneling</source>
-        <translation>اسپلٹ ٹنلنگ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="171"/>
-        <source>Mode</source>
-        <translation>موڈ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="306"/>
-        <source>Managed by server</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="317"/>
-        <source>Server-managed rules are locked. They are used only when this server is active and the current split tunneling mode applies this list.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="368"/>
-        <source>Remove </source>
-        <translation>ہٹائیں </translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="369"/>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="520"/>
-        <source>Continue</source>
-        <translation>براہ کرم جاری رکھیں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="370"/>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="521"/>
-        <source>Cancel</source>
-        <translation>منسوخ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="467"/>
-        <source>Additional options</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="98"/>
-        <source>Only the sites listed here will be accessed through the VPN</source>
-        <translation>صرف یہاں درج کردہ سائٹس وی پی این کے ذریعے دسترس حاصل کریں گی</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="36"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="29"/>
         <source>Cannot change split tunneling settings during active connection</source>
         <translation>فعال کنکشن کے دوران سپلٹ ٹنلنگ کی ترتیبات تبدیل نہیں کی جا سکتیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="421"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="32"/>
+        <source>Default server does not support split tunneling function</source>
+        <translation>افتراضی سرور سپلٹ ٹنلنگ فعال نہیں کرتا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="65"/>
+        <source>Only the sites listed here will be accessed through the VPN</source>
+        <translation>صرف یہاں درج کردہ سائٹس VPN کے ذریعے دسترس حاصل کریں گی</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="70"/>
+        <source>Addresses from the list should not be accessed via VPN</source>
+        <translation>اس فہرست سے پتوں کا VPN کے ذریعے دسترس حاصل نہیں کیا جانا چاہئے</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="101"/>
+        <source>Split tunneling</source>
+        <translation>اسپلٹ ٹنلنگ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="128"/>
+        <source>Mode</source>
+        <translation>موڈ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="210"/>
+        <source>Remove </source>
+        <translation>ہٹائیں </translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="211"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="361"/>
+        <source>Continue</source>
+        <translation>براہ کرم جاری رکھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="212"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="362"/>
+        <source>Cancel</source>
+        <translation>منسوخ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="262"/>
         <source>website or IP</source>
-        <translation>ویب سائٹ یا آئی پی</translation>
+        <translation>ویب سائٹ یا IP</translation>
     </message>
     <message>
-        <source>Import / Export Sites</source>
-        <translation type="vanished">سائٹس درآمد / برآمد</translation>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="308"/>
+        <source>Additional options</source>
+        <translation>اضافی اختیارات</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="474"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="315"/>
         <source>Import</source>
         <translation>درآمد</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="487"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="328"/>
         <source>Save site list</source>
         <translation>سائٹ کی فہرست کو محفوظ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="494"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="335"/>
         <source>Save sites</source>
         <translation>سائٹس کو محفوظ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="495"/>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="621"/>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="634"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="336"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="462"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="475"/>
         <source>Sites files (*.json)</source>
         <translation>سائٹس فائلیں (*.json)</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="515"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="356"/>
         <source>Clear site list</source>
-        <translation type="unfinished"></translation>
+        <translation>سائٹ کی فہرست صاف کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="518"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="359"/>
         <source>Clear site list?</source>
-        <translation type="unfinished"></translation>
+        <translation>سائٹ کی فہرست صاف کریں؟</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="519"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="360"/>
         <source>All sites will be removed from list.</source>
-        <translation type="unfinished"></translation>
+        <translation>تمام سائٹس فہرست سے ہٹا دی جائیں گی۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="583"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="424"/>
         <source>Import a list of sites</source>
         <translation>ایک فہرست کو درآمد کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="618"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="459"/>
         <source>Replace site list</source>
         <translation>سائٹ کی فہرست کو بدلیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="620"/>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="633"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="461"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="474"/>
         <source>Open sites file</source>
         <translation>سائٹس فائل کو کھولیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="631"/>
+        <location filename="../ui/qml/Pages2/PageSettingsSplitTunneling.qml" line="472"/>
         <source>Add imported sites to existing ones</source>
         <translation>آمدہ سائٹس کو موجودہ میں شامل کریں</translation>
     </message>
@@ -6136,40 +4947,110 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiFreeInfo.qml" line="74"/>
         <source>Free features</source>
-        <translation type="unfinished"></translation>
+        <translation>مفت خصوصیات</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiFreeInfo.qml" line="125"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
 </context>
 <context>
     <name>PageSetupWizardApiPremiumInfo</name>
+    <message numerus="yes">
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="102"/>
+        <source>Try free for %n day(s)</source>
+        <translation>
+            <numerusform>%n دن مفت آزمائیں</numerusform>
+            <numerusform>%n دن مفت آزمائیں</numerusform>
+        </translation>
+    </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="91"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="140"/>
         <source>Recommended</source>
-        <translation type="unfinished"></translation>
+        <translation>تجویز کردہ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="103"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="167"/>
+        <source>Change plan</source>
+        <translation>پلان تبدیل کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="180"/>
         <source>Premium features</source>
-        <translation type="unfinished"></translation>
+        <translation>Premium خصوصیات</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="132"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="209"/>
         <source>Charged to your Apple ID at confirmation. Renews automatically unless auto-renew is turned off at least 24 hours before period end. Manage in Apple ID settings.</source>
-        <translation type="unfinished"></translation>
+        <translation>تصدیق پر آپ کے Apple ID سے رقم لی جائے گی۔ مدت ختم ہونے سے کم از کم 24 گھنٹے قبل خودکار تجدید بند نہ کرنے پر یہ خودکار تجدید ہوتا رہے گا۔ Apple ID ترتیبات میں منظم کریں۔</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="169"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="268"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="309"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="271"/>
+        <source>Start %n-day free trial</source>
+        <translation>
+            <numerusform>%n دن کا مفت ٹرائل شروع کریں</numerusform>
+            <numerusform>%n دن کا مفت ٹرائل شروع کریں</numerusform>
+        </translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="171"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="273"/>
         <source>Subscribe — %1 for %2</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرائب کریں — %2 کے لیے %1</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="296"/>
+        <source>Upgrade plan?</source>
+        <translation>پلان اپ گریڈ کریں؟</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="297"/>
+        <source>The current plan will be replaced with the %1 / %2 plan. The change will take effect immediately after confirmation</source>
+        <translation>موجودہ پلان کو %1 / %2 پلان سے تبدیل کر دیا جائے گا۔ تصدیق کے فوراً بعد تبدیلی نافذ ہو جائے گی</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="300"/>
+        <source>Downgrade plan?</source>
+        <translation>پلان ڈاؤن گریڈ کریں؟</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="301"/>
+        <source>The current plan will be replaced with the %1 / %2 plan. The store will apply the change based on its billing rules</source>
+        <translation>موجودہ پلان کو %1 / %2 پلان سے تبدیل کر دیا جائے گا۔ اسٹور اپنے بلنگ قواعد کے مطابق تبدیلی لاگو کرے گا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="304"/>
+        <source>Confirm subscription change?</source>
+        <translation>سبسکرپشن کی تبدیلی کی تصدیق کریں؟</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="305"/>
+        <source>An active subscription already exists. The current plan will be replaced with the %1 / %2 plan</source>
+        <translation>ایک فعال سبسکرپشن پہلے سے موجود ہے۔ موجودہ پلان کو %1 / %2 پلان سے تبدیل کر دیا جائے گا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="309"/>
+        <source>Cancel</source>
+        <translation>منسوخ کریں</translation>
+    </message>
+    <message numerus="yes">
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="335"/>
+        <source>%n day(s) free, then %1/%2. Auto-renews until canceled. Cancel anytime in Settings.</source>
+        <translation>
+            <numerusform>%n دن مفت، پھر %1/%2۔ منسوخی تک خودکار تجدید۔ کسی بھی وقت ترتیبات میں منسوخ کریں۔</numerusform>
+            <numerusform>%n دن مفت، پھر %1/%2۔ منسوخی تک خودکار تجدید۔ کسی بھی وقت ترتیبات میں منسوخ کریں۔</numerusform>
+        </translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardApiPremiumInfo.qml" line="338"/>
+        <source>%1/%2, auto-renewal. Cancel anytime in the Settings.</source>
+        <translation>%1/%2، خودکار تجدید۔ آپ کسی بھی وقت ترتیبات میں منسوخ کر سکتے ہیں۔</translation>
     </message>
 </context>
 <context>
@@ -6177,17 +5058,17 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiServicesList.qml" line="52"/>
         <source>VPN by Amnezia</source>
-        <translation type="unfinished"></translation>
+        <translation>Amnezia کا VPN</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiServicesList.qml" line="53"/>
         <source>Choose a VPN service that suits your needs.</source>
-        <translation type="unfinished"></translation>
+        <translation>اپنی ضروریات کے مطابق VPN سروس منتخب کریں۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiServicesList.qml" line="91"/>
         <source>Recommended</source>
-        <translation type="unfinished"></translation>
+        <translation>تجویز کردہ</translation>
     </message>
 </context>
 <context>
@@ -6195,200 +5076,176 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiTrialEmail.qml" line="65"/>
         <source>Create an account</source>
-        <translation type="unfinished"></translation>
+        <translation>اکاؤنٹ بنائیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiTrialEmail.qml" line="66"/>
         <source>To manage your subscription</source>
-        <translation type="unfinished"></translation>
+        <translation>اپنا سبسکرپشن منظم کرنے کے لیے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiTrialEmail.qml" line="77"/>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiTrialEmail.qml" line="78"/>
         <source>Email</source>
-        <translation type="unfinished"></translation>
+        <translation>ای میل</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiTrialEmail.qml" line="102"/>
         <source>We will create an account for your trial subscription and send important subscription updates to this email address</source>
-        <translation type="unfinished"></translation>
+        <translation>ہم آپ کے ٹرائل سبسکرپشن کے لیے اکاؤنٹ بنائیں گے اور سبسکرپشن سے متعلق اہم اپ ڈیٹس اس ای میل پتے پر بھیجیں گے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiTrialEmail.qml" line="118"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardApiTrialEmail.qml" line="126"/>
         <source>Enter a valid email address</source>
-        <translation type="unfinished"></translation>
+        <translation>ایک درست ای میل پتہ درج کریں</translation>
     </message>
 </context>
 <context>
     <name>PageSetupWizardConfigSource</name>
     <message>
-        <source>Server connection</source>
-        <translation type="vanished">سرور کنکشن</translation>
-    </message>
-    <message>
-        <source>Do not use connection codes from untrusted sources, as they may be created to intercept your data.</source>
-        <translation type="vanished">غیر معتبر ماخذ سے کنکشن کوڈ استعمال نہ کریں، کیونکہ یہ آپ کے ڈیٹا کو منسلک کرنے کے لئے تخلیق کیا گیا ہوسکتا ہے.</translation>
-    </message>
-    <message>
-        <source>What do you have?</source>
-        <translation type="vanished">آپ کو کس میں مدد چاہیے؟</translation>
-    </message>
-    <message>
-        <source>File with connection settings or backup</source>
-        <translation type="vanished">کنکشن کی ترتیبات یا بیک اپ والی فائل</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="48"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="50"/>
         <source>Connection</source>
-        <translation type="unfinished">کنکشن</translation>
+        <translation>کنکشن</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="75"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="77"/>
         <source>Settings</source>
-        <translation type="unfinished">ترتیبات</translation>
+        <translation>ترتیبات</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="152"/>
-        <source>Insert</source>
-        <translation type="unfinished">داخل کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="348"/>
-        <source>Restore purchases</source>
-        <translation>خریداری بحال کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="294"/>
-        <source>Restore from backup</source>
-        <translation type="unfinished">بیک اپ سے بحال کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="81"/>
-        <source>Export client logs</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="91"/>
-        <source>Save</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="92"/>
-        <source>Logs files (*.log)</source>
-        <translation type="unfinished">لاگ فائلیں (*.log)</translation>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="87"/>
+        <source>Enable logs</source>
+        <translation>لاگز فعال کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="101"/>
-        <source>Logs file saved</source>
-        <translation type="unfinished">لاگ فائل محفوظ ہوگئی</translation>
+        <source>Export client logs</source>
+        <translation>کلائنٹ لاگز برآمد کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="111"/>
+        <source>Save</source>
+        <translation>محفوظ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="112"/>
+        <source>Logs files (*.log)</source>
+        <translation>لاگ فائلیں (*.log)</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="121"/>
+        <source>Logs file saved</source>
+        <translation>لاگ فائل محفوظ ہوگئی</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="131"/>
         <source>Support tag</source>
-        <translation type="unfinished"></translation>
+        <translation>سپورٹ ٹیگ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="122"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="142"/>
         <source>Copied</source>
-        <translation type="unfinished"></translation>
+        <translation>نقل کر دیا گیا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="141"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="161"/>
         <source>Insert the key, add a configuration file or scan the QR-code</source>
-        <translation type="unfinished"></translation>
+        <translation>کی درج کریں، کنفیگریشن فائل شامل کریں یا QR کوڈ اسکین کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="151"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="171"/>
         <source>Insert key</source>
-        <translation type="unfinished"></translation>
+        <translation>کی درج کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="170"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="172"/>
+        <source>Insert</source>
+        <translation>داخل کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="190"/>
         <source>Continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="187"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="207"/>
         <source>Other connection options</source>
-        <translation type="unfinished"></translation>
+        <translation>دیگر کنکشن اختیارات</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="208"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="228"/>
         <source>Recommended</source>
-        <translation type="unfinished"></translation>
+        <translation>تجویز کردہ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="238"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="260"/>
         <source>Site Amnezia</source>
-        <translation type="unfinished"></translation>
+        <translation>Amnezia ویب سائٹ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="262"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="284"/>
         <source>VPN by Amnezia</source>
-        <translation type="unfinished"></translation>
+        <translation>Amnezia کا VPN</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="263"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="285"/>
         <source>The easiest way to connect to the VPN</source>
-        <translation type="unfinished"></translation>
+        <translation>VPN سے جڑنے کا آسان ترین طریقہ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="281"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="303"/>
         <source>Self-hosted VPN</source>
-        <translation type="unfinished"></translation>
+        <translation>خود میزبان VPN</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="282"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="304"/>
         <source>Configure Amnezia VPN on your own server</source>
-        <translation type="unfinished"></translation>
+        <translation>اپنے سرور پر Amnezia VPN ترتیب دیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="295"/>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="314"/>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="333"/>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="349"/>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="364"/>
-        <source></source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="316"/>
+        <source>Restore from backup</source>
+        <translation>بیک اپ سے بحال کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="299"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="324"/>
         <source>Open backup file</source>
-        <translation type="unfinished">بیک اپ فائل کو کھولیں</translation>
+        <translation>بیک اپ فائل کو کھولیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="300"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="325"/>
         <source>Backup files (*.backup)</source>
-        <translation type="unfinished">بیک اپ فائلیں (*.backup)</translation>
+        <translation>بیک اپ فائلیں (*.backup)</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="313"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="342"/>
         <source>File with connection settings</source>
         <translation>کنکشن کی ترتیبات والی فائل</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="319"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="348"/>
         <source>Open config file</source>
         <translation>کنفیگ فائل کو کھولیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="332"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="361"/>
         <source>QR code</source>
         <translation>QR کوڈ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="363"/>
-        <source>I have nothing</source>
-        <translation type="unfinished">میرے پاس کچھ نہیں ہے</translation>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="377"/>
+        <source>Restore purchases</source>
+        <translation>خریداری بحال کریں</translation>
     </message>
     <message>
-        <source>Key as text</source>
-        <translation type="vanished">متن کے طور پر کلید</translation>
+        <location filename="../ui/qml/Pages2/PageSetupWizardConfigSource.qml" line="392"/>
+        <source>I have nothing</source>
+        <translation>میرے پاس کچھ نہیں ہے</translation>
     </message>
 </context>
 <context>
@@ -6399,9 +5256,16 @@ Create one from the current settings.</source>
         <translation>اپنے سرور کو ترتیب دیں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="206"/>
-        <source>Server IP address [:port]</source>
-        <translation>سرور آئی پی پتہ [:پورٹ]</translation>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="82"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="94"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="248"/>
+        <source>Password or SSH private key</source>
+        <translation>پاس ورڈ یا SSH نجی کلید</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="97"/>
+        <source>SSH key requirements: supported key types are ED25519 and RSA in PEM format. Paste the private key, including the BEGIN/END lines. If your key doesn’t work, generate a compatible one</source>
+        <translation>SSH کی کی ضروریات: سپورٹ شدہ اقسام PEM فارمیٹ میں ED25519 اور RSA ہیں۔ BEGIN/END لائنوں سمیت نجی کی پیسٹ کریں۔ اگر آپ کی کی کام نہ کرے تو ایک ہم آہنگ کی بنائیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="112"/>
@@ -6411,76 +5275,75 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="144"/>
         <source>All data you enter will remain strictly confidential and will not be shared or disclosed to the Amnezia or any third parties</source>
-        <translation>آپ جو ڈیٹا داخل کریں گے وہ بالکل خفیہ رہے گا اور نہ تو امنیزیا یا کسی تیسری شخصیت کے ساتھ اشتراک کیا جائے گا</translation>
+        <translation>آپ جو ڈیٹا داخل کریں گے وہ بالکل خفیہ رہے گا اور نہ تو Amnezia یا کسی تیسری شخصیت کے ساتھ اشتراک کیا جائے گا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="207"/>
-        <source>255.255.255.255:22</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="157"/>
+        <source>Don&apos;t have a server?</source>
+        <translation>سرور نہیں ہے؟</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="215"/>
-        <source>SSH Username</source>
-        <translation>ایس ایس ایچ صارف نام</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="82"/>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="94"/>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="224"/>
-        <source>Password or SSH private key</source>
-        <translation>پاس ورڈ یا SSH نجی کلید</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="97"/>
-        <source>SSH key requirements: supported key types are ED25519 and RSA in PEM format. Paste the private key, including the BEGIN/END lines. If your key doesn’t work, generate a compatible one</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="155"/>
-        <source>How to run your VPN server</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="156"/>
-        <source>Where to get connection data, step-by-step instructions for buying a VPS</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="176"/>
-        <source>Ip address cannot be empty</source>
-        <translation>آئی پی پتہ خالی نہیں ہو سکتا</translation>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="158"/>
+        <source>Amnezia hosting. VPN servers without complicated settings and headaches</source>
+        <translation>Amnezia ہوسٹنگ۔ پیچیدہ ترتیبات اور جھنجھٹ کے بغیر VPN سرورز</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="179"/>
+        <source>How to run your VPN server</source>
+        <translation>اپنا VPN سرور کیسے چلائیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="180"/>
+        <source>Where to get connection data, step-by-step instructions for buying a VPS</source>
+        <translation>کنکشن ڈیٹا کہاں سے حاصل کریں، VPS خریدنے کی مرحلہ وار ہدایات</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="200"/>
+        <source>Ip address cannot be empty</source>
+        <translation>IP پتہ خالی نہیں ہو سکتا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="203"/>
         <source>Enter the address in the format 255.255.255.255:88</source>
         <translation>ایڈریس درج کریں فارمیٹ 255.255.255.255:88</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="184"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="208"/>
         <source>Login cannot be empty</source>
         <translation>لاگ ان نام خالی نہیں ہو سکتا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="190"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="214"/>
         <source>Password/private key cannot be empty</source>
         <translation>پاس ورڈ یا نجی کلید خالی نہیں ہو سکتی</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="230"/>
+        <source>Server IP address [:port]</source>
+        <translation>سرور IP پتہ [:پورٹ]</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="231"/>
+        <source>255.255.255.255:22</source>
+        <translation>255.255.255.255:22</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardCredentials.qml" line="239"/>
+        <source>SSH Username</source>
+        <translation>SSH صارف نام</translation>
     </message>
 </context>
 <context>
     <name>PageSetupWizardEasy</name>
     <message>
-        <source>What is the level of internet control in your region?</source>
-        <translation type="vanished">آپ کے علاقے میں انٹرنیٹ کنٹرول کا سطح کیا ہے؟</translation>
-    </message>
-    <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardEasy.qml" line="85"/>
         <source>Choose Installation Type</source>
-        <translation type="unfinished"></translation>
+        <translation>تنصیب کی قسم منتخب کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardEasy.qml" line="138"/>
         <source>Manual</source>
-        <translation type="unfinished"></translation>
+        <translation>دستی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardEasy.qml" line="139"/>
@@ -6488,14 +5351,14 @@ Create one from the current settings.</source>
         <translation>ایک VPN پروٹوکول کا انتخاب کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardEasy.qml" line="200"/>
-        <source>Skip setup</source>
-        <translation>ترتیب چھوڑیں</translation>
-    </message>
-    <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardEasy.qml" line="159"/>
         <source>Continue</source>
         <translation>جاری رکھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardEasy.qml" line="200"/>
+        <source>Skip setup</source>
+        <translation>ترتیب چھوڑیں</translation>
     </message>
 </context>
 <context>
@@ -6514,17 +5377,12 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardInstalling.qml" line="63"/>
         <source>Amnezia has detected that your server is currently </source>
-        <translation>ایمنیزیا نے دریافت کیا ہے کہ آپ کا سرور موجودہ </translation>
+        <translation>Amnezia نے دریافت کیا ہے کہ آپ کا سرور موجودہ </translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardInstalling.qml" line="64"/>
         <source>busy installing other software. Amnezia installation </source>
         <translation>مصروف ہے اور دوسرے سافٹ ویئر کی انسٹالیشن کر رہا ہے </translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardInstalling.qml" line="150"/>
-        <source>Cancel installation</source>
-        <translation>انسٹالیشن منسوخ</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardInstalling.qml" line="65"/>
@@ -6535,6 +5393,11 @@ Create one from the current settings.</source>
         <location filename="../ui/qml/Pages2/PageSetupWizardInstalling.qml" line="104"/>
         <source>Installing</source>
         <translation>انسٹال ہو رہی ہے</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardInstalling.qml" line="150"/>
+        <source>Cancel installation</source>
+        <translation>انسٹالیشن منسوخ</translation>
     </message>
 </context>
 <context>
@@ -6560,19 +5423,60 @@ Create one from the current settings.</source>
         <translation>نیٹ ورک پروٹوکول</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="214"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="215"/>
         <source>Port</source>
         <translation>پورٹ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="235"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="229"/>
+        <source>Hostname</source>
+        <translation>ہوسٹ نام</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="230"/>
+        <source>proxy.example.com</source>
+        <translation>proxy.example.com</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="244"/>
+        <source>Use lowercase letters, digits, dots and hyphens</source>
+        <translation>چھوٹے انگریزی حروف، ہندسے، نقطے اور ہائفن استعمال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="260"/>
+        <source>ACME email</source>
+        <translation>ACME ای میل</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="261"/>
+        <source>you@example.com</source>
+        <translation>you@example.com</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="275"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="329"/>
+        <source>Enter a valid email for the TLS certificate</source>
+        <translation>TLS سرٹیفکیٹ کے لیے ایک درست ای میل درج کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="288"/>
+        <source>Needs a DNS A record and free, internet-reachable ports 443 (HTTPS) and 80 (ACME). If either port is busy or blocked, the proxy will not work. Classic Telegram MTProxy links will not work.</source>
+        <translation>DNS A ریکارڈ اور انٹرنیٹ سے قابل رسائی خالی پورٹس 443 (HTTPS) اور 80 (ACME) درکار ہیں۔ اگر ان میں سے کوئی پورٹ مصروف یا بلاک ہو تو پراکسی کام نہیں کرے گی۔ کلاسک Telegram MTProxy لنکس کام نہیں کریں گے۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="310"/>
         <source>Install</source>
         <translation>انسٹال</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="241"/>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="325"/>
+        <source>Enter a lowercase DNS hostname</source>
+        <translation>چھوٹے حروف میں DNS ہوسٹ نام درج کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageSetupWizardProtocolSettings.qml" line="344"/>
         <source>The port must be in the range of 1 to 65535</source>
-        <translation type="unfinished"></translation>
+        <translation>پورٹ 1 سے 65535 کی حد میں ہونا چاہیے</translation>
     </message>
 </context>
 <context>
@@ -6580,7 +5484,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardProtocols.qml" line="78"/>
         <source>VPN protocol</source>
-        <translation>وی پی این پروٹوکول</translation>
+        <translation>VPN پروٹوکول</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardProtocols.qml" line="79"/>
@@ -6599,29 +5503,9 @@ Create one from the current settings.</source>
 <context>
     <name>PageSetupWizardStart</name>
     <message>
-        <source>Settings restored from backup file</source>
-        <translation type="vanished">ترتیبات بیک اپ فائل سے بحال کردی گئی ہیں</translation>
-    </message>
-    <message>
-        <source>Free service for creating a personal VPN on your server.</source>
-        <translation type="vanished">آپ کے سرور پر ایک ذاتی وی پی این بنانے کے لئے مفت خدمات.</translation>
-    </message>
-    <message>
-        <source> Helps you access blocked content without revealing your privacy, even to VPN providers.</source>
-        <translation type="vanished"> آپ کو ریاست کردہ مواد تک رسائی فراہم کرتا ہے بغیر آپ کے خصوصیت کو وی پی این فراہم کرنے والوں تک بھی ظاہر نہیں کرتا.</translation>
-    </message>
-    <message>
-        <source>I have the data to connect</source>
-        <translation type="vanished">میرے پاس اس کنکشن کے لئے ڈیٹا موجود ہے</translation>
-    </message>
-    <message>
-        <source>I have nothing</source>
-        <translation type="vanished">میرے پاس کچھ نہیں ہے</translation>
-    </message>
-    <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardStart.qml" line="42"/>
         <source>Let&apos;s get started</source>
-        <translation type="unfinished"></translation>
+        <translation>آئیے شروع کریں</translation>
     </message>
 </context>
 <context>
@@ -6672,7 +5556,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardViewConfig.qml" line="132"/>
         <source>Enable WireGuard obfuscation. It may be useful if WireGuard is blocked on your provider.</source>
-        <translation>وائر گارڈ کی غلط شناخت کو بروئے کار لانے کے لئے وائر گارڈ غلط شناخت کو فعال کریں۔ آپ کے پرووائیڈر پر وائر گارڈ بند ہونے کی صورت میں یہ کار آمد ہو سکتی ہے۔</translation>
+        <translation>WireGuard کی غلط شناخت کو بروئے کار لانے کے لئے WireGuard غلط شناخت کو فعال کریں۔ آپ کے پرووائیڈر پر WireGuard بند ہونے کی صورت میں یہ کار آمد ہو سکتی ہے۔</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardViewConfig.qml" line="163"/>
@@ -6682,268 +5566,205 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageSetupWizardViewConfig.qml" line="207"/>
         <source>Connect</source>
-        <translation>کنکٹ</translation>
+        <translation>منسلک کریں</translation>
     </message>
 </context>
 <context>
     <name>PageShare</name>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="60"/>
-        <source>Save OpenVPN config</source>
-        <translation>اوپن وی پی این کی ترتیبات کو محفوظ کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="67"/>
-        <source>Save WireGuard config</source>
-        <translation>وائر گارڈ کی ترتیبات کو محفوظ کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="74"/>
-        <source>Save AmneziaWG config</source>
-        <translation>ایمنیزیا ڈبلیو جی کی ترتیبات کو محفوظ کریں</translation>
-    </message>
-    <message>
-        <source>Save Shadowsocks config</source>
-        <translation type="vanished">شیڈو ساکس کی ترتیبات کو محفوظ کریں</translation>
-    </message>
-    <message>
-        <source>Save Cloak config</source>
-        <translation type="vanished">چادر کی ترتیبات کو محفوظ کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="81"/>
-        <source>Save XRay config</source>
-        <translation>&quot;XRay کنفیگ کو محفوظ کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="125"/>
-        <source>For the AmneziaVPN app</source>
-        <translation>AmneziaVPN ایپ کے لئے</translation>
-    </message>
-    <message>
-        <source>OpenVpn native format</source>
-        <translation type="vanished">OpenVPN کا اصل فارمیٹ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="135"/>
-        <source>WireGuard native format</source>
-        <translation>وائر گارڈ کا اصل فارمیٹ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="140"/>
-        <source>AmneziaWG native format</source>
-        <translation>ایمنیزیا ڈبلیو جی کا اصل فارمیٹ</translation>
-    </message>
-    <message>
-        <source>Shadowsocks native format</source>
-        <translation type="vanished">شیڈو ساکس کا اصل فارمیٹ</translation>
-    </message>
-    <message>
-        <source>Cloak native format</source>
-        <translation type="vanished">Cloak کا اصل فارمیٹ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="145"/>
-        <source>XRay native format</source>
-        <translation>ایکس رے کا نیٹویٹ فارمیٹ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="181"/>
-        <source>Share VPN Access</source>
-        <translation>VPN دسترسی شیئر</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="215"/>
-        <source>Share full access to the server and VPN</source>
-        <translation>سرور اور وی پی این کے لئے مکمل دسترسی کو شیئر کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="216"/>
-        <source>Use for your own devices, or share with those you trust to manage the server.</source>
-        <translation>اپنی خود کی ڈیوائسز کے لئے استعمال کریں، یا ان لوگوں کے ساتھ شیئر کریں جن پر آپ کا بھروسہ ہو کہ وہ سرور کو منظم کر سکیں.</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="273"/>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="584"/>
-        <source>Users</source>
-        <translation>صارفین</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="296"/>
-        <source>Share VPN access without the ability to manage the server</source>
-        <translation>سرور کو منظم کرنے کی صلاحیت کے بغیر وی پی این کی دسترسی شیئر</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="600"/>
-        <source>Search</source>
-        <translation>تلاش</translation>
-    </message>
-    <message>
-        <source>Creation date: </source>
-        <translation type="vanished">تخلیق کی تاریخ: </translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="790"/>
-        <source>Rename</source>
-        <translation>نام تبدیل</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="815"/>
-        <source>Client name</source>
-        <translation>کلائنٹ کا نام</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="826"/>
-        <source>Save</source>
-        <translation>محفوظ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="863"/>
-        <source>Download logs</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="871"/>
-        <source>Save logs</source>
-        <translation type="unfinished">لاگوں کو محفوظ کریں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="872"/>
-        <source>Text files (*.txt)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="903"/>
-        <source>Revoke</source>
-        <translation>واپس لین</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="906"/>
-        <source>Revoke the config for a user - %1?</source>
-        <translation>کیا آپ مستعمل کے لئے کنفیگ کو واپس لینا چاہتے ہیں - %1؟</translation>
-    </message>
-    <message>
-        <source>The user will no longer be able to connect to your server.</source>
-        <translation type="vanished">صارف آپ کے سرور سے متصل ہونے کا اختیار نہیں رہے گا.</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="908"/>
-        <source>Continue</source>
-        <translation>جاری رکھیں</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="909"/>
-        <source>Cancel</source>
-        <translation>منسوخ</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="258"/>
-        <source>Connection</source>
-        <translation>کنکشن</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="326"/>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="327"/>
-        <source>Server</source>
-        <translation>سرور</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="91"/>
-        <source>File with connection settings to </source>
-        <translation>کنکشن کی ترتیبات کی فائل </translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="391"/>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="392"/>
-        <source>Protocol</source>
-        <translation>پروٹوکول</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="90"/>
-        <source>Connection to </source>
-        <translation>کنکشن کو </translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="37"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="35"/>
         <source>Config revoked</source>
         <translation>کنفیگ منسوخ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="53"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="51"/>
         <source>Save AmneziaVPN config</source>
-        <translation type="unfinished">AmneziaVPN ترتیب کو محفوظ کریں</translation>
+        <translation>AmneziaVPN ترتیب کو محفوظ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="103"/>
-        <source>No remote logs found</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="58"/>
+        <source>Save OpenVPN config</source>
+        <translation>OpenVPN کی ترتیبات کو محفوظ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="65"/>
+        <source>Save WireGuard config</source>
+        <translation>WireGuard کی ترتیبات کو محفوظ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="72"/>
+        <source>Save AmneziaWG config</source>
+        <translation>AmneziaWG کی ترتیبات کو محفوظ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="79"/>
+        <source>Save XRay config</source>
+        <translation>&quot;XRay کنفیگ کو محفوظ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="88"/>
+        <source>Connection to </source>
+        <translation>کنکشن کو </translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="89"/>
+        <source>File with connection settings to </source>
+        <translation>کنکشن کی ترتیبات کی فائل </translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageShare.qml" line="108"/>
-        <source>Logs save dialog opened</source>
-        <translation type="unfinished"></translation>
+        <source>For the AmneziaVPN app</source>
+        <translation>AmneziaVPN ایپ کے لئے</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="110"/>
-        <source>Logs file saved</source>
-        <translation type="unfinished">لاگ فائل محفوظ ہوگئی</translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="130"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="113"/>
         <source>OpenVPN native format</source>
-        <translation type="unfinished"></translation>
+        <translation>OpenVPN کا اصل فارمیٹ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="307"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="118"/>
+        <source>WireGuard native format</source>
+        <translation>WireGuard کا اصل فارمیٹ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="123"/>
+        <source>AmneziaWG native format</source>
+        <translation>AmneziaWG کا اصل فارمیٹ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="128"/>
+        <source>XRay native format</source>
+        <translation>XRay کا نیٹویٹ فارمیٹ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="156"/>
+        <source>Share VPN Access</source>
+        <translation>VPN دسترسی شیئر</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="190"/>
+        <source>Share full access to the server and VPN</source>
+        <translation>سرور اور VPN کے لئے مکمل دسترسی کو شیئر کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="191"/>
+        <source>Use for your own devices, or share with those you trust to manage the server.</source>
+        <translation>اپنی خود کی ڈیوائسز کے لئے استعمال کریں، یا ان لوگوں کے ساتھ شیئر کریں جن پر آپ کا بھروسہ ہو کہ وہ سرور کو منظم کر سکیں.</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="198"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="541"/>
+        <source>Share</source>
+        <translation>شیئر</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="233"/>
+        <source>Connection</source>
+        <translation>کنکشن</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="248"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="559"/>
+        <source>Users</source>
+        <translation>صارفین</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="271"/>
+        <source>Share VPN access without the ability to manage the server</source>
+        <translation>سرور کو منظم کرنے کی صلاحیت کے بغیر VPN کی دسترسی شیئر</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="282"/>
         <source>User name</source>
         <translation>صارف کا نام</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="504"/>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="505"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="301"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="302"/>
+        <source>Server</source>
+        <translation>سرور</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="366"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="367"/>
+        <source>Protocol</source>
+        <translation>پروٹوکول</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="479"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="480"/>
         <source>Connection format</source>
         <translation>کنکشن فارمیٹ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="729"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="575"/>
+        <source>Search</source>
+        <translation>تلاش</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="704"/>
         <source>Creation date: %1</source>
-        <translation type="unfinished"></translation>
+        <translation>تخلیق کی تاریخ: %1</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="741"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="716"/>
         <source>Latest handshake: %1</source>
-        <translation type="unfinished"></translation>
+        <translation>آخری ہینڈشیک: %1</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="753"/>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="728"/>
         <source>Data received: %1</source>
-        <translation type="unfinished"></translation>
+        <translation>موصول ڈیٹا: %1</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="740"/>
+        <source>Data sent: %1</source>
+        <translation>بھیجا گیا ڈیٹا: %1</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="750"/>
+        <source>Allowed IPs: %1</source>
+        <translation>اجازت شدہ IPs: %1</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageShare.qml" line="765"/>
-        <source>Data sent: %1</source>
-        <translation type="unfinished"></translation>
+        <source>Rename</source>
+        <translation>نام تبدیل</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="775"/>
-        <source>Allowed IPs: %1</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="790"/>
+        <source>Client name</source>
+        <translation>کلائنٹ کا نام</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="907"/>
-        <source>The user will no longer be able to connect to your server. Existing server-side logs will remain until the storage limit cleanup removes old log files.</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="801"/>
+        <source>Save</source>
+        <translation>محفوظ</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="925"/>
-        <source>Unable to revoke current config during active connection</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="837"/>
+        <source>Revoke</source>
+        <translation>واپس لین</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="223"/>
-        <location filename="../ui/qml/Pages2/PageShare.qml" line="566"/>
-        <source>Share</source>
-        <translation>شیئر</translation>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="840"/>
+        <source>Revoke the config for a user - %1?</source>
+        <translation>کیا آپ مستعمل کے لئے کنفیگ کو واپس لینا چاہتے ہیں - %1؟</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="841"/>
+        <source>The user will no longer be able to connect to your server.</source>
+        <translation>صارف آپ کے سرور سے متصل ہونے کا اختیار نہیں رہے گا.</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="842"/>
+        <source>Continue</source>
+        <translation>جاری رکھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShare.qml" line="843"/>
+        <source>Cancel</source>
+        <translation>منسوخ</translation>
     </message>
 </context>
 <context>
@@ -6951,38 +5772,43 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageShareConnection.qml" line="25"/>
         <source>Share</source>
-        <translation type="unfinished"></translation>
+        <translation>شیئر</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageShareConnection.qml" line="26"/>
         <source>Copy</source>
-        <translation type="unfinished">کاپی</translation>
+        <translation>کاپی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageShareConnection.qml" line="30"/>
         <source>Save AmneziaVPN config</source>
-        <translation type="unfinished">AmneziaVPN ترتیب کو محفوظ کریں</translation>
+        <translation>AmneziaVPN ترتیب کو محفوظ کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageShareConnection.qml" line="150"/>
         <source>Copy config string</source>
-        <translation type="unfinished">تشکیل سٹرنگ کو کاپی کریں</translation>
+        <translation>تشکیل سٹرنگ کو کاپی کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageShareConnection.qml" line="168"/>
         <source>Show connection settings</source>
-        <translation type="unfinished">کنکشن کی ترتیبات دکھائیں</translation>
+        <translation>کنکشن کی ترتیبات دکھائیں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageShareConnection.qml" line="189"/>
         <location filename="../ui/qml/Pages2/PageShareConnection.qml" line="199"/>
         <source>Copied</source>
-        <translation type="unfinished"></translation>
+        <translation>نقل کر دیا گیا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageShareConnection.qml" line="323"/>
-        <source>To read the QR code in the Amnezia app, select &quot;Add server&quot; → &quot;I have data to connect&quot; → &quot;QR code, key or settings file&quot;</source>
-        <translation type="unfinished">ایمنیزیا ایپ میں QR کوڈ پڑھنے کے لیے، &quot;سرور شامل کریں&quot; → &quot;میرے پاس جوڑنے کے لیے ڈیٹا ہے&quot; → &quot;QR کوڈ، کلید یا سیٹنگ فائل&quot; کو منتخب کریں</translation>
+        <location filename="../ui/qml/Pages2/PageShareConnection.qml" line="326"/>
+        <source>To read the QR code in the Amnezia app, tap + in the main menu → &apos;QR code&apos;</source>
+        <translation>Amnezia ایپ میں QR کوڈ پڑھنے کے لیے، مین مینو میں + دبائیں → &apos;QR کوڈ&apos;</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageShareConnection.qml" line="342"/>
+        <source>This config is too large for a QR code. Share the file or copy the connection settings instead.</source>
+        <translation>یہ کنفیگریشن QR کوڈ کے لیے بہت بڑی ہے۔ اس کے بجائے فائل شیئر کریں یا کنکشن کی ترتیبات کاپی کریں۔</translation>
     </message>
 </context>
 <context>
@@ -6990,7 +5816,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageShareFullAccess.qml" line="57"/>
         <source>Full access to the server and VPN</source>
-        <translation>سرور اور وی پی این کی مکمل رسائی</translation>
+        <translation>سرور اور VPN کی مکمل رسائی</translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageShareFullAccess.qml" line="67"/>
@@ -7002,7 +5828,7 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageShareFullAccess.qml" line="68"/>
         <source>If you share full access with other people, they can remove and add protocols and services to the server, which will cause the VPN to work incorrectly for all users. </source>
-        <translation>&quot;اگر آپ دوسروں کے ساتھ مکمل رسائی شیئر کریں تو وہ سرور پروٹوکول اور خدمات کو ہٹا سکتے ہیں اور شامل کر سکتے ہیں، جس سے وی پی این تمام صارفین کے لئے غلط کام کرے گا. </translation>
+        <translation>&quot;اگر آپ دوسروں کے ساتھ مکمل رسائی شیئر کریں تو وہ سرور پروٹوکول اور خدمات کو ہٹا سکتے ہیں اور شامل کر سکتے ہیں، جس سے VPN تمام صارفین کے لئے غلط کام کرے گا. </translation>
     </message>
     <message>
         <location filename="../ui/qml/Pages2/PageShareFullAccess.qml" line="87"/>
@@ -7028,27 +5854,79 @@ Create one from the current settings.</source>
     <message>
         <location filename="../ui/qml/Pages2/PageShareFullAccess.qml" line="155"/>
         <source>Access error!</source>
-        <translation type="unfinished">رساءی ناممکن!</translation>
-    </message>
-    <message>
-        <source>Connection to </source>
-        <translation type="vanished">کنکشن کو </translation>
-    </message>
-    <message>
-        <source>File with connection settings to </source>
-        <translation type="vanished">کنکشن کی ترتیبات کی فائل </translation>
+        <translation>رساءی ناممکن!</translation>
     </message>
 </context>
 <context>
     <name>PageStart</name>
     <message>
+        <location filename="../ui/qml/Pages2/PageStart.qml" line="207"/>
         <source>Logging was disabled after 14 days, log files were deleted</source>
-        <translation type="vanished">لاگنگ کو 14 دنوں کے بعد غیر فعال کر دیا گیا، لاگ فائلوں کو حذف کر دیا گیا</translation>
+        <translation>لاگنگ کو 14 دنوں کے بعد غیر فعال کر دیا گیا، لاگ فائلوں کو حذف کر دیا گیا</translation>
     </message>
     <message>
-        <location filename="../ui/qml/Pages2/PageStart.qml" line="207"/>
+        <location filename="../ui/qml/Pages2/PageStart.qml" line="211"/>
         <source>Settings restored from backup file</source>
-        <translation type="unfinished">ترتیبات بیک اپ فائل سے بحال کردی گئی ہیں</translation>
+        <translation>ترتیبات بیک اپ فائل سے بحال کردی گئی ہیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageStart.qml" line="217"/>
+        <source>Logging is enabled. Note that logs will be automaticallydisabled after 14 days, and all log files will be deleted.</source>
+        <translation>لاگنگ فعال ہے۔ نوٹ کریں کہ یہ 14 دن بعد خودکار طور پر بند ہو جائے گی اور تمام لاگ فائلیں مٹا دی جائیں گی۔</translation>
+    </message>
+</context>
+<context>
+    <name>PageUpdate</name>
+    <message>
+        <location filename="../ui/qml/Pages2/PageUpdate.qml" line="24"/>
+        <source>Done. Install the update</source>
+        <translation>مکمل۔ اپ ڈیٹ انسٹال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageUpdate.qml" line="26"/>
+        <source>Download failed. Download manually from amnezia.org</source>
+        <translation>ڈاؤن لوڈ ناکام۔ amnezia.org سے دستی طور پر ڈاؤن لوڈ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageUpdate.qml" line="169"/>
+        <source>New version available</source>
+        <translation>نیا ورژن دستیاب ہے</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageUpdate.qml" line="186"/>
+        <source>New</source>
+        <translation>نیا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageUpdate.qml" line="194"/>
+        <source>Improved</source>
+        <translation>بہتر کیا گیا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageUpdate.qml" line="202"/>
+        <source>Fixed</source>
+        <translation>درست کیا گیا</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageUpdate.qml" line="242"/>
+        <location filename="../ui/qml/Pages2/PageUpdate.qml" line="248"/>
+        <source>Update app</source>
+        <translation>ایپ اپ ڈیٹ کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageUpdate.qml" line="245"/>
+        <source>Downloading update...</source>
+        <translation>اپ ڈیٹ ڈاؤن لوڈ ہو رہی ہے...</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageUpdate.qml" line="246"/>
+        <source>Install update</source>
+        <translation>اپ ڈیٹ انسٹال کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Pages2/PageUpdate.qml" line="247"/>
+        <source>Retry</source>
+        <translation>دوبارہ کوشش کریں</translation>
     </message>
 </context>
 <context>
@@ -7060,224 +5938,24 @@ Create one from the current settings.</source>
     </message>
 </context>
 <context>
-    <name>QKeychain::DeletePasswordJobPrivate</name>
-    <message>
-        <location filename="../3rd/qtkeychain/qtkeychain/keychain_win.cpp" line="104"/>
-        <source>Password entry not found</source>
-        <translation>پاس ورڈ انٹری نہیں ملی</translation>
-    </message>
-    <message>
-        <location filename="../3rd/qtkeychain/qtkeychain/keychain_win.cpp" line="108"/>
-        <source>Could not decrypt data</source>
-        <translation>ڈیٹا کو ڈیکرپٹ نہیں کیا جا سکا</translation>
-    </message>
-    <message>
-        <source>Unknown error</source>
-        <translation type="vanished">نا معلوم خطا</translation>
-    </message>
-    <message>
-        <source>Could not open wallet: %1; %2</source>
-        <translation type="vanished">والٹ کو نہیں کھول سکا: %1؛ %2</translation>
-    </message>
-    <message>
-        <source>Password not found</source>
-        <translation type="vanished">پاس ورڈ نہیں ملا</translation>
-    </message>
-    <message>
-        <source>Could not open keystore</source>
-        <translation type="vanished">کی اسٹور کھولا نہیں جا سکا</translation>
-    </message>
-    <message>
-        <source>Could not remove private key from keystore</source>
-        <translation type="vanished">خصوصی کلید کو کی اسٹور سے ہٹانا نہیں ہو سکا</translation>
-    </message>
-</context>
-<context>
-    <name>QKeychain::JobPrivate</name>
-    <message>
-        <source>Unknown error</source>
-        <translation type="vanished">غیر معروف خطا</translation>
-    </message>
-    <message>
-        <source>Access to keychain denied</source>
-        <translation type="vanished">کی چین تک رسائی منسوخ</translation>
-    </message>
-</context>
-<context>
-    <name>QKeychain::PlainTextStore</name>
-    <message>
-        <source>Could not store data in settings: access error</source>
-        <translation type="vanished">ترتیبات میں ڈیٹا کو محفوظ نہیں کیا جا سکا: رسائی کی خطا</translation>
-    </message>
-    <message>
-        <source>Could not store data in settings: format error</source>
-        <translation type="vanished">ترتیبات میں ڈیٹا کو محفوظ نہیں کیا جا سکا: فارمیٹ کی خطا</translation>
-    </message>
-    <message>
-        <source>Could not delete data from settings: access error</source>
-        <translation type="vanished">ترتیبات سے ڈیٹا کو حذف نہیں کیا جا سکا: رسائی کی خطا</translation>
-    </message>
-    <message>
-        <source>Could not delete data from settings: format error</source>
-        <translation type="vanished">ترتیبات سے ڈیٹا کو حذف نہیں کیا جا سکا: فارمیٹ کی خطا</translation>
-    </message>
-    <message>
-        <source>Entry not found</source>
-        <translation type="vanished">لم يتم العثور علي اندراج نہیں ملا</translation>
-    </message>
-</context>
-<context>
-    <name>QKeychain::ReadPasswordJobPrivate</name>
-    <message>
-        <location filename="../3rd/qtkeychain/qtkeychain/keychain_win.cpp" line="32"/>
-        <source>Password entry not found</source>
-        <translation>پاس ورڈ انٹری نہیں ملی</translation>
-    </message>
-    <message>
-        <location filename="../3rd/qtkeychain/qtkeychain/keychain_win.cpp" line="36"/>
-        <location filename="../3rd/qtkeychain/qtkeychain/keychain_win.cpp" line="139"/>
-        <source>Could not decrypt data</source>
-        <translation>ڈیٹا کو ڈیکرپٹ نہیں کر سکا</translation>
-    </message>
-    <message>
-        <source>D-Bus is not running</source>
-        <translation type="vanished">ڈی بس چل رہا نہیں ہے</translation>
-    </message>
-    <message>
-        <source>Unknown error</source>
-        <translation type="vanished">نامعلوم خطا</translation>
-    </message>
-    <message>
-        <source>No keychain service available</source>
-        <translation type="vanished">کوئی کی چین سروس دستیاب نہیں</translation>
-    </message>
-    <message>
-        <source>Could not open wallet: %1; %2</source>
-        <translation type="vanished">والٹ کو کھولنا نا ممکن: %1؛ %2</translation>
-    </message>
-    <message>
-        <source>Access to keychain denied</source>
-        <translation type="vanished">کی چین تک رسائی منسوخ</translation>
-    </message>
-    <message>
-        <source>Could not determine data type: %1; %2</source>
-        <translation type="vanished">ڈیٹا کی قسم تعین نہیں کی جا سکی: %1؛ %2</translation>
-    </message>
-    <message>
-        <source>Entry not found</source>
-        <translation type="vanished">اندراج نہیں ملا</translation>
-    </message>
-    <message>
-        <source>Unsupported entry type &apos;Map&apos;</source>
-        <translation type="vanished">غیر معتبر انٹری قسم &apos;Map&apos;</translation>
-    </message>
-    <message>
-        <source>Unknown kwallet entry type &apos;%1&apos;</source>
-        <translation type="vanished">نامعلوم kwallet انٹری قسم &apos;%1&apos;</translation>
-    </message>
-    <message>
-        <source>Password not found</source>
-        <translation type="vanished">پاس ورڈ نہیں ملا</translation>
-    </message>
-    <message>
-        <source>Could not open keystore</source>
-        <translation type="vanished">کی اسٹور کھولنا ممکن نہیں تھا</translation>
-    </message>
-    <message>
-        <source>Could not retrieve private key from keystore</source>
-        <translation type="vanished">کی اسٹور سے نجی کلید حاصل نہیں کی جا سکی</translation>
-    </message>
-    <message>
-        <source>Could not create decryption cipher</source>
-        <translation type="vanished">ڈیکرپشن سائفر تخلیق نہیں کر سکا</translation>
-    </message>
-</context>
-<context>
-    <name>QKeychain::WritePasswordJobPrivate</name>
-    <message>
-        <location filename="../3rd/qtkeychain/qtkeychain/keychain_win.cpp" line="78"/>
-        <source>Credential size exceeds maximum size of %1</source>
-        <translation>کریڈنشل کا سائز حد سے زیادہ ہے جو %1 ہے</translation>
-    </message>
-    <message>
-        <location filename="../3rd/qtkeychain/qtkeychain/keychain_win.cpp" line="87"/>
-        <source>Credential key exceeds maximum size of %1</source>
-        <translation>کریڈنشل کی چابی کا حد سب سے زیادہ سائز %1 کا ہے</translation>
-    </message>
-    <message>
-        <location filename="../3rd/qtkeychain/qtkeychain/keychain_win.cpp" line="92"/>
-        <source>Writing credentials failed: Win32 error code %1</source>
-        <translation>کریڈنشلز لکھنا ناکام رہا: ون32 خطا کوڈ %1</translation>
-    </message>
-    <message>
-        <location filename="../3rd/qtkeychain/qtkeychain/keychain_win.cpp" line="162"/>
-        <source>Encryption failed</source>
-        <translation>خفیہ کاری ناکام ہوگئی</translation>
-    </message>
-    <message>
-        <source>D-Bus is not running</source>
-        <translation type="vanished">ڈی بس چل رہا نہیں ہے</translation>
-    </message>
-    <message>
-        <source>Unknown error</source>
-        <translation type="vanished">نامعلوم خطا</translation>
-    </message>
-    <message>
-        <source>Could not open wallet: %1; %2</source>
-        <translation type="vanished">والٹ کو کھولنے میں ناکام: %1؛ %2</translation>
-    </message>
-    <message>
-        <source>Password not found</source>
-        <translation type="vanished">پاس ورڈ نہیں ملا</translation>
-    </message>
-    <message>
-        <source>Could not open keystore</source>
-        <translation type="vanished">کی اسٹور کھولنے میں ناکام</translation>
-    </message>
-    <message>
-        <source>Could not create private key generator</source>
-        <translation type="vanished">پرائیویٹ کلید جنریٹر تخلیق نہیں کیا</translation>
-    </message>
-    <message>
-        <source>Could not generate new private key</source>
-        <translation type="vanished">نیا نجی کلید تخلیق نہیں کیا جا سکا</translation>
-    </message>
-    <message>
-        <source>Could not retrieve private key from keystore</source>
-        <translation type="vanished">کی اسٹور سے نجی کلید حاصل نہیں کیا</translation>
-    </message>
-    <message>
-        <source>Could not create encryption cipher</source>
-        <translation type="vanished">تشکیل تشکیل نہیں کر سکا</translation>
-    </message>
-    <message>
-        <source>Could not encrypt data</source>
-        <translation type="vanished">ڈیٹا کو محفوظ کرنے میں ناکام</translation>
-    </message>
-</context>
-<context>
     <name>QObject</name>
     <message>
         <location filename="../core/protocols/protocolUtils.cpp" line="70"/>
         <source>SFTP service</source>
-        <translation>ایس ایف ٹی پی سروس</translation>
+        <translation>SFTP سروس</translation>
     </message>
     <message>
-        <location filename="../core/protocols/protocolUtils.cpp" line="221"/>
-        <source> (version 2)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../core/protocols/protocolUtils.cpp" line="222"/>
-        <source> (version 1.5)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="79"/>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="191"/>
         <location filename="../core/protocols/protocolUtils.cpp" line="71"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="79"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="193"/>
         <source>SOCKS5 proxy server</source>
-        <translation type="unfinished"></translation>
+        <translation>SOCKS5 پراکسی سرور</translation>
+    </message>
+    <message>
+        <location filename="../core/protocols/protocolUtils.cpp" line="74"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="82"/>
+        <source>TProxy (Telegram WEB)</source>
+        <translation>TProxy (Telegram WEB)</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="11"/>
@@ -7307,12 +5985,12 @@ Create one from the current settings.</source>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="20"/>
         <source>Server error: Docker container missing</source>
-        <translation>سرور کی خرابی: ڈوکر کنٹینر غائب ہے</translation>
+        <translation>سرور کی خرابی: Docker کنٹینر غائب ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="21"/>
         <source>Server error: Docker failed</source>
-        <translation>سرور کی خرابی: ڈوکر ناکام ہو گیا</translation>
+        <translation>سرور کی خرابی: Docker ناکام ہو گیا</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="22"/>
@@ -7327,180 +6005,191 @@ Create one from the current settings.</source>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="29"/>
         <source>Docker error: runc doesn&apos;t work on cgroups v2</source>
-        <translation type="unfinished"></translation>
+        <translation>Docker کی خرابی: runc، cgroups v2 پر کام نہیں کرتا</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="30"/>
         <source>Server error: cgroup mountpoint does not exist</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور کی خرابی: cgroup ماؤنٹ پوائنٹ موجود نہیں ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="31"/>
         <source>Docker error: The pull rate limit has been reached</source>
-        <translation type="unfinished"></translation>
+        <translation>Docker کی خرابی: پل ریٹ کی حد تک پہنچ گئی ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="32"/>
         <source>Server error: Linux kernel is too old</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور کی خرابی: Linux کرنل بہت پرانا ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="34"/>
         <source>Server error: invalid or unreadable XRay server configuration</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور کی خرابی: XRay سرور کی کنفیگریشن غلط یا ناقابل پڑھنے کے قابل ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="37"/>
         <source>Server error: XRay server has no VLESS clients</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور کی خرابی: XRay سرور پر کوئی VLESS کلائنٹ نہیں ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="40"/>
         <source>Server error: failed to read XRay Reality keys from the server</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور کی خرابی: سرور سے XRay Reality کیز پڑھنے میں ناکامی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="44"/>
+        <location filename="../core/utils/errorStrings.cpp" line="42"/>
+        <source>Server error: The default container runtime available for installation on this server is not supported.
+ Install Docker Engine on the server manually and try again.</source>
+        <translation>سرور کی خرابی: اس سرور پر انسٹالیشن کے لیے دستیاب ڈیفالٹ کنٹینر رن ٹائم سپورٹ نہیں کیا جاتا۔
+ سرور پر Docker Engine کو دستی طور پر انسٹال کریں اور دوبارہ کوشش کریں۔</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="43"/>
+        <source>Container runtime error: The container runtime service is not running.
+ Check the container runtime service on the server, or wait about a minute and try again.</source>
+        <translation>کنٹینر رن ٹائم کی خرابی: کنٹینر رن ٹائم سروس نہیں چل رہی ہے۔
+ سرور پر کنٹینر رن ٹائم سروس چیک کریں، یا تقریباً ایک منٹ انتظار کریں اور دوبارہ کوشش کریں۔</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="46"/>
         <source>SSH request was denied</source>
         <translation>SSH درخواست مسترد کر دی گئی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="45"/>
+        <location filename="../core/utils/errorStrings.cpp" line="47"/>
         <source>SSH request was interrupted</source>
         <translation>SSH درخواست میں خلل پڑ</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="46"/>
+        <location filename="../core/utils/errorStrings.cpp" line="48"/>
         <source>SSH internal error</source>
         <translation>SSH اندرونی خرابی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="47"/>
+        <location filename="../core/utils/errorStrings.cpp" line="49"/>
         <source>Invalid private key or invalid passphrase entered</source>
         <translation>غلط نجی کلید یا غلط پاسفریز درج کیا گیا</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="48"/>
+        <location filename="../core/utils/errorStrings.cpp" line="50"/>
         <source>The selected private key format is not supported, use openssh ED25519 key types or PEM key types</source>
         <translation>منتخب کردہ پرائیویٹ کلیدی فارمیٹ تعاون یافتہ نہیں ہے، openssh ED25519 کلیدی اقسام یا PEM کلیدی اقسام استعمال کریں</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="49"/>
+        <location filename="../core/utils/errorStrings.cpp" line="51"/>
         <source>Timeout connecting to server</source>
         <translation>سرور سے منسلک ہونے کا ٹائم آؤٹ</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="69"/>
-        <source>Backup files cannot be imported here. Use &apos;Restore from backup&apos; instead.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../core/utils/errorStrings.cpp" line="70"/>
-        <source>Backup file is corrupted or has invalid format</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <location filename="../core/utils/errorStrings.cpp" line="71"/>
-        <source>This legacy Amnezia subscription format is no longer supported</source>
-        <translation type="unfinished"></translation>
+        <source>Backup files cannot be imported here. Use &apos;Restore from backup&apos; instead.</source>
+        <translation>بیک اپ فائلیں یہاں درآمد نہیں کی جا سکتیں۔ اس کے بجائے &apos;بیک اپ سے بحال کریں&apos; استعمال کریں۔</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="72"/>
-        <source>This protocol is no longer supported. Please select another protocol or remove this container from the server settings.</source>
-        <translation type="unfinished"></translation>
+        <source>Backup file is corrupted or has invalid format</source>
+        <translation>بیک اپ فائل خراب ہے یا اس کا فارمیٹ غلط ہے</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="77"/>
+        <location filename="../core/utils/errorStrings.cpp" line="73"/>
+        <source>This legacy Amnezia subscription format is no longer supported</source>
+        <translation>Amnezia سبسکرپشن کا یہ پرانا فارمیٹ اب سپورٹ نہیں کیا جاتا</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="76"/>
+        <source>This protocol is no longer supported. Please select another protocol or remove this container from the server settings.</source>
+        <translation>یہ پروٹوکول اب سپورٹ نہیں کیا جاتا۔ براہ کرم کوئی دوسرا پروٹوکول منتخب کریں یا اس کنٹینر کو سرور کی ترتیبات سے ہٹا دیں۔</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="81"/>
         <source>VPN connection error</source>
         <translation>VPN کنکشن کی خرابی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="80"/>
-        <location filename="../core/utils/errorStrings.cpp" line="89"/>
+        <location filename="../core/utils/errorStrings.cpp" line="84"/>
+        <location filename="../core/utils/errorStrings.cpp" line="93"/>
         <source>Error when retrieving configuration from API</source>
         <translation>آپی سے کنفیگریشن بازیافت کرتے وقت خرابی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="81"/>
+        <location filename="../core/utils/errorStrings.cpp" line="85"/>
         <source>This config has already been added to the application</source>
         <translation>یہ تشکیل پہلے ہی ایپلی کیشن میں شامل کی جا چکی ہے</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="90"/>
-        <source>A migration error has occurred. Please contact our technical support</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../core/utils/errorStrings.cpp" line="91"/>
-        <source>Please update the application to use this feature</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../core/utils/errorStrings.cpp" line="92"/>
-        <source>Your Amnezia Premium subscription has expired.
- Please check your email for renewal instructions.
- If you haven&apos;t received an email, please contact our support.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../core/utils/errorStrings.cpp" line="93"/>
-        <source>Unable to process purchase</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <location filename="../core/utils/errorStrings.cpp" line="94"/>
-        <source>No active subscription found</source>
-        <translation type="unfinished"></translation>
+        <source>Please update the application to use this feature</source>
+        <translation>اس خصوصیت کو استعمال کرنے کے لیے براہ کرم ایپلیکیشن اپ ڈیٹ کریں</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="95"/>
-        <source>No purchased subscriptions found. Please purchase a subscription first</source>
-        <translation type="unfinished"></translation>
+        <source>Your Amnezia Premium subscription has expired.
+ Please check your email for renewal instructions.
+ If you haven&apos;t received an email, please contact our support.</source>
+        <translation>آپ کا Amnezia Premium سبسکرپشن ختم ہو گیا ہے۔
+ تجدید کی ہدایات کے لیے براہ کرم اپنا ای میل چیک کریں۔
+ اگر آپ کو ای میل نہیں ملا تو براہ کرم ہماری سپورٹ سے رابطہ کریں۔</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="96"/>
-        <source>This email address has already been used to activate a trial</source>
-        <translation type="unfinished"></translation>
+        <source>Unable to process purchase</source>
+        <translation>خریداری پر کارروائی نہیں کی جا سکی</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="97"/>
-        <source>CAPTCHA verification is required</source>
-        <translation type="unfinished"></translation>
+        <source>No active subscription found</source>
+        <translation>کوئی فعال سبسکرپشن نہیں ملا</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="98"/>
-        <source>CAPTCHA was incorrect. Please try again</source>
-        <translation type="unfinished"></translation>
+        <source>No purchased subscriptions found. Please purchase a subscription first</source>
+        <translation>کوئی خریدا ہوا سبسکرپشن نہیں ملا۔ براہ کرم پہلے سبسکرپشن خریدیں</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="99"/>
-        <source>CAPTCHA refreshed. Please try again</source>
-        <translation type="unfinished"></translation>
+        <source>This email address has already been used to activate a trial</source>
+        <translation>یہ ای میل ایڈریس پہلے ہی ٹرائل فعال کرنے کے لیے استعمال ہو چکا ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="100"/>
-        <source>Too many requests. Please try again later</source>
-        <translation type="unfinished"></translation>
+        <source>CAPTCHA verification is required</source>
+        <translation>CAPTCHA کی تصدیق درکار ہے</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="115"/>
+        <location filename="../core/utils/errorStrings.cpp" line="101"/>
+        <source>CAPTCHA was incorrect. Please try again</source>
+        <translation>CAPTCHA غلط تھا۔ براہ کرم دوبارہ کوشش کریں</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="102"/>
+        <source>CAPTCHA refreshed. Please try again</source>
+        <translation>CAPTCHA تازہ کر دیا گیا۔ براہ کرم دوبارہ کوشش کریں</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="103"/>
+        <source>Too many requests. Please try again later</source>
+        <translation>بہت زیادہ درخواستیں۔ براہ کرم بعد میں دوبارہ کوشش کریں</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="145"/>
         <source>ErrorCode: %1. </source>
         <translation>ایرر کوڈ: %1. </translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="55"/>
+        <location filename="../core/utils/errorStrings.cpp" line="57"/>
         <source>OpenVPN config missing</source>
         <translation>OpenVPN تشکیل غائب ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="14"/>
         <source>Background service is not running</source>
-        <translation type="unfinished"></translation>
+        <translation>بیک گراؤنڈ سروس نہیں چل رہی ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="15"/>
         <source>The selected protocol is not supported on the current platform</source>
-        <translation type="unfinished">منتخب کردہ پروٹوکول موجودہ پلیٹ فارم پر تعاون یافتہ نہیں ہے</translation>
+        <translation>منتخب کردہ پروٹوکول موجودہ پلیٹ فارم پر تعاون یافتہ نہیں ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="24"/>
@@ -7510,172 +6199,240 @@ Create one from the current settings.</source>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="25"/>
         <source>The sudo package is not pre-installed on the server</source>
-        <translation type="unfinished"></translation>
+        <translation>sudo پیکیج سرور پر پہلے سے انسٹال نہیں ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="26"/>
         <source>The server user&apos;s home directory is not accessible</source>
-        <translation type="unfinished"></translation>
+        <translation>سرور صارف کی ہوم ڈائریکٹری تک رسائی نہیں ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="27"/>
         <source>Action not allowed in sudoers</source>
-        <translation type="unfinished"></translation>
+        <translation>sudoers میں اس کارروائی کی اجازت نہیں ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="28"/>
         <source>The user&apos;s password is required</source>
-        <translation type="unfinished"></translation>
+        <translation>صارف کا پاس ورڈ درکار ہے</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="52"/>
+        <location filename="../core/utils/errorStrings.cpp" line="54"/>
         <source>SCP error: Generic failure</source>
         <translation>ایس سی پی کی خرابی: عام ناکامی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="56"/>
+        <location filename="../core/utils/errorStrings.cpp" line="58"/>
         <source>OpenVPN management server error</source>
         <translation>OpenVPN مینجمنٹ سرور کی خرابی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="59"/>
+        <location filename="../core/utils/errorStrings.cpp" line="61"/>
         <source>OpenVPN executable missing</source>
         <translation>OpenVPN قابل عمل غائب ہے</translation>
     </message>
     <message>
-        <source>Shadowsocks (ss-local) executable missing</source>
-        <translation type="vanished">شیڈو ساکس (ss-local) قابل عمل غائب</translation>
-    </message>
-    <message>
-        <source>Cloak (ck-client) executable missing</source>
-        <translation type="vanished">Cloak (ck-client) قابل عمل غائب</translation>
-    </message>
-    <message>
-        <location filename="../core/utils/errorStrings.cpp" line="60"/>
+        <location filename="../core/utils/errorStrings.cpp" line="62"/>
         <source>Amnezia helper service error</source>
-        <translation>ایمنیزیا مددگار سروس کی خرابی</translation>
+        <translation>Amnezia مددگار سروس کی خرابی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="61"/>
+        <location filename="../core/utils/errorStrings.cpp" line="63"/>
         <source>OpenSSL failed</source>
         <translation>OpenSSL ناکام ہوگیا</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="64"/>
+        <location filename="../core/utils/errorStrings.cpp" line="66"/>
         <source>Can&apos;t connect: another VPN connection is active</source>
         <translation>منسلک نہیں ہو سکتا: دوسرا VPN کنکشن فعال ہے</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="65"/>
+        <location filename="../core/utils/errorStrings.cpp" line="67"/>
         <source>Can&apos;t setup OpenVPN TAP network adapter</source>
         <translation>OpenVPN TAP نیٹ ورک اڈاپٹر سیٹ اپ نہیں کر سکتے</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="66"/>
+        <location filename="../core/utils/errorStrings.cpp" line="68"/>
         <source>VPN pool error: no available addresses</source>
         <translation>VPN پول کی خرابی: کوئی پتہ دستیاب نہیں ہے</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="68"/>
+        <location filename="../core/utils/errorStrings.cpp" line="70"/>
         <source>The config does not contain any containers and credentials for connecting to the server</source>
         <translation>ترتیب میں سرور سے منسلک ہونے کے لیے کوئی کنٹینرز اور اسناد نہیں ہیں</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="73"/>
-        <source>Unable to open config file</source>
-        <translation type="unfinished"></translation>
+        <location filename="../core/utils/errorStrings.cpp" line="74"/>
+        <source>This configuration was created in a newer version of the application and is not fully supported. Please update the application</source>
+        <translation>یہ کنفیگریشن ایپلیکیشن کے نئے ورژن میں بنائی گئی تھی اور مکمل طور پر سپورٹ نہیں ہے۔ براہ کرم ایپلیکیشن اپ ڈیٹ کریں</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="74"/>
+        <location filename="../core/utils/errorStrings.cpp" line="75"/>
+        <source>Some configurations from the backup were not restored because they require a newer version of the application</source>
+        <translation>بیک اپ سے کچھ کنفیگریشنز بحال نہیں کی گئیں کیونکہ ان کے لیے ایپلیکیشن کا نیا ورژن درکار ہے</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="77"/>
+        <source>Unable to open config file</source>
+        <translation>کنفیگ فائل کو کھولا نہیں جا سکا</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="78"/>
         <source>VPN Protocols is not installed.
  Please install VPN container at first</source>
-        <translation type="unfinished">وی پی این پروٹوکول انسٹال نہیں ہے,براہ کرم پہلےوی پی این کنٹینر انسٹال کریں</translation>
-    </message>
-    <message>
-        <location filename="../core/utils/errorStrings.cpp" line="82"/>
-        <source>In the response from the server, an empty config was received</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../core/utils/errorStrings.cpp" line="83"/>
-        <source>SSL error occurred</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../core/utils/errorStrings.cpp" line="84"/>
-        <source>Server response timeout on api request</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../core/utils/errorStrings.cpp" line="85"/>
-        <source>Missing AGW public key</source>
-        <translation type="unfinished"></translation>
+        <translation>VPN پروٹوکول انسٹال نہیں ہے۔
+ براہ کرم پہلے VPN کنٹینر انسٹال کریں</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="86"/>
-        <source>Failed to decrypt response payload</source>
-        <translation type="unfinished"></translation>
+        <source>In the response from the server, an empty config was received</source>
+        <translation>سرور کے جواب میں ایک خالی کنفیگریشن موصول ہوئی</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="87"/>
-        <source>Missing list of available services</source>
-        <translation type="unfinished"></translation>
+        <source>SSL error occurred</source>
+        <translation>SSL کی خرابی پیش آگئی</translation>
     </message>
     <message>
         <location filename="../core/utils/errorStrings.cpp" line="88"/>
-        <source>The limit of allowed configurations per subscription has been exceeded</source>
-        <translation type="unfinished"></translation>
+        <source>Server response timeout on api request</source>
+        <translation>API درخواست پر سرور کے جواب کا وقت ختم ہو گیا</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="103"/>
+        <location filename="../core/utils/errorStrings.cpp" line="89"/>
+        <source>Missing AGW public key</source>
+        <translation>AGW پبلک کی غائب ہے</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="90"/>
+        <source>Failed to decrypt response payload</source>
+        <translation>جوابی پے لوڈ کو ڈی کرپٹ کرنے میں ناکامی</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="91"/>
+        <source>Missing list of available services</source>
+        <translation>دستیاب سروسز کی فہرست غائب ہے</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="92"/>
+        <source>The limit of allowed configurations per subscription has been exceeded</source>
+        <translation>فی سبسکرپشن اجازت شدہ کنفیگریشنز کی حد سے تجاوز ہو گیا ہے</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="106"/>
+        <source>Your payment is pending confirmation in Google Play. Once the payment is completed, the subscription will be added automatically on the next app launch.</source>
+        <translation>آپ کی ادائیگی Google Play میں تصدیق کی منتظر ہے۔ ادائیگی مکمل ہونے پر، اگلی بار ایپ کھولنے پر سبسکرپشن خودکار طور پر شامل ہو جائے گا۔</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="108"/>
+        <source>Your payment is awaiting confirmation. Once it is approved, the subscription will be added automatically.</source>
+        <translation>آپ کی ادائیگی تصدیق کی منتظر ہے۔ منظوری ملتے ہی سبسکرپشن خودکار طور پر شامل ہو جائے گا۔</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="110"/>
+        <source>Your payment is pending confirmation. Please complete the payment and then restore your subscription.</source>
+        <translation>آپ کی ادائیگی تصدیق کی منتظر ہے۔ براہ کرم ادائیگی مکمل کریں اور پھر اپنا سبسکرپشن بحال کریں۔</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="115"/>
+        <source>No purchases to restore. If you have an active subscription, make sure you&apos;re signed in with the same Google account used for the purchase.</source>
+        <translation>بحال کرنے کے لیے کوئی خریداری نہیں۔ اگر آپ کا سبسکرپشن فعال ہے تو یقینی بنائیں کہ آپ اسی Google اکاؤنٹ سے سائن ان ہیں جس سے خریداری کی گئی تھی۔</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="117"/>
+        <source>No purchases to restore. If you have an active subscription, make sure you&apos;re signed in with the same Apple ID used for the purchase.</source>
+        <translation>بحال کرنے کے لیے کوئی خریداری نہیں۔ اگر آپ کا سبسکرپشن فعال ہے تو یقینی بنائیں کہ آپ اسی Apple ID سے سائن ان ہیں جس سے خریداری کی گئی تھی۔</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="119"/>
+        <source>No purchases to restore. If you have an active subscription, make sure you&apos;re signed in with the same account used for the purchase.</source>
+        <translation>بحال کرنے کے لیے کوئی خریداری نہیں۔ اگر آپ کا سبسکرپشن فعال ہے تو یقینی بنائیں کہ آپ اسی اکاؤنٹ سے سائن ان ہیں جس سے خریداری کی گئی تھی۔</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="124"/>
         <source>QFile error: The file could not be opened</source>
         <translation>QFile کی خرابی: فائل کو نہیں کھولا جا سکا</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="104"/>
+        <location filename="../core/utils/errorStrings.cpp" line="125"/>
         <source>QFile error: An error occurred when reading from the file</source>
         <translation>کیو فائل کی خرابی: فائل سے پڑھتے وقت ایک خرابی پیش آگئی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="105"/>
+        <location filename="../core/utils/errorStrings.cpp" line="126"/>
         <source>QFile error: The file could not be accessed</source>
         <translation>QFile کی خرابی: فائل تک رسائی نہیں ہو سکی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="106"/>
+        <location filename="../core/utils/errorStrings.cpp" line="127"/>
         <source>QFile error: An unspecified error occurred</source>
         <translation>کیو فائل میں خرابی: ایک غیر متعینہ خرابی پیش آگئی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="107"/>
+        <location filename="../core/utils/errorStrings.cpp" line="128"/>
         <source>QFile error: A fatal error occurred</source>
         <translation>کیو فائل میں خرابی: ایک مہلک خرابی پیش آگئی</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="108"/>
+        <location filename="../core/utils/errorStrings.cpp" line="129"/>
         <source>QFile error: The operation was aborted</source>
         <translation>کیو فائل کی خرابی: آپریشن روک دیا گیا تھا</translation>
     </message>
     <message>
-        <location filename="../core/utils/errorStrings.cpp" line="112"/>
+        <location filename="../core/utils/errorStrings.cpp" line="132"/>
+        <source>Transaction was canceled by the user</source>
+        <translation>صارف نے لین دین منسوخ کر دیا</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="133"/>
+        <source>Billing error</source>
+        <translation>بلنگ کی خرابی</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="134"/>
+        <source>Internal Google Play error, please try again later</source>
+        <translation>Google Play کی اندرونی خرابی، براہ کرم بعد میں دوبارہ کوشش کریں</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="135"/>
+        <source>Billing is unavailable, please try again later</source>
+        <translation>بلنگ دستیاب نہیں ہے، براہ کرم بعد میں دوبارہ کوشش کریں</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="136"/>
+        <source>You already own this subscription</source>
+        <translation>یہ سبسکرپشن پہلے ہی آپ کے پاس ہے</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="137"/>
+        <source>The requested subscription is not available for purchase</source>
+        <translation>درخواست کردہ سبسکرپشن خریداری کے لیے دستیاب نہیں ہے</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="138"/>
+        <source>A network error occurred during the operation, please check the Internet connection</source>
+        <translation>کارروائی کے دوران نیٹ ورک کی خرابی پیش آئی، براہ کرم انٹرنیٹ کنکشن چیک کریں</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/errorStrings.cpp" line="142"/>
         <source>Internal error</source>
         <translation>داخلی خامی</translation>
     </message>
     <message>
         <location filename="../core/utils/containers/containerUtils.cpp" line="73"/>
         <source>IPsec</source>
-        <translation>آئی پی ایس سی</translation>
+        <translation>IPsec</translation>
     </message>
     <message>
         <location filename="../core/utils/containers/containerUtils.cpp" line="76"/>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="184"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="186"/>
         <source>Website in Tor network</source>
         <translation>ٹور نیٹ ورک میں ویب سائٹ</translation>
     </message>
     <message>
         <location filename="../core/utils/containers/containerUtils.cpp" line="77"/>
         <source>AmneziaDNS</source>
-        <translation>ایمنیزیا ڈی این ایس</translation>
+        <translation>Amnezia DNS</translation>
     </message>
     <message>
         <location filename="../core/utils/containers/containerUtils.cpp" line="78"/>
@@ -7683,45 +6440,45 @@ Create one from the current settings.</source>
         <translation>SFTP فائل شیئرنگ سروس</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="80"/>
         <location filename="../core/protocols/protocolUtils.cpp" line="72"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="80"/>
         <source>MTProxy (Telegram)</source>
-        <translation type="unfinished"></translation>
+        <translation>MTProxy (Telegram)</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="81"/>
         <location filename="../core/protocols/protocolUtils.cpp" line="73"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="81"/>
         <source>Telemt (Telegram)</source>
-        <translation type="unfinished"></translation>
+        <translation>Telemt (Telegram)</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="88"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="89"/>
         <source>OpenVPN is the most popular VPN protocol, with flexible configuration options. It uses its own security protocol with SSL/TLS for key exchange.</source>
-        <translation>اوپن وی پی این لچکدار ترتیب کے اختیارات کے ساتھ سب سے زیادہ مقبول VPN پروٹوکول ہے۔ یہ کلیدی تبادلے کے لیے SSL/TLS کے ساتھ اپنا سیکیورٹی پروٹوکول استعمال کرتا ہے۔</translation>
+        <translation>OpenVPN لچکدار ترتیب کے اختیارات کے ساتھ سب سے زیادہ مقبول VPN پروٹوکول ہے۔ یہ کلیدی تبادلے کے لیے SSL/TLS کے ساتھ اپنا سیکیورٹی پروٹوکول استعمال کرتا ہے۔</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="91"/>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="93"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="92"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="94"/>
         <source>This protocol is no longer supported.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="116"/>
-        <source></source>
-        <translation type="unfinished"></translation>
+        <translation>یہ پروٹوکول اب سپورٹ نہیں کیا جاتا۔</translation>
     </message>
     <message>
         <location filename="../core/utils/containers/containerUtils.cpp" line="118"/>
         <source>Telegram MTProto proxy server</source>
-        <translation type="unfinished"></translation>
+        <translation>Telegram MTProto پراکسی سرور</translation>
     </message>
     <message>
         <location filename="../core/utils/containers/containerUtils.cpp" line="120"/>
         <source>Telegram MTProto proxy (Telemt, Rust)</source>
-        <translation type="unfinished"></translation>
+        <translation>Telegram MTProto پراکسی (Telemt، Rust)</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="128"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="122"/>
+        <source>Telegram WEB proxy (tproxy-server)</source>
+        <translation>Telegram WEB پراکسی (tproxy-server)</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="130"/>
         <source>OpenVPN is one of the most popular and reliable VPN protocols. It uses SSL/TLS encryption, supports a wide variety of devices and operating systems, and is continuously improved by the community due to its open-source nature. It provides a good balance between speed and security but is easily recognized by DPI systems, making it susceptible to blocking.
 
 Features:
@@ -7729,10 +6486,16 @@ Features:
 * Normal battery consumption on mobile devices
 * Flexible customization for various devices and OS
 * Operates over both TCP and UDP protocols</source>
-        <translation type="unfinished"></translation>
+        <translation>OpenVPN سب سے مقبول اور قابل اعتماد VPN پروٹوکولز میں سے ایک ہے۔ یہ SSL/TLS انکرپشن استعمال کرتا ہے، مختلف قسم کے ڈیوائسز اور آپریٹنگ سسٹمز کو سپورٹ کرتا ہے، اور اوپن سورس ہونے کی وجہ سے کمیونٹی کی جانب سے مسلسل بہتر بنایا جاتا ہے۔ یہ رفتار اور سیکیورٹی کے درمیان اچھا توازن فراہم کرتا ہے، لیکن DPI سسٹمز اسے آسانی سے پہچان لیتے ہیں، جس سے یہ بلاک ہونے کا خطرہ رکھتا ہے۔
+
+خصوصیات:
+* تمام AmneziaVPN پلیٹ فارمز پر دستیاب
+* موبائل ڈیوائسز پر عام بیٹری کی کھپت
+* مختلف ڈیوائسز اور OS کے لیے لچکدار ترتیب
+* TCP اور UDP دونوں پروٹوکولز پر کام کرتا ہے</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="139"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="141"/>
         <source>WireGuard is a modern, streamlined VPN protocol offering stable connectivity and excellent performance across all devices. It uses fixed encryption settings, delivering lower latency and higher data transfer speeds compared to OpenVPN. However, WireGuard is easily identifiable by DPI systems due to its distinctive packet signatures, making it susceptible to blocking.
 
 Features:
@@ -7741,10 +6504,17 @@ Features:
 * Minimal configuration required
 * Easily detected by DPI systems (susceptible to blocking)
 * Operates over UDP protocol</source>
-        <translation type="unfinished"></translation>
+        <translation>WireGuard ایک جدید اور سادہ VPN پروٹوکول ہے جو تمام ڈیوائسز پر مستحکم کنیکٹیویٹی اور بہترین کارکردگی فراہم کرتا ہے۔ یہ مقررہ انکرپشن ترتیبات استعمال کرتا ہے، جس سے OpenVPN کے مقابلے میں کم تعویق اور زیادہ ڈیٹا ٹرانسفر رفتار حاصل ہوتی ہے۔ تاہم، اپنے مخصوص پیکٹ دستخطوں کی وجہ سے WireGuard کو DPI سسٹمز آسانی سے پہچان لیتے ہیں، جس سے یہ بلاک ہونے کا خطرہ رکھتا ہے۔
+
+خصوصیات:
+* تمام AmneziaVPN پلیٹ فارمز پر دستیاب
+* موبائل ڈیوائسز پر کم بجلی کی کھپت
+* کم سے کم ترتیب درکار
+* DPI سسٹمز اسے آسانی سے پہچان لیتے ہیں (بلاک ہونے کا خطرہ)
+* UDP پروٹوکول پر کام کرتا ہے</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="149"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="151"/>
         <source>AmneziaWG is a modern VPN protocol based on WireGuard, combining simplified architecture with high performance across all devices. It addresses WireGuard&apos;s main vulnerability (easy detection by DPI systems) through advanced obfuscation techniques, making VPN traffic indistinguishable from regular internet traffic.
 
 AmneziaWG is an excellent choice for those seeking a fast, stealthy VPN connection.
@@ -7755,10 +6525,19 @@ Features:
 * Minimal settings required
 * Undetectable by traffic analysis systems (DPI)
 * Operates over UDP protocol</source>
-        <translation type="unfinished"></translation>
+        <translation>AmneziaWG، WireGuard پر مبنی ایک جدید VPN پروٹوکول ہے جو سادہ آرکیٹیکچر کو تمام ڈیوائسز پر اعلیٰ کارکردگی کے ساتھ ملاتا ہے۔ یہ جدید اوبفسکیشن تکنیکوں کے ذریعے WireGuard کی بنیادی کمزوری (DPI سسٹمز کے ذریعے آسان شناخت) کو دور کرتا ہے، جس سے VPN ٹریفک عام انٹرنیٹ ٹریفک سے الگ نہیں پہچانا جا سکتا۔
+
+جو لوگ تیز اور غیر محسوس VPN کنکشن چاہتے ہیں، ان کے لیے AmneziaWG ایک بہترین انتخاب ہے۔
+
+خصوصیات:
+* تمام AmneziaVPN پلیٹ فارمز پر دستیاب
+* موبائل ڈیوائسز پر کم بیٹری کی کھپت
+* کم سے کم ترتیبات درکار
+* ٹریفک تجزیہ سسٹمز (DPI) کے ذریعے ناقابل شناخت
+* UDP پروٹوکول پر کام کرتا ہے</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="161"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="163"/>
         <source>REALITY is an innovative protocol developed by the creators of XRay, designed specifically to combat high levels of internet censorship. REALITY identifies censorship systems during the TLS handshake, redirecting suspicious traffic seamlessly to legitimate websites like google.com while providing genuine TLS certificates. This allows VPN traffic to blend indistinguishably with regular web traffic without special configuration.
 Unlike older protocols such as VMess, VLESS, and XTLS-Vision, REALITY incorporates an advanced built-in &quot;friend-or-foe&quot; detection mechanism, effectively protecting against DPI and other traffic analysis methods.
 
@@ -7768,10 +6547,18 @@ Features:
 * Highly effective in heavily censored regions
 * Minimal battery consumption on devices
 * Operates over TCP protocol</source>
-        <translation type="unfinished"></translation>
+        <translation>REALITY، XRay کے تخلیق کاروں کی جانب سے تیار کردہ ایک اختراعی پروٹوکول ہے، جو خاص طور پر انٹرنیٹ کی شدید سنسرشپ کا مقابلہ کرنے کے لیے ڈیزائن کیا گیا ہے۔ REALITY، TLS ہینڈشیک کے دوران سنسرشپ سسٹمز کی شناخت کرتا ہے اور مشتبہ ٹریفک کو اصل TLS سرٹیفکیٹس فراہم کرتے ہوئے google.com جیسی حقیقی ویب سائٹس کی طرف بغیر رکاوٹ موڑ دیتا ہے۔ اس سے VPN ٹریفک کسی خاص ترتیب کے بغیر عام ویب ٹریفک میں مکمل طور پر گھل مل جاتا ہے۔
+VMess، VLESS اور XTLS-Vision جیسے پرانے پروٹوکولز کے برعکس، REALITY میں ایک جدید بلٹ ان &quot;دوست یا دشمن&quot; شناختی نظام شامل ہے، جو DPI اور ٹریفک تجزیے کے دیگر طریقوں سے مؤثر تحفظ دیتا ہے۔
+
+خصوصیات:
+* ایکٹو پروبنگ اور DPI شناخت کے خلاف مزاحم
+* ٹریفک چھپانے کے لیے کسی خاص ترتیب کی ضرورت نہیں
+* شدید سنسرشپ والے علاقوں میں انتہائی مؤثر
+* ڈیوائسز پر کم سے کم بیٹری کی کھپت
+* TCP پروٹوکول پر کام کرتا ہے</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="174"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="176"/>
         <source>IKEv2, combined with IPSec encryption, is a modern and reliable VPN protocol. It reconnects quickly when switching networks or devices, making it ideal for dynamic network environments. While it provides good security and speed, it&apos;s easily recognized by DPI systems and susceptible to blocking.
 
 Features:
@@ -7780,114 +6567,69 @@ Features:
 * Minimal configuration required
 * Detectable by DPI analysis systems(easily blocked)
 * Operates over UDP protocol(ports 500 and 4500)</source>
-        <translation type="unfinished"></translation>
+        <translation>IKEv2، IPSec انکرپشن کے ساتھ مل کر ایک جدید اور قابل اعتماد VPN پروٹوکول بناتا ہے۔ نیٹ ورک یا ڈیوائس تبدیل کرنے پر یہ تیزی سے دوبارہ منسلک ہو جاتا ہے، جس سے یہ بدلتے نیٹ ورک ماحول کے لیے مثالی ہے۔ اگرچہ یہ اچھی سیکیورٹی اور رفتار فراہم کرتا ہے، DPI سسٹمز اسے آسانی سے پہچان لیتے ہیں اور یہ بلاک ہونے کا خطرہ رکھتا ہے۔
+
+خصوصیات:
+* AmneziaVPN میں صرف Windows پر دستیاب
+* موبائل ڈیوائسز پر کم بیٹری کی کھپت
+* کم سے کم ترتیب درکار
+* DPI تجزیہ سسٹمز کے ذریعے قابل شناخت (آسانی سے بلاک ہو جاتا ہے)
+* UDP پروٹوکول پر کام کرتا ہے (پورٹ 500 اور 4500)</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="193"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="195"/>
         <source>Telegram MTProto proxy server. Allows Telegram clients to connect through your server using the MTProto protocol. Supports FakeTLS mode for bypassing DPI-based blocking.</source>
-        <translation type="unfinished"></translation>
+        <translation>Telegram MTProto پراکسی سرور۔ Telegram کلائنٹس کو MTProto پروٹوکول کے ذریعے آپ کے سرور سے منسلک ہونے دیتا ہے۔ DPI پر مبنی بلاکنگ سے بچنے کے لیے FakeTLS موڈ کو سپورٹ کرتا ہے۔</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="198"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="200"/>
         <source>Telegram MTProto proxy powered by Telemt (Rust). Supports secure and TLS fronting modes with optional traffic masking.</source>
-        <translation type="unfinished"></translation>
+        <translation>Telemt (Rust) پر مبنی Telegram MTProto پراکسی۔ محفوظ اور TLS فرنٹنگ موڈز کو سپورٹ کرتا ہے، اختیاری ٹریفک ماسکنگ کے ساتھ۔</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="330"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="203"/>
+        <source>Telegram WEB proxy. Clients connect over HTTPS to a hostname; the server relays traffic to official MTProxy. Requires a domain, ports 80 and 443, and a WEB-capable Telegram app.</source>
+        <translation>Telegram WEB پراکسی۔ کلائنٹس HTTPS کے ذریعے ایک ہوسٹ نام سے منسلک ہوتے ہیں؛ سرور ٹریفک کو سرکاری MTProxy تک پہنچاتا ہے۔ اس کے لیے ایک ڈومین، پورٹس 80 اور 443، اور WEB سپورٹ کرنے والی Telegram ایپ درکار ہے۔</translation>
+    </message>
+    <message>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="340"/>
         <source>Automatic</source>
-        <translation type="unfinished"></translation>
+        <translation>خودکار</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="338"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="348"/>
         <source>AmneziaWG protocol will be installed. It provides high connection speed and ensures stable operation even in the most challenging network conditions.</source>
-        <translation type="unfinished"></translation>
+        <translation>AmneziaWG پروٹوکول انسٹال کیا جائے گا۔ یہ تیز رفتار کنکشن فراہم کرتا ہے اور انتہائی مشکل نیٹ ورک حالات میں بھی مستحکم کارکردگی کو یقینی بناتا ہے۔</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="95"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="96"/>
         <source>WireGuard - popular VPN protocol with high performance, high speed and low power consumption.</source>
-        <translation type="unfinished"></translation>
+        <translation>WireGuard — اعلیٰ کارکردگی، تیز رفتاری اور کم بجلی کی کھپت والا مقبول VPN پروٹوکول۔</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="98"/>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="101"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="99"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="102"/>
         <location filename="../ui/models/containersModel.cpp" line="41"/>
         <source>AmneziaWG is a special protocol from Amnezia based on WireGuard. It provides high connection speed and ensures stable operation even in the most challenging network conditions.</source>
-        <translation type="unfinished"></translation>
+        <translation>AmneziaWG، WireGuard پر مبنی Amnezia کا ایک خصوصی پروٹوکول ہے۔ یہ تیز رفتار کنکشن فراہم کرتا ہے اور انتہائی مشکل نیٹ ورک حالات میں بھی مستحکم کارکردگی کو یقینی بناتا ہے۔</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="104"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="105"/>
         <source>XRay with REALITY masks VPN traffic as web traffic and protects against active probing. It is highly resistant to detection and offers high speed.</source>
-        <translation type="unfinished"></translation>
+        <translation>REALITY کے ساتھ XRay، VPN ٹریفک کو ویب ٹریفک کے طور پر چھپاتا ہے اور ایکٹو پروبنگ سے تحفظ دیتا ہے۔ یہ شناخت کے خلاف انتہائی مزاحم ہے اور تیز رفتاری فراہم کرتا ہے۔</translation>
     </message>
     <message>
-        <source>Shadowsocks - masks VPN traffic, making it similar to normal web traffic, but it may be recognized by analysis systems in some highly censored regions.</source>
-        <translation type="vanished">شیڈو ساکس - VPN ٹریفک کو ماسک کرتا ہے، جو اسے عام ویب ٹریفک جیسا بناتا ہے، لیکن اسے کچھ انتہائی سنسر والے علاقوں میں تجزیہ کے نظام کے ذریعے پہچانا جا سکتا ہے.</translation>
-    </message>
-    <message>
-        <source>OpenVPN over Cloak - OpenVPN with VPN masquerading as web traffic and protection against active-probing detection. Ideal for bypassing blocking in regions with the highest levels of censorship.</source>
-        <translation type="vanished">اوپن وی پی این اوور کلوک - اوپن وی پی این کے ساتھ وی پی این کو ویب ٹریفک کے طور پر چھپانا اور ایکٹیو پروبنگ ڈٹیکشن کے خلاف تحفظ۔ سنسرشپ کی اعلی ترین سطح والے خطوں میں بلاکنگ کو نظرانداز کرنے کے لیے مثالی.</translation>
-    </message>
-    <message>
-        <source>XRay with REALITY - Suitable for countries with the highest level of internet censorship. Traffic masking as web traffic at the TLS level, and protection against detection by active probing methods.</source>
-        <translation type="vanished">حقیقت کے ساتھ ایکسرےواقعیت کے ساتھ ایکس رے - سب سے زیادہ انٹرنیٹ سینسرشپ والے ممالک کے لئے مناسب ہے۔ ٹریفک ویب ٹریفک کی سطح TLS پر ماسکنگ اور فعال پرابنگ کے طریقوں سے شناخت سے بچائے جانے کی حفاظت۔</translation>
-    </message>
-    <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="107"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="108"/>
         <source>IKEv2/IPsec -  Modern stable protocol, a bit faster than others, restores connection after signal loss. It has native support on the latest versions of Android and iOS.</source>
-        <translation type="unfinished"></translation>
+        <translation>IKEv2/IPsec — ایک جدید اور مستحکم پروٹوکول، دوسروں سے کچھ تیز، سگنل ختم ہونے کے بعد کنکشن بحال کرتا ہے۔ Android اور iOS کے تازہ ترین ورژنز میں اس کی مقامی سپورٹ موجود ہے۔</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="114"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="115"/>
         <source>Create a file vault on your server to securely store and transfer files.</source>
         <translation>فائلوں کو محفوظ طریقے سے اسٹور اور ٹرانسفر کرنے کے لیے اپنے سرور پر ایک فائل والٹ بنائیں.</translation>
     </message>
     <message>
-        <source>This is a combination of the OpenVPN protocol and the Cloak plugin designed specifically for protecting against blocking.
-
-OpenVPN provides a secure VPN connection by encrypting all internet traffic between the client and the server.
-
-Cloak protects OpenVPN from detection and blocking. 
-
-Cloak can modify packet metadata so that it completely masks VPN traffic as normal web traffic, and also protects the VPN from detection by Active Probing. This makes it very resistant to being detected
-
-Immediately after receiving the first data packet, Cloak authenticates the incoming connection. If authentication fails, the plugin masks the server as a fake website and your VPN becomes invisible to analysis systems.
-
-If there is a extreme level of Internet censorship in your region, we advise you to use only OpenVPN over Cloak from the first connection
-
-* Available in the AmneziaVPN across all platforms
-* High power consumption on mobile devices
-* Flexible settings
-* Not recognised by DPI analysis systems
-* Works over TCP network protocol, 443 port.
-</source>
-        <translation type="vanished">یہ اوپن وی پی این پروٹوکول اور کلوک پلگ ان کا مجموعہ ہے جو خاص طور پر بلاکنگ سے تحفظ کے لیے ڈیزائن کیا گیا ہے۔ اوپن وی پی این کلائنٹ اور سرور کے درمیان تمام انٹرنیٹ ٹریفک کو انکرپٹ کرکے ایک محفوظ وی پی این کنکشن فراہم کرتا ہے۔ Cloak OpenVPN کو پتہ لگانے اور بلاک کرنے سے بچاتا ہے۔ کلوک پیکٹ میٹا ڈیٹا میں ترمیم کر سکتا ہے تاکہ یہ VPN ٹریفک کو عام ویب ٹریفک کے طور پر مکمل طور پر ماسک کر دے، اور VPN کو ایکٹیو پروبنگ کے ذریعے پتہ لگانے سے بھی محفوظ رکھتا ہے۔ یہ پہلا ڈیٹا پیکٹ حاصل کرنے کے فوراً بعد پتہ لگانے کے لیے بہت مزاحم بناتا ہے، کلوک آنے والے کنکشن کی تصدیق کرتا ہے۔ اگر تصدیق ناکام ہو جاتی ہے، تو پلگ ان سرور کو ایک جعلی ویب سائٹ کے طور پر ماسک کر دیتا ہے اور آپ کا VPN تجزیہ کے نظام کے لیے پوشیدہ ہو جاتا ہے۔ اگر آپ کے علاقے میں انتہائی درجے کی انٹرنیٹ سنسرشپ ہے، تو ہم آپ کو مشورہ دیتے ہیں کہ پہلے کنکشن سے صرف اوپن وی پی این اوور کلوک استعمال کریں * تمام پلیٹ فارمز پر ایمنیزیا وی پی این میں دستیاب ہے * موبائل ڈیوائسز پر زیادہ بجلی کی کھپت * لچکدار ترتیبات * ڈی پی آئی تجزیہ کے ذریعے تسلیم شدہ نہیں سسٹمز * TCP نیٹ ورک پروٹوکول، 443 پورٹ پر کام کرتا ہے.
-</translation>
-    </message>
-    <message>
-        <source>A relatively new popular VPN protocol with a simplified architecture.
-WireGuard provides stable VPN connection and high performance on all devices. It uses hard-coded encryption settings. WireGuard compared to OpenVPN has lower latency and better data transfer throughput.
-WireGuard is very susceptible to blocking due to its distinct packet signatures. Unlike some other VPN protocols that employ obfuscation techniques, the consistent signature patterns of WireGuard packets can be more easily identified and thus blocked by advanced Deep Packet Inspection (DPI) systems and other network monitoring tools.
-
-* Available in the AmneziaVPN across all platforms
-* Low power consumption
-* Minimum number of settings
-* Easily recognised by DPI analysis systems, susceptible to blocking
-* Works over UDP network protocol.</source>
-        <translation type="vanished">ایک نسبتاً نیا مقبول وی پی این پروٹوکول جس میں سادہ معماری ہے۔ وائر گارڈ تمام آلات پر مضبوط وی پی این کنکشن اور اعلی کارکردگی فراہم کرتا ہے۔ اس میں ہارڈ کوڈ کردہ انکرپشن سیٹنگز استعمال کی جاتی ہیں۔ وائر گارڈ کو اوپن وی پی این سے موازنہ کرنے پر لیٹنسی میں کمی اور بہتر ڈیٹا ٹرانسفر تھروپٹ حاصل ہوتی ہے۔ وائر گارڈ کا مخصوص پیکٹ سائنیچرز کی وجہ سے بلاک کرنا زیادہ آسان ہوتا ہے۔ کچھ دوسرے وی پی این پروٹوکول کے مخالف، جو اوبفسکیشن ٹیکنیکس کا استعمال کرتے ہیں، وائر گارڈ کے پیکٹس کے مسلسل سائنیچر پیٹرنز کو زیادہ آسانی سے پہچانا جا سکتا ہے اور اس طرح معقد ڈیپ پیکٹ انسپیکشن (DPI) سسٹمز اور دیگر نیٹ ورک مانیٹرنگ ٹولز کے ذریعے بلاک کیا جا سکتا ہے۔ * تمام پلیٹ فارمز پر دستیاب ہے * کم بجلی کی استعمال * کم سیٹنگز کی تعداد * ڈی پی آئی تجزیہ سسٹمز کے ذریعے آسانی سے پہچانا جاتا ہے، بلاک کرنے کے لئے زیادہ متاثر ہے * یو ڈی پی نیٹ ورک پروٹوکول پر کام کرتا ہے.</translation>
-    </message>
-    <message>
-        <source>The REALITY protocol, a pioneering development by the creators of XRay, is specifically designed to counteract the highest levels of internet censorship through its novel approach to evasion.
-It uniquely identifies censors during the TLS handshake phase, seamlessly operating as a proxy for legitimate clients while diverting censors to genuine websites like google.com, thus presenting an authentic TLS certificate and data. 
-This advanced capability differentiates REALITY from similar technologies by its ability to disguise web traffic as coming from random, legitimate sites without the need for specific configurations. 
-Unlike older protocols such as VMess, VLESS, and the XTLS-Vision transport, REALITY&apos;s innovative &quot;friend or foe&quot; recognition at the TLS handshake enhances security and circumvents detection by sophisticated DPI systems employing active probing techniques. This makes REALITY a robust solution for maintaining internet freedom in environments with stringent censorship.</source>
-        <translation type="vanished">REALITY پروٹوکول، جو ایکس رے کے تخلیق کاروں کی ایک نوعیتی پیشرفت ہے، انٹرنیٹ سینسرشپ کی بلند ترین سطحوں کو مقابلہ کرنے کے لئے مخصوص طریقہ کار بنایا گیا ہے۔
-یہ فرد معین کو TLS ہینڈشیک فیز کے دوران سینسرز کو شناخت کرتا ہے، اصل کلائنٹس کے طور پر پراکسی کے طور پر بغیر رکاوٹ چلنے کے دوران سینسرز کو اصل ویب سائٹوں جیسے google.com پر منتقل کرتا ہے، اس طرح ایک مستند TLS سرٹیفکیٹ اور ڈیٹا کو پیش کرتا ہے۔
-یہ بلند پذیرای کی صلاحیت کو مخصوص ترتیبات کی ضرورت کے بغیر ویب ٹریفک کو اصلی سائٹس سے آنے کی طرح بنانے کی بنیاد میں مختلف ہے۔
-پرانے پروٹوکولوں جیسے VMess، VLESS، اور XTLS-Vision ٹرانسپورٹ کے برعکس، REALITY کا TLS ہینڈشیک کے دوران نئی &quot;دوست یا دشمن&quot; شناخت TLS پر سکیورٹی کو بڑھاتا ہے اور توانائی کے ساتھ DPI سسٹمز کی پیشہ ورانہ چھان بین تکنیکوں کے ذریعے شناخت سے بچتا ہے۔
-یہ REALITY کو سخت سینسرشپ والے ماحولوں میں انٹرنیٹ کی آزادی کو برقرار رکھنے کے لئے ایک مضبوط حل بناتا ہے۔</translation>
-    </message>
-    <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="187"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="189"/>
         <source>After installation, Amnezia will create a
 
  file storage on your server. You will be able to access it using
@@ -7896,326 +6638,175 @@ Unlike older protocols such as VMess, VLESS, and the XTLS-Vision transport, REAL
 
 For more detailed information, you can
  find it in the support section under &quot;Create SFTP file storage.&quot; </source>
-        <translation>انسٹالیشن کے بعد، ایمنیزیا آپ کے سرور پر ایک فائل اسٹوریج بنائے گا۔ آپ اس تک رسائی حاصل کر سکیں گے فائل زلا یا دیگر ایس ایف ٹی پی کلائنٹس کے ذریعے، اور اسکے علاوہ آپ اس ڈسک کو اپنے آلہ پر ماؤنٹ کر کے اس تک سیدھے راستے سے رسائی حاصل کر سکیں گے۔ مزید تفصیلات کے لئے، آپ سپورٹ سیکشن میں &quot;ایس ایف ٹی پی فائل اسٹوریج بنانا&quot; میں جا کر مزید معلومات حاصل کر سکتے ہیں.&quot; </translation>
+        <translation>انسٹالیشن کے بعد، Amnezia آپ کے سرور پر
+
+ ایک فائل اسٹوریج بنائے گا۔ آپ اس تک رسائی حاصل کر سکیں گے
+ FileZilla یا دیگر SFTP کلائنٹس کے ذریعے، اور ڈسک کو اپنے آلہ پر ماؤنٹ کر کے
+ براہ راست اپنے آلہ سے بھی رسائی لے سکیں گے۔
+
+مزید تفصیلی معلومات کے لیے، آپ
+ سپورٹ سیکشن میں &quot;SFTP فائل اسٹوریج بنانا&quot; کے تحت دیکھ سکتے ہیں۔ </translation>
     </message>
     <message>
-        <source>WireGuard - New popular VPN protocol with high performance, high speed and low power consumption. Recommended for regions with low levels of censorship.</source>
-        <translation type="vanished">وائر گارڈ - اعلی کارکردگی، تیز رفتار اور کم بجلی کی کھپت کے ساتھ نیا مقبول VPN پروٹوکول۔ سنسرشپ کی کم سطح والے علاقوں کے لیے تجویز کردہ.</translation>
-    </message>
-    <message>
-        <source>AmneziaWG - Special protocol from Amnezia, based on WireGuard. It&apos;s fast like WireGuard, but very resistant to blockages. Recommended for regions with high levels of censorship.</source>
-        <translation type="vanished">AmneziaWG - Amnezia سے خصوصی پروٹوکول، WireGuard پر مبنی۔ یہ وائر گارڈ کی طرح تیز ہے، لیکن رکاوٹوں کے خلاف بہت مزاحم ہے۔ اعلی درجے کی سنسر شپ والے خطوں کے لیے تجویز کردہ۔</translation>
-    </message>
-    <message>
-        <source>IKEv2/IPsec -  Modern stable protocol, a bit faster than others, restores connection after signal loss.</source>
-        <translation type="vanished">IKEv2/IPsec - جدید مستحکم پروٹوکول، دوسروں کے مقابلے میں تھوڑا تیز، سگنل ضائع ہونے کے بعد کنکشن بحال کرتا ہے۔</translation>
-    </message>
-    <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="110"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="111"/>
         <source>Deploy a WordPress site on the Tor network in two clicks.</source>
         <translation>ٹور نیٹ ورک پر ایک ورڈپریس سائٹ کو دو کلکس میں تعینات کریں.</translation>
     </message>
     <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="112"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="113"/>
         <source>Replace the current DNS server with your own. This will increase your privacy level.</source>
         <translation>موجودہ DNS سرور کو اپنے سے تبدیل کریں۔ اس سے آپ کی رازداری کی سطح میں اضافہ ہوگا.</translation>
     </message>
     <message>
-        <source>OpenVPN stands as one of the most popular and time-tested VPN protocols available.
-It employs its unique security protocol, leveraging the strength of SSL/TLS for encryption and key exchange. Furthermore, OpenVPN&apos;s support for a multitude of authentication methods makes it versatile and adaptable, catering to a wide range of devices and operating systems. Due to its open-source nature, OpenVPN benefits from extensive scrutiny by the global community, which continually reinforces its security. With a strong balance of performance, security, and compatibility, OpenVPN remains a top choice for privacy-conscious individuals and businesses alike.
-
-* Available in the AmneziaVPN across all platforms
-* Normal power consumption on mobile devices
-* Flexible customisation to suit user needs to work with different operating systems and devices
-* Recognised by DPI analysis systems and therefore susceptible to blocking
-* Can operate over both TCP and UDP network protocols.</source>
-        <translation type="vanished">OpenVPN دستیاب سب سے زیادہ مقبول اور وقتی آزمائشی VPN پروٹوکولز میں سے ایک ہے۔ یہ انکرپشن اور کلیدی تبادلے کے لیے SSL/TLS کی طاقت کا فائدہ اٹھاتے ہوئے اپنا منفرد سیکیورٹی پروٹوکول استعمال کرتا ہے۔ مزید برآں، توثیق کے بہت سے طریقوں کے لیے OpenVPN کی حمایت اسے ورسٹائل اور قابل موافق بناتی ہے، جو آلات اور آپریٹنگ سسٹم کی ایک وسیع رینج کو پورا کرتی ہے۔ اوپن سورس کی نوعیت کی وجہ سے، اوپن وی پی این کو عالمی برادری کی طرف سے وسیع جانچ سے فائدہ ہوتا ہے، جو اس کی سلامتی کو مسلسل تقویت دیتا ہے۔ کارکردگی، سیکورٹی اور مطابقت کے مضبوط توازن کے ساتھ، OpenVPN رازداری کے بارے میں شعور رکھنے والے افراد اور کاروباروں کے لیے یکساں انتخاب ہے۔ * تمام پلیٹ فارمز پر AmneziaVPN میں دستیاب ہے * موبائل آلات پر بجلی کی عام کھپت * صارف کو مختلف آپریٹنگ سسٹمز اور ڈیوائسز کے ساتھ کام کرنے کی ضرورت کے مطابق لچکدار تخصیص * DPI تجزیہ سسٹمز کے ذریعہ پہچانا جاتا ہے اور اس وجہ سے بلاک کرنے کا خطرہ ہوتا ہے * TCP اور UDP دونوں نیٹ ورک پر کام کر سکتا ہے۔ پروٹوکول</translation>
-    </message>
-    <message>
-        <source>Shadowsocks, inspired by the SOCKS5 protocol, safeguards the connection using the AEAD cipher. Although Shadowsocks is designed to be discreet and challenging to identify, it isn&apos;t identical to a standard HTTPS connection.However, certain traffic analysis systems might still detect a Shadowsocks connection. Due to limited support in Amnezia, it&apos;s recommended to use AmneziaWG protocol.
-
-* Available in the AmneziaVPN only on desktop platforms
-* Configurable encryption protocol
-* Detectable by some DPI systems
-* Works over TCP network protocol.</source>
-        <translation type="vanished">شیڈو ساکس، SOCKS5 پروٹوکول سے متاثر، AEAD سائفر کا استعمال کرتے ہوئے کنکشن کی حفاظت کرتا ہے۔ اگرچہ شیڈو ساکس کو سمجھدار اور شناخت کرنے کے لیے چیلنج کرنے کے لیے ڈیزائن کیا گیا ہے، لیکن یہ معیاری HTTPS کنکشن سے مماثل نہیں ہے۔ تاہم، کچھ ٹریفک تجزیہ نظام اب بھی شیڈو ساکس کنکشن کا پتہ لگا سکتے ہیں۔ Amnezia میں محدود تعاون کی وجہ سے، AmneziaWG پروٹوکول استعمال کرنے کی سفارش کی جاتی ہے۔ * صرف ڈیسک ٹاپ پلیٹ فارمز پر AmneziaVPN میں دستیاب ہے * قابل ترتیب انکرپشن پروٹوکول * کچھ DPI سسٹمز کے ذریعے قابل شناخت * TCP نیٹ ورک پروٹوکول پر کام کرتا ہے.</translation>
-    </message>
-    <message>
-        <source>A modern iteration of the popular VPN protocol, AmneziaWG builds upon the foundation set by WireGuard, retaining its simplified architecture and high-performance capabilities across devices.
-While WireGuard is known for its efficiency, it had issues with being easily detected due to its distinct packet signatures. AmneziaWG solves this problem by using better obfuscation methods, making its traffic blend in with regular internet traffic.
-This means that AmneziaWG keeps the fast performance of the original while adding an extra layer of stealth, making it a great choice for those wanting a fast and discreet VPN connection.
-
-* Available in the AmneziaVPN across all platforms
-* Low power consumption
-* Minimum number of settings
-* Not recognised by DPI analysis systems, resistant to blocking
-* Works over UDP network protocol.</source>
-        <translation type="vanished">ایک معاصر اشارہ جاتا ہے مقبول وی پی این پروٹوکول کا امنیزیہ ڈبلیو جی۔ امنیزیہ ڈبلیو جی وائر گارڈ کے بنیادی ڈھانچے پر مبنی ہے، جس نے اس کی آسانی سے معماری اور ایکسیلنٹ کارکردگی کی خصوصیات کو برقرار رکھا۔ جبکہ وائر گارڈ کو اس کی کارآمدی کے لئے جانا جاتا ہے، اس میں اپنے ممتاز پیکٹ سائنیچرز کی وجہ سے آسانی سے پہچان میں مسائل پیش آتے تھے۔ امنیزیہ ڈبلیو جی اس مسئلے کا حل پیش کرتا ہے بہتر اوبفسکیشن میتھڈس کے ذریعے، جس سے اس کی ٹریفک عام انٹرنیٹ ٹریفک کے ساتھ مل جل کر رہتی ہے۔ اس سے مطلب یہ ہے کہ امنیزیہ ڈبلیو جی نے اصل وائر گارڈ کی تیزی کارکردگی کو برقرار رکھا جبکہ اس میں ایک اضافی پردہ شامل کیا، جو اسے ایک تیز اور پرانے طریقہ سے وی پی این کنکشن کی درخواست کرنے والوں کے لئے ایک عمدہ چوئس بناتا ہے۔ * تمام پلیٹ فارمز پر دستیاب ہے * کم بجلی کی استعمال * کم سیٹنگز کی تعداد * ڈی پی آئی تجزیہ سسٹمز سے پہچانا نہیں جاتا، بند کرنے کے لئے مزید مضبوط ہے * یو ڈی پی نیٹ ورک پروٹوکول پر کام کرتا ہے۔</translation>
-    </message>
-    <message>
-        <source>IKEv2, paired with the IPSec encryption layer, stands as a modern and stable VPN protocol.
-One of its distinguishing features is its ability to swiftly switch between networks and devices, making it particularly adaptive in dynamic network environments. 
-While it offers a blend of security, stability, and speed, it&apos;s essential to note that IKEv2 can be easily detected and is susceptible to blocking.
-
-* Available in the AmneziaVPN only on Windows
-* Low power consumption, on mobile devices
-* Minimal configuration
-* Recognised by DPI analysis systems
-* Works over UDP network protocol, ports 500 and 4500.</source>
-        <translation type="vanished">IKEv2، IPSec انکرپشن پرت کے ساتھ جوڑا، ایک جدید اور مستحکم VPN پروٹوکول کے طور پر کھڑا ہے۔ اس کی امتیازی خصوصیات میں سے ایک نیٹ ورکس اور ڈیوائسز کے درمیان تیزی سے سوئچ کرنے کی صلاحیت ہے، جو اسے متحرک نیٹ ورک کے ماحول میں خاص طور پر موافق بناتی ہے۔ اگرچہ یہ سیکیورٹی، استحکام اور رفتار کا امتزاج پیش کرتا ہے، لیکن یہ نوٹ کرنا ضروری ہے کہ IKEv2 کا آسانی سے پتہ لگایا جا سکتا ہے اور یہ بلاک کرنے کے لیے حساس ہے۔ * صرف ونڈوز پر AmneziaVPN میں دستیاب ہے * کم بجلی کی کھپت، موبائل ڈیوائسز پر * کم سے کم کنفیگریشن * DPI تجزیہ سسٹمز کے ذریعے پہچانا جاتا ہے * UDP نیٹ ورک پروٹوکول، پورٹ 500 اور 4500 پر کام .کرتا ہے</translation>
-    </message>
-    <message>
-        <location filename="../core/utils/containers/containerUtils.cpp" line="185"/>
+        <location filename="../core/utils/containers/containerUtils.cpp" line="187"/>
         <source>DNS Service</source>
         <translation>DNS سروس</translation>
     </message>
     <message>
-        <source>Entry not found</source>
-        <translation type="vanished">اندراج نہیں ملا</translation>
-    </message>
-    <message>
-        <source>Access to keychain denied</source>
-        <translation type="vanished">کی چین تک رسائی منسوخ</translation>
-    </message>
-    <message>
-        <source>No keyring daemon</source>
-        <translation type="vanished">کوئی کیرنگ ڈیمون نہیں</translation>
-    </message>
-    <message>
-        <source>Already unlocked</source>
-        <translation type="vanished">&quot;پہلے سے ہی انلاک ہوگیا ہے</translation>
-    </message>
-    <message>
-        <source>No such keyring</source>
-        <translation type="vanished">ایسی کوئی کیرنگ نہیں</translation>
-    </message>
-    <message>
-        <source>Bad arguments</source>
-        <translation type="vanished">برے دلائل</translation>
-    </message>
-    <message>
-        <source>I/O error</source>
-        <translation type="vanished">I/O غلطی</translation>
-    </message>
-    <message>
-        <source>Cancelled</source>
-        <translation type="vanished">منسوخ</translation>
-    </message>
-    <message>
-        <source>Keyring already exists</source>
-        <translation type="vanished">کیرنگ پہلے سے موجود ہے</translation>
-    </message>
-    <message>
-        <source>No match</source>
-        <translation type="vanished">کوئی میچ نہیں</translation>
-    </message>
-    <message>
-        <source>error 0x%1: %2</source>
-        <translation type="vanished">غلطی 0x%1: %2</translation>
-    </message>
-    <message>
         <location filename="../core/utils/serialization/vmess_new.cpp" line="57"/>
         <source>vmess:// url is invalid</source>
-        <translation type="unfinished"></translation>
+        <translation>vmess:// یو آر ایل غلط ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/vmess_new.cpp" line="82"/>
         <source>Invalid streamSettings protocol: </source>
-        <translation type="unfinished"></translation>
+        <translation>غلط streamSettings پروٹوکول: </translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/vmess_new.cpp" line="148"/>
         <source>Unknown transport method: </source>
-        <translation type="unfinished"></translation>
+        <translation>نا معلوم ٹرانسپورٹ طریقہ: </translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/vmess.cpp" line="130"/>
         <source>VMess string should start with &apos;vmess://&apos;</source>
-        <translation type="unfinished"></translation>
+        <translation>VMess سٹرنگ کو &apos;vmess://&apos; سے شروع ہونا چاہیے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/vmess.cpp" line="137"/>
         <source>VMess string should be a valid base64 string</source>
-        <translation type="unfinished"></translation>
+        <translation>VMess سٹرنگ ایک درست base64 سٹرنگ ہونی چاہیے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/vmess.cpp" line="154"/>
         <source>JSON should not be empty</source>
-        <translation type="unfinished"></translation>
+        <translation>JSON خالی نہیں ہونا چاہیے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/vless.cpp" line="45"/>
         <source>VLESS link should start with vless://</source>
-        <translation type="unfinished"></translation>
+        <translation>VLESS لنک کو vless:// سے شروع ہونا چاہیے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/vless.cpp" line="53"/>
         <source>link parse failed: %1</source>
-        <translation type="unfinished"></translation>
+        <translation>لنک پارس کرنے میں ناکامی: %1</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/vless.cpp" line="61"/>
         <source>empty host</source>
-        <translation type="unfinished"></translation>
+        <translation>ہوسٹ خالی ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/vless.cpp" line="70"/>
         <source>missing port</source>
-        <translation type="unfinished"></translation>
+        <translation>پورٹ غائب ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/vless.cpp" line="85"/>
         <source>missing uuid</source>
-        <translation type="unfinished"></translation>
+        <translation>uuid غائب ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ssd.cpp" line="54"/>
         <source>Invalid ssd link: json: field %1 must exist</source>
-        <translation type="unfinished"></translation>
+        <translation>غلط ssd لنک: json: فیلڈ %1 موجود ہونی چاہیے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ssd.cpp" line="61"/>
         <source>Invalid ssd link: json: field %1 must be valid port number</source>
-        <translation type="unfinished"></translation>
+        <translation>غلط ssd لنک: json: فیلڈ %1 ایک درست پورٹ نمبر ہونا چاہیے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ssd.cpp" line="68"/>
         <source>Invalid ssd link: json: field %1 must be of type &apos;string&apos;</source>
-        <translation type="unfinished"></translation>
+        <translation>غلط ssd لنک: json: فیلڈ %1 کی قسم &apos;string&apos; ہونی چاہیے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ssd.cpp" line="75"/>
         <source>Invalid ssd link: json: field %1 must be an array</source>
-        <translation type="unfinished"></translation>
+        <translation>غلط ssd لنک: json: فیلڈ %1 ایک ارے ہونی چاہیے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ssd.cpp" line="82"/>
         <source>Skipping invalid ssd server: server must be an object</source>
-        <translation type="unfinished"></translation>
+        <translation>غلط ssd سرور کو نظر انداز کیا جا رہا ہے: سرور ایک آبجیکٹ ہونا چاہیے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ssd.cpp" line="88"/>
         <source>Skipping invalid ssd server: missing required field %1</source>
-        <translation type="unfinished"></translation>
+        <translation>غلط ssd سرور کو نظر انداز کیا جا رہا ہے: مطلوبہ فیلڈ %1 غائب ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ssd.cpp" line="95"/>
         <source>Skipping invalid ssd server: field %1 should be of type &apos;string&apos;</source>
-        <translation type="unfinished"></translation>
+        <translation>غلط ssd سرور کو نظر انداز کیا جا رہا ہے: فیلڈ %1 کی قسم &apos;string&apos; ہونی چاہیے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ssd.cpp" line="104"/>
         <source>Invalid ssd link: should begin with ssd://</source>
-        <translation type="unfinished"></translation>
+        <translation>غلط ssd لنک: اسے ssd:// سے شروع ہونا چاہیے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ssd.cpp" line="114"/>
         <source>Invalid ssd link: base64 parse failed</source>
-        <translation type="unfinished"></translation>
+        <translation>غلط ssd لنک: base64 پارس کرنے میں ناکامی</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ssd.cpp" line="121"/>
         <source>Invalid ssd link: json parse failed</source>
-        <translation type="unfinished"></translation>
+        <translation>غلط ssd لنک: json پارس کرنے میں ناکامی</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ssd.cpp" line="144"/>
         <source>Invalid ssd link: rc4-md5 encryption is not supported by v2ray-core</source>
-        <translation type="unfinished"></translation>
+        <translation>غلط ssd لنک: rc4-md5 انکرپشن v2ray-core سپورٹ نہیں کرتا</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ss.cpp" line="51"/>
         <source>SS URI is too short</source>
-        <translation type="unfinished"></translation>
+        <translation>SS URI بہت مختصر ہے</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ss.cpp" line="74"/>
         <location filename="../core/utils/serialization/ss.cpp" line="109"/>
         <source>Can&apos;t find the colon separator between method and password</source>
-        <translation type="unfinished"></translation>
+        <translation>طریقہ اور پاس ورڈ کے درمیان کولن علامت نہیں مل سکی</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ss.cpp" line="83"/>
         <source>Can&apos;t find the at separator between password and hostname</source>
-        <translation type="unfinished"></translation>
+        <translation>پاس ورڈ اور ہوسٹ نام کے درمیان @ علامت نہیں مل سکی</translation>
     </message>
     <message>
         <location filename="../core/utils/serialization/ss.cpp" line="92"/>
         <source>Can&apos;t find the colon separator between hostname and port</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
-    <name>RemoteLogHealthUiController</name>
-    <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="43"/>
-        <source>Waiting for VPN connection</source>
-        <translation type="unfinished"></translation>
+        <translation>ہوسٹ نام اور پورٹ کے درمیان کولن علامت نہیں مل سکی</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="45"/>
-        <source>Remote diagnostics collector is not configured</source>
-        <translation type="unfinished"></translation>
+        <location filename="../core/models/protocols/awgProtocolConfig.cpp" line="436"/>
+        <source> (version 3.1)</source>
+        <translation> (ورژن 3.1)</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="47"/>
-        <source>Uploading diagnostics</source>
-        <translation type="unfinished"></translation>
+        <location filename="../core/models/protocols/awgProtocolConfig.cpp" line="437"/>
+        <source> (version 2)</source>
+        <translation> (ورژن 2)</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="49"/>
-        <source>Diagnostics delivery is healthy</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="51"/>
-        <source>Diagnostics delivery is stale</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="53"/>
-        <source>Diagnostics delivery failed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="55"/>
-        <source>Diagnostics delivery status is not exposed in this view</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="88"/>
-        <source>Collector configuration is unavailable</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="90"/>
-        <source>Collector enrollment failed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="92"/>
-        <source>Collector authentication failed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="94"/>
-        <source>Network request failed</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="96"/>
-        <source>Collector request timed out</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="98"/>
-        <source>Collector rejected the upload</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/remoteLogHealthUiController.cpp" line="100"/>
-        <source>Local diagnostics logs are unavailable</source>
-        <translation type="unfinished"></translation>
+        <location filename="../core/models/protocols/awgProtocolConfig.cpp" line="438"/>
+        <source> (version 1.5)</source>
+        <translation> (ورژن 1.5)</translation>
     </message>
 </context>
 <context>
@@ -8223,12 +6814,20 @@ While it offers a blend of security, stability, and speed, it&apos;s essential t
     <message>
         <location filename="../ui/qml/Components/RenameServerDrawer.qml" line="30"/>
         <source>Server name</source>
-        <translation type="unfinished">سرور کا نام</translation>
+        <translation>سرور کا نام</translation>
     </message>
     <message>
         <location filename="../ui/qml/Components/RenameServerDrawer.qml" line="41"/>
         <source>Save</source>
-        <translation type="unfinished"></translation>
+        <translation>محفوظ کریں</translation>
+    </message>
+</context>
+<context>
+    <name>SecureServersRepository</name>
+    <message>
+        <location filename="../core/repositories/secureServersRepository.cpp" line="225"/>
+        <source>Server</source>
+        <translation>سرور</translation>
     </message>
 </context>
 <context>
@@ -8244,231 +6843,53 @@ While it offers a blend of security, stability, and speed, it&apos;s essential t
     <message>
         <location filename="../ui/qml/Components/ServersListView.qml" line="70"/>
         <source>Subscription expired. Please renew</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرپشن ختم ہو گیا۔ براہ کرم تجدید کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Components/ServersListView.qml" line="70"/>
         <source>Subscription expiring soon</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرپشن جلد ختم ہو رہا ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Components/ServersListView.qml" line="83"/>
         <source>Unable change server while there is an active connection</source>
-        <translation type="unfinished">فعال کنکشن موجود ہونے کی وجہ سے سرور تبدیل کرنے میں ناکام ہیں</translation>
+        <translation>فعال کنکشن موجود ہونے کی وجہ سے سرور تبدیل کرنے میں ناکام ہیں</translation>
     </message>
 </context>
 <context>
     <name>ServersUiController</name>
     <message>
-        <location filename="../ui/controllers/serversUiController.cpp" line="96"/>
+        <location filename="../ui/controllers/serversUiController.cpp" line="99"/>
         <source>Legacy API v1 configs are no longer supported. Remove this server to continue.</source>
-        <translation type="unfinished"></translation>
+        <translation>پرانے API v1 کنفیگز اب سپورٹ نہیں کیے جاتے۔ جاری رکھنے کے لیے اس سرور کو ہٹا دیں۔</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/serversUiController.cpp" line="97"/>
+        <location filename="../ui/controllers/serversUiController.cpp" line="100"/>
         <source>Use the remove action to delete this legacy config.</source>
-        <translation type="unfinished"></translation>
+        <translation>اس پرانے کنفیگ کو مٹانے کے لیے ہٹانے کی کارروائی استعمال کریں۔</translation>
     </message>
 </context>
 <context>
     <name>ServicesCatalogController</name>
     <message>
-        <location filename="../core/controllers/api/servicesCatalogController.cpp" line="176"/>
+        <location filename="../core/controllers/api/servicesCatalogController.cpp" line="258"/>
         <source>%1/mo</source>
         <comment>IAP: price per month in plan subtitle</comment>
-        <translation type="unfinished"></translation>
+        <translation>%1/ماہ</translation>
     </message>
     <message>
-        <location filename="../core/controllers/api/servicesCatalogController.cpp" line="196"/>
+        <location filename="../core/controllers/api/servicesCatalogController.cpp" line="278"/>
         <source>from %1 per month</source>
         <comment>IAP: card footer minimum monthly price from StoreKit</comment>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
-    <name>Settings</name>
-    <message>
-        <source>Server #1</source>
-        <translation type="vanished">سرور نمبر 1</translation>
-    </message>
-    <message>
-        <source>Server</source>
-        <translation type="vanished">سرور</translation>
-    </message>
-</context>
-<context>
-    <name>SettingsController</name>
-    <message>
-        <source>Backup file is corrupted</source>
-        <translation type="vanished">بیک اپ فائل خراب ہو گئی ہے</translation>
-    </message>
-    <message>
-        <source>All settings have been reset to default values</source>
-        <translation type="vanished">تمام ترتیبات کو ڈیفالٹ اقدار پر دوبارہ ترتیب دیا گیا ہے</translation>
+        <translation>%1 ماہانہ سے</translation>
     </message>
 </context>
 <context>
     <name>SettingsUiController</name>
     <message>
-        <location filename="../ui/controllers/settingsUiController.cpp" line="183"/>
+        <location filename="../ui/controllers/settingsUiController.cpp" line="187"/>
         <source>All settings have been reset to default values</source>
-        <translation type="unfinished">تمام ترتیبات کو ڈیفالٹ اقدار پر دوبارہ ترتیب دیا گیا ہے</translation>
-    </message>
-</context>
-<context>
-    <name>ShareConnectionDrawer</name>
-    <message>
-        <source>Save AmneziaVPN config</source>
-        <translation type="vanished">AmneziaVPN ترتیب کو محفوظ کریں</translation>
-    </message>
-    <message>
-        <source>Share</source>
-        <translation type="vanished">بانٹیں</translation>
-    </message>
-    <message>
-        <source>Copy</source>
-        <translation type="vanished">کاپی</translation>
-    </message>
-    <message>
-        <source>Copied</source>
-        <translation type="vanished">کاپی</translation>
-    </message>
-    <message>
-        <source>Copy config string</source>
-        <translation type="vanished">تشکیل سٹرنگ کو کاپی کریں</translation>
-    </message>
-    <message>
-        <source>Show connection settings</source>
-        <translation type="vanished">کنکشن کی ترتیبات دکھائیں</translation>
-    </message>
-    <message>
-        <source>To read the QR code in the Amnezia app, select &quot;Add server&quot; → &quot;I have data to connect&quot; → &quot;QR code, key or settings file&quot;</source>
-        <translation type="vanished">ایمنیزیا ایپ میں QR کوڈ پڑھنے کے لیے، &quot;سرور شامل کریں&quot; → &quot;میرے پاس جوڑنے کے لیے ڈیٹا ہے&quot; → &quot;QR کوڈ، کلید یا سیٹنگ فائل&quot; کو منتخب کریں</translation>
-    </message>
-</context>
-<context>
-    <name>SitesController</name>
-    <message>
-        <source>Hostname not look like ip adress or domain name</source>
-        <translation type="vanished">میزبان کا نام آئی پی ایڈریس یا ڈومین نام نظر نہیں آ رہا ہے</translation>
-    </message>
-    <message>
-        <source>New site added: %1</source>
-        <translation type="vanished">نیا سائٹ شامل ہوگئی ہے: %1</translation>
-    </message>
-    <message>
-        <source>Site removed: %1</source>
-        <translation type="vanished">سائٹ ہٹا دی گئی ہے: %1</translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="44"/>
-        <source>Can&apos;t open file: %1</source>
-        <translation>فائل نہیں کھول سکتا: %1</translation>
-    </message>
-    <message>
-        <source>Failed to parse JSON data from file: %1</source>
-        <translation type="vanished">فائل سے JSON ڈیٹا پارس کرنے میں ناکامی: %1</translation>
-    </message>
-    <message>
-        <source>The JSON data is not an array in file: %1</source>
-        <translation type="vanished">فائل میں JSON ڈیٹا ایک ایرے نہیں ہے: %1</translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="280"/>
-        <source>Import completed</source>
-        <translation>واردات مکمل ہوگئی ہے</translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="295"/>
-        <source>Export completed</source>
-        <translation>ایکسپورٹ مکمل ہوگیا</translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="51"/>
-        <source>Failed to parse JSON data: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="56"/>
-        <source>The JSON data is not an array</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="165"/>
-        <location filename="../ui/controllers/sitesController.cpp" line="182"/>
-        <location filename="../ui/controllers/sitesController.cpp" line="240"/>
-        <source>Server routing rules are available only for server admins</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="173"/>
-        <source>Server routing policy updated</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="186"/>
-        <source>Site should be a domain, IP address, or subnet</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="194"/>
-        <source>Managed route is too broad, unsafe, or exceeds the policy limit</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="202"/>
-        <source>Managed site updated: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="219"/>
-        <source>Managed site removed: %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="232"/>
-        <source>Site list cleared!</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="262"/>
-        <source>Imported route list contains an unsafe or oversized IP value</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="275"/>
-        <source>Imported route list is too large or contains an unsafe managed route</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="336"/>
-        <source>Local rollback snapshot is unavailable</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="360"/>
-        <source>Local routing state already matches the rollback snapshot</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="378"/>
-        <source>Local routing changes were rolled back</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="379"/>
-        <source>Local routing changes could not be rolled back</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="397"/>
-        <source>Server credentials are unavailable; routing policy was not published</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/controllers/sitesController.cpp" line="492"/>
-        <source>Failed to publish server routing rules for clients</source>
-        <translation type="unfinished"></translation>
+        <translation>تمام ترتیبات کو ڈیفالٹ اقدار پر دوبارہ ترتیب دیا گیا ہے</translation>
     </message>
 </context>
 <context>
@@ -8476,111 +6897,126 @@ While it offers a blend of security, stability, and speed, it&apos;s essential t
     <message>
         <location filename="../ui/qml/Components/SubscriptionExpiredDrawer.qml" line="46"/>
         <source> subscription has expired</source>
-        <translation type="unfinished"></translation>
+        <translation> سبسکرپشن ختم ہو گیا ہے</translation>
     </message>
     <message>
         <location filename="../ui/qml/Components/SubscriptionExpiredDrawer.qml" line="59"/>
         <source>Renew to continue using VPN</source>
-        <translation type="unfinished"></translation>
+        <translation>VPN استعمال جاری رکھنے کے لیے تجدید کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Components/SubscriptionExpiredDrawer.qml" line="71"/>
         <source>Renew</source>
-        <translation type="unfinished"></translation>
+        <translation>تجدید کریں</translation>
     </message>
     <message>
         <location filename="../ui/qml/Components/SubscriptionExpiredDrawer.qml" line="95"/>
         <source>Support</source>
-        <translation type="unfinished"></translation>
+        <translation>سپورٹ</translation>
     </message>
 </context>
 <context>
     <name>SubscriptionUiController</name>
     <message>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="218"/>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="268"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="241"/>
+        <source>Your subscription has been upgraded</source>
+        <translation>آپ کا سبسکرپشن اپ گریڈ ہو گیا</translation>
+    </message>
+    <message>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="242"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="282"/>
         <source>This subscription has already been added</source>
-        <translation type="unfinished"></translation>
+        <translation>یہ سبسکرپشن پہلے ہی شامل کیا جا چکا ہے</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="225"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="254"/>
         <source>%1 has been added to the app</source>
-        <translation type="unfinished"></translation>
+        <translation>%1 کو ایپ میں شامل کر دیا گیا ہے</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="275"/>
-        <source>Subscription restored successfully.</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="289"/>
+        <source>Subscription restored successfully</source>
+        <translation>سبسکرپشن کامیابی سے بحال ہو گیا</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="303"/>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="349"/>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="412"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="344"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="380"/>
+        <source>Purchase confirmed. Subscription has been added to the app</source>
+        <translation>خریداری کی تصدیق ہو گئی۔ سبسکرپشن ایپ میں شامل کر دیا گیا</translation>
+    </message>
+    <message>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="436"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="489"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="612"/>
         <source>%1 installed successfully.</source>
-        <translation type="unfinished"></translation>
+        <translation>%1 کامیابی سے نصب ہو گیا۔</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="316"/>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="357"/>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="388"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="451"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="497"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="524"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="555"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="583"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="647"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="740"/>
         <source>Enter the digits from the image to continue</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھنے کے لیے تصویر میں دیے گئے ہندسے درج کریں</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="405"/>
-        <source>This email address has already been used to activate a trial. If you like the service, you can upgrade to Premium</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="605"/>
+        <source>This email address has already been used to activate a trial. Like the service? Upgrade to Premium</source>
+        <translation>یہ ای میل ایڈریس پہلے ہی ٹرائل فعال کرنے کے لیے استعمال ہو چکا ہے۔ سروس پسند آئی؟ Premium میں اپ گریڈ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="433"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="665"/>
         <source>API config reloaded</source>
-        <translation type="unfinished"></translation>
+        <translation>API کنفیگ دوبارہ لوڈ ہو گیا</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="437"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="669"/>
         <source>Successfully changed the country of connection to %1</source>
-        <translation type="unfinished"></translation>
+        <translation>کنکشن کا ملک کامیابی سے %1 میں تبدیل کر دیا گیا</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="514"/>
-        <source>Api config removed</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="784"/>
+        <source>API config removed</source>
+        <translation>API کنفیگ ہٹا دیا گیا</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="523"/>
+        <location filename="../ui/controllers/api/subscriptionUiController.cpp" line="793"/>
         <source>Server &apos;%1&apos; was removed</source>
-        <translation type="unfinished">سرور %1 ہٹا دیا گیا تھا</translation>
+        <translation>سرور %1 ہٹا دیا گیا تھا</translation>
     </message>
 </context>
 <context>
     <name>SystemTrayNotificationHandler</name>
     <message>
-        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="28"/>
-        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="62"/>
+        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="26"/>
+        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="75"/>
         <source>Show</source>
         <translation>دکھائیں</translation>
     </message>
     <message>
-        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="32"/>
-        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="63"/>
+        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="30"/>
+        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="76"/>
         <source>Connect</source>
         <translation>منسلک کریں</translation>
     </message>
     <message>
-        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="33"/>
-        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="64"/>
+        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="31"/>
+        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="77"/>
         <source>Disconnect</source>
         <translation>منقطع کریں</translation>
     </message>
     <message>
-        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="37"/>
-        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="65"/>
+        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="35"/>
+        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="78"/>
         <source>Visit Website</source>
         <translation>ویب سائٹ دیکھیں</translation>
     </message>
     <message>
-        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="43"/>
-        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="66"/>
+        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="41"/>
+        <location filename="../ui/utils/systemTrayNotificationHandler.cpp" line="79"/>
         <source>Quit</source>
         <translation>بند کریں</translation>
     </message>
@@ -8590,39 +7026,74 @@ While it offers a blend of security, stability, and speed, it&apos;s essential t
     <message>
         <location filename="../ui/qml/Components/TermsAndPrivacyText.qml" line="23"/>
         <source>By continuing, you agree to the &lt;a href=&quot;%1&quot; style=&quot;color: %3;&quot;&gt;Terms of Use&lt;/a&gt; and &lt;a href=&quot;%2&quot; style=&quot;color: %3;&quot;&gt;Privacy Policy&lt;/a&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>جاری رکھنے سے، آپ &lt;a href=&quot;%1&quot; style=&quot;color: %3;&quot;&gt;استعمال کی شرائط&lt;/a&gt; اور &lt;a href=&quot;%2&quot; style=&quot;color: %3;&quot;&gt;رازداری کی پالیسی&lt;/a&gt; سے اتفاق کرتے ہیں</translation>
     </message>
 </context>
 <context>
     <name>TextFieldWithHeaderType</name>
     <message>
-        <location filename="../ui/qml/Controls2/TextFieldWithHeaderType.qml" line="143"/>
+        <location filename="../ui/qml/Controls2/TextFieldWithHeaderType.qml" line="145"/>
         <source>The field can&apos;t be empty</source>
         <translation>یہ فیلڈ خالی نہیں ہو سکتا</translation>
     </message>
 </context>
 <context>
-    <name>UpdateUiController</name>
+    <name>UpdateSupportDrawer</name>
     <message>
-        <location filename="../ui/controllers/updateUiController.cpp" line="28"/>
-        <source>New version released: %1</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Components/UpdateSupportDrawer.qml" line="39"/>
+        <source>Support</source>
+        <translation>سپورٹ</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/updateUiController.cpp" line="31"/>
-        <source>New version released: %1 (%2)</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Components/UpdateSupportDrawer.qml" line="47"/>
+        <source>If the update won&apos;t install, message us</source>
+        <translation>اگر اپ ڈیٹ انسٹال نہ ہو تو ہمیں پیغام بھیجیں</translation>
     </message>
     <message>
-        <location filename="../ui/controllers/updateUiController.cpp" line="42"/>
-        <source>Failed to load changelog text</source>
-        <translation type="unfinished"></translation>
+        <location filename="../ui/qml/Components/UpdateSupportDrawer.qml" line="54"/>
+        <source>Telegram</source>
+        <translation>Telegram</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Components/UpdateSupportDrawer.qml" line="55"/>
+        <source>We&apos;ll reply in chat</source>
+        <translation>ہم چیٹ میں جواب دیں گے</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Components/UpdateSupportDrawer.qml" line="60"/>
+        <source>https://t.me/amnezia_vpn_en</source>
+        <translation>https://t.me/amnezia_vpn_en</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Components/UpdateSupportDrawer.qml" line="69"/>
+        <source>support@amnezia.org</source>
+        <translation>support@amnezia.org</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Components/UpdateSupportDrawer.qml" line="70"/>
+        <source>Support email</source>
+        <translation>سپورٹ ای میل</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Components/UpdateSupportDrawer.qml" line="75"/>
+        <source>mailto:support@amnezia.org</source>
+        <translation>mailto:support@amnezia.org</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Components/UpdateSupportDrawer.qml" line="84"/>
+        <source>amnezia.org</source>
+        <translation>amnezia.org</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/Components/UpdateSupportDrawer.qml" line="85"/>
+        <source>Download the update manually</source>
+        <translation>اپ ڈیٹ دستی طور پر ڈاؤن لوڈ کریں</translation>
     </message>
 </context>
 <context>
     <name>VpnConnection</name>
     <message>
-        <location filename="../vpnConnection.cpp" line="1591"/>
+        <location filename="../vpnConnection.cpp" line="554"/>
         <source>Mbps</source>
         <translation>ایم بی پی ایس</translation>
     </message>
@@ -8630,44 +7101,67 @@ While it offers a blend of security, stability, and speed, it&apos;s essential t
 <context>
     <name>VpnProtocol</name>
     <message>
-        <location filename="../core/protocols/vpnProtocol.cpp" line="135"/>
+        <location filename="../core/protocols/vpnProtocol.cpp" line="136"/>
         <source>Unknown</source>
         <translation>نامعلوم</translation>
     </message>
     <message>
-        <location filename="../core/protocols/vpnProtocol.cpp" line="136"/>
+        <location filename="../core/protocols/vpnProtocol.cpp" line="137"/>
         <source>Disconnected</source>
         <translation>منقطع</translation>
     </message>
     <message>
-        <location filename="../core/protocols/vpnProtocol.cpp" line="137"/>
+        <location filename="../core/protocols/vpnProtocol.cpp" line="138"/>
         <source>Preparing</source>
         <translation>تیاری مکمل</translation>
     </message>
     <message>
-        <location filename="../core/protocols/vpnProtocol.cpp" line="138"/>
+        <location filename="../core/protocols/vpnProtocol.cpp" line="139"/>
         <source>Connecting...</source>
         <translation>منسلک ہو رہا ہے...</translation>
     </message>
     <message>
-        <location filename="../core/protocols/vpnProtocol.cpp" line="139"/>
+        <location filename="../core/protocols/vpnProtocol.cpp" line="140"/>
         <source>Connected</source>
         <translation>منسلک</translation>
     </message>
     <message>
-        <location filename="../core/protocols/vpnProtocol.cpp" line="140"/>
+        <location filename="../core/protocols/vpnProtocol.cpp" line="141"/>
         <source>Disconnecting...</source>
         <translation>منقطع ہو رہا ہے...</translation>
     </message>
     <message>
-        <location filename="../core/protocols/vpnProtocol.cpp" line="141"/>
+        <location filename="../core/protocols/vpnProtocol.cpp" line="142"/>
         <source>Reconnecting...</source>
         <translation>دوبارہ منسلک ہو رہا ہے...</translation>
     </message>
     <message>
-        <location filename="../core/protocols/vpnProtocol.cpp" line="142"/>
+        <location filename="../core/protocols/vpnProtocol.cpp" line="143"/>
         <source>Error</source>
         <translation>خرابی</translation>
+    </message>
+</context>
+<context>
+    <name>XrayConfigModel</name>
+    <message>
+        <location filename="../ui/models/protocols/xrayConfigModel.cpp" line="707"/>
+        <source>Port must be in the range of 1 to 65535</source>
+        <translation>پورٹ 1 سے 65535 کی حد میں ہونا چاہیے</translation>
+    </message>
+    <message>
+        <location filename="../ui/models/protocols/xrayConfigModel.cpp" line="713"/>
+        <source>SNI: enter a valid IP address or domain name</source>
+        <translation>SNI: ایک درست IP پتہ یا ڈومین نام درج کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/models/protocols/xrayConfigModel.cpp" line="719"/>
+        <source>Host: enter a valid IP address or domain name</source>
+        <translation>ہوسٹ: ایک درست IP پتہ یا ڈومین نام درج کریں</translation>
+    </message>
+    <message>
+        <location filename="../ui/models/protocols/xrayConfigModel.cpp" line="722"/>
+        <source>Path must start with &quot;/&quot;</source>
+        <translation>راستہ &quot;/&quot; سے شروع ہونا چاہیے</translation>
     </message>
 </context>
 <context>
@@ -8675,73 +7169,47 @@ While it offers a blend of security, stability, and speed, it&apos;s essential t
     <message>
         <location filename="../ui/models/protocols/xrayConfigSnapshotsModel.cpp" line="153"/>
         <source>Invalid JSON format</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
-    <name>amnezia::ContainerProps</name>
-    <message>
-        <source>Low</source>
-        <translation type="vanished">کم</translation>
-    </message>
-    <message>
-        <source>Medium or High</source>
-        <translation type="vanished">متوسط یا زیادہ</translation>
-    </message>
-    <message>
-        <source>Extreme</source>
-        <translation type="vanished">انتہائی</translation>
-    </message>
-    <message>
-        <source>I just want to increase the level of my privacy.</source>
-        <translation type="vanished">میں صرف اپنی خصوصیت کا سطح بڑھانا چاہتا ہوں.</translation>
-    </message>
-    <message>
-        <source>I want to bypass censorship. This option recommended in most cases.</source>
-        <translation type="vanished">میں سانسر شدگی سے چھٹکارا حاصل کرنا چاہتا ہوں۔ یہ اختیار بیشتر صورتوں میں تجویز کیا جاتا ہے.</translation>
-    </message>
-    <message>
-        <source>Most VPN protocols are blocked. Recommended if other options are not working.</source>
-        <translation type="vanished">زیادہ تر وی پی این پروٹوکولز بلاک ہوتے ہیں۔ اگر دوسرے اختیارات کام نہیں کر رہے ہیں تو یہ تجویز کی جاتی ہے.</translation>
+        <translation>غلط JSON فارمیٹ</translation>
     </message>
 </context>
 <context>
     <name>main2</name>
     <message>
-        <location filename="../ui/qml/main2.qml" line="279"/>
+        <location filename="../ui/qml/main2.qml" line="285"/>
         <source>Private key passphrase</source>
         <translation>نجی کلید پاس فریز</translation>
     </message>
     <message>
-        <location filename="../ui/qml/main2.qml" line="300"/>
+        <location filename="../ui/qml/main2.qml" line="306"/>
         <source>Save</source>
         <translation>محفوظ کریں</translation>
     </message>
     <message>
-        <location filename="../ui/qml/main2.qml" line="394"/>
+        <location filename="../ui/qml/main2.qml" line="400"/>
         <source>This subscription format is no longer supported</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/main2.qml" line="395"/>
-        <source>This legacy Amnezia subscription type can no longer be used to connect in this application version.
-Remove the server from the app to continue.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/main2.qml" line="396"/>
-        <source>Continue</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location filename="../ui/qml/main2.qml" line="397"/>
-        <source>Cancel</source>
-        <translation type="unfinished"></translation>
+        <translation>سبسکرپشن کا یہ فارمیٹ اب سپورٹ نہیں کیا جاتا</translation>
     </message>
     <message>
         <location filename="../ui/qml/main2.qml" line="401"/>
+        <source>This legacy Amnezia subscription type can no longer be used to connect in this application version.
+Remove the server from the app to continue.</source>
+        <translation>Amnezia سبسکرپشن کی یہ پرانی قسم اس ایپلیکیشن ورژن میں منسلک ہونے کے لیے استعمال نہیں کی جا سکتی۔
+جاری رکھنے کے لیے سرور کو ایپ سے ہٹا دیں۔</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/main2.qml" line="402"/>
+        <source>Continue</source>
+        <translation>جاری رکھیں</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/main2.qml" line="403"/>
+        <source>Cancel</source>
+        <translation>منسوخ</translation>
+    </message>
+    <message>
+        <location filename="../ui/qml/main2.qml" line="407"/>
         <source>Cannot remove server during active connection</source>
-        <translation type="unfinished">چالو کنکشن کے دوران سرور کو ہٹایا نہیں جا سکتا</translation>
+        <translation>چالو کنکشن کے دوران سرور کو ہٹایا نہیں جا سکتا</translation>
     </message>
 </context>
 </TS>

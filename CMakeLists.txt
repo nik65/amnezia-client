@@ -9,7 +9,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(PROJECT AmneziaVPN)
-set(AMNEZIAVPN_VERSION 5.0.1.39)
+if(NOT AMNEZIAVPN_VERSION)
+    set(AMNEZIAVPN_VERSION 5.0.3.1 CACHE STRING "Client app version")
+endif()
 
 set(QT_CREATOR_SKIP_PACKAGE_MANAGER_SETUP ON CACHE BOOL "" FORCE)
 set(CMAKE_PROJECT_TOP_LEVEL_INCLUDES
@@ -26,6 +28,7 @@ project(${PROJECT} VERSION ${AMNEZIAVPN_VERSION}
 if(MSVC)
     add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/MP>)
 endif()
+option(AMNEZIA_BUILD_TESTS "Build test executables" OFF)
 
 # trigger conan to kick off `conan install` globally
 find_package(OpenSSL REQUIRED)
@@ -37,8 +40,6 @@ string(TIMESTAMP CURRENT_DATE "%Y-%m-%d")
 set(RELEASE_DATE "${CURRENT_DATE}")
 
 set(APP_MAJOR_VERSION ${CMAKE_PROJECT_VERSION_MAJOR}.${CMAKE_PROJECT_VERSION_MINOR}.${CMAKE_PROJECT_VERSION_PATCH})
-# Keep the fork code monotonic beyond upstream 5.0.1.5 (2152).
-set(APP_ANDROID_VERSION_CODE 2187)
 
 # Branding defaults must load before any subproject configures version.h.in:
 # APPLICATION_NAME / SERVICE_NAME / ORGANIZATION_NAME are expanded from
@@ -56,6 +57,11 @@ foreach(_branding_var IN ITEMS
         message(FATAL_ERROR "Required branding variable is empty: ${_branding_var}")
     endif()
 endforeach()
+# Keep the fork code monotonic beyond the upstream 5.0.3.0 code (2163).
+set(APP_ANDROID_VERSION_CODE 2188)
+if(DEFINED APP_ANDROID_VERSION_CODE_OFFSET)
+    math(EXPR APP_ANDROID_VERSION_CODE "${APP_ANDROID_VERSION_CODE} + ${APP_ANDROID_VERSION_CODE_OFFSET}")
+endif()
 
 if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
     set(MZ_PLATFORM_NAME "linux")

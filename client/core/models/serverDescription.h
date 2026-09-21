@@ -41,6 +41,7 @@ struct ServerDescription
     bool isCountrySelectionAvailable = false;
     QJsonArray apiAvailableCountries;
     QString apiServerCountryCode;
+    QString apiServerCountryCodeL10n;
     QString apiServiceProtocol;
     QStringList apiAvailableProtocols;
 

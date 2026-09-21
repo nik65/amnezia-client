@@ -35,6 +35,7 @@
 #include "core/controllers/selfhosted/selfHostedUpdateBootstrapper.h"
 #include "core/repositories/secureAppSettingsRepository.h"
 #include "core/repositories/secureServersRepository.h"
+#include "core/controllers/updateController.h"
 #include "core/protocols/qmlRegisterProtocols.h"
 #include "core/utils/containers/containerUtils.h"
 #include "core/utils/constants/configKeys.h"
@@ -51,8 +52,16 @@
 #include "ui/models/installedAppsModel.h"
 #include "ui/utils/mtProxyPublicHostInput.h"
 #include "version.h"
+#include "core/utils/appUiConfig.h"
 
 #include "platforms/ios/QRCodeReaderBase.h"
+#ifdef Q_OS_IOS
+    #include "platforms/ios/ioscontextmenu.h"
+#endif
+
+#ifdef Q_OS_ANDROID
+    #include "platforms/android/android_controller.h"
+#endif
 
 #include <cstdio>
 #include <utility>
@@ -806,7 +815,6 @@ bool AmneziaApplication::isTrustedPrimaryRunning(int timeoutMs)
     return acknowledged;
 #endif
 }
-
 bool AmneziaApplication::m_forceQuit = false;
 
 AmneziaApplication::AmneziaApplication(
@@ -1017,10 +1025,17 @@ void AmneziaApplication::init()
 
     m_coreController.reset(new CoreController(m_vpnConnection, m_settings, m_engine));
 
-    m_marketplaceUpdateController.reset(new MarketplaceUpdateController());
-    m_marketplaceUpdateController->start();
+    m_engine->addImportPath(QStringLiteral(APP_QML_IMPORT_PATH));
+#ifdef Q_OS_IOS
+    m_engine->rootContext()->setContextProperty("IosContextMenu", new IosContextMenu(this));
+#endif
 
-    m_engine->addImportPath("qrc:/ui/qml/Modules/");
+#ifdef Q_OS_ANDROID
+    m_engine->rootContext()->setContextProperty("IsPlayBuild", AndroidController::instance()->isPlay());
+#else
+    m_engine->rootContext()->setContextProperty("IsPlayBuild", false);
+#endif
+
 
     if (m_parser.isSet(m_optImport)) {
         const QString data = m_parser.value(m_optImport);
@@ -1034,6 +1049,10 @@ void AmneziaApplication::init()
     m_engine->load(url);
 
     m_coreController->setQmlRoot();
+
+#if CLIENT_ENABLE_APP_UPDATES
+    m_coreController->checkForAppUpdates();
+#endif
 
 #ifdef Q_OS_WIN //TODO
     if (m_parser.isSet(m_optAutostart))
@@ -1107,6 +1126,7 @@ void AmneziaApplication::registerTypes()
     amnezia::declareQmlProtocolEnum();
     Vpn::declareQmlVpnConnectionStateEnum();
     PageLoader::declareQmlPageEnum();
+    UpdateState::declareQmlUpdateStateEnum();
 }
 
 void AmneziaApplication::loadFonts()

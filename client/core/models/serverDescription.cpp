@@ -1,6 +1,7 @@
 #include "serverDescription.h"
 
 #include <QMap>
+#include <QJsonObject>
 
 #include "core/utils/serverConfigUtils.h"
 #include "core/utils/constants/apiKeys.h"
@@ -166,6 +167,7 @@ ServerDescription buildServerDescription(const ApiV2ServerConfig &server, bool /
     row.isCountrySelectionAvailable = !server.apiConfig.availableCountries.isEmpty();
     row.apiAvailableCountries = server.apiConfig.availableCountries;
     row.apiServerCountryCode = server.apiConfig.serverCountryCode;
+    row.apiServerCountryCodeL10n = server.apiConfig.serverCountryCodeL10n;
     row.apiServiceProtocol = server.apiConfig.serviceProtocol;
     for (const QJsonValue &countryValue : server.apiConfig.availableCountries) {
         const QJsonObject country = countryValue.toObject();

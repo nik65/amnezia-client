@@ -114,6 +114,11 @@ QByteArray SettingsController::backupAppConfig() const
     return QJsonDocument(config).toJson();
 }
 
+int SettingsController::unsupportedFormatConfigsSkippedCount() const
+{
+    return m_serversRepository->unsupportedFormatConfigsCount();
+}
+
 ErrorCode SettingsController::restoreAppConfigFromData(const QByteArray &data)
 {
     if (!m_appSettingsRepository->restoreAppConfig(data)) {
@@ -243,6 +248,16 @@ bool SettingsController::isNewsNotificationsEnabled() const
 void SettingsController::toggleNewsNotificationsEnabled(bool enable)
 {
     m_appSettingsRepository->setNewsNotifications(enable);
+}
+
+bool SettingsController::isAutoUpdateCheckEnabled() const
+{
+    return m_appSettingsRepository->isAutoUpdateCheckEnabled();
+}
+
+void SettingsController::toggleAutoUpdateCheckEnabled(bool enable)
+{
+    m_appSettingsRepository->setAutoUpdateCheckEnabled(enable);
 }
 
 bool SettingsController::isKillSwitchEnabled() const

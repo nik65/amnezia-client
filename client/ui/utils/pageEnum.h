@@ -57,6 +57,7 @@ namespace PageLoader
         PageServiceSocksProxySettings,
         PageServiceMtProxySettings,
         PageServiceTelemtSettings,
+        PageServiceTProxySettings,
 
         PageSetupWizardStart,
         PageSetupWizardCredentials,
@@ -101,6 +102,8 @@ namespace PageLoader
         PageRouteInspector,
 
         PageSettingsLanguage,
+
+        PageUpdate,
     };
     Q_ENUM_NS(PageEnum)
 

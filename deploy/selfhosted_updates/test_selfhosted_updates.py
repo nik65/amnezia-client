@@ -3101,8 +3101,8 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.1.39)", cmake)
-        self.assertIn("set(APP_ANDROID_VERSION_CODE 2187)", cmake)
+        self.assertIn("set(AMNEZIAVPN_VERSION 5.0.3.1", cmake)
+        self.assertIn("set(APP_ANDROID_VERSION_CODE 2188)", cmake)
         self.assertRegex(headless_cmake, r'set\(HEADLESS_BUILD_VERSION "5\.0\.1\.(37|38)"\)')
         self.assertRegex(readme, r"current self-hosted release line is `5\.0\.1\.(37|38)`")
         self.assertRegex(readme, r"`versionCode` `218[56]`")

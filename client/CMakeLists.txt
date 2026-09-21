@@ -119,16 +119,23 @@ qt6_add_resources(QRC ${QRC}
 )
 
 # -- i18n begin
-set(AMNEZIAVPN_TS_FILES
-    ${CMAKE_CURRENT_LIST_DIR}/translations/amneziavpn_ru_RU.ts
-    ${CMAKE_CURRENT_LIST_DIR}/translations/amneziavpn_zh_CN.ts
-    ${CMAKE_CURRENT_LIST_DIR}/translations/amneziavpn_fa_IR.ts
-    ${CMAKE_CURRENT_LIST_DIR}/translations/amneziavpn_ar_EG.ts
-    ${CMAKE_CURRENT_LIST_DIR}/translations/amneziavpn_my_MM.ts
-    ${CMAKE_CURRENT_LIST_DIR}/translations/amneziavpn_uk_UA.ts
-    ${CMAKE_CURRENT_LIST_DIR}/translations/amneziavpn_ur_PK.ts
-    ${CMAKE_CURRENT_LIST_DIR}/translations/amneziavpn_hi_IN.ts
-)
+if(CLIENT_TS_FILES)
+    set(AMNEZIAVPN_TS_FILES ${CLIENT_TS_FILES})
+else()
+    set(AMNEZIAVPN_TS_FILES
+        ${CMAKE_CURRENT_LIST_DIR}/translations/${CLIENT_TS_PREFIX}_ru_RU.ts
+        ${CMAKE_CURRENT_LIST_DIR}/translations/${CLIENT_TS_PREFIX}_zh_CN.ts
+        ${CMAKE_CURRENT_LIST_DIR}/translations/${CLIENT_TS_PREFIX}_fa_IR.ts
+        ${CMAKE_CURRENT_LIST_DIR}/translations/${CLIENT_TS_PREFIX}_ar_EG.ts
+        ${CMAKE_CURRENT_LIST_DIR}/translations/${CLIENT_TS_PREFIX}_my_MM.ts
+        ${CMAKE_CURRENT_LIST_DIR}/translations/${CLIENT_TS_PREFIX}_uk_UA.ts
+        ${CMAKE_CURRENT_LIST_DIR}/translations/${CLIENT_TS_PREFIX}_ur_PK.ts
+        ${CMAKE_CURRENT_LIST_DIR}/translations/${CLIENT_TS_PREFIX}_hi_IN.ts
+        ${CMAKE_CURRENT_LIST_DIR}/translations/${CLIENT_TS_PREFIX}_es_ES.ts
+        ${CMAKE_CURRENT_LIST_DIR}/translations/${CLIENT_TS_PREFIX}_ko_KR.ts
+        ${CMAKE_CURRENT_LIST_DIR}/translations/${CLIENT_TS_PREFIX}_fr_FR.ts
+    )
+endif()
 
 # QML files are embedded through qml.qrc and therefore are not visible in the
 # target's SOURCES property that Qt Linguist scans by default. Keep them in the
@@ -414,4 +421,8 @@ if(OVPN_SCRIPTS)
             GROUP_READ GROUP_EXECUTE
             WORLD_READ WORLD_EXECUTE
     )
+endif()
+
+if(AMNEZIA_BUILD_TESTS)
+    add_subdirectory(tests)
 endif()

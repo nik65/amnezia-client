@@ -169,6 +169,9 @@ void CoreController::initModels()
     m_telemtConfigModel = new TelemtConfigModel(this);
     setQmlContextProperty("TelemtConfigModel", m_telemtConfigModel);
 
+    m_tProxyConfigModel = new TProxyConfigModel(this);
+    setQmlContextProperty("TProxyConfigModel", m_tProxyConfigModel);
+
     m_clientManagementModel = new ClientManagementModel(this);
     setQmlContextProperty("ClientManagementModel", m_clientManagementModel);
 
@@ -210,6 +213,7 @@ void CoreController::initCoreControllers()
     m_allowedDnsController = new AllowedDnsController(m_appSettingsRepository);
     m_servicesCatalogController = new ServicesCatalogController(m_appSettingsRepository);
     m_subscriptionController = new SubscriptionController(m_serversRepository, m_appSettingsRepository);
+    m_storePurchaseController = new StorePurchaseController(m_serversRepository, m_appSettingsRepository);
     m_newsController = new NewsController(m_appSettingsRepository, m_serversRepository);
     m_updateController = new UpdateController(m_appSettingsRepository, m_serversRepository, this);
     m_selfHostedUpdateBootstrapper = new SelfHostedUpdateBootstrapper(m_serversRepository, this);
@@ -332,6 +336,7 @@ void CoreController::initControllers()
                                                      m_ikev2ConfigModel,
 #endif
                                                      m_sftpConfigModel, m_socks5ConfigModel, m_mtProxyConfigModel, m_telemtConfigModel,
+                                                     m_tProxyConfigModel,
                                                      m_connectionController, this);
     setQmlContextProperty("InstallController", m_installUiController);
 
@@ -410,6 +415,7 @@ void CoreController::initControllers()
     setQmlContextProperty("ServicesCatalogUiController", m_servicesCatalogUiController);
 
     m_subscriptionUiController = new SubscriptionUiController(m_serversController, m_apiServicesModel, m_servicesCatalogController, m_subscriptionController,
+                                                              m_storePurchaseController,
                                                               m_apiSubscriptionPlansModel, m_apiBenefitsModel, m_apiAccountInfoModel,
                                                               m_apiCountryModel, m_apiDevicesModel, m_settingsController,
                                                               m_connectionController, this);
@@ -735,6 +741,13 @@ void CoreController::initSignalHandlers()
         m_updateController->checkForUpdates();
     #endif
 }
+
+void CoreController::checkForAppUpdates()
+{
+    if (!m_appSettingsRepository->isAutoUpdateCheckEnabled()) {
+        return;
+    }
+    m_updateController->checkForUpdates();
 
 void CoreController::updateTranslator(const QLocale &locale)
 {
