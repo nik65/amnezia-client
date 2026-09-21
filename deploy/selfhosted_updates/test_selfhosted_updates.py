@@ -3390,6 +3390,48 @@ class SourceContractTests(unittest.TestCase):
         ):
             self.assertEqual(config_keys.count(f"constexpr QLatin1String {key}("), 1)
 
+    def test_current_libxray_recipe_selects_and_applies_16kb_patch(self) -> None:
+        import patch_ng
+        import yaml
+
+        recipe_path = REPO_ROOT / "recipes/amnezia-libxray/conanfile.py"
+        conandata_path = REPO_ROOT / "recipes/amnezia-libxray/conandata.yml"
+        patch_root = REPO_ROOT / "recipes/amnezia-libxray"
+        recipe = recipe_path.read_text(encoding="utf-8")
+        recipe_version = re.search(r'^\s*version\s*=\s*"([^"]+)"', recipe, re.MULTILINE)
+        self.assertIsNotNone(recipe_version)
+        current_version = recipe_version.group(1)
+        conandata = yaml.safe_load(conandata_path.read_text(encoding="utf-8"))
+        selected = conandata["patches"].get(current_version, [])
+        patch_entries = [entry for entry in selected if "patch_file" in entry]
+        self.assertEqual(
+            [entry["patch_file"] for entry in patch_entries],
+            ["patches/0001-add-16kb-page-support-amnezia-libxray.patch"],
+        )
+
+        fixture_lines = [f"# fixture line {index}" for index in range(1, 28)]
+        fixture_lines.extend(
+            [
+                "    rm -fr assets",
+                "    mkdir -p assets/geo",
+                "    mv dat/* assets/geo",
+                "    gomobile bind -target android -androidapi 24 -javapkg=org.amnezia.vpn.protocol.xray -o libxray.aar -ldflags=\"-w -s -buildid= -checklinkname=0\" -trimpath",
+                "}",
+                "",
+                "download_geo() {",
+                "    go run main/main.go",
+            ]
+        )
+        with tempfile.TemporaryDirectory(prefix="amnezia-libxray-patch-") as temp_dir:
+            build_path = Path(temp_dir) / "build.sh"
+            build_path.write_text("\n".join(fixture_lines) + "\n", encoding="utf-8")
+            patch_path = patch_root / patch_entries[0]["patch_file"]
+            patchset = patch_ng.fromfile(str(patch_path))
+            self.assertTrue(patchset)
+            self.assertTrue(patchset.apply(strip=0, root=temp_dir, fuzz=False))
+            patched_build = build_path.read_text(encoding="utf-8")
+            self.assertIn("-extldflags=-Wl,-z,max-page-size=16384", patched_build)
+
     def test_windows_split_tunnel_uses_race_fixed_driver_and_bounded_helper(self) -> None:
         firewall = (REPO_ROOT / "client/platforms/windows/daemon/windowsfirewall.cpp").read_text(encoding="utf-8")
         firewall_header = (REPO_ROOT / "client/platforms/windows/daemon/windowsfirewall.h").read_text(encoding="utf-8")
