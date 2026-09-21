@@ -16,7 +16,7 @@ index 7969505..02c5b73 100755
      mkdir -p assets/geo
      mv dat/* assets/geo
 -    gomobile bind -target android -androidapi 24 -javapkg=org.amnezia.vpn.protocol.xray -o libxray.aar -ldflags="-w -s -buildid= -checklinkname=0" -trimpath
-+    gomobile bind -target android -androidapi 24 -javapkg=org.amnezia.vpn.protocol.xray -o libxray.aar -ldflags="-w -s -buildid= -checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384" -trimpath
++    gomobile bind -target android -androidapi 24 -javapkg=org.amnezia.vpn.protocol.xray -o libxray.aar -ldflags="-w -s -buildid= -checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384,-z,common-page-size=16384" -trimpath
  }
 
  download_geo() {

@@ -2476,6 +2476,7 @@ class SourceContractTests(unittest.TestCase):
         build_bat = (REPO_ROOT / "deploy/build.bat").read_text(encoding="utf-8")
         build_sh = (REPO_ROOT / "deploy/build.sh").read_text(encoding="utf-8")
         platform_settings = (REPO_ROOT / "cmake/platform_settings.cmake").read_text(encoding="utf-8")
+        release_env = (REPO_ROOT / "dist/selfhosted-release-env.ps1").read_text(encoding="utf-8")
         android_cmake = (REPO_ROOT / "client/cmake/android.cmake").read_text(encoding="utf-8")
         android_gradle = (REPO_ROOT / "client/android/build.gradle.kts").read_text(encoding="utf-8")
         client_cmake = (REPO_ROOT / "client/CMakeLists.txt").read_text(encoding="utf-8")
@@ -2511,6 +2512,10 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("get_android_toolchain_dir", build_sh)
         self.assertIn('$QT_ROOT_PATH/android/lib/cmake/Qt6/qt.toolchain.cmake', build_sh)
         self.assertIn('"-o=openssl/*:no_asm=True"', platform_settings)
+        self.assertIn("-Wl,-z,max-page-size=16384,-z,common-page-size=16384", platform_settings)
+        self.assertIn("ANDROID_NDK_VERSION", release_env)
+        self.assertIn("27.2.12479018", release_env)
+        self.assertIn("27.2.12479018", setup_release)
         self.assertIn('WIN32 AND (CONAN_NO_REMOTE', platform_settings)
         self.assertIn("AMNEZIA_BUILD_JOBS_STRIPPED", platform_settings)
         self.assertIn('MATCHES "^[1-9][0-9]*$"', platform_settings)
@@ -3430,7 +3435,10 @@ class SourceContractTests(unittest.TestCase):
             self.assertTrue(patchset)
             self.assertTrue(patchset.apply(strip=0, root=temp_dir, fuzz=False))
             patched_build = build_path.read_text(encoding="utf-8")
-            self.assertIn("-extldflags=-Wl,-z,max-page-size=16384", patched_build)
+            self.assertIn(
+                "-extldflags=-Wl,-z,max-page-size=16384,-z,common-page-size=16384",
+                patched_build,
+            )
 
     def test_windows_split_tunnel_uses_race_fixed_driver_and_bounded_helper(self) -> None:
         firewall = (REPO_ROOT / "client/platforms/windows/daemon/windowsfirewall.cpp").read_text(encoding="utf-8")
@@ -7217,11 +7225,11 @@ class ManifestPublisherTests(unittest.TestCase):
             module_config.parent.mkdir(parents=True)
             module_config.write_text("# fake module\n", encoding="utf-8")
         android_home = self.root / "Android" / "Sdk"
-        (android_home / "ndk" / "26.1.10909125").mkdir(parents=True)
+        (android_home / "ndk" / "27.2.12479018").mkdir(parents=True)
         build_tools = android_home / "build-tools" / "36.0.0"
         build_tools.mkdir(parents=True)
         (build_tools / "apksigner").write_text("# fake apksigner\n", encoding="utf-8")
-        linux_toolchain = android_home / "ndk" / "26.1.10909125" / "toolchains" / "llvm" / "prebuilt" / "linux-x86_64" / "bin"
+        linux_toolchain = android_home / "ndk" / "27.2.12479018" / "toolchains" / "llvm" / "prebuilt" / "linux-x86_64" / "bin"
         linux_toolchain.mkdir(parents=True)
         for compiler in ("clang", "clang++"):
             compiler_path = linux_toolchain / compiler
@@ -7283,7 +7291,7 @@ class ManifestPublisherTests(unittest.TestCase):
             toolchain.parent.mkdir(parents=True)
             toolchain.write_text("# fake qt toolchain\n", encoding="utf-8")
         android_home = self.root / "Android" / "Sdk"
-        (android_home / "ndk" / "26.1.10909125").mkdir(parents=True)
+        (android_home / "ndk" / "27.2.12479018").mkdir(parents=True)
         build_tools = android_home / "build-tools" / "36.0.0"
         build_tools.mkdir(parents=True)
         (build_tools / "apksigner").write_text("# fake apksigner\n", encoding="utf-8")

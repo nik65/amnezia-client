@@ -1054,12 +1054,14 @@ if (-not $SkipBuild) {
         $repoWsl = Convert-ToWslPath $RepoRoot
         $keystoreWsl = Convert-ToWslPath $env:QT_ANDROID_KEYSTORE_PATH
         $androidHomeWsl = Resolve-WslAndroidHome
+        $androidNdkVersion = if ([string]::IsNullOrWhiteSpace($env:ANDROID_NDK_VERSION)) { "27.2.12479018" } else { $env:ANDROID_NDK_VERSION }
         $androidExports = @(
             "export QT_ANDROID_KEYSTORE_PATH=$(Quote-Sh $keystoreWsl)",
             "export QT_ANDROID_KEYSTORE_ALIAS=$(Quote-Sh $env:QT_ANDROID_KEYSTORE_ALIAS)",
             "export QT_ANDROID_KEYSTORE_STORE_PASS=$(Quote-Sh $env:QT_ANDROID_KEYSTORE_STORE_PASS)",
             "export ANDROID_HOME=$(Quote-Sh $androidHomeWsl)",
             "export ANDROID_SDK_ROOT=$(Quote-Sh $androidHomeWsl)",
+            "export ANDROID_NDK_VERSION=$(Quote-Sh $androidNdkVersion)",
             "export AMNEZIA_BUILD_JOBS=$(Quote-Sh ([string] $buildJobs))",
             "export CMAKE_BUILD_PARALLEL_LEVEL=$(Quote-Sh ([string] $buildJobs))",
             "export MAKEFLAGS=$(Quote-Sh ("-j$buildJobs"))",
