@@ -309,6 +309,7 @@ void SecureServersRepository::persistDefaultServerFields()
 void SecureServersRepository::loadFromStorage()
 {
     clearServerStateMaps();
+    m_unsupportedFormatConfigsCount = 0;
 
     const QJsonArray serversArray =
             QJsonDocument::fromJson(value(QStringLiteral("Servers/serversList"), QByteArray()).toByteArray())
@@ -319,6 +320,12 @@ void SecureServersRepository::loadFromStorage()
         const QString candidateId = readStorageServerId(json);
         const QString serverId = normalizedOrGeneratedServerId(candidateId);
         const QJsonObject strippedJson = withoutStorageServerId(json);
+        if (!serverConfigUtils::isConfigFormatVersionSupported(strippedJson)) {
+            qWarning() << "Skipping stored server config with unsupported format version"
+                       << serverConfigUtils::configFormatVersion(strippedJson);
+            ++m_unsupportedFormatConfigsCount;
+            continue;
+        }
         const serverConfigUtils::ConfigType kind = serverConfigUtils::configTypeFromJson(strippedJson);
 
         if (m_serverJsonById.contains(serverId) || kind == serverConfigUtils::ConfigType::Invalid) {
@@ -349,6 +356,11 @@ void SecureServersRepository::syncToStorage()
 void SecureServersRepository::invalidateCache()
 {
     loadFromStorage();
+}
+
+int SecureServersRepository::unsupportedFormatConfigsCount() const
+{
+    return m_unsupportedFormatConfigsCount;
 }
 
 void SecureServersRepository::clearServers()
@@ -389,7 +401,8 @@ QString SecureServersRepository::addServer(const QString &serverId, const QJsonO
         return id;
     }
     QJsonObject strippedJson = withoutStorageServerId(serverJson);
-    if (serverConfigUtils::configTypeFromJson(strippedJson) != kind) {
+    if (!serverConfigUtils::isConfigFormatVersionSupported(strippedJson)
+        || serverConfigUtils::configTypeFromJson(strippedJson) != kind) {
         return id;
     }
     managedRoutePolicy::refreshEffectiveContentMetadata(strippedJson);
