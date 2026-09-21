@@ -170,9 +170,12 @@ android {
                 doLast {
                     val srcDir = layout.buildDirectory.dir("outputs/apk/oss/$buildTypeName").get().asFile
                     val dstDir = layout.buildDirectory.dir("outputs/apk").get().asFile
+                    val qtDstDir = layout.buildDirectory.dir("outputs/apk/$buildTypeName").get().asFile
                     dstDir.mkdirs()
+                    qtDstDir.mkdirs()
                     srcDir.listFiles()?.filter { it.name.endsWith(".apk") }?.forEach { apk ->
                         apk.copyTo(File(dstDir, "$base-$buildTypeName$unsignedSuffix.apk"), overwrite = true)
+                        apk.copyTo(File(qtDstDir, "$base-$buildTypeName$unsignedSuffix.apk"), overwrite = true)
                     }
                 }
             }
