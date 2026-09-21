@@ -58,11 +58,11 @@ class BoundedQueuedSnapshotTest final : public QObject
 private slots:
     void remoteLogHealthRequiresEveryExpectedSource()
     {
-        QVERIFY(amnezia::remoteLogBatchCanBecomeHealthy(false, true, false, false));
-        QVERIFY(!amnezia::remoteLogBatchCanBecomeHealthy(true, true, false, false));
-        QVERIFY(!amnezia::remoteLogBatchCanBecomeHealthy(false, false, false, false));
-        QVERIFY(!amnezia::remoteLogBatchCanBecomeHealthy(false, true, true, false));
-        QVERIFY(!amnezia::remoteLogBatchCanBecomeHealthy(false, true, false, true));
+        QVERIFY(amnezia::remoteLogBatchCanBecomeHealthy(false, true, false, false, false, false, false));
+        QVERIFY(!amnezia::remoteLogBatchCanBecomeHealthy(true, true, false, false, false, false, false));
+        QVERIFY(!amnezia::remoteLogBatchCanBecomeHealthy(false, false, false, false, false, false, false));
+        QVERIFY(!amnezia::remoteLogBatchCanBecomeHealthy(false, true, true, false, false, false, false));
+        QVERIFY(!amnezia::remoteLogBatchCanBecomeHealthy(false, true, false, true, false, false, false));
     }
 
     void missingTargetCompletesAsUnavailable()

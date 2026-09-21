@@ -35,7 +35,7 @@ private slots:
     void initTestCase()
     {
         const QString testOrg = "AmneziaVPN-Test-" + QUuid::createUuid().toString();
-        m_settings = new SecureQSettings(testOrg, "amnezia-client", nullptr, false);
+        m_settings = new SecureQSettings(testOrg, "amnezia-client", nullptr, SecureQSettings::AccessMode::ReadWrite);
         auto vpnConnection = QSharedPointer<VpnConnection>::create(nullptr, nullptr);
         m_coreController = new TestCoreController(vpnConnection, m_settings, nullptr, this);
     }
