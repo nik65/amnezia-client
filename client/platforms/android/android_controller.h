@@ -56,6 +56,7 @@ public:
     void requestNotificationPermission();
     bool requestAuthentication();
     void sendTouch(float x, float y);
+    bool isPlay();
     int installApk(const QString &fileName);
 
     void showUpdateCover();

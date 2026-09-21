@@ -360,6 +360,11 @@ void AndroidController::sendTouch(float x, float y)
     callActivityMethod("sendTouch", "(FF)V", x, y);
 }
 
+bool AndroidController::isPlay()
+{
+    return callActivityMethod<jboolean>("isPlay", "()Z");
+}
+
 int AndroidController::installApk(const QString &fileName)
 {
     return callActivityMethod<jint>("installApk", "(Ljava/lang/String;)I",
