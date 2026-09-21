@@ -103,18 +103,20 @@ private slots:
         QSignalSpy saveLogsChangedSpy(m_coreController->m_appSettingsRepository, &SecureAppSettingsRepository::saveLogsChanged);
 
         bool initialLogging = m_coreController->m_settingsController->isLoggingEnabled();
+        QVERIFY2(initialLogging, "Self-hosted client logging should remain enabled");
 
         m_coreController->m_settingsUiController->toggleLogging(!initialLogging);
         QVERIFY2(loggingStateChangedSpy.count() == 1, "loggingStateChanged signal should be emitted");
         QVERIFY2(saveLogsChangedSpy.count() == 1, "saveLogsChanged signal should be emitted");
-        QVERIFY2(m_coreController->m_settingsController->isLoggingEnabled() == !initialLogging, "Logging state should be updated in SettingsController");
-        QVERIFY2(m_coreController->m_settingsUiController->isLoggingEnabled() == !initialLogging, "Logging state should be available in SettingsUiController");
-        QVERIFY2(m_coreController->m_appSettingsRepository->isSaveLogs() == !initialLogging, "Logging state should be available in SecureAppSettingsRepository");
+        QVERIFY2(saveLogsChangedSpy.at(0).at(0).toBool(), "saveLogsChanged should preserve always-on logging");
+        QVERIFY2(m_coreController->m_settingsController->isLoggingEnabled(), "Logging should remain enabled in SettingsController");
+        QVERIFY2(m_coreController->m_settingsUiController->isLoggingEnabled(), "Logging should remain enabled in SettingsUiController");
+        QVERIFY2(m_coreController->m_appSettingsRepository->isSaveLogs(), "Logging should remain enabled in SecureAppSettingsRepository");
 
         m_coreController->m_settingsUiController->toggleLogging(initialLogging);
         QVERIFY2(loggingStateChangedSpy.count() == 2, "loggingStateChanged signal should be emitted again");
         QVERIFY2(saveLogsChangedSpy.count() == 2, "saveLogsChanged signal should be emitted again");
-        QVERIFY2(m_coreController->m_settingsUiController->isLoggingEnabled() == initialLogging, "Logging state should be restored in SettingsUiController");
+        QVERIFY2(m_coreController->m_settingsUiController->isLoggingEnabled(), "Logging should remain enabled in SettingsUiController");
     }
 
     void testScreenshotsSignals() {
@@ -264,4 +266,3 @@ private slots:
 
 QTEST_MAIN(TestSettingsSignals)
 #include "testSettingsSignals.moc"
-
