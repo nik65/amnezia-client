@@ -1,0 +1,14 @@
+Package: cuttlefish-base
+Source: cuttlefish-common
+Version: 1.57.0
+Architecture: amd64
+Maintainer: Cuttlefish Team <cloud-android-ext@google.com>
+Installed-Size: 468602
+Pre-Depends: init-system-helpers (>= 1.54~)
+Depends: adduser, bridge-utils, curl, dnsmasq-base, ebtables-legacy | ebtables, grub-efi-amd64-bin, iproute2, iptables, jq, less, libarchive-tools | bsdtar, libcap2-bin, libcurl4, libdrm2, libfdt1, libfmt-dev, libgflags-dev, libgl1, libjsoncpp-dev, liblzma5 (>= 5.1.1alpha+20120614), libprotobuf-dev, libsrtp2-1, libssl-dev, libwayland-client0 (>= 1.20.0), libwayland-server0, libx11-6, libxext6, libxml2, libxml2-dev, libz3-4, net-tools, nftables, openssl, opus-tools, python3, xdg-utils, libc6 (>= 2.39), libcap2 (>= 1:2.10), libgcc-s1 (>= 4.2), libopus0 (>= 1.1)
+Breaks: cuttlefish-common (<= 0.9.24)
+Section: misc
+Priority: optional
+Description: Cuttlefish Android Virtual Device companion package
+ Contains set of tools and binaries required to boot up and manage
+ Cuttlefish Android Virtual Device that are used in all deployments.

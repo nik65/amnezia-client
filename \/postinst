@@ -1,0 +1,118 @@
+#!/bin/sh
+
+set -e
+
+case "$1" in
+    (configure)
+    # unlink if it's a symlink
+    if [ -L /var/empty ]; then
+        unlink /var/empty
+    fi
+    # delete if it's a file
+    if [ -f /var/empty ]; then
+        rm -rf /var/empty
+    fi
+    # guarantees it's a directory
+    mkdir -p /var/empty
+    if ! getent group cvdnetwork > /dev/null 2>&1
+    then
+        addgroup --system cvdnetwork
+    fi
+
+    # Create the kvm group when running inside a docker container.
+    if test -f /.dockerenv && ( ! getent group kvm > /dev/null 2>&1 )
+    then
+        addgroup --system kvm
+    fi
+
+    if [ -f /etc/modules-load.d/cuttlefish-common.conf ]; then
+        while read -r module || [ -n "$module" ]; do
+            case "$module" in
+                [\#]*) continue ;;
+                "") continue ;;
+            esac
+            modprobe "$module" || true
+        done < /etc/modules-load.d/cuttlefish-common.conf
+    fi
+
+    setcap cap_net_admin,cap_net_bind_service,cap_net_raw=+ep \
+        /usr/lib/cuttlefish-common/bin/cvdalloc
+    setcap cap_setgid=+ep \
+        /usr/lib/cuttlefish-common/bin/cvd_refresh_groups
+    ;;
+esac
+
+# Automatically added by dh_installinit/13.24.2
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	if [ -z "$DPKG_ROOT" ] && [ -x "/etc/init.d/cuttlefish-host-resources" ]; then
+		update-rc.d cuttlefish-host-resources defaults >/dev/null
+		if [ -n "$2" ]; then
+			_dh_action=restart
+		else
+			_dh_action=start
+		fi
+		invoke-rc.d --skip-systemd-native cuttlefish-host-resources $_dh_action || exit 1
+	fi
+fi
+# End automatically added section
+# Automatically added by dh_installsystemd/13.24.2
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	# The following line should be removed in trixie or trixie+1
+	deb-systemd-helper unmask 'cuttlefish-host-resources.service' >/dev/null || true
+
+	# was-enabled defaults to true, so new installations run enable.
+	if deb-systemd-helper --quiet was-enabled 'cuttlefish-host-resources.service'; then
+		# Enables the unit on first installation, creates new
+		# symlinks on upgrades if the unit file has changed.
+		deb-systemd-helper enable 'cuttlefish-host-resources.service' >/dev/null || true
+	else
+		# Update the statefile to add new symlinks (if any), which need to be
+		# cleaned up on purge. Also remove old symlinks.
+		deb-systemd-helper update-state 'cuttlefish-host-resources.service' >/dev/null || true
+	fi
+fi
+# End automatically added section
+# Automatically added by dh_installsystemd/13.24.2
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	if [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+		if [ -n "$2" ]; then
+			_dh_action=restart
+		else
+			_dh_action=start
+		fi
+		deb-systemd-invoke $_dh_action 'cuttlefish-host-resources.service' >/dev/null || true
+	fi
+fi
+# End automatically added section
+# Automatically added by dh_installsystemd/13.24.2
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	# The following line should be removed in trixie or trixie+1
+	deb-systemd-helper unmask 'cuttlefish-host-resources.service' >/dev/null || true
+
+	# was-enabled defaults to true, so new installations run enable.
+	if deb-systemd-helper --quiet was-enabled 'cuttlefish-host-resources.service'; then
+		# Enables the unit on first installation, creates new
+		# symlinks on upgrades if the unit file has changed.
+		deb-systemd-helper enable 'cuttlefish-host-resources.service' >/dev/null || true
+	else
+		# Update the statefile to add new symlinks (if any), which need to be
+		# cleaned up on purge. Also remove old symlinks.
+		deb-systemd-helper update-state 'cuttlefish-host-resources.service' >/dev/null || true
+	fi
+fi
+# End automatically added section
+# Automatically added by dh_installsystemd/13.24.2
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	if [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+		if [ -n "$2" ]; then
+			_dh_action=restart
+		else
+			_dh_action=start
+		fi
+		deb-systemd-invoke $_dh_action 'cuttlefish-host-resources.service' >/dev/null || true
+	fi
+fi
+# End automatically added section
+
