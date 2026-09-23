@@ -724,9 +724,40 @@ int WindowsSplitTunnel::runCleanupHelper(
     CloseHandle(parentProcess);
   });
 
+  SIZE_T initialState = 0;
+  DWORD initialStateBytes = 0;
+  logger.debug() << "Split-tunnel cleanup helper stage=before-read-state";
+  const BOOL initialStateRead = DeviceIoControl(
+      driver, IOCTL_GET_STATE, nullptr, 0, &initialState,
+      sizeof(initialState), &initialStateBytes, nullptr);
+  const DWORD initialStateError =
+      initialStateRead ? ERROR_SUCCESS : GetLastError();
+  logger.debug() << "Split-tunnel cleanup helper stage=after-read-state"
+                 << "result=" << initialStateError
+                 << "bytes=" << initialStateBytes
+                 << "state=" << initialState;
+  if (!windowsSplitTunnelPolicy::cleanupStateAllowsInitializedNoop(
+          initialStateRead != FALSE, initialStateBytes, sizeof(SIZE_T),
+          initialState, STATE_INITIALIZED)) {
+    if (!initialStateRead || initialStateBytes != sizeof(SIZE_T)) {
+      logger.error() << "Split-tunnel cleanup helper state read failed"
+                     << "stage=initial-state-read"
+                     << "result=" << initialStateError;
+      return CONFIGURATION_HELPER_CLEANUP_FAILED;
+    }
+  } else {
+    logger.debug() << "Split-tunnel cleanup helper verified initialized no-op";
+    return CONFIGURATION_HELPER_CLEANUP_VERIFIED;
+  }
+
   DWORD bytesReturned = 0;
+  logger.debug() << "Split-tunnel cleanup helper stage=before-clear-configuration"
+                 << "state=" << initialState;
   if (!DeviceIoControl(driver, IOCTL_CLEAR_CONFIGURATION, nullptr, 0,
                        nullptr, 0, &bytesReturned, nullptr)) {
+    logger.error() << "Split-tunnel cleanup helper clear failed"
+                   << "stage=clear-configuration"
+                   << "result=" << GetLastError();
     return CONFIGURATION_HELPER_CLEANUP_FAILED;
   }
   SIZE_T state = 0;
@@ -734,6 +765,11 @@ int WindowsSplitTunnel::runCleanupHelper(
   const BOOL stateRead = DeviceIoControl(
       driver, IOCTL_GET_STATE, nullptr, 0, &state, sizeof(state),
       &stateBytes, nullptr);
+  const DWORD stateError = stateRead ? ERROR_SUCCESS : GetLastError();
+  logger.debug() << "Split-tunnel cleanup helper stage=after-clear-read-state"
+                 << "result=" << stateError
+                 << "bytes=" << stateBytes
+                 << "state=" << state;
   return windowsSplitTunnelPolicy::exactReadyStateReadback(
              stateRead != FALSE, stateBytes, sizeof(SIZE_T), state,
              STATE_READY)

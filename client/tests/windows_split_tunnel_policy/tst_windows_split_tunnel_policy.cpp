@@ -70,6 +70,19 @@ int main() {
   CHECK(!windowsSplitTunnelPolicy::exactReadyStateReadback(
       false, sizeof(std::size_t), sizeof(std::size_t), ready, ready));
 
+  constexpr std::size_t initialized = 2;
+  CHECK(windowsSplitTunnelPolicy::cleanupStateAllowsInitializedNoop(
+      true, sizeof(std::size_t), sizeof(std::size_t), initialized,
+      initialized));
+  CHECK(!windowsSplitTunnelPolicy::cleanupStateAllowsInitializedNoop(
+      false, sizeof(std::size_t), sizeof(std::size_t), initialized,
+      initialized));
+  CHECK(!windowsSplitTunnelPolicy::cleanupStateAllowsInitializedNoop(
+      true, sizeof(std::size_t) - 1, sizeof(std::size_t), initialized,
+      initialized));
+  CHECK(!windowsSplitTunnelPolicy::cleanupStateAllowsInitializedNoop(
+      true, sizeof(std::size_t), sizeof(std::size_t), ready, initialized));
+
   windowsSplitTunnelPolicy::CleanupGate gate;
   CHECK(gate.allowsMutation());
   gate.markFailure();
