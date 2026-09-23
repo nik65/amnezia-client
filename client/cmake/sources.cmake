@@ -24,6 +24,7 @@ set(HEADERS ${HEADERS}
     ${CLIENT_ROOT_DIR}/core/utils/errorStrings.h
     ${CLIENT_ROOT_DIR}/core/utils/selfhosted/scriptsRegistry.h
     ${CLIENT_ROOT_DIR}/core/utils/selfhosted/clientLogsUtils.h
+    ${CLIENT_ROOT_DIR}/core/utils/selfhosted/clientLogsTarget.h
     ${CLIENT_ROOT_DIR}/core/utils/qrCodeUtils.h
     ${CLIENT_ROOT_DIR}/core/controllers/coreController.h
     ${CLIENT_ROOT_DIR}/core/controllers/coreSignalHandlers.h

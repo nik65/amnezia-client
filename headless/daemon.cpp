@@ -98,7 +98,8 @@ Daemon::Daemon(QString socketPath, QString profileStorePath,
                QString configRoot,
                bool requireRootOwnedConfig,
                QObject *parent,
-               QString stagingRoot)
+               QString stagingRoot,
+               QString remoteLogConfigPath)
     : QObject(parent),
       m_socketPath(socketPath.trimmed().isEmpty() ? defaultSocketPath() : std::move(socketPath)),
       m_profileStore(std::move(profileStorePath)),
@@ -106,7 +107,8 @@ Daemon::Daemon(QString socketPath, QString profileStorePath,
                    stagingRoot),
       m_routingController(runner ? runner : std::make_shared<RealCommandRunner>(stagingRoot),
                           routeStatePathForStore(m_profileStore.path()), false),
-      m_updateManager(runner, updateStatePathForStore(m_profileStore.path()))
+      m_updateManager(runner, updateStatePathForStore(m_profileStore.path())),
+      m_remoteLogUploader(std::move(remoteLogConfigPath), this)
 {
     connect(&m_server, &QLocalServer::newConnection,
             this, &Daemon::acceptConnections);
@@ -119,6 +121,9 @@ Daemon::Daemon(QString socketPath, QString profileStorePath,
     m_healthTimer.setInterval(30'000);
     connect(&m_healthTimer, &QTimer::timeout,
             this, [this]() { ensureBackendHealthy(); });
+    m_remoteLogTimer.setInterval(30'000);
+    connect(&m_remoteLogTimer, &QTimer::timeout,
+            &m_remoteLogUploader, &HeadlessRemoteLogUploader::poll);
 }
 
 Daemon::~Daemon()
@@ -160,6 +165,13 @@ bool Daemon::start(QString *error)
         m_instanceLock.reset();
         m_startPhase = StartPhase::NotStarted;
         return false;
+    }
+    QString remoteLogError;
+    if (!m_remoteLogUploader.load(&remoteLogError)) {
+        qWarning() << "Headless remote log uploader disabled:" << remoteLogError;
+    }
+    if (m_remoteLogUploader.state() != HeadlessRemoteLogUploader::State::Disabled) {
+        m_remoteLogTimer.start();
     }
 
     // Backend sessions are deliberately in-memory.  A native interface or
@@ -275,6 +287,7 @@ void Daemon::stop()
     m_routingRefreshTimer.stop();
     m_updateTimer.stop();
     m_healthTimer.stop();
+    m_remoteLogTimer.stop();
     const RoutingResult routingResult = m_routingOwned
             ? m_routingController.disconnect() : RoutingResult { true, {}, {} };
     if (routingResult.ok) m_routingOwned = false;
@@ -703,6 +716,7 @@ QByteArray Daemon::statusResponse(const QString &requestId)
         { QStringLiteral("routing"), routing },
         { QStringLiteral("needsReapply"), routing.value(QStringLiteral("needsReapply")).toBool() },
         { QStringLiteral("routingOffline"), routing.value(QStringLiteral("interfaceOffline")).toBool() },
+        { QStringLiteral("remoteLogs"), m_remoteLogUploader.status() },
         { QStringLiteral("updates"), m_updateManager.status() },
     });
 }

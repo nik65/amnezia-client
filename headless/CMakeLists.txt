@@ -34,6 +34,9 @@ add_library(amnezia_headless_core STATIC
     headlessRoutingController.h
     headlessUpdateManager.cpp
     headlessUpdateManager.h
+    remoteLogUploader.cpp
+    remoteLogUploader.h
+    "${CMAKE_CURRENT_LIST_DIR}/../client/core/utils/selfhosted/clientLogsTarget.h"
     vpnBackend.cpp
     vpnBackend.h
     privilegedDaemonBridge.cpp
@@ -42,7 +45,10 @@ add_library(amnezia_headless_core STATIC
     daemon.h
 )
 target_include_directories(amnezia_headless_core PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
+target_include_directories(amnezia_headless_core PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../client")
 target_link_libraries(amnezia_headless_core PUBLIC Qt6::Core Qt6::Network OpenSSL::Crypto)
+target_sources(amnezia_headless_core PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../client/core/utils/remoteLogSanitizer.cpp")
 if(NOT DEFINED HEADLESS_BUILD_VERSION OR HEADLESS_BUILD_VERSION STREQUAL "")
     if(DEFINED AMNEZIAVPN_VERSION AND NOT AMNEZIAVPN_VERSION STREQUAL "")
         set(HEADLESS_BUILD_VERSION "${AMNEZIAVPN_VERSION}")

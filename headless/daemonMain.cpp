@@ -107,11 +107,15 @@ int main(int argc, char *argv[])
     QCommandLineOption stagingRootOption(
         QStringLiteral("staging-root"),
         QStringLiteral("Writable root for staged full-tunnel VPN configs"), QStringLiteral("path"));
+    QCommandLineOption remoteLogConfigOption(
+        QStringLiteral("remote-log-config"),
+        QStringLiteral("Root-owned clientLogs uploader provisioning file"), QStringLiteral("path"));
     parser.addOption(socketOption);
     parser.addOption(storeOption);
     parser.addOption(configRootOption);
     parser.addOption(requireRootOwnedConfigOption);
     parser.addOption(stagingRootOption);
+    parser.addOption(remoteLogConfigOption);
     parser.process(application);
 
     const QString socketPath = parser.value(socketOption);
@@ -123,7 +127,8 @@ int main(int argc, char *argv[])
         parser.value(configRootOption),
         parser.isSet(requireRootOwnedConfigOption),
         nullptr,
-        parser.value(stagingRootOption));
+        parser.value(stagingRootOption),
+        parser.value(remoteLogConfigOption));
     QString error;
     if (!daemon.start(&error)) {
         QTextStream(stderr) << "amneziad: failed to start: " << error << Qt::endl;

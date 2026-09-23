@@ -71,6 +71,11 @@ struct RemoteLogSecretTransitionEvidence
     bool markerCursorIsAhead = false;
     bool lastAcceptedSecretSetMatches = true;
     bool markerSecretSetMatches = true;
+    // A non-awaiting marker is only metadata from a previously observed
+    // source epoch.  The caller may explicitly prove that the current scan
+    // is a new bounded epoch and rebind the marker to it while keeping the
+    // payload fully redacted.  Awaiting markers never use this escape hatch.
+    bool sourceEpochRebindSafe = false;
     qint64 sourceSize = 0;
     qint64 acceptedCursorOffset = 0;
 };
@@ -91,6 +96,30 @@ constexpr RemoteLogSecretTransitionResult remoteLogAdvanceSecretTransition(
 {
     RemoteLogSecretTransitionResult result;
     result.state = state;
+    if (state.present && state.awaitingStableSource
+        && evidence.sourceEpochRebindSafe) {
+        // A receipt already armed a confirmation for the old source.  Never
+        // reinterpret that state after an identity change.
+        result.forceRedacted = true;
+        result.globalFailClosed = true;
+        return result;
+    }
+    if (state.present && !state.awaitingStableSource
+        && evidence.sourceEpochRebindSafe
+        && evidence.markerValid
+        && evidence.sourceSize >= 0
+        && evidence.acceptedCursorOffset >= 0
+        && evidence.acceptedCursorOffset <= evidence.sourceSize) {
+        // The old marker/cursor is stale, but no receipt confirmation is
+        // pending. Rebind only opaque metadata to the current bounded scan
+        // and force the first request in the new epoch to be redacted.
+        result.state.highWaterOffset = evidence.sourceSize;
+        result.state.awaitingStableSource = false;
+        result.updateMarkerSecretSet = true;
+        result.persistMarker = true;
+        result.forceRedacted = true;
+        return result;
+    }
     if (!evidence.markerValid
         || evidence.sourceSize < 0
         || evidence.acceptedCursorOffset < 0

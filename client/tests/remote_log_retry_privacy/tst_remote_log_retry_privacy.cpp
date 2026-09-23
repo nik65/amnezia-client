@@ -124,6 +124,56 @@ private slots:
         QVERIFY(truncatedClosed.globalFailClosed);
     }
 
+    void staleNonAwaitingEpochRebindsOnlyOpaqueMetadata()
+    {
+        const amnezia::RemoteLogSecretTransitionState stale { true, false, 811247 };
+        amnezia::RemoteLogSecretTransitionEvidence evidence;
+        evidence.sourceIdentityMatches = false;
+        evidence.cursorMatchesSource = false;
+        evidence.sourceEpochRebindSafe = true;
+        evidence.sourceSize = 3734;
+        evidence.acceptedCursorOffset = 0;
+
+        const auto result = amnezia::remoteLogAdvanceSecretTransition(stale, evidence);
+        QVERIFY(result.forceRedacted);
+        QVERIFY(result.persistMarker);
+        QVERIFY(result.updateMarkerSecretSet);
+        QVERIFY(!result.globalFailClosed);
+        QVERIFY(result.state.present);
+        QVERIFY(!result.state.awaitingStableSource);
+        QCOMPARE(result.state.highWaterOffset, qint64 { 3734 });
+    }
+
+    void awaitingEpochMismatchCannotRebind()
+    {
+        const amnezia::RemoteLogSecretTransitionState awaiting { true, true, 811247 };
+        amnezia::RemoteLogSecretTransitionEvidence evidence;
+        evidence.sourceIdentityMatches = false;
+        evidence.cursorMatchesSource = false;
+        evidence.sourceEpochRebindSafe = true;
+        evidence.sourceSize = 3734;
+        evidence.acceptedCursorOffset = 0;
+
+        const auto result = amnezia::remoteLogAdvanceSecretTransition(awaiting, evidence);
+        QVERIFY(result.forceRedacted);
+        QVERIFY(result.globalFailClosed);
+        QVERIFY(!result.persistMarker);
+    }
+
+    void epochRebindRejectsOutOfRangeScan()
+    {
+        const amnezia::RemoteLogSecretTransitionState stale { true, false, 100 };
+        amnezia::RemoteLogSecretTransitionEvidence evidence;
+        evidence.sourceEpochRebindSafe = true;
+        evidence.sourceSize = 32;
+        evidence.acceptedCursorOffset = 33;
+
+        const auto result = amnezia::remoteLogAdvanceSecretTransition(stale, evidence);
+        QVERIFY(result.forceRedacted);
+        QVERIFY(result.globalFailClosed);
+        QVERIFY(!result.persistMarker);
+    }
+
     void capturedReadsAndRecordDelimitersAreStrict()
     {
         QVERIFY(amnezia::remoteLogCapturedReadIsExact(0, 0));

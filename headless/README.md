@@ -131,6 +131,35 @@ amnezia-cli disconnect
 amnezia-cli update-rollback
 ```
 
+## Отправка логов в self-hosted collector
+
+Headless uploader включается только отдельным root-owned provisioning-файлом
+`/etc/amnezia/client-logs.json`, переданным daemon через
+`--remote-log-config`. Файл не входит в update archive и не создаётся автоматически.
+Его структура использует уже выданный desktop `clientLogs` target:
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "sourcePath": "/var/log/amnezia/amneziad.log",
+  "installationId": "stable-installation-identity",
+  "clientLogs": {
+    "endpoint": "http://172.29.172.251:17866/logs",
+    "clientId": "<64-hex-client-id>",
+    "token": "<issued-token>"
+  }
+}
+```
+
+Оператор импортирует его из защищённого desktop export/provisioning bundle,
+проверяет endpoint по тому же allowlist, что и GUI, и устанавливает режим `0600`.
+При отсутствии файла отправка имеет состояние `disabled/not_configured`; при
+ошибке прав или формата сеть не вызывается. Состояние cursor/epoch хранится рядом
+в `.state` с теми же owner-only правами. Отправляется только bounded sanitized
+chunk; receipt принимается лишь при совпадении HTTP 2xx, `X-Amnezia-Batch-Accepted: 1`
+и `X-Amnezia-Batch-Id`, после чего cursor сохраняется атомарно.
+
 `--json` печатает полный JSON-ответ. `connect` запускает adapter выбранного профиля:
 WireGuard через `wg-quick`, AmneziaWG через `awg-quick`/`amneziawg-quick`, OpenVPN через
 `openvpn`, XRay и Shadowsocks-over-XRay через `xray`. Если нужный Linux executable не установлен,

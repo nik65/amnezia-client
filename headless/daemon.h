@@ -16,6 +16,7 @@
 #include "headlessRoutingController.h"
 #include "headlessUpdateManager.h"
 #include "profileStore.h"
+#include "remoteLogUploader.h"
 #include "vpnBackend.h"
 
 class QLocalSocket;
@@ -33,7 +34,8 @@ public:
                     QString configRoot = {},
                     bool requireRootOwnedConfig = false,
                     QObject *parent = nullptr,
-                    QString stagingRoot = {});
+                    QString stagingRoot = {},
+                    QString remoteLogConfigPath = {});
     ~Daemon() override;
 
     bool start(QString *error = nullptr);
@@ -84,6 +86,8 @@ private:
     QTimer m_routingRefreshTimer;
     QTimer m_updateTimer;
     QTimer m_healthTimer;
+    QTimer m_remoteLogTimer;
+    HeadlessRemoteLogUploader m_remoteLogUploader;
     std::unique_ptr<QLockFile> m_instanceLock;
     int m_processedRequestCount = 0;
     QElapsedTimer m_backendConnectedTimer;

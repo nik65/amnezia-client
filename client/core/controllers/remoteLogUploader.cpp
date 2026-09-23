@@ -23,6 +23,7 @@
 #include "core/utils/remoteLogBatchHealth.h"
 #include "core/utils/remoteLogSanitizer.h"
 #include "core/utils/selfhosted/clientLogsUtils.h"
+#include "core/utils/selfhosted/clientLogsTarget.h"
 #include "vpnConnection.h"
 #include "logger.h"
 #include "core/utils/containers/containerUtils.h"
@@ -198,12 +199,7 @@ namespace
 
     bool isTrustedClientLogsEndpoint(const QString &endpoint)
     {
-        const QUrl url(endpoint);
-        return url.isValid()
-               && url.scheme() == QStringLiteral("http")
-               && url.host() == QString::fromLatin1(amnezia::protocols::clientLogs::syncHost)
-               && url.port() == amnezia::protocols::clientLogs::syncPort
-               && url.path() == QString::fromLatin1(amnezia::protocols::clientLogs::uploadPath);
+        return amnezia::clientLogsTarget::isTrustedEndpoint(endpoint);
     }
 
     void updatePrivateKeyLookbehind(QByteArray &lookbehind, const QByteArray &block)
@@ -919,7 +915,18 @@ bool RemoteLogUploader::reconcileRetrySanitizerTransition(
         return false;
     }
 
-    const qint64 durableCursorOffset = marker.present ? cursor.offset : sourceOffset;
+    // A marker left behind by an older source epoch contains no raw log data
+    // and no pending receipt. Rebind it to the current bounded scan so a
+    // rotated/truncated log can make forward progress with a redacted first
+    // batch. An awaiting marker is deliberately excluded: it represents an
+    // ACK whose matching cursor may still be missing and must fail closed.
+    const bool sourceEpochRebindSafe = marker.present && marker.valid
+            && !marker.awaitingStableSource
+            && sourceOffset >= 0 && sourceOffset <= capturedSize
+            && (marker.fingerprint != fingerprint
+                || !cursorMatchesSource);
+    const qint64 durableCursorOffset = sourceEpochRebindSafe
+            ? sourceOffset : (marker.present ? cursor.offset : sourceOffset);
     const bool markerCursorMatches = !marker.present
             || !marker.awaitingStableSource
             || (marker.confirmationCursorOffset == cursor.offset
@@ -945,6 +952,7 @@ bool RemoteLogUploader::reconcileRetrySanitizerTransition(
             cursor.sanitizerSecretSetSha256 == currentSecretSetSha256;
     evidence.markerSecretSetMatches = !marker.present
             || marker.secretSetSha256 == currentSecretSetSha256;
+    evidence.sourceEpochRebindSafe = sourceEpochRebindSafe;
     evidence.sourceSize = capturedSize;
     evidence.acceptedCursorOffset = durableCursorOffset;
     const amnezia::RemoteLogSecretTransitionResult transition =
