@@ -142,6 +142,7 @@ private slots:
     void streamStateSurvivesRestartAndRedactsSecretSplitAcrossBatches();
     void replacementWithSamePrefixIsQuarantined();
     void targetChangeQuarantinesOldReceipt();
+    void unsafeParentChainIsRejected();
     void executableConfigModeIsRejected();
     void symlinkSourceIsRejected();
     void executableStateModeIsRejected();
@@ -149,7 +150,7 @@ private slots:
 
 void RemoteLogUploaderTest::receiptDoesNotAdvanceWhenStateCommitFails()
 {
-    QTemporaryDir directory;
+    QTemporaryDir directory(QDir::home().filePath(QStringLiteral("amnezia-uploader-test-XXXXXX")));
     QVERIFY(directory.isValid());
     const QString sourcePath = directory.filePath(QStringLiteral("client.log"));
     const QString configPath = directory.filePath(QStringLiteral("client-logs.json"));
@@ -174,7 +175,7 @@ void RemoteLogUploaderTest::receiptDoesNotAdvanceWhenStateCommitFails()
 
 void RemoteLogUploaderTest::streamStateSurvivesRestartAndRedactsSecretSplitAcrossBatches()
 {
-    QTemporaryDir directory;
+    QTemporaryDir directory(QDir::home().filePath(QStringLiteral("amnezia-uploader-test-XXXXXX")));
     QVERIFY(directory.isValid());
     const QString sourcePath = directory.filePath(QStringLiteral("client.log"));
     const QString configPath = directory.filePath(QStringLiteral("client-logs.json"));
@@ -194,7 +195,10 @@ void RemoteLogUploaderTest::streamStateSurvivesRestartAndRedactsSecretSplitAcros
     const QByteArray first = QByteArray(15 * 1024 * 1024 - 9, 'x') + QByteArrayLiteral("password=");
     QVERIFY(appendBytes(sourcePath, first));
     uploader.poll();
+    QCOMPARE(collector.payloads.size(), 2);
+    QCOMPARE(uploader.state(), HeadlessRemoteLogUploader::State::Pending);
     uploader.poll();
+    QCOMPARE(uploader.state(), HeadlessRemoteLogUploader::State::Healthy);
     const int batchesBeforeRestart = collector.payloads.size();
     QVERIFY(batchesBeforeRestart >= 2);
     HeadlessRemoteLogUploader restarted(configPath, &network);
@@ -208,7 +212,7 @@ void RemoteLogUploaderTest::streamStateSurvivesRestartAndRedactsSecretSplitAcros
 
 void RemoteLogUploaderTest::replacementWithSamePrefixIsQuarantined()
 {
-    QTemporaryDir directory;
+    QTemporaryDir directory(QDir::home().filePath(QStringLiteral("amnezia-uploader-test-XXXXXX")));
     QVERIFY(directory.isValid());
     const QString sourcePath = directory.filePath(QStringLiteral("client.log"));
     const QString backupPath = directory.filePath(QStringLiteral("client.old"));
@@ -233,7 +237,7 @@ void RemoteLogUploaderTest::replacementWithSamePrefixIsQuarantined()
 
 void RemoteLogUploaderTest::targetChangeQuarantinesOldReceipt()
 {
-    QTemporaryDir directory;
+    QTemporaryDir directory(QDir::home().filePath(QStringLiteral("amnezia-uploader-test-XXXXXX")));
     QVERIFY(directory.isValid());
     const QString sourcePath = directory.filePath(QStringLiteral("client.log"));
     const QString configPath = directory.filePath(QStringLiteral("client-logs.json"));
@@ -254,9 +258,28 @@ void RemoteLogUploaderTest::targetChangeQuarantinesOldReceipt()
     QVERIFY(!quarantined.isEmpty());
 }
 
+void RemoteLogUploaderTest::unsafeParentChainIsRejected()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("parent ownership checks are Unix-only");
+#else
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(QStringLiteral("client.log"));
+    const QString configPath = directory.filePath(QStringLiteral("client-logs.json"));
+    QVERIFY(appendBytes(sourcePath, QByteArrayLiteral("safe\n")));
+    QVERIFY(writeConfig(configPath, sourcePath));
+    HeadlessRemoteLogUploader uploader(configPath);
+    QString error;
+    QVERIFY(!uploader.load(&error));
+    QCOMPARE(uploader.state(), HeadlessRemoteLogUploader::State::Error);
+    QCOMPARE(error, QStringLiteral("config_permissions_or_size"));
+#endif
+}
+
 void RemoteLogUploaderTest::executableConfigModeIsRejected()
 {
-    QTemporaryDir directory;
+    QTemporaryDir directory(QDir::home().filePath(QStringLiteral("amnezia-uploader-test-XXXXXX")));
     QVERIFY(directory.isValid());
     const QString sourcePath = directory.filePath(QStringLiteral("client.log"));
     const QString configPath = directory.filePath(QStringLiteral("client-logs.json"));
@@ -272,7 +295,7 @@ void RemoteLogUploaderTest::executableConfigModeIsRejected()
 
 void RemoteLogUploaderTest::symlinkSourceIsRejected()
 {
-    QTemporaryDir directory;
+    QTemporaryDir directory(QDir::home().filePath(QStringLiteral("amnezia-uploader-test-XXXXXX")));
     QVERIFY(directory.isValid());
     const QString realPath = directory.filePath(QStringLiteral("real.log"));
     const QString linkPath = directory.filePath(QStringLiteral("link.log"));
@@ -289,7 +312,7 @@ void RemoteLogUploaderTest::symlinkSourceIsRejected()
 
 void RemoteLogUploaderTest::executableStateModeIsRejected()
 {
-    QTemporaryDir directory;
+    QTemporaryDir directory(QDir::home().filePath(QStringLiteral("amnezia-uploader-test-XXXXXX")));
     QVERIFY(directory.isValid());
     const QString sourcePath = directory.filePath(QStringLiteral("client.log"));
     const QString configPath = directory.filePath(QStringLiteral("client-logs.json"));

@@ -52,14 +52,40 @@ bool ownerOnly(const QFileInfo &info)
                                | QFileDevice::ExeOther)) == expected;
 }
 
-bool requiresRootOwner(const QString &path)
+bool secureParentChain(const QString &path)
 {
 #ifdef Q_OS_UNIX
-    return path.startsWith(QStringLiteral("/etc/amnezia/"))
-            || path.startsWith(QStringLiteral("/var/lib/amnezia/"));
+    // The daemon's system service runs as root, so this also makes an
+    // arbitrary --remote-log-config path root-owned.  An unprivileged daemon
+    // may use its own private home directory, but never a writable shared
+    // parent such as /tmp.  Root-owned parents remain safe for either mode.
+    const uid_t effectiveUser = geteuid();
+    QString current = QFileInfo(path).absolutePath();
+    while (true) {
+        const QFileInfo directory(current);
+        if (!directory.exists() || !directory.isDir() || directory.isSymLink()) return false;
+        const uint owner = directory.ownerId();
+        if (owner != static_cast<uint>(effectiveUser) && owner != 0) return false;
+        const auto permissions = directory.permissions();
+        if (permissions & (QFileDevice::WriteGroup | QFileDevice::WriteOther)) return false;
+        const QString next = directory.absolutePath();
+        if (next == current) break;
+        current = next;
+    }
+    return true;
 #else
     Q_UNUSED(path);
-    return false;
+    return true;
+#endif
+}
+
+bool ownedByEffectiveUser(const QFileInfo &info)
+{
+#ifdef Q_OS_UNIX
+    return info.ownerId() == static_cast<uint>(geteuid());
+#else
+    Q_UNUSED(info);
+    return true;
 #endif
 }
 
@@ -117,8 +143,8 @@ bool HeadlessRemoteLogUploader::validateSecureFile(const QFileInfo &info,
                                                    const QString &reason,
                                                    QString *error) const
 {
-    if (!ownerOnly(info) || (requiresRootOwner(info.absoluteFilePath())
-                             && info.ownerId() != 0)) {
+    if (!ownerOnly(info) || !ownedByEffectiveUser(info)
+        || !secureParentChain(info.absoluteFilePath())) {
         if (error) *error = reason;
         return false;
     }
@@ -430,6 +456,10 @@ bool HeadlessRemoteLogUploader::provisionFromDesktopTarget(
         if (error) *error = QStringLiteral("remote log config path is not provisioned");
         return false;
     }
+    if (!secureParentChain(m_configPath)) {
+        if (error) *error = QStringLiteral("config_permissions_or_size");
+        return false;
+    }
     const QFileInfo existingConfig(m_configPath);
     if (existingConfig.exists() && !validateSecureFile(
                 existingConfig, QStringLiteral("config_permissions_or_size"), error)) {
@@ -547,6 +577,10 @@ bool HeadlessRemoteLogUploader::stateFromJson(const QJsonObject &object,
 
 bool HeadlessRemoteLogUploader::saveState(const DurableState &state, QString *error) const
 {
+    if (!secureParentChain(m_statePath)) {
+        if (error) *error = QStringLiteral("state_write_failed");
+        return false;
+    }
     QSaveFile file(m_statePath);
     if (!file.open(QIODevice::WriteOnly)
         || file.write(QJsonDocument(stateToJson(state)).toJson(QJsonDocument::Compact)) < 0
