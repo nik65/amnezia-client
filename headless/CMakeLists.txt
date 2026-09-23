@@ -101,6 +101,12 @@ add_executable(headless_update_tests
 )
 target_link_libraries(headless_update_tests PRIVATE amnezia_headless_core Qt6::Core Qt6::Network Qt6::Test)
 
+add_executable(headless_remote_log_uploader_tests
+    tests/tst_remote_log_uploader.cpp
+)
+target_link_libraries(headless_remote_log_uploader_tests PRIVATE
+    amnezia_headless_core Qt6::Core Qt6::Network Qt6::Test)
+
 enable_testing()
 add_test(NAME headless_protocol COMMAND headless_protocol_tests)
 add_test(NAME headless_daemon COMMAND headless_daemon_tests)
@@ -109,6 +115,7 @@ add_test(NAME headless_vpn_backend COMMAND headless_vpn_backend_tests)
 add_test(NAME headless_privileged_daemon_bridge COMMAND headless_privileged_daemon_bridge_tests)
 add_test(NAME headless_server_routing COMMAND headless_server_routing_tests)
 add_test(NAME headless_updates COMMAND headless_update_tests)
+add_test(NAME headless_remote_log_uploader COMMAND headless_remote_log_uploader_tests)
 endif()
 
 configure_file(
