@@ -398,7 +398,10 @@ void HeadlessRemoteLogUploader::poll()
     target = m_config.value(QStringLiteral("clientLogs")).toObject();
     request.setRawHeader("X-Amnezia-Client-Id", target.value(QStringLiteral("clientId")).toString().toUtf8());
     request.setRawHeader("X-Amnezia-Log-Token", target.value(QStringLiteral("token")).toString().toUtf8());
-    request.setRawHeader("X-Amnezia-Log-Kind", QByteArrayLiteral("headless"));
+    // The deployed collector allowlist is android/client/service. Headless
+    // is a producer mode, not a new storage kind, so use the existing client
+    // bucket and keep the server contract unchanged.
+    request.setRawHeader("X-Amnezia-Log-Kind", QByteArrayLiteral("client"));
     request.setRawHeader("X-Amnezia-Batch-Id", id.toLatin1());
     request.setRawHeader("X-Amnezia-Installation-Id", m_config.value(QStringLiteral("installationId")).toString().toUtf8());
     QNetworkAccessManager manager;

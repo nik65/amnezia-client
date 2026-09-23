@@ -160,6 +160,55 @@ class ClientLogsCollectorTest(unittest.TestCase):
         self.assertEqual(1, len(stored))
         self.assertEqual(payload, stored[0].read_bytes())
 
+    def test_receipt_persist_restart_and_source_rotation_redaction(self):
+        """Exercise the durable receipt boundary used by GUI and headless senders.
+
+        The uploader implementations persist only opaque cursor/epoch metadata;
+        this harness uses the real collector HTTP handler and deliberately
+        restarts between the two accepted marker batches.
+        """
+        state_path = self.root / "uploader-state.json"
+        marker = b"[REDACTED LOG CHUNK]\n"
+        first_id = "1" * 64
+        status, headers, _ = self.request(
+            "POST", "/logs", marker,
+            self.upload_headers(first_id) | {"X-Amnezia-Log-Kind": "client"})
+        self.assertEqual(204, status)
+        self.assertEqual("1", headers.get("X-Amnezia-Batch-Accepted"))
+        self.assertEqual(first_id, headers.get("X-Amnezia-Batch-Id"))
+        state_path.write_text(json.dumps({
+            "offset": 4096,
+            "fingerprint": "epoch-a",
+            "awaitingStableSource": True,
+            "redactNext": False,
+        }), encoding="utf-8")
+
+        # Simulate a process restart followed by a source epoch change. The
+        # old ACK is retained, so the replacement epoch must use a new opaque
+        # id and the whole redacted marker before another cursor advance.
+        restarted = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertTrue(restarted["awaitingStableSource"])
+        restarted.update({
+            "offset": 1024,
+            "fingerprint": "epoch-b",
+            "awaitingStableSource": False,
+            "redactNext": True,
+        })
+        second_id = "2" * 64
+        status, headers, _ = self.request(
+            "POST", "/logs", marker,
+            self.upload_headers(second_id) | {"X-Amnezia-Log-Kind": "client"})
+        self.assertEqual(204, status)
+        self.assertEqual("1", headers.get("X-Amnezia-Batch-Accepted"))
+        self.assertEqual(second_id, headers.get("X-Amnezia-Batch-Id"))
+        restarted.update({"offset": 2048, "awaitingStableSource": True, "redactNext": False})
+        state_path.write_text(json.dumps(restarted), encoding="utf-8")
+        after_restart = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual("epoch-b", after_restart["fingerprint"])
+        self.assertEqual(2048, after_restart["offset"])
+        self.assertTrue(after_restart["awaitingStableSource"])
+        self.assertEqual(2, len(self.stored_logs()))
+
     def test_batch_retry_with_different_body_is_rejected(self):
         status, _, _ = self.request(
             "POST", "/logs", b"first payload", self.upload_headers(self.BATCH_ID))
