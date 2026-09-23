@@ -86,10 +86,13 @@ bool HeadlessRemoteLogUploader::validateConfig(const QJsonObject &config, QStrin
         return fail(QStringLiteral("remote log config version is unsupported"));
     if (!config.value(QStringLiteral("enabled")).isBool())
         return fail(QStringLiteral("remote log config enabled is missing"));
-    if (!config.value(QStringLiteral("sourcePath")).isString()
-        || !QFileInfo(config.value(QStringLiteral("sourcePath")).toString()).isAbsolute())
-        return fail(QStringLiteral("remote log sourcePath must be absolute"));
     if (!config.value(QStringLiteral("enabled")).toBool()) return true;
+    const QString sourcePath = config.value(QStringLiteral("sourcePath")).toString().trimmed();
+    const QFileInfo sourceInfo(sourcePath);
+    if (!config.value(QStringLiteral("sourcePath")).isString()
+        || !sourceInfo.isAbsolute() || !sourceInfo.exists()
+        || !sourceInfo.isFile() || sourceInfo.isSymLink())
+        return fail(QStringLiteral("remote log sourcePath must be an existing regular file"));
     const QString installationId = config.value(QStringLiteral("installationId")).toString();
     if (installationId.size() < 16 || installationId.size() > 128)
         return fail(QStringLiteral("remote log installationId is invalid"));
