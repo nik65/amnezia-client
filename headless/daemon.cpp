@@ -53,7 +53,8 @@ private:
 bool isMutatingCommand(Command command)
 {
     return command == Command::Connect || command == Command::Disconnect
-        || command == Command::Import || command == Command::UpdateRollback;
+        || command == Command::Import || command == Command::ImportRemoteLogs
+        || command == Command::UpdateRollback;
 }
 } // namespace
 
@@ -587,6 +588,8 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
         return importProfileResponse(request);
     case Command::Export:
         return exportProfileResponse(request);
+    case Command::ImportRemoteLogs:
+        return importRemoteLogsResponse(request);
     case Command::UpdateRollback: {
         const HeadlessUpdateResult result = m_updateManager.rollback();
         if (!result.ok) {
@@ -659,6 +662,7 @@ bool Daemon::authorizePrivilegedCommand(QLocalSocket *client, const Request &req
 {
     switch (request.command) {
     case Command::Import:
+    case Command::ImportRemoteLogs:
     case Command::UpdateRollback:
         return peerIsRoot(client);
     default:
@@ -703,6 +707,28 @@ QByteArray Daemon::exportProfileResponse(const Request &request) const
     }
     return encodeResponse(request.requestId, QJsonObject {
         { QStringLiteral("profile"), m_profileStore.toJson(profile) },
+    });
+}
+
+QByteArray Daemon::importRemoteLogsResponse(const Request &request)
+{
+    const QJsonValue target = request.parameters.value(QStringLiteral("clientLogs"));
+    const QString sourcePath = request.parameters.value(QStringLiteral("sourcePath"))
+                                       .toString().trimmed();
+    const QString installationId = request.parameters.value(QStringLiteral("installationId"))
+                                           .toString().trimmed();
+    if (!target.isObject() || sourcePath.isEmpty() || installationId.isEmpty()) {
+        return encodeError(request.requestId, QStringLiteral("invalid_parameters"),
+                           QStringLiteral("remote log import requires clientLogs, sourcePath and installationId"));
+    }
+    QString error;
+    if (!m_remoteLogUploader.provisionFromDesktopTarget(
+                target.toObject(), sourcePath, installationId, &error)) {
+        return encodeError(request.requestId, QStringLiteral("remote_log_rejected"), error);
+    }
+    m_remoteLogTimer.start();
+    return encodeResponse(request.requestId, QJsonObject {
+        { QStringLiteral("remoteLogs"), m_remoteLogUploader.status() },
     });
 }
 

@@ -129,6 +129,9 @@ amnezia-cli export <profile-id> --output ./profile-export.json
 amnezia-cli connect <profile-id>
 amnezia-cli disconnect
 amnezia-cli update-rollback
+amnezia-cli import-remote-logs ./desktop-connection.json \
+  --source-path /var/log/amnezia/amneziad.log \
+  --installation-id stable-headless-installation
 ```
 
 ## Отправка логов в self-hosted collector
@@ -152,7 +155,9 @@ Headless uploader включается только отдельным root-owne
 }
 ```
 
-Оператор импортирует его из защищённого desktop export/provisioning bundle,
+Оператор импортирует его из защищённого desktop export/provisioning bundle через
+`amnezia-cli import-remote-logs`; команда принимает только пути и стабильный
+идентификатор в argv, а сами `clientLogs` credentials читает из файла,
 проверяет endpoint по тому же allowlist, что и GUI, и устанавливает режим `0600`.
 При отсутствии файла отправка имеет состояние `disabled/not_configured`; при
 ошибке прав или формата сеть не вызывается. Состояние cursor/epoch хранится рядом
@@ -201,7 +206,7 @@ amnezia-cli --socket /run/amnezia/amneziad.sock doctor --json
 
 Каждый запрос и ответ — один JSON object на строку. В запросе используются поля `protocol`,
 `id`, `command`, `params`; максимальный размер кадра — 64 KiB. Поддерживаемые команды текущего
-среза: `status`, `list-profiles`, `doctor`, `import`, `export`, `connect`, `disconnect`, `update-rollback`.
+среза: `status`, `list-profiles`, `doctor`, `import`, `export`, `import-remote-logs`, `connect`, `disconnect`, `update-rollback`.
 
 Unix socket — локальный control plane. На Unix daemon выставляет права socket в `0660`, а
 основной systemd deployment использует private `/run/amnezia` (`RuntimeDirectoryMode=0750`).

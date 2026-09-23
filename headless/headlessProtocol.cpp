@@ -45,6 +45,8 @@ QString commandName(Command command)
         return QStringLiteral("import");
     case Command::Export:
         return QStringLiteral("export");
+    case Command::ImportRemoteLogs:
+        return QStringLiteral("import-remote-logs");
     case Command::UpdateRollback:
         return QStringLiteral("update-rollback");
     }
@@ -61,6 +63,7 @@ bool commandFromName(const QString &name, Command &command)
         Command::Doctor,
         Command::Import,
         Command::Export,
+        Command::ImportRemoteLogs,
         Command::UpdateRollback,
     };
 

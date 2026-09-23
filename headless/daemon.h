@@ -63,6 +63,7 @@ private:
     QByteArray profileListResponse(const Request &request) const;
     QByteArray importProfileResponse(const Request &request);
     QByteArray exportProfileResponse(const Request &request) const;
+    QByteArray importRemoteLogsResponse(const Request &request);
 
     static QString defaultSocketPath();
     static QString routeStatePathForStore(const QString &storePath);

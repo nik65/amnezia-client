@@ -149,6 +149,36 @@ bool HeadlessRemoteLogUploader::load(QString *error)
     return true;
 }
 
+bool HeadlessRemoteLogUploader::provisionFromDesktopTarget(
+        const QJsonObject &desktopExport, const QString &sourcePath,
+        const QString &installationId, QString *error)
+{
+    QJsonObject target = desktopExport.value(QStringLiteral("clientLogs")).toObject();
+    if (target.isEmpty()) target = desktopExport;
+    QJsonObject config {
+        { QStringLiteral("version"), ConfigVersion },
+        { QStringLiteral("enabled"), true },
+        { QStringLiteral("sourcePath"), sourcePath.trimmed() },
+        { QStringLiteral("installationId"), installationId.trimmed() },
+        { QStringLiteral("clientLogs"), target },
+    };
+    if (!validateConfig(config, error)) return false;
+    if (m_configPath.isEmpty()) {
+        if (error) *error = QStringLiteral("remote log config path is not provisioned");
+        return false;
+    }
+    QSaveFile file(m_configPath);
+    if (!file.open(QIODevice::WriteOnly)
+        || file.write(QJsonDocument(config).toJson(QJsonDocument::Compact)) < 0
+        || !file.commit()
+        || !QFile::setPermissions(m_configPath,
+                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+        if (error) *error = QStringLiteral("config_write_failed");
+        return false;
+    }
+    return load(error);
+}
+
 bool HeadlessRemoteLogUploader::loadState(QString *error)
 {
     m_offset = 0;

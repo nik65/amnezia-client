@@ -139,8 +139,14 @@ int main(int argc, char *argv[])
     parser.addOption(QCommandLineOption(
         { QStringLiteral("o"), QStringLiteral("output") },
         QStringLiteral("Write an exported profile to this file"), QStringLiteral("path")));
+    parser.addOption(QCommandLineOption(
+        QStringLiteral("source-path"),
+        QStringLiteral("Absolute headless log source path for remote log provisioning"), QStringLiteral("path")));
+    parser.addOption(QCommandLineOption(
+        QStringLiteral("installation-id"),
+        QStringLiteral("Stable non-secret installation identity for remote logs"), QStringLiteral("id")));
     parser.addPositionalArgument(QStringLiteral("command"),
-                                 QStringLiteral("status, list-profiles, doctor, connect, disconnect, import, export or update-rollback"));
+                                 QStringLiteral("status, list-profiles, doctor, connect, disconnect, import, export, import-remote-logs or update-rollback"));
     parser.addPositionalArgument(QStringLiteral("argument"),
                                  QStringLiteral("profile name, profile JSON file or profile id"));
     parser.process(application);
@@ -158,6 +164,7 @@ int main(int argc, char *argv[])
 
     const bool takesArgument = command == amnezia::headless::Command::Connect
         || command == amnezia::headless::Command::Import
+        || command == amnezia::headless::Command::ImportRemoteLogs
         || command == amnezia::headless::Command::Export;
     if ((takesArgument && positional.size() != 2)
         || (!takesArgument && positional.size() != 1)) {
@@ -183,6 +190,22 @@ int main(int argc, char *argv[])
             return 2;
         }
         parameters.insert(QStringLiteral("profile"), profile);
+    } else if (command == amnezia::headless::Command::ImportRemoteLogs) {
+        QJsonObject desktopExport;
+        QString error;
+        if (!readJsonObject(positional.at(1), desktopExport, error)) {
+            QTextStream(stderr) << "amnezia-cli: " << error << Qt::endl;
+            return 2;
+        }
+        const QString sourcePath = parser.value(QStringLiteral("source-path")).trimmed();
+        const QString installationId = parser.value(QStringLiteral("installation-id")).trimmed();
+        if (sourcePath.isEmpty() || installationId.isEmpty()) {
+            QTextStream(stderr) << "amnezia-cli: import-remote-logs requires --source-path and --installation-id" << Qt::endl;
+            return 2;
+        }
+        parameters.insert(QStringLiteral("clientLogs"), desktopExport);
+        parameters.insert(QStringLiteral("sourcePath"), sourcePath);
+        parameters.insert(QStringLiteral("installationId"), installationId);
     }
 
     const amnezia::headless::Request request {

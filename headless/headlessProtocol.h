@@ -22,6 +22,7 @@ enum class Command {
     Doctor,
     Import,
     Export,
+    ImportRemoteLogs,
     UpdateRollback,
 };
 

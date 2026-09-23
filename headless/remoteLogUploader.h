@@ -19,6 +19,10 @@ public:
     explicit HeadlessRemoteLogUploader(QString configPath, QObject *parent = nullptr);
 
     bool load(QString *error = nullptr);
+    bool provisionFromDesktopTarget(const QJsonObject &desktopExport,
+                                    const QString &sourcePath,
+                                    const QString &installationId,
+                                    QString *error = nullptr);
     State state() const { return m_state; }
     QString stateName() const;
     QString lastReason() const { return m_lastReason; }
