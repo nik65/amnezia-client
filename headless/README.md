@@ -53,8 +53,7 @@ installer-скриптом, `runtime-dependencies.txt` и `SHA256SUMS`. Подп
  <package-manifest-sha256> <checksums-sha256> <signed-manifest-sha256> verified-receipt.json`. Installer принимает только
  полную identity-связку либо пустой fresh-host, отвергает partial/ambiguous host,
  поддерживает точный systemd `FragmentPath` в `/etc`, `/run/systemd`, `/usr/local/lib/systemd`, `/usr/lib/systemd` или `/lib/systemd`, проверяет root-владельца/режим unit и сохранение systemd-состояния,
- ELF x86_64 через статический `readelf`, затем `ldd`, SHA-256 и health-check. Поддерживаются только Ubuntu 22.04/jammy и
- 24.04/noble amd64 с runtime/backend-командами из строгих metadata пакета.
+ ELF x86_64 через статический `readelf`, затем `ldd`, SHA-256 и health-check. В версии 5.0.3.3 поддерживается Ubuntu 24.04/noble amd64 с Qt 6.4, OpenSSL 3.0 и runtime/backend-командами из строгих metadata пакета. Ubuntu 22.04/jammy этой сборкой не заявляется.
  На upgrade `/etc/amnezia`, `/etc/amnezia/profiles`, `/var/lib/amnezia` и `/run/amnezia`
  вместе со всей цепочкой родителей, а также все существующие managed files,
  должны быть root-owned и без group/world-write; штатный `/run/amnezia/amneziad.sock`

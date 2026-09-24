@@ -988,14 +988,14 @@ PY
     if ! elf_header="$(readelf -h "$PACKAGE_ROOT/$binary" 2>/dev/null)" \
         || ! grep -q 'Class:[[:space:]]*ELF64' <<< "$elf_header" \
         || ! grep -q 'Machine:[[:space:]]*Advanced Micro Devices X86-64' <<< "$elf_header"; then
-        echo "static readelf validation failed for authenticated headless binary: $binary" >&2
+        echo "update_runtime_incompatible: static readelf validation failed for authenticated headless binary: $binary" >&2
         exit 3
     fi
-    if ! ldd_output="$(ldd "$PACKAGE_ROOT/$binary" 2>&1)"; then echo "ldd failed for headless binary: $binary" >&2; exit 3; fi
-    if grep -q 'not found' <<< "$ldd_output"; then echo "unresolved shared-library dependency: $binary" >&2; exit 3; fi
+    if ! ldd_output="$(ldd "$PACKAGE_ROOT/$binary" 2>&1)"; then echo "update_runtime_incompatible: ldd failed for headless binary: $binary" >&2; exit 3; fi
+    if grep -q 'not found' <<< "$ldd_output"; then echo "update_runtime_incompatible: unresolved shared-library dependency: $binary" >&2; exit 3; fi
     if ! version_output="$("$PACKAGE_ROOT/$binary" --version 2>&1)" \
         || ! grep -Fq "$PACKAGE_VERSION" <<< "$version_output"; then
-        echo "authenticated headless binary version does not match package version: $binary" >&2
+        echo "update_runtime_incompatible: authenticated headless binary version does not match package version: $binary" >&2
         exit 3
     fi
 done

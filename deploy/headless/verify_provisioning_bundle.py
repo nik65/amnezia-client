@@ -251,7 +251,7 @@ def extract_verified_bundle(archive: Path, destination: Path) -> Path:
     """Extract only the already-verified regular members (Python 3.10 safe).
 
     ``TarFile.extractall(filter=...)`` is a Python 3.12 API.  The headless
-    provisioning helper is expected to run on Ubuntu 22.04/Python 3.10, so
+    provisioning helper is expected to run on Ubuntu 24.04/Python 3.10, so
     keep the traversal and file creation explicit after the exact archive
     contract has been checked by ``inspect_headless_provisioning``.
     """

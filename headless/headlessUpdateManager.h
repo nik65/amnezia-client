@@ -65,6 +65,9 @@ private:
                  const QString &directory, QString *error) const;
     bool install(const Candidate &candidate, const QString &payloadDirectory,
                  const QString &currentVersion, QString *error);
+    bool validateCandidateRuntime(const QString &payloadDirectory,
+                                  const QString &candidateVersion,
+                                  QString *error) const;
     bool restartService(QString *error) const;
     bool retireAcknowledgedJournal(QString *error);
     bool restoreRollback(QString *error);

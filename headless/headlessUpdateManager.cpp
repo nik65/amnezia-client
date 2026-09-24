@@ -14,6 +14,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
@@ -871,8 +872,12 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
                 collectGarbage();
             }
         }
+        const bool runtimeIncompatible = error.startsWith(
+                QStringLiteral("update_runtime_incompatible:"));
         return failure(m_lastState == QStringLiteral("recovery_required")
-                           ? QStringLiteral("recovery_required") : QStringLiteral("update_install_failed"),
+                           ? QStringLiteral("recovery_required")
+                           : runtimeIncompatible ? QStringLiteral("update_runtime_incompatible")
+                                                 : QStringLiteral("update_install_failed"),
                        error.isEmpty() ? QStringLiteral("headless update installation failed") : error);
     }
     if (m_lastState != QStringLiteral("restart_pending")) {
@@ -1456,6 +1461,13 @@ bool HeadlessUpdateManager::install(const Candidate &candidate,
     const QFileInfo installInfo(m_installDirectory);
     if (!installInfo.isDir() || installInfo.isSymLink()) {
         if (error) *error = QStringLiteral("headless install directory is not a safe directory");
+        return false;
+    }
+    // Validate both signed candidate executables while they are still private
+    // staging files.  This must precede rollback/journal creation and any
+    // replacement so a Qt/OpenSSL ABI mismatch cannot create restart_pending
+    // state with an unstartable daemon.
+    if (!validateCandidateRuntime(payloadDirectory, candidate.version, error)) {
         return false;
     }
     const QString rollbackDirectory = QDir(m_updateRoot).filePath(
@@ -3324,6 +3336,14 @@ bool HeadlessUpdateManager::runProcess(const QString &program,
     QProcess process;
     process.setProgram(program);
     process.setArguments(arguments);
+    // Archive and runtime preflight commands receive a minimal environment.
+    // In particular, do not let LD_* or user plugin paths influence the
+    // acceptance decision for an authenticated candidate.
+    QProcessEnvironment environment;
+    environment.insert(QStringLiteral("PATH"), QStringLiteral("/usr/bin:/bin"));
+    environment.insert(QStringLiteral("LANG"), QStringLiteral("C"));
+    environment.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
+    process.setProcessEnvironment(environment);
     process.setProcessChannelMode(QProcess::MergedChannels);
     process.start();
     if (!process.waitForStarted(3000) || !process.waitForFinished(timeoutMs)) {
@@ -3342,6 +3362,67 @@ bool HeadlessUpdateManager::runProcess(const QString &program,
         *output = QString::fromUtf8(bytes);
     }
     return true;
+}
+
+bool HeadlessUpdateManager::validateCandidateRuntime(const QString &payloadDirectory,
+                                                     const QString &candidateVersion,
+                                                     QString *error) const
+{
+#ifdef Q_OS_WIN
+    Q_UNUSED(payloadDirectory);
+    Q_UNUSED(candidateVersion);
+    if (error) *error = QStringLiteral("update_runtime_incompatible:headless runtime gate is Linux-only");
+    return false;
+#else
+    const QString root = QFileInfo(payloadDirectory).canonicalFilePath();
+    if (root.isEmpty()) {
+        if (error) *error = QStringLiteral("update_runtime_incompatible:payload root is not canonical");
+        return false;
+    }
+    for (const QString &name : managedPayloadFiles()) {
+        const QString path = QDir(root).filePath(name);
+        const QFileInfo info(path);
+        if (!info.isFile() || info.isSymLink()
+            || info.canonicalFilePath() != path
+            || !path.startsWith(root + QDir::separator())) {
+            if (error) *error = QStringLiteral("update_runtime_incompatible:%1: candidate is not a regular staged file")
+                    .arg(name);
+            return false;
+        }
+
+        QString readelfOutput;
+        QString commandError;
+        if (!runProcess(QStringLiteral("/usr/bin/readelf"),
+                        { QStringLiteral("-h"), path }, 10'000,
+                        &readelfOutput, &commandError)
+            || !readelfOutput.contains(QStringLiteral("ELF64"), Qt::CaseSensitive)
+            || !readelfOutput.contains(QStringLiteral("Advanced Micro Devices X86-64"), Qt::CaseSensitive)) {
+            if (error) *error = QStringLiteral("update_runtime_incompatible:%1: candidate is not an x86_64 ELF")
+                    .arg(name);
+            return false;
+        }
+
+        QString lddOutput;
+        if (!runProcess(QStringLiteral("/usr/bin/ldd"), { path }, 20'000,
+                        &lddOutput, &commandError)
+            || lddOutput.contains(QStringLiteral("not found"), Qt::CaseInsensitive)
+            || lddOutput.contains(QStringLiteral("Qt_6.10 not found"), Qt::CaseInsensitive)) {
+            if (error) *error = QStringLiteral("update_runtime_incompatible:%1: shared-library ABI is unresolved")
+                    .arg(name);
+            return false;
+        }
+
+        QString versionOutput;
+        if (!runProcess(path, { QStringLiteral("--version") }, 10'000,
+                        &versionOutput, &commandError)
+            || !versionOutput.contains(candidateVersion, Qt::CaseSensitive)) {
+            if (error) *error = QStringLiteral("update_runtime_incompatible:%1: --version does not match candidate")
+                    .arg(name);
+            return false;
+        }
+    }
+    return true;
+#endif
 }
 
 bool HeadlessUpdateManager::atomicReplace(const QString &source,

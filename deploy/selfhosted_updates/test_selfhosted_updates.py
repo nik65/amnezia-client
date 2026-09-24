@@ -3102,6 +3102,7 @@ class SourceContractTests(unittest.TestCase):
     def test_selfhosted_release_documents_own_monotonic_versioning(self) -> None:
         cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         headless_cmake = (REPO_ROOT / "headless/CMakeLists.txt").read_text(encoding="utf-8")
+        update_manager = (REPO_ROOT / "headless/headlessUpdateManager.cpp").read_text(encoding="utf-8")
         readme = (REPO_ROOT / "deploy/selfhosted_updates/README.md").read_text(encoding="utf-8")
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
@@ -3197,8 +3198,10 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("headless-package", build_script)
         self.assertIn("amneziad.service", build_script)
         self.assertIn('"schema":2', build_script)
-        self.assertIn('"codenames":["jammy"]', build_script)
+        self.assertNotIn('"codenames":["jammy"]', build_script)
         self.assertIn('"codenames":["noble"]', build_script)
+        self.assertIn('update_runtime_incompatible', update_manager)
+        self.assertIn('validateCandidateRuntime', update_manager)
         self.assertIn('"backendModes"', build_script)
         local_release = (REPO_ROOT / "deploy/selfhosted_updates/local_release.ps1").read_text(encoding="utf-8")
         cpack_ifw = (REPO_ROOT / "cmake/CPack.cmake").read_text(encoding="utf-8")
@@ -3221,6 +3224,7 @@ class SourceContractTests(unittest.TestCase):
             'upgrade requires exactly one complete installation identity',
             'ELF64',
             'runtime dependency alternatives are not satisfied',
+            'update_runtime_incompatible:',
             'readelf -h',
             'receipt is not trusted',
             'systemd enabled/active state was not preserved',

@@ -85,17 +85,8 @@ cat > "$PACKAGE_DIR/package-manifest.json" <<EOF
 EOF
 cat > "$PACKAGE_DIR/runtime-dependencies.json" <<'EOF'
 {"schema":2,"distribution":"ubuntu","architectures":["amd64"],"releases":[
- {"versionId":"22.04","codenames":["jammy"],"packages":[
-  {"alternatives":["libc6"],"minimum":"2.35","reason":"glibc runtime"},
-  {"alternatives":["libssl3"],"minimum":"3.0","reason":"OpenSSL crypto runtime"},
-  {"alternatives":["libqt6core6"],"minimum":"6.2","reason":"Qt6 Core runtime"},
-  {"alternatives":["libqt6network6"],"minimum":"6.2","reason":"Qt6 Network runtime"},
-  {"alternatives":["systemd"],"minimum":"245","reason":"service and restart supervision"},
-  {"alternatives":["iproute2"],"minimum":"5.10","reason":"policy routing"},
-  {"alternatives":["tar"],"minimum":"1.30","reason":"update extraction"}
- ]},
  {"versionId":"24.04","codenames":["noble"],"packages":[
-  {"alternatives":["libc6"],"minimum":"2.35","reason":"glibc runtime"},
+  {"alternatives":["libc6"],"minimum":"2.39","reason":"glibc runtime used by the Ubuntu 24.04 headless build"},
   {"alternatives":["libssl3t64","libssl3"],"minimum":"3.0","reason":"OpenSSL crypto runtime"},
   {"alternatives":["libqt6core6t64","libqt6core6"],"minimum":"6.4","reason":"Qt6 Core runtime"},
   {"alternatives":["libqt6network6t64","libqt6network6"],"minimum":"6.4","reason":"Qt6 Network runtime"},
@@ -107,7 +98,9 @@ cat > "$PACKAGE_DIR/runtime-dependencies.json" <<'EOF'
 EOF
 cat > "$PACKAGE_DIR/runtime-dependencies.txt" <<'EOF'
 # Runtime requirements for dynamically linked headless binaries.
-# The provisioning preflight validates commands and shared libraries.
+# This release is built and supported on Ubuntu 24.04/noble amd64 with Qt 6.4
+# and OpenSSL 3.0. The installer validates both ldd and --version before it
+# creates a transaction or changes an existing installation.
 Qt6 Core and Network runtime libraries
 OpenSSL libcrypto runtime compatible with the build
 systemd (systemctl, systemd-run)
