@@ -14,6 +14,8 @@
 #include "profileStore.h"
 #include "vpnBackend.h"
 
+class HeadlessUpdateTest;
+
 namespace amnezia::headless
 {
 
@@ -40,6 +42,8 @@ public:
     QJsonObject status() const;
 
 private:
+    friend class ::HeadlessUpdateTest;
+
     struct Candidate
     {
         QString version;

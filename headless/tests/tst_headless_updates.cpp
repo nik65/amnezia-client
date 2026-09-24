@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QCryptographicHash>
 #include <QStringList>
+#include <QCoreApplication>
 
 #include "headlessUpdateManager.h"
 
@@ -44,6 +45,94 @@ class HeadlessUpdateTest : public QObject
     Q_OBJECT
 
 private slots:
+    void incompatibleCandidateIsRejectedBeforeJournalOrReplacement()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("headless runtime validation is Linux-only");
+#else
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("state.json"));
+        const QString payloadDirectory = temporaryDirectory.filePath(
+                QStringLiteral("updates/transaction-incompatible/payload"));
+        QVERIFY(QDir().mkpath(payloadDirectory));
+        const QByteArray oldBytes = QByteArrayLiteral("old-installed");
+        const QByteArray candidateBytes = QByteArrayLiteral("not-an-elf");
+        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+            QFile installed(QDir(temporaryDirectory.path()).filePath(name));
+            QVERIFY(installed.open(QIODevice::WriteOnly));
+            QCOMPARE(installed.write(oldBytes), oldBytes.size());
+            installed.close();
+            QFile candidate(QDir(payloadDirectory).filePath(name));
+            QVERIFY(candidate.open(QIODevice::WriteOnly));
+            QCOMPARE(candidate.write(candidateBytes), candidateBytes.size());
+            candidate.close();
+        }
+
+        HeadlessUpdateManager manager(std::make_shared<SuccessfulCommandRunner>(),
+                                      statePath, temporaryDirectory.path(), false);
+        HeadlessUpdateManager::Candidate candidate;
+        candidate.version = QStringLiteral("5.0.3.3");
+        QString error;
+        QVERIFY(!manager.install(candidate, payloadDirectory, QStringLiteral("5.0.3.2"), &error));
+        QVERIFY(error.startsWith(QStringLiteral("update_runtime_incompatible:")));
+        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+            QFile installed(QDir(temporaryDirectory.path()).filePath(name));
+            QVERIFY(installed.open(QIODevice::ReadOnly));
+            QCOMPARE(installed.readAll(), oldBytes);
+        }
+        QVERIFY(!QFileInfo::exists(QDir(temporaryDirectory.filePath(QStringLiteral("updates")))
+                                   .filePath(QStringLiteral("transaction.json"))));
+        QVERIFY(!QFileInfo::exists(QDir(temporaryDirectory.filePath(QStringLiteral("updates")))
+                                   .filePath(QStringLiteral("rollback-receipt.json"))));
+#endif
+    }
+
+    void compatibleCandidatePassesProductionRuntimeGateAndPersistsPendingState()
+    {
+#ifdef Q_OS_WIN
+        QSKIP("headless runtime validation is Linux-only");
+#else
+        const QString buildDirectory = QCoreApplication::applicationDirPath();
+        const QString daemonSource = QDir(buildDirectory).filePath(QStringLiteral("amneziad"));
+        const QString cliSource = QDir(buildDirectory).filePath(QStringLiteral("amnezia-cli"));
+        if (!QFileInfo(daemonSource).isExecutable() || !QFileInfo(cliSource).isExecutable()) {
+            QSKIP("production headless binaries are not next to the test executable");
+        }
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("state.json"));
+        const QString payloadDirectory = temporaryDirectory.filePath(
+                QStringLiteral("updates/transaction-compatible/payload"));
+        QVERIFY(QDir().mkpath(payloadDirectory));
+        QMap<QString, qint64> candidateSizes;
+        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+            QFile installed(QDir(temporaryDirectory.path()).filePath(name));
+            QVERIFY(installed.open(QIODevice::WriteOnly));
+            QVERIFY(installed.write(QByteArrayLiteral("old-installed")) > 0);
+            installed.close();
+            const QString source = QDir(buildDirectory).filePath(name);
+            QVERIFY(QFile::copy(source, QDir(payloadDirectory).filePath(name)));
+            candidateSizes.insert(name, QFileInfo(QDir(payloadDirectory).filePath(name)).size());
+        }
+        HeadlessUpdateManager manager(std::make_shared<SuccessfulCommandRunner>(),
+                                      statePath, temporaryDirectory.path(), false);
+        HeadlessUpdateManager::Candidate candidate;
+        candidate.version = QStringLiteral("5.0.3.3");
+        QString error;
+        QVERIFY2(manager.install(candidate, payloadDirectory, QStringLiteral("5.0.3.2"), &error),
+                 qPrintable(error));
+        QCOMPARE(manager.status().value(QStringLiteral("state")).toString(),
+                 QStringLiteral("restart_pending"));
+        QVERIFY(QFileInfo::exists(QDir(temporaryDirectory.filePath(QStringLiteral("updates")))
+                                  .filePath(QStringLiteral("transaction.json"))));
+        for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
+            QCOMPARE(QFileInfo(QDir(temporaryDirectory.path()).filePath(name)).size(),
+                     candidateSizes.value(name));
+        }
+#endif
+    }
+
     void disabledUpdatesDoNotTouchNetworkOrStateUnexpectedly()
     {
         QTemporaryDir temporaryDirectory;
