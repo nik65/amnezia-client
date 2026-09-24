@@ -1310,6 +1310,62 @@ class SourceContractTests(unittest.TestCase):
         self.assertNotIn("id command;", installer)
         self.assertNotIn('"command"', builder)
 
+    @unittest.skipUnless(find_bash(), "bash is required for the installer group policy harness")
+    def test_headless_installer_group_policy_preserves_upgrade_members(self) -> None:
+        bash = find_bash()
+        assert bash is not None
+        installer = (REPO_ROOT / "deploy/headless/install_headless.sh").read_text(encoding="utf-8")
+        match = re.search(
+            r"(?ms)^validate_amnezia_group\(\) \{.*?^\}\n",
+            installer,
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        group_policy = match.group(0)
+
+        def invoke(mode: str, group_entry: str) -> tuple[subprocess.CompletedProcess[str], bool]:
+            harness = textwrap.dedent(
+                f"""
+                set -euo pipefail
+                {group_policy}
+                getent() {{ printf '%s\\n' "$GROUP_ENTRY"; }}
+                groupmod() {{ touch "$GROUP_CALL_MARKER"; return 99; }}
+                gpasswd() {{ touch "$GROUP_CALL_MARKER"; return 99; }}
+                groupdel() {{ touch "$GROUP_CALL_MARKER"; return 99; }}
+                MODE={shlex.quote(mode)}
+                if validate_amnezia_group; then
+                    printf 'accepted:%s\\n' "$AMNEZIA_GROUP_ENTRY"
+                else
+                    printf 'rejected\\n'
+                    exit 4
+                fi
+                """
+            )
+            with tempfile.TemporaryDirectory() as tmp:
+                marker = Path(tmp) / "group-command-called"
+                environment = os.environ.copy()
+                environment.update({
+                    "GROUP_ENTRY": group_entry,
+                    "GROUP_CALL_MARKER": str(marker),
+                })
+                result = subprocess.run(
+                    [bash, "--noprofile", "--norc", "-c", harness],
+                    text=True,
+                    capture_output=True,
+                    env=environment,
+                )
+                return result, marker.exists()
+
+        fresh, fresh_group_command_called = invoke("fresh", "amnezia:x:986:nikita")
+        self.assertEqual(fresh.returncode, 4, fresh.stderr + fresh.stdout)
+        self.assertIn("fresh installation refuses", fresh.stderr)
+        self.assertFalse(fresh_group_command_called)
+
+        upgrade, upgrade_group_command_called = invoke("upgrade", "amnezia:x:986:nikita")
+        self.assertEqual(upgrade.returncode, 0, upgrade.stderr + upgrade.stdout)
+        self.assertIn("accepted:amnezia:x:986:nikita", upgrade.stdout)
+        self.assertFalse(upgrade_group_command_called)
+
     def test_provisioning_receipt_is_bound_to_signed_manifest_and_fresh_state_is_ambiguous(self) -> None:
         installer = (REPO_ROOT / "deploy/headless/install_headless.sh").read_text(encoding="utf-8")
         self.assertIn("EXPECTED_SIGNED_MANIFEST_SHA256", installer)

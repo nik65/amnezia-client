@@ -859,21 +859,27 @@ if [[ "$MODE" == "fresh" && ("$EXISTING_COMPONENTS" -ne 0 || "$STATE_DIR_COUNT" 
     echo "a partial, complete, or preexisting-state installation already exists; pass 'upgrade' explicitly after adoption/backup" >&2
     exit 4
 fi
-AMNEZIA_GROUP_ENTRY="$(getent group amnezia || true)"
-if [[ "$MODE" == "fresh" && -n "$AMNEZIA_GROUP_ENTRY" ]]; then
-    echo "fresh installation refuses a preexisting amnezia group; use upgrade after adoption/backup" >&2
-    exit 4
-fi
-if [[ "$MODE" == "upgrade" && -z "$AMNEZIA_GROUP_ENTRY" ]]; then
-    echo "upgrade requires the existing amnezia group" >&2
-    exit 4
-fi
-if [[ -n "$AMNEZIA_GROUP_ENTRY" ]]; then
-    IFS=: read -r _ _ _ AMNEZIA_GROUP_MEMBERS <<< "$AMNEZIA_GROUP_ENTRY"
-    if [[ -n "$AMNEZIA_GROUP_MEMBERS" ]]; then
-        echo "installation refuses an amnezia group with preexisting members" >&2
-        exit 4
+validate_amnezia_group() {
+    AMNEZIA_GROUP_ENTRY="$(getent group amnezia || true)"
+    if [[ "$MODE" == "fresh" && -n "$AMNEZIA_GROUP_ENTRY" ]]; then
+        echo "fresh installation refuses a preexisting amnezia group; use upgrade after adoption/backup" >&2
+        return 4
     fi
+    if [[ "$MODE" == "upgrade" && -z "$AMNEZIA_GROUP_ENTRY" ]]; then
+        echo "upgrade requires the existing amnezia group" >&2
+        return 4
+    fi
+    if [[ "$MODE" == "fresh" && -n "$AMNEZIA_GROUP_ENTRY" ]]; then
+        IFS=: read -r _ _ _ AMNEZIA_GROUP_MEMBERS <<< "$AMNEZIA_GROUP_ENTRY"
+        if [[ -n "$AMNEZIA_GROUP_MEMBERS" ]]; then
+            echo "fresh installation refuses an amnezia group with preexisting members" >&2
+            return 4
+        fi
+    fi
+    return 0
+}
+if ! validate_amnezia_group; then
+    exit 4
 fi
 if [[ "$MODE" == "upgrade" && "$EXISTING_COMPONENTS" -ne 4 ]]; then
     echo "upgrade requires exactly one complete installation identity; partial or ambiguous state found" >&2
