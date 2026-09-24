@@ -53,6 +53,8 @@ private slots:
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
         const QString statePath = temporaryDirectory.filePath(QStringLiteral("state.json"));
+        HeadlessUpdateManager manager(std::make_shared<SuccessfulCommandRunner>(),
+                                      statePath, temporaryDirectory.path(), false);
         const QString payloadDirectory = temporaryDirectory.filePath(
                 QStringLiteral("updates/transaction-incompatible/payload"));
         QVERIFY(QDir().mkpath(payloadDirectory));
@@ -69,8 +71,6 @@ private slots:
             candidate.close();
         }
 
-        HeadlessUpdateManager manager(std::make_shared<SuccessfulCommandRunner>(),
-                                      statePath, temporaryDirectory.path(), false);
         HeadlessUpdateManager::Candidate candidate;
         candidate.version = QStringLiteral("5.0.3.3");
         QString error;
@@ -102,6 +102,8 @@ private slots:
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
         const QString statePath = temporaryDirectory.filePath(QStringLiteral("state.json"));
+        HeadlessUpdateManager manager(std::make_shared<SuccessfulCommandRunner>(),
+                                      statePath, temporaryDirectory.path(), false);
         const QString payloadDirectory = temporaryDirectory.filePath(
                 QStringLiteral("updates/transaction-compatible/payload"));
         QVERIFY(QDir().mkpath(payloadDirectory));
@@ -115,8 +117,6 @@ private slots:
             QVERIFY(QFile::copy(source, QDir(payloadDirectory).filePath(name)));
             candidateSizes.insert(name, QFileInfo(QDir(payloadDirectory).filePath(name)).size());
         }
-        HeadlessUpdateManager manager(std::make_shared<SuccessfulCommandRunner>(),
-                                      statePath, temporaryDirectory.path(), false);
         HeadlessUpdateManager::Candidate candidate;
         candidate.version = QStringLiteral("5.0.3.3");
         QString error;
