@@ -278,14 +278,20 @@ print(hashlib.sha256(public.public_bytes(Encoding.Raw, PublicFormat.Raw)).hexdig
 '@
     $previousPublicKey = $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64
     $previousPrivateKey = $env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH
+    $validatorPath = [IO.Path]::GetTempFileName()
     try {
         $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $PublicKeyBase64
         $env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH = $PrivateKey
-        $fingerprint = (& python -c $validator 2>$null | Select-Object -Last 1).Trim()
-        if ($LASTEXITCODE -ne 0 -or $fingerprint -notmatch '^[0-9a-f]{64}$') {
+        [IO.File]::WriteAllText($validatorPath, $validator, [Text.UTF8Encoding]::new($false))
+        $validatorOutput = & python $validatorPath 2>$null
+        $validatorExitCode = $LASTEXITCODE
+        $fingerprint = [string]($validatorOutput | Select-Object -Last 1)
+        if ($validatorExitCode -ne 0 -or $fingerprint.Trim() -notmatch '^[0-9a-f]{64}$') {
             throw "SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 must decode to the matching 113-byte Ed25519 public key"
         }
+        $fingerprint = $fingerprint.Trim()
     } finally {
+        Remove-Item -LiteralPath $validatorPath -Force -ErrorAction SilentlyContinue
         $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $previousPublicKey
         $env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH = $previousPrivateKey
     }
