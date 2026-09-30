@@ -9,10 +9,29 @@
 #include <QCryptographicHash>
 #include <QStringList>
 #include <QCoreApplication>
+#include <QVersionNumber>
 
 #include "headlessUpdateManager.h"
 
 using namespace amnezia::headless;
+
+namespace {
+
+QString currentHeadlessVersion()
+{
+    return QStringLiteral(AMNEZIA_HEADLESS_VERSION);
+}
+
+QString previousHeadlessVersion()
+{
+    const QVersionNumber current = QVersionNumber::fromString(currentHeadlessVersion());
+    auto segments = current.segments();
+    if (segments.isEmpty()) return QString();
+    segments.last() = qMax(0, segments.last() - 1);
+    return QVersionNumber(segments).toString();
+}
+
+}
 
 class SuccessfulCommandRunner final : public CommandRunner
 {
@@ -72,9 +91,9 @@ private slots:
         }
 
         HeadlessUpdateManager::Candidate candidate;
-        candidate.version = QStringLiteral("5.0.3.3");
+        candidate.version = currentHeadlessVersion();
         QString error;
-        QVERIFY(!manager.install(candidate, payloadDirectory, QStringLiteral("5.0.3.2"), &error));
+        QVERIFY(!manager.install(candidate, payloadDirectory, previousHeadlessVersion(), &error));
         QVERIFY(error.startsWith(QStringLiteral("update_runtime_incompatible:")));
         for (const QString &name : { QStringLiteral("amneziad"), QStringLiteral("amnezia-cli") }) {
             QFile installed(QDir(temporaryDirectory.path()).filePath(name));
@@ -118,9 +137,9 @@ private slots:
             candidateSizes.insert(name, QFileInfo(QDir(payloadDirectory).filePath(name)).size());
         }
         HeadlessUpdateManager::Candidate candidate;
-        candidate.version = QStringLiteral("5.0.3.3");
+        candidate.version = currentHeadlessVersion();
         QString error;
-        QVERIFY2(manager.install(candidate, payloadDirectory, QStringLiteral("5.0.3.2"), &error),
+        QVERIFY2(manager.install(candidate, payloadDirectory, previousHeadlessVersion(), &error),
                  qPrintable(error));
         QCOMPARE(manager.status().value(QStringLiteral("state")).toString(),
                  QStringLiteral("restart_pending"));
