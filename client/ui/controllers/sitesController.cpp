@@ -413,7 +413,10 @@ void SitesController::publishManagedSplitTunnelingRules(
         emit managedSplitTunnelingRulesPublishFailed(serverIndex, QStringLiteral("unknown"),
                                                      QStringLiteral("unknown"), reason, false);
         emit errorOccurred(reason);
-        emit managedSplitTunnelingRulesPublishIdle();
+        // This server has no queued publication, but another server may
+        // still be publishing. Never use either idle signal here: the normal
+        // queue drain reports server-aware idle only after active work ends.
+        startNextManagedSplitTunnelingPublish();
         return;
     }
 
@@ -445,7 +448,21 @@ void SitesController::publishManagedSplitTunnelingRules(
              << "expected revision" << job.expectedRevision;
     emit managedSplitTunnelingRulesPublishPending(
             serverIndex, job.expectedRevision >= 0 ? QString::number(job.expectedRevision) : QStringLiteral("unknown"));
-    startNextManagedSplitTunnelingPublish();
+    QTimer *debounceTimer = m_managedPublishDebounceTimers.value(serverId, nullptr);
+    if (!debounceTimer) {
+        debounceTimer = new QTimer(this);
+        debounceTimer->setSingleShot(true);
+        m_managedPublishDebounceTimers.insert(serverId, debounceTimer);
+        connect(debounceTimer, &QTimer::timeout, this, [this, serverId]() {
+            for (auto &pendingJob : m_pendingManagedSplitTunnelingPublishJobs) {
+                if (pendingJob.serverId == serverId) {
+                    pendingJob.ready = true;
+                }
+            }
+            startNextManagedSplitTunnelingPublish();
+        });
+    }
+    debounceTimer->start(400);
 }
 
 void SitesController::startNextManagedSplitTunnelingPublish()
@@ -455,7 +472,17 @@ void SitesController::startNextManagedSplitTunnelingPublish()
     }
 
     while (!m_pendingManagedSplitTunnelingPublishJobs.isEmpty()) {
-        const ManagedSplitTunnelingPublishJob job = m_pendingManagedSplitTunnelingPublishJobs.takeFirst();
+        int readyIndex = -1;
+        for (int i = 0; i < m_pendingManagedSplitTunnelingPublishJobs.size(); ++i) {
+            if (m_pendingManagedSplitTunnelingPublishJobs.at(i).ready) {
+                readyIndex = i;
+                break;
+            }
+        }
+        if (readyIndex < 0) {
+            break;
+        }
+        const ManagedSplitTunnelingPublishJob job = m_pendingManagedSplitTunnelingPublishJobs.takeAt(readyIndex);
         const int serverIndex = m_serversRepository->indexOfServerId(job.serverId);
         if (serverIndex < 0 || job.credentials.userName.isEmpty() || job.credentials.secretData.isEmpty()) {
             const int signalServerIndex = serverIndex >= 0 ? serverIndex : job.serverIndex;
@@ -499,11 +526,26 @@ void SitesController::startNextManagedSplitTunnelingPublish()
                         continue;
                     }
                     if (result.conflict) {
-                        m_pendingManagedSplitTunnelingPublishJobs.removeAt(i);
+                        // Keep the newest local draft for an explicit retry. It
+                        // must never be silently discarded after a remote CAS
+                        // conflict; the next edit restarts the debounce window.
+                        pendingJob.expectedRevision = result.currentRevision;
+                        pendingJob.ready = false;
+                        hasNewerPendingJob = true;
                     } else {
                         pendingJob.rollbackState = job.rollbackState;
                         hasNewerPendingJob = true;
                     }
+                }
+                if (result.conflict && !hasNewerPendingJob && result.currentRevision >= 0) {
+                    // Keep the failed job as an explicit retry draft. The
+                    // remote revision is now known, so the retry remains CAS
+                    // guarded and never falls back to an unconditional write.
+                    auto retryJob = job;
+                    retryJob.expectedRevision = result.currentRevision;
+                    retryJob.ready = false;
+                    m_pendingManagedSplitTunnelingPublishJobs.append(retryJob);
+                    hasNewerPendingJob = true;
                 }
                 if (result.conflict && result.currentRevision >= 0) {
                     // Rebase the next explicit user retry on the revision we
@@ -564,5 +606,32 @@ void SitesController::startNextManagedSplitTunnelingPublish()
         return;
     }
 
+    if (!m_pendingManagedSplitTunnelingPublishJobs.isEmpty()) {
+        return;
+    }
     emit managedSplitTunnelingRulesPublishIdle();
+    for (auto it = m_managedPublishDebounceTimers.constBegin(); it != m_managedPublishDebounceTimers.constEnd(); ++it) {
+        if (!it.value()->isActive()) {
+            emit managedSplitTunnelingRulesPublishServerIdle(it.key());
+        }
+    }
+}
+
+void SitesController::retryManagedSplitTunnelingRules(int serverIndex)
+{
+    if (serverIndex < 0 || serverIndex >= m_serversRepository->serversCount()) {
+        return;
+    }
+    const QString serverId = m_serversRepository->serverIdAt(serverIndex);
+    for (auto &pendingJob : m_pendingManagedSplitTunnelingPublishJobs) {
+        if (pendingJob.serverId == serverId) {
+            pendingJob.expectedRevision = m_lastPublishedRevisionByServerId.value(serverId, pendingJob.expectedRevision);
+            pendingJob.ready = true;
+            emit managedSplitTunnelingRulesPublishPending(
+                    serverIndex, pendingJob.expectedRevision >= 0
+                            ? QString::number(pendingJob.expectedRevision) : QStringLiteral("unknown"));
+            startNextManagedSplitTunnelingPublish();
+            return;
+        }
+    }
 }

@@ -2,6 +2,7 @@
 #define SSHSESSION_H
 
 #include <QJsonObject>
+#include <QList>
 #include <QObject>
 
 #include "core/utils/containerEnum.h"
@@ -38,6 +39,18 @@ public:
     ErrorCode runScriptInSingleShell(
             const ServerCredentials &credentials, QString script,
             const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdOut = nullptr,
+            const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdErr = nullptr,
+            int timeoutMs = libssh::Client::DefaultCommandTimeoutMs);
+
+    struct CompositeUpload {
+        QByteArray data;
+        QString remotePath;
+    };
+    using CompositeUploadBuilder = std::function<ErrorCode(const QString &, QList<CompositeUpload> &)>;
+    ErrorCode runScriptAndUploadFiles(
+            const ServerCredentials &credentials, QString script,
+            const CompositeUploadBuilder &buildUploads,
+            QString *scriptOutput = nullptr,
             const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdErr = nullptr,
             int timeoutMs = libssh::Client::DefaultCommandTimeoutMs);
 

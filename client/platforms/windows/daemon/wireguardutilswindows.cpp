@@ -21,6 +21,11 @@
 
 namespace {
 Logger logger("WireguardUtilsWindows");
+
+bool isSuccessfulRouteDelete(DWORD result) {
+  return result == NO_ERROR || result == ERROR_NOT_FOUND ||
+         result == ERROR_FILE_NOT_FOUND;
+}
 };  // namespace
 
 std::unique_ptr<WireguardUtilsWindows> WireguardUtilsWindows::create(
@@ -345,15 +350,12 @@ bool WireguardUtilsWindows::deleteRoutePrefix(const IPAddress& prefix) {
 
   // Install the route
   DWORD result = DeleteIpForwardEntry2(&entry);
-  if (result == ERROR_NOT_FOUND) {
-    return true;
-  }
-  if (result != NO_ERROR) {
+  if (!isSuccessfulRouteDelete(result)) {
     logger.error() << "Failed to delete route to"
                    << prefix.toString()
                    << "result:" << result;
   }
-  return result == NO_ERROR;
+  return isSuccessfulRouteDelete(result);
 }
 
 bool WireguardUtilsWindows::addExclusionRoute(const IPAddress& prefix) {

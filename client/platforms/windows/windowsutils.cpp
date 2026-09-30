@@ -20,17 +20,20 @@ constexpr const int WINDOWS_11_BUILD =
     22000;  // Build Number of the first release win 11 iso
 
 QString WindowsUtils::getErrorMessage(quint32 code) {
-  LPSTR messageBuffer = nullptr;
-  size_t size = FormatMessageA(
+  LPWSTR messageBuffer = nullptr;
+  const DWORD size = FormatMessageW(
       FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
           FORMAT_MESSAGE_IGNORE_INSERTS,
       nullptr, code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-      (LPSTR)&messageBuffer, 0, nullptr);
+      reinterpret_cast<LPWSTR>(&messageBuffer), 0, nullptr);
 
-  std::string message(messageBuffer, size);
-  QString result(message.c_str());
-  LocalFree(messageBuffer);
-  return result;
+  if (size != 0 && messageBuffer != nullptr) {
+    QString result = QString::fromWCharArray(messageBuffer, size).trimmed();
+    LocalFree(messageBuffer);
+    return result;
+  }
+
+  return QStringLiteral("Windows error %1").arg(code);
 }
 
 QString WindowsUtils::getErrorMessage() {

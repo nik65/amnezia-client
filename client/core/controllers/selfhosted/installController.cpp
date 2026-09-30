@@ -7,6 +7,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -299,6 +300,27 @@ namespace
         return true;
     }
 
+    ErrorCode parseServerRoutingRulesRevisionOutput(const QString &stdOut, qint64 &revision, QString &errorMessage)
+    {
+        const QByteArray payload = stdOut.trimmed().toUtf8();
+        if (payload.isEmpty()) {
+            revision = 0;
+            return ErrorCode::NoError;
+        }
+
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(payload, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            errorMessage = QStringLiteral("Current server routing policy is not valid JSON: %1")
+                                   .arg(parseError.errorString());
+            return ErrorCode::ServerCheckFailed;
+        }
+        if (!serverRoutingRulesRevision(document.object(), revision, errorMessage)) {
+            return ErrorCode::ServerCheckFailed;
+        }
+        return ErrorCode::NoError;
+    }
+
     ErrorCode readServerRoutingRulesRevision(const ServerCredentials &credentials, SshSession &sshSession,
                                              qint64 &revision, QString &errorMessage)
     {
@@ -317,24 +339,7 @@ namespace
             errorMessage = QStringLiteral("Unable to read the current server routing policy revision");
             return errorCode;
         }
-
-        const QByteArray payload = stdOut.trimmed().toUtf8();
-        if (payload.isEmpty()) {
-            revision = 0;
-            return ErrorCode::NoError;
-        }
-
-        QJsonParseError parseError;
-        const QJsonDocument document = QJsonDocument::fromJson(payload, &parseError);
-        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
-            errorMessage = QStringLiteral("Current server routing policy is not valid JSON: %1")
-                                   .arg(parseError.errorString());
-            return ErrorCode::ServerCheckFailed;
-        }
-        if (!serverRoutingRulesRevision(document.object(), revision, errorMessage)) {
-            return ErrorCode::ServerCheckFailed;
-        }
-        return ErrorCode::NoError;
+        return parseServerRoutingRulesRevisionOutput(stdOut, revision, errorMessage);
     }
 
     QJsonObject canonicalServerRoutingRulesContent(const QJsonObject &rules)
@@ -873,60 +878,81 @@ ServerRoutingRulesPublishResult InstallController::publishVersionedServerRouting
     }
 
     SshSession sshSession;
+    QElapsedTimer phaseTimer;
+    phaseTimer.start();
+    auto logPhase = [&phaseTimer](const char *phase) {
+        qInfo().noquote() << "managed-routing phase=" << phase
+                          << "duration_ms=" << phaseTimer.restart();
+    };
     QString revisionError;
-    ErrorCode errorCode = readServerRoutingRulesRevision(credentials, sshSession, result.currentRevision, revisionError);
-    if (errorCode != ErrorCode::NoError) {
-        result.errorCode = errorCode;
-        result.failureReason = revisionError;
-        return result;
-    }
-
-    if (expectedRevision >= 0 && expectedRevision != result.currentRevision) {
-        result.errorCode = ErrorCode::ServerCheckFailed;
-        result.conflict = true;
-        result.failureReason = QStringLiteral("Routing policy revision conflict: expected %1, server has %2")
-                                       .arg(expectedRevision)
-                                       .arg(result.currentRevision);
-        return result;
-    }
-
-    const qint64 compareAndSwapRevision = result.currentRevision;
-    result.expectedRevision = compareAndSwapRevision;
-    if (compareAndSwapRevision >= serverRoutingRulesMaximumJsonRevision) {
-        result.errorCode = ErrorCode::InternalError;
-        result.failureReason = QStringLiteral("Routing policy revision counter exceeds the JSON safe integer range");
-        return result;
-    }
-
-    const qint64 publishedRevision = compareAndSwapRevision + 1;
-    const QJsonObject versionedRules = versionedServerRoutingRules(rules, publishedRevision, result.contentSha256);
-    const QByteArray sourceData = serverRoutingRulesSourceData(versionedRules);
-    const QByteArray resolverScript = serverRoutingRulesResolverScript(versionedRules);
-    const QString sourceSha256 = QString::fromLatin1(
-            QCryptographicHash::hash(sourceData, QCryptographicHash::Sha256).toHex());
-    const QString scriptSha256 = QString::fromLatin1(
-            QCryptographicHash::hash(resolverScript, QCryptographicHash::Sha256).toHex());
+    qint64 compareAndSwapRevision = -1;
+    qint64 publishedRevision = -1;
+    QJsonObject versionedRules;
+    QByteArray sourceData;
+    QByteArray resolverScript;
+    QString sourceSha256;
+    QString scriptSha256;
     const QString transactionId = Utils::getRandomString(16);
     const QString candidateDirectory = QStringLiteral("%1/.candidate-%2")
             .arg(QString::fromLatin1(protocols::serverRoutingRules::hostDirectory), transactionId);
-
     const QString sourceTmpFileName = QStringLiteral("/tmp/%1.txt").arg(Utils::getRandomString(16));
-    errorCode = sshSession.uploadFileToHost(credentials, sourceData, sourceTmpFileName);
-    if (errorCode != ErrorCode::NoError) {
-        result.errorCode = errorCode;
-        result.failureReason = QStringLiteral("Unable to upload managed routing policy source data");
-        return result;
-    }
-
     const QString scriptTmpFileName = QStringLiteral("/tmp/%1.sh").arg(Utils::getRandomString(16));
-    errorCode = sshSession.uploadFileToHost(credentials, resolverScript, scriptTmpFileName);
+    const QString rulesPath = QStringLiteral("%1/%2")
+            .arg(QString::fromLatin1(protocols::serverRoutingRules::hostDirectory),
+                 QString::fromLatin1(protocols::serverRoutingRules::fileName));
+    const QString revisionScript = QStringLiteral("sudo test -s '%1' && sudo cat '%1' || true").arg(rulesPath);
+    ErrorCode errorCode = sshSession.runScriptAndUploadFiles(
+            credentials, revisionScript,
+            [&](const QString &stdOut, QList<SshSession::CompositeUpload> &uploads) {
+                const ErrorCode parseError = parseServerRoutingRulesRevisionOutput(
+                        stdOut, result.currentRevision, revisionError);
+                if (parseError != ErrorCode::NoError) {
+                    return parseError;
+                }
+                if (expectedRevision >= 0 && expectedRevision != result.currentRevision) {
+                    result.conflict = true;
+                    result.failureReason = QStringLiteral("Routing policy revision conflict: expected %1, server has %2")
+                                                   .arg(expectedRevision)
+                                                   .arg(result.currentRevision);
+                    return ErrorCode::ServerCheckFailed;
+                }
+                compareAndSwapRevision = result.currentRevision;
+                result.expectedRevision = compareAndSwapRevision;
+                if (compareAndSwapRevision >= serverRoutingRulesMaximumJsonRevision) {
+                    result.failureReason = QStringLiteral(
+                            "Routing policy revision counter exceeds the JSON safe integer range");
+                    return ErrorCode::InternalError;
+                }
+
+                publishedRevision = compareAndSwapRevision + 1;
+                versionedRules = versionedServerRoutingRules(rules, publishedRevision, result.contentSha256);
+                sourceData = serverRoutingRulesSourceData(versionedRules);
+                resolverScript = serverRoutingRulesResolverScript(versionedRules);
+                constexpr qsizetype maxUploadBytes = 2 * 1024 * 1024;
+                if (sourceData.isEmpty() || resolverScript.isEmpty()
+                    || sourceData.size() > maxUploadBytes || resolverScript.size() > maxUploadBytes) {
+                    result.failureReason = QStringLiteral("Managed routing publication payload exceeds its size limit");
+                    return ErrorCode::ServerCheckFailed;
+                }
+                sourceSha256 = QString::fromLatin1(
+                        QCryptographicHash::hash(sourceData, QCryptographicHash::Sha256).toHex());
+                scriptSha256 = QString::fromLatin1(
+                        QCryptographicHash::hash(resolverScript, QCryptographicHash::Sha256).toHex());
+                uploads.append({sourceData, sourceTmpFileName});
+                uploads.append({resolverScript, scriptTmpFileName});
+                return ErrorCode::NoError;
+            });
     if (errorCode != ErrorCode::NoError) {
-        sshSession.runScript(credentials,
-                             QStringLiteral("sudo rm -f %1").arg(shellSingleQuoted(sourceTmpFileName)));
+        logPhase("revision_read_and_upload");
         result.errorCode = errorCode;
-        result.failureReason = QStringLiteral("Unable to upload managed routing policy resolver");
+        if (result.failureReason.isEmpty()) {
+            result.failureReason = revisionError.isEmpty()
+                    ? QStringLiteral("Unable to read or upload managed routing policy")
+                    : revisionError;
+        }
         return result;
     }
+    logPhase("revision_read_and_upload");
 
     const QString tunnelInterface = serverRoutingRulesTunnelInterface(container);
     const bool publishTunnelEndpoint = !tunnelInterface.isEmpty();
@@ -986,6 +1012,7 @@ ServerRoutingRulesPublishResult InstallController::publishVersionedServerRouting
                 .arg(shellSingleQuoted(candidateDirectory), shellSingleQuoted(sourceTmpFileName),
                      shellSingleQuoted(scriptTmpFileName));
         sshSession.runScript(credentials, cleanupScript);
+        logPhase("cleanup");
     };
 
     QString stageScript = QStringLiteral(R"STAGE_SH(
@@ -1088,6 +1115,7 @@ fi
 
     QString stageOutput;
     errorCode = runPublishingScript(stageScript, stageOutput);
+    logPhase("stage");
 
     const QRegularExpression conflictExpression(
             QStringLiteral("%1:([0-9]+)")
@@ -1341,6 +1369,7 @@ fi
     // server returns a rollback receipt, its recovery state is unknown.
     result.remoteRollbackStatus = QStringLiteral("not_reported");
     errorCode = runPublishingScript(commitScript, publishOutput);
+    logPhase("commit");
 
     conflictMatch = conflictExpression.match(publishOutput);
     if (conflictMatch.hasMatch()) {

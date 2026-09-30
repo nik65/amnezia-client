@@ -1,6 +1,10 @@
 #include "sshSession.h"
 
 #include <QTemporaryFile>
+#include <QElapsedTimer>
+#include <QRegularExpression>
+
+#include <utility>
 
 #include "core/utils/containerEnum.h"
 #include "core/utils/containers/containerUtils.h"
@@ -87,6 +91,77 @@ ErrorCode SshSession::runScriptInSingleShell(
     if (error == ErrorCode::NoError) {
         qDebug() << "SshSession::Run script in one remote shell";
         error = m_sshClient.executeScript(script, cbReadStdOut, cbReadStdErr, timeoutMs);
+    }
+    return m_sshClient.finishOperation(error);
+}
+
+ErrorCode SshSession::runScriptAndUploadFiles(
+        const ServerCredentials &credentials, QString script,
+        const CompositeUploadBuilder &buildUploads, QString *scriptOutput,
+        const std::function<ErrorCode(const QString &, libssh::Client &)> &cbReadStdErr,
+        int timeoutMs)
+{
+    ErrorCode error = m_sshClient.beginOperation(timeoutMs);
+    if (error != ErrorCode::NoError) {
+        return error;
+    }
+
+    error = m_sshClient.connectToHost(credentials);
+    script.replace("\r", "");
+    QString output;
+    QStringList uploadedPaths;
+    QElapsedTimer phaseTimer;
+    phaseTimer.start();
+    auto cbReadStdOut = [&output](const QString &data, libssh::Client &) {
+        output.append(data);
+        return ErrorCode::NoError;
+    };
+    if (error == ErrorCode::NoError) {
+        error = m_sshClient.executeScript(script, cbReadStdOut, cbReadStdErr, timeoutMs);
+        qInfo() << "managed-routing phase=revision_read duration_ms=" << phaseTimer.restart();
+    }
+    if (error == ErrorCode::NoError) {
+        QList<CompositeUpload> uploads;
+        error = buildUploads(output, uploads);
+        for (const CompositeUpload &upload : uploads) {
+            if (error != ErrorCode::NoError) {
+                break;
+            }
+            if (upload.data.isEmpty()
+                || !QRegularExpression(QStringLiteral("^/tmp/[A-Za-z0-9._-]+$")).match(upload.remotePath).hasMatch()) {
+                error = ErrorCode::InternalError;
+                break;
+            }
+            QTemporaryFile localFile;
+            if (!localFile.open() || localFile.write(upload.data) != upload.data.size() || !localFile.flush()) {
+                error = ErrorCode::ReadError;
+                break;
+            }
+            localFile.close();
+            // Register the validated target before SCP starts. The remote
+            // atomic rename can succeed even when the client loses the
+            // receipt/close response; cleanup must cover that case too.
+            const QString phase = uploadedPaths.isEmpty()
+                    ? QStringLiteral("source_upload") : QStringLiteral("script_upload");
+            uploadedPaths.append(upload.remotePath);
+            phaseTimer.restart();
+            error = m_sshClient.scpFileCopy(
+                    libssh::ScpOverwriteMode::ScpOverwriteExisting,
+                    localFile.fileName(), upload.remotePath, "managed_routing_upload", timeoutMs);
+            qInfo() << "managed-routing phase=" << phase << "duration_ms=" << phaseTimer.restart();
+        }
+    }
+    if (error != ErrorCode::NoError && !uploadedPaths.isEmpty()) {
+        QString cleanup = QStringLiteral("sudo rm -f");
+        for (const QString &path : std::as_const(uploadedPaths)) {
+            QString quotedPath = path;
+            quotedPath.replace(u'\'', QStringLiteral("'\\''"));
+            cleanup += QStringLiteral(" '") + quotedPath + QStringLiteral("'");
+        }
+        m_sshClient.executeCommand(cleanup, nullptr, nullptr, timeoutMs);
+    }
+    if (scriptOutput) {
+        *scriptOutput = output;
     }
     return m_sshClient.finishOperation(error);
 }

@@ -20,6 +20,7 @@ PageType {
 
     property bool pageEnabled: true
     property bool managedPublishPending: false
+    property bool managedPublishConflict: false
 
     QtObject {
         id: routeMode
@@ -27,7 +28,7 @@ PageType {
     }
 
     function addManagedSite() {
-        if (managedPublishPending || searchField.textField.text.trim() === "") {
+        if (searchField.textField.text.trim() === "") {
             return
         }
 
@@ -53,6 +54,7 @@ PageType {
         function onManagedSplitTunnelingRulesPublishPending(serverIndex, expectedRevision) {
             if (serverIndex === ServersUiController.getProcessedServerIndex()) {
                 root.managedPublishPending = true
+                root.managedPublishConflict = false
                 PageController.showBusyIndicator(true)
             }
         }
@@ -66,11 +68,28 @@ PageType {
 
         function onManagedSplitTunnelingRulesPublishFailed(serverIndex, expectedRevision,
                                                             currentRevision, reason, conflict) {
+            if (serverIndex === ServersUiController.getProcessedServerIndex()) {
+                // Retry is safe only when the backend returned the current
+                // CAS revision. An unknown revision must not expose a button
+                // that could imply an unconditional overwrite.
+                root.managedPublishConflict = conflict && currentRevision !== "unknown"
+                if (conflict) {
+                    root.managedPublishPending = false
+                    PageController.showBusyIndicator(false)
+                }
+            }
         }
 
         function onManagedSplitTunnelingRulesPublishIdle() {
             root.managedPublishPending = false
             PageController.showBusyIndicator(false)
+        }
+
+        function onManagedSplitTunnelingRulesPublishServerIdle(serverId) {
+            if (serverId === ServersUiController.processedServerId) {
+                root.managedPublishPending = false
+                PageController.showBusyIndicator(false)
+            }
         }
 
         function onManagedSplitTunnelingForceChanged() {
@@ -116,11 +135,28 @@ PageType {
             text: qsTr("Force split tunneling")
             descriptionText: qsTr("For clients with split tunneling disabled, enable bypass mode and apply these server bypass rules. Clients using the opposite split tunneling mode keep their own settings.")
 
-            enabled: root.pageEnabled && !root.managedPublishPending
+            enabled: root.pageEnabled
             checked: SitesController.isManagedSplitTunnelingForceEnabled()
 
             onToggled: function() {
                 SitesController.setManagedSplitTunnelingForceEnabled(checked)
+            }
+        }
+
+        BasicButtonType {
+            visible: root.managedPublishConflict
+            Layout.fillWidth: true
+            Layout.leftMargin: 16
+            Layout.rightMargin: 16
+            text: qsTr("Retry routing publication")
+            defaultColor: AmneziaStyle.color.transparent
+            hoveredColor: AmneziaStyle.color.translucentWhite
+            pressedColor: AmneziaStyle.color.sheerWhite
+            textColor: AmneziaStyle.color.paleGray
+            borderWidth: 1
+            clickedFunc: function() {
+                root.managedPublishConflict = false
+                SitesController.retryManagedSplitTunnelingRules(ServersUiController.getProcessedServerIndex())
             }
         }
     }
@@ -138,7 +174,7 @@ PageType {
         anchors.bottomMargin: addSiteButton.implicitHeight + 48 + (searchField.textField.activeFocus ? 0 : PageController.imeHeight)
 
         width: parent.width
-        enabled: root.pageEnabled && !root.managedPublishPending
+        enabled: root.pageEnabled
         clip: true
 
         model: SortFilterProxyModel {
@@ -171,7 +207,7 @@ PageType {
                 descriptionText: ip
                 rightImageSource: root.pageEnabled ? "qrc:/images/controls/trash.svg" : ""
                 rightImageColor: AmneziaStyle.color.paleGray
-                enabled: root.pageEnabled && !root.managedPublishPending
+                enabled: root.pageEnabled
 
                 clickedFunction: function() {
                     var yesButtonFunction = function() {
@@ -204,7 +240,7 @@ PageType {
         RowLayout {
             id: addSiteButton
 
-            enabled: root.pageEnabled && !root.managedPublishPending
+            enabled: root.pageEnabled
             anchors.bottom: parent.bottom
             anchors.left: parent.left
             anchors.right: parent.right

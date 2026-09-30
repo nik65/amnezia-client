@@ -31,6 +31,7 @@ public:
 
     amnezia::ErrorCode post(const QString &endpoint, const QJsonObject apiPayload, QByteArray &responseBody);
     QFuture<QPair<amnezia::ErrorCode, QByteArray>> postAsync(const QString &endpoint, const QJsonObject apiPayload);
+    static bool hasConfiguredPublicKey(bool isDevEnvironment);
 
 private:
     struct EncryptedRequestData

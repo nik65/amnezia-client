@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QJsonArray>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSet>
 #include <QTemporaryDir>
@@ -37,6 +38,18 @@ constexpr int LongRunningStartupGraceMs = 500;
 constexpr qsizetype MaxCapturedProbeStdout = 1024 * 1024;
 constexpr qsizetype MaxCapturedProbeStderr = 4096;
 constexpr qsizetype ProbeReadChunkSize = 64 * 1024;
+
+void configureChildEnvironment(QProcess &process)
+{
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    // The daemon owns systemd watchdog notifications.  Child helpers must not
+    // inherit NOTIFY_SOCKET/WATCHDOG_* and accidentally report their exit or
+    // watchdog state as if they were the service process.
+    environment.remove(QStringLiteral("NOTIFY_SOCKET"));
+    environment.remove(QStringLiteral("WATCHDOG_PID"));
+    environment.remove(QStringLiteral("WATCHDOG_USEC"));
+    process.setProcessEnvironment(environment);
+}
 
 struct WireGuardConfigDetails
 {
@@ -270,6 +283,7 @@ QString RealCommandRunner::resolveExecutable(const QStringList &candidates) cons
 CommandResult RealCommandRunner::run(const QString &program, const QStringList &arguments)
 {
     QProcess process;
+    configureChildEnvironment(process);
     process.setProgram(program);
     process.setArguments(arguments);
     // Some Linux VPN adapters daemonize a userspace tunnel process.  Do not
@@ -349,6 +363,7 @@ CommandResult RealCommandRunner::runBatch(const QString &program,
     batchFile.close();
 
     QProcess process;
+    configureChildEnvironment(process);
     process.setProgram(program);
     process.setArguments({ QStringLiteral("-batch"), batchFile.fileName() });
     process.setStandardOutputFile(QProcess::nullDevice());
@@ -406,6 +421,7 @@ CommandResult RealCommandRunner::runCaptured(const QString &program,
                                              const QStringList &arguments)
 {
     QProcess process;
+    configureChildEnvironment(process);
     process.setProgram(program);
     process.setArguments(arguments);
 
@@ -488,7 +504,12 @@ CommandResult RealCommandRunner::runCaptured(const QString &program,
 CommandResult RealCommandRunner::startDetached(const QString &program,
                                                const QStringList &arguments)
 {
-    if (!QProcess::startDetached(program, arguments)) {
+    QProcess process;
+    configureChildEnvironment(process);
+    process.setProgram(program);
+    process.setArguments(arguments);
+    qint64 pid = 0;
+    if (!process.startDetached(&pid)) {
         return { false, -1, QStringLiteral("unable to start detached helper") };
     }
     return { true, 0, {} };
@@ -505,6 +526,7 @@ CommandResult RealCommandRunner::start(const QString &id, const QString &program
     }
 
     auto *process = new QProcess;
+    configureChildEnvironment(*process);
     process->setProgram(program);
     process->setArguments(arguments);
     process->setStandardOutputFile(QProcess::nullDevice());

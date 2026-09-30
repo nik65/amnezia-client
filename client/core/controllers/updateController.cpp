@@ -2671,7 +2671,12 @@ bool UpdateController::checkForUpdates()
     if (isSelfHostedUpdateChannelConfigured()) {
         fetchSelfHostedManifest();
     } else {
-        fetchGatewayUrl();
+        if (!GatewayController::hasConfiguredPublicKey(m_appSettingsRepository->isDevGatewayEnv())) {
+            logger.info() << "Gateway update channel is unavailable because its selected RSA key is not configured";
+            finishUpdateCheck();
+        } else {
+            fetchGatewayUrl();
+        }
     }
     return true;
 }
@@ -2920,7 +2925,23 @@ bool UpdateController::isNewVersionAvailable() const
 
 bool UpdateController::isSelfHostedUpdateChannelConfigured() const
 {
-    return !QByteArray(SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64).trimmed().isEmpty();
+    QByteArray publicKeyPem;
+    if (!decodeStrictBase64(QByteArray(SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64),
+                            QByteArray::Base64Encoding, publicKeyPem)
+        || publicKeyPem.isEmpty()) {
+        return false;
+    }
+    BIO *bio = BIO_new_mem_buf(publicKeyPem.constData(), publicKeyPem.size());
+    if (!bio) {
+        return false;
+    }
+    EVP_PKEY *publicKey = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
+    BIO_free(bio);
+    const bool validKey = publicKey && EVP_PKEY_base_id(publicKey) == EVP_PKEY_ED25519;
+    if (publicKey) {
+        EVP_PKEY_free(publicKey);
+    }
+    return validKey && !selfHostedManifestUrls().isEmpty();
 }
 
 bool UpdateController::isNewVersionAvailable(const QString &version) const

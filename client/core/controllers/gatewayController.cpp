@@ -114,6 +114,21 @@ GatewayController::GatewayController(const QString &gatewayEndpoint, const bool 
 {
 }
 
+bool GatewayController::hasConfiguredPublicKey(bool isDevEnvironment)
+{
+    const QByteArray key = isDevEnvironment ? DEV_AGW_PUBLIC_KEY : PROD_AGW_PUBLIC_KEY;
+    if (key.trimmed().isEmpty()) {
+        return false;
+    }
+    EVP_PKEY *publicKey = CryptoUtils::loadPublicKeyFromPem(key);
+    if (!publicKey) {
+        return false;
+    }
+    const bool isRsaKey = EVP_PKEY_base_id(publicKey) == EVP_PKEY_RSA;
+    EVP_PKEY_free(publicKey);
+    return isRsaKey;
+}
+
 GatewayController::EncryptedRequestData GatewayController::prepareRequest(const QString &endpoint, const QJsonObject &apiPayload)
 {
     EncryptedRequestData encRequestData;

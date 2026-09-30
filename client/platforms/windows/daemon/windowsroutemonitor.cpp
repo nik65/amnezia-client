@@ -12,6 +12,11 @@
 namespace {
 Logger logger("WindowsRouteMonitor");
 
+bool isSuccessfulRouteDelete(DWORD result) {
+  return result == NO_ERROR || result == ERROR_NOT_FOUND ||
+         result == ERROR_FILE_NOT_FOUND;
+}
+
 bool isZeroIpv6Address(const IN6_ADDR& address) {
   const IN6_ADDR zero = {};
   return memcmp(&address, &zero, sizeof(IN6_ADDR)) == 0;
@@ -257,7 +262,7 @@ void WindowsRouteMonitor::updateExclusionRoute(MIB_IPFORWARD_ROW2* data,
   // Delete the previous routing table entry, if any.
   if (data->InterfaceLuid.Value != 0) {
     DWORD result = DeleteIpForwardEntry2(data);
-    if ((result != NO_ERROR) && (result != ERROR_NOT_FOUND)) {
+    if (!isSuccessfulRouteDelete(result)) {
       logger.error() << "Failed to delete route:" << result;
     }
   }
@@ -439,7 +444,7 @@ void WindowsRouteMonitor::updateCapturedRoutes(int family, void* ptable) {
 
     // Otherwise, this route is no longer in use.
     DWORD result = DeleteIpForwardEntry2(data);
-    if ((result != NO_ERROR) && (result != ERROR_NOT_FOUND)) {
+    if (!isSuccessfulRouteDelete(result)) {
       logger.error() << "Failed to delete route:" << result;
     }
     delete data;
@@ -529,7 +534,7 @@ bool WindowsRouteMonitor::deleteExclusionRoute(const IPAddress& prefix) {
   }
 
   DWORD result = DeleteIpForwardEntry2(data);
-  if ((result != ERROR_NOT_FOUND) && (result != NO_ERROR)) {
+  if (!isSuccessfulRouteDelete(result)) {
     logger.error() << "Failed to delete route to"
                    << prefix.toString()
                    << "result:" << result;
@@ -547,7 +552,7 @@ void WindowsRouteMonitor::flushRouteTable(
   for (auto i = table.begin(); i != table.end(); i++) {
     MIB_IPFORWARD_ROW2* data = i.value();
     DWORD result = DeleteIpForwardEntry2(data);
-    if ((result != ERROR_NOT_FOUND) && (result != NO_ERROR)) {
+    if (!isSuccessfulRouteDelete(result)) {
       logger.error() << "Failed to delete route to"
                      << i.key().toString()
                      << "result:" << result;

@@ -215,6 +215,7 @@ function Get-ProjectVersion {
     return $Matches[1]
 }
 
+
 function Get-ProjectAndroidVersionCode {
     $cmakeLists = Get-Content -LiteralPath (Join-Path $RepoRoot "CMakeLists.txt") -Raw
     if ($cmakeLists -notmatch "set\(APP_ANDROID_VERSION_CODE\s+([0-9]+)\)") {
@@ -251,6 +252,53 @@ function Assert-ReleaseInputs {
     }
     Assert-SshHostKeyPinPair
     Assert-SafeFleetPolicy
+    Assert-SelfHostedUpdateKey
+}
+
+function Assert-SelfHostedUpdateKey {
+    $validator = @'
+import base64, hashlib, os
+from pathlib import Path
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_private_key, load_pem_public_key
+
+encoded = os.environ.get("SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64", "")
+private_path = os.environ.get("SELFHOSTED_UPDATE_PRIVATE_KEY_PATH", "")
+try:
+    pem = base64.b64decode(encoded, validate=True)
+    public = load_pem_public_key(pem)
+    private = load_pem_private_key(Path(private_path).read_bytes(), password=None)
+except Exception as error:
+    raise SystemExit("self-hosted update key material cannot be parsed") from error
+if len(pem) != 113 or not isinstance(public, Ed25519PublicKey) or not isinstance(private, Ed25519PrivateKey):
+    raise SystemExit("self-hosted update keys must be Ed25519 and the public PEM must be 113 bytes")
+if public.public_bytes(Encoding.Raw, PublicFormat.Raw) != private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw):
+    raise SystemExit("self-hosted update public and private keys do not match")
+print(hashlib.sha256(public.public_bytes(Encoding.Raw, PublicFormat.Raw)).hexdigest())
+'@
+    $previousPublicKey = $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64
+    $previousPrivateKey = $env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH
+    try {
+        $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $PublicKeyBase64
+        $env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH = $PrivateKey
+        $fingerprint = (& python -c $validator 2>$null | Select-Object -Last 1).Trim()
+        if ($LASTEXITCODE -ne 0 -or $fingerprint -notmatch '^[0-9a-f]{64}$') {
+            throw "SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 must decode to the matching 113-byte Ed25519 public key"
+        }
+    } finally {
+        $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $previousPublicKey
+        $env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH = $previousPrivateKey
+    }
+    $receiptPath = Join-Path $RepoRoot "dist\diagnostics\2026-09-30\local\SELFHOSTED_KEY_PREFLIGHT.md"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $receiptPath) | Out-Null
+    @(
+        "# Self-hosted update key preflight",
+        "",
+        "- Channel: selfhosted",
+        "- Public key SHA-256 (raw Ed25519): $fingerprint",
+        "- Public/private key match: true",
+        "- Key material is intentionally omitted."
+    ) | Set-Content -LiteralPath $receiptPath -Encoding utf8
 }
 
 function Assert-SafeFleetPolicy {

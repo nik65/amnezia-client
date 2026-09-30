@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QHash>
 #include <QJsonObject>
+#include <QTimer>
 #include <QVector>
 
 #include "core/controllers/selfhosted/installController.h"
@@ -35,6 +36,7 @@ public slots:
     void removeManagedSites(int routeMode);
     void importManagedSites(int routeMode, const QString &fileName, bool replaceExisting);
     void exportManagedSites(int routeMode, const QString &fileName);
+    void retryManagedSplitTunnelingRules(int serverIndex);
     void reloadManagedSites();
     void reloadDefaultManagedSites();
 
@@ -50,6 +52,7 @@ signals:
                                                  const QString &currentRevision, const QString &reason,
                                                  bool conflict);
     void managedSplitTunnelingRulesPublishIdle();
+    void managedSplitTunnelingRulesPublishServerIdle(const QString &serverId);
     void managedSplitTunnelingRulesSigningBlocked(int serverIndex, const QString &blocker);
     void managedSplitTunnelingRulesPublishRolledBack(int serverIndex);
     void managedSplitTunnelingRulesLocalRollbackFinished(int serverIndex, bool applied,
@@ -89,9 +92,11 @@ private:
         qint64 expectedRevision = -1;
         ManagedSplitTunnelingLocalState rollbackState;
         QString successMessage;
+        bool ready = false;
     };
     QVector<ManagedSplitTunnelingPublishJob> m_pendingManagedSplitTunnelingPublishJobs;
     QHash<QString, qint64> m_lastPublishedRevisionByServerId;
+    QHash<QString, QTimer *> m_managedPublishDebounceTimers;
     bool m_isManagedSplitTunnelingPublishInProgress = false;
 };
 
