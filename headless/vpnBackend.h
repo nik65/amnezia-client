@@ -161,7 +161,7 @@ private:
     static bool isLongRunningProtocol(const QString &protocol);
     static QStringList argumentsForProtocol(const QString &protocol,
                                             const QString &configPath);
-    bool prepareFullTunnelConfig(const Profile &profile,
+    bool prepareManagedNativeConfig(const Profile &profile,
                                  const QString &protocol,
                                  QString &configPath,
                                  QString &temporaryDirectory,

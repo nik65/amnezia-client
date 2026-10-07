@@ -44,6 +44,14 @@ public:
     CommandResult run(const QString &program, const QStringList &arguments) override
     {
         calls.append({ QStringLiteral("run"), {}, program, arguments });
+        if ((program == QStringLiteral("wg-quick") || program == QStringLiteral("awg-quick"))
+            && arguments.value(0) == QStringLiteral("up")) {
+            QFile nativeConfig(arguments.value(1));
+            if (nativeConfig.open(QIODevice::ReadOnly)) {
+                nativeQuickConfiguration = nativeConfig.readAll();
+                nativeQuickWouldAddRoutes = !nativeQuickConfiguration.contains("Table = off");
+            }
+        }
         return runResult;
     }
 
@@ -99,6 +107,8 @@ public:
     bool handshakeRequested = false;
     QString handshakeOutput;
     QString configOutput;
+    QByteArray nativeQuickConfiguration;
+    bool nativeQuickWouldAddRoutes = false;
     bool sessionAlive = true;
     CommandResult runResult { true, {}, {} };
     CommandResult startResult { true, {}, {} };
@@ -456,6 +466,86 @@ private slots:
         QCOMPARE(result.code, QStringLiteral("config_not_allowed"));
         QVERIFY(runner->calls.isEmpty());
         QVERIFY(backend.activeProfile().isEmpty());
+    }
+
+    void managedSplitNativeStagesTableOnly_data()
+    {
+        QTest::addColumn<QString>("protocol");
+        QTest::addColumn<bool>("policyOnly");
+        QTest::newRow("wireguard-forward-routes") << QStringLiteral("wireguard") << false;
+        QTest::newRow("awg-forward-routes") << QStringLiteral("amneziawg") << false;
+        QTest::newRow("awg-policy-only") << QStringLiteral("amneziawg") << true;
+    }
+
+    void managedSplitNativeStagesTableOnly()
+    {
+        QFETCH(QString, protocol);
+        QFETCH(bool, policyOnly);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString sourcePath = directory.filePath(QStringLiteral("source.conf"));
+        QByteArray original("[Interface]\n# preserve native settings\nPrivateKey = test-private\n"
+                                  "Address = 10.8.1.2/32\nMTU = 1420\n"
+                                  "[Peer]\nPublicKey = peer\nPresharedKey = test-psk\n"
+                                  "Endpoint = 192.0.2.10:51820\nAllowedIPs = 10.8.1.0/24, 10.9.0.0/16\n"
+                                  "PersistentKeepalive = 15\n");
+        if (protocol == QStringLiteral("amneziawg"))
+            original.replace("[Peer]\n", "Jc = 4\nJmin = 40\nJmax = 70\nS1 = 16\nS2 = 16\nS3 = 16\nS4 = 16\n"
+                                        "HeaderProtectionKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n[Peer]\n");
+        QFile source(sourcePath);
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        QCOMPARE(source.write(original), original.size());
+        source.close();
+        QVERIFY(source.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        auto runner = std::make_shared<FakeCommandRunner>();
+        const QString quick = protocol == QStringLiteral("wireguard") ? QStringLiteral("wg-quick") : QStringLiteral("awg-quick");
+        runner->availablePrograms = { quick, QStringLiteral("wg"), QStringLiteral("awg"), QStringLiteral("ip") };
+        VpnBackend backend(runner);
+        Profile work = profile(QStringLiteral("managed"), protocol, sourcePath);
+        work.interfaceName = QStringLiteral("managed0");
+        if (policyOnly) work.serverRulesUrl = QStringLiteral("https://192.0.2.1/rules.json");
+        else work.forwardRoutes = { QStringLiteral("10.8.1.0/24") };
+        QVERIFY2(backend.connect(work).ok, qPrintable(backend.lastError().message));
+        QVERIFY(!runner->nativeQuickWouldAddRoutes);
+        QByteArray staged = runner->nativeQuickConfiguration;
+        QCOMPARE(staged.count("Table = off\n"), 1);
+        staged.replace("Table = off\n", "");
+        QCOMPARE(staged, original);
+        const QString stagedPath = runner->calls.constFirst().arguments.at(1);
+        QVERIFY(stagedPath != sourcePath);
+        QVERIFY(stagedPath.endsWith(QStringLiteral("/managed0.conf")));
+        const auto privateBits = QFileInfo(stagedPath).permissions();
+        QVERIFY(!(privateBits & (QFileDevice::ReadGroup | QFileDevice::WriteGroup
+                                | QFileDevice::ReadOther | QFileDevice::WriteOther)));
+        QVERIFY(source.open(QIODevice::ReadOnly));
+        QCOMPARE(source.readAll(), original);
+        source.close();
+        QVERIFY2(backend.disconnect().ok, qPrintable(backend.lastError().message));
+        QVERIFY(!QFileInfo(stagedPath).exists());
+        QVERIFY(source.open(QIODevice::ReadOnly));
+        QCOMPARE(source.readAll(), original);
+    }
+
+    void unmanagedNativeKeepsAutomaticTable()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString sourcePath = directory.filePath(QStringLiteral("legacy.conf"));
+        QFile source(sourcePath);
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        const QByteArray original("[Interface]\n[Peer]\nPublicKey = peer\nAllowedIPs = 10.8.1.0/24\n");
+        QCOMPARE(source.write(original), original.size());
+        source.close();
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->availablePrograms = { QStringLiteral("awg-quick"), QStringLiteral("awg"), QStringLiteral("ip") };
+        VpnBackend backend(runner);
+        QVERIFY2(backend.connect(profile(QStringLiteral("unmanaged"), QStringLiteral("amneziawg"), sourcePath)).ok,
+                 qPrintable(backend.lastError().message));
+        QCOMPARE(runner->calls.constFirst().arguments.at(1), sourcePath);
+        QCOMPARE(runner->nativeQuickConfiguration, original);
+        QVERIFY(runner->nativeQuickWouldAddRoutes);
+        QVERIFY(backend.disconnect().ok);
+        QVERIFY(QFileInfo(sourcePath).exists());
     }
 
     void allExceptStagesNativeWireGuardWithDefaultAllowedIps()

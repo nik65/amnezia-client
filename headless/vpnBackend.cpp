@@ -629,7 +629,7 @@ BackendResult VpnBackend::connect(const Profile &profile)
         QString temporaryDirectory;
         QString preparationError;
         if (profile.routingMode == QStringLiteral("all-except")
-            && !prepareFullTunnelConfig(profile, protocol, effectivePath, temporaryDirectory, &preparationError))
+            && !prepareManagedNativeConfig(profile, protocol, effectivePath, temporaryDirectory, &preparationError))
             return failure(QStringLiteral("config_invalid"), preparationError);
         m_embedded = std::make_unique<EmbeddedAwgBackend>(m_runner);
         const QString interfaceName = profile.interfaceName.isEmpty() ? QStringLiteral("amn0") : profile.interfaceName;
@@ -655,9 +655,11 @@ BackendResult VpnBackend::connect(const Profile &profile)
     QString effectiveConfigPath = profile.configPath;
     QString temporaryConfigDirectory;
     QString preparationError;
-    if (profile.routingMode == QStringLiteral("all-except")
+    const bool managedNativeRoutes = profile.routingMode == QStringLiteral("all-except")
+            || !profile.forwardRoutes.isEmpty() || !profile.serverRulesUrl.isEmpty();
+    if (managedNativeRoutes
         && (protocol == QStringLiteral("wireguard") || protocol == QStringLiteral("amneziawg"))
-        && !prepareFullTunnelConfig(profile, protocol, effectiveConfigPath,
+        && !prepareManagedNativeConfig(profile, protocol, effectiveConfigPath,
                                     temporaryConfigDirectory, &preparationError)) {
         return failure(QStringLiteral("config_invalid"), preparationError);
     }
@@ -832,7 +834,7 @@ BackendResult VpnBackend::disconnect()
     return { true, {}, {} };
 }
 
-bool VpnBackend::prepareFullTunnelConfig(const Profile &profile,
+bool VpnBackend::prepareManagedNativeConfig(const Profile &profile,
                                          const QString &protocol,
                                          QString &configPath,
                                          QString &temporaryDirectory,
@@ -849,20 +851,24 @@ bool VpnBackend::prepareFullTunnelConfig(const Profile &profile,
     }
     const QString content = QString::fromUtf8(source.readAll());
     const WireGuardConfigDetails details = parseWireGuardConfig(content);
-    if (!details.hasInterface || details.peerCount != 1 || details.allowedIpsCount != 1
-        || details.allowedIpsLine < 0) {
+    const bool fullTunnel = profile.routingMode == QStringLiteral("all-except");
+    if (!details.hasInterface || (fullTunnel && (details.peerCount != 1
+        || details.allowedIpsCount != 1 || details.allowedIpsLine < 0))) {
         if (error) *error = QStringLiteral(
-                "all-except requires exactly one peer with one AllowedIPs entry");
+                "managed native configuration requires an Interface; all-except requires exactly one peer with one AllowedIPs entry");
         return false;
     }
 
-    QStringList lines = content.split(QLatin1Char('\n'), Qt::KeepEmptyParts);
-    lines[details.allowedIpsLine] = QStringLiteral("AllowedIPs = 0.0.0.0/0, ::/0");
-    QString rewritten = lines.join(QLatin1Char('\n'));
+    QString rewritten = content;
+    if (fullTunnel) {
+        QStringList lines = content.split(QLatin1Char('\n'), Qt::KeepEmptyParts);
+        lines[details.allowedIpsLine] = QStringLiteral("AllowedIPs = 0.0.0.0/0, ::/0");
+        rewritten = lines.join(QLatin1Char('\n'));
+    }
 
-    // The native wg-quick policy-rules generator is not the transaction owner
-    // for headless full-tunnel mode.  Disable it explicitly and let the
-    // reconciler stage table 51821 plus its bounded rules atomically.
+    // Native quick helpers must not create unowned main-table routes before
+    // the managed split/full-tunnel reconciler checks foreign route ownership.
+    // Only all-except changes AllowedIPs; split mode preserves native peer data.
     const QRegularExpression tableLine(
             QStringLiteral(R"(^\s*Table\s*=\s*[^\r\n]*$)"),
             QRegularExpression::MultilineOption | QRegularExpression::CaseInsensitiveOption);
