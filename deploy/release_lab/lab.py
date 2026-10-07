@@ -2832,7 +2832,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                 if not isinstance(installer_evidence, dict) or installer_evidence.get("interactive_token") is not True:
                     raise LabError("Hyper-V interactive receipt lacks guest interactive-token evidence")
                 screenshot_sha = str(installer_evidence.get("screenshot_sha256") or "")
-                ui_export = self.hyperv_call("export-ui", run_id=run_id, CaseId=interactive_case, credential=True, ExpectedScreenshotSha256=screenshot_sha)
+                ui_export = self.hyperv_call("export-ui", run_id=run_id, CaseId=interactive_case, credential=True, ExpectedScreenshotSha256=screenshot_sha, ScreenshotGuestPath=str(installer_evidence.get("screenshot_path") or ""))
                 bound_consent = confirmed_consent
                 completion = interactive_receipt.get("assertion", {}).get("installer_completion")
                 expected_vm_id = str((interactive_run.get("result") or {}).get("vm_id") or "")

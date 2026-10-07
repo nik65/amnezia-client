@@ -45,6 +45,7 @@ param(
     [int] $ExpectedConsentSessionId = -1,
     [string] $ExpectedArtifactSha256,
     [string] $ExpectedScreenshotSha256,
+    [string] $ScreenshotGuestPath,
     [string] $TokenEvidencePath,
     [switch] $CredentialStdin
 )
@@ -53,6 +54,11 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
 
+function New-UiCapturePaths([string] $GuestRoot, [string] $Phase) {
+    if ($Phase -notin @('probe','reinstall','update','service-health','interactive-start','interactive-status','interactive-collect')) { throw 'capture phase is invalid' }
+    $captureId = '{0}-{1}' -f $Phase,([Guid]::NewGuid().ToString('N'))
+    return @{ evidence = (Join-Path $GuestRoot "ui-evidence-$captureId.json"); screenshot = (Join-Path $GuestRoot "ui-screenshot-$captureId.png") }
+}
 function Fail([string] $Message) { throw "hyperv-adapter: $Message" }
 function Full([string] $Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { Fail 'path is empty' }
@@ -267,8 +273,9 @@ function Invoke-Guest([object] $Child, [string] $GuestScript, [string] $GuestAct
         $guestReceipt = Join-Path $guestRoot 'receipt.json'
         $guestMarker = Join-Path $guestRoot 'run-marker.txt'
         $guestUi = Join-Path $guestRoot 'hyperv-ui-helper.ps1'
-        $guestEvidence = Join-Path $guestRoot 'ui-evidence.json'
-        $guestScreenshot = Join-Path $guestRoot 'ui-screenshot.png'
+        $capturePaths = New-UiCapturePaths $guestRoot $GuestAction
+        $guestEvidence = $capturePaths.evidence
+        $guestScreenshot = $capturePaths.screenshot
         $guestLauncher = Join-Path $guestRoot 'hyperv-interactive-launcher.ps1'
         $guestLauncherArgument = if($GuestAction -in @('interactive-start','interactive-collect')){$guestLauncher}else{$null}
         if ([string]::IsNullOrWhiteSpace($GuestScript) -or -not (Test-Path -LiteralPath $GuestScript -PathType Leaf)) { Fail 'guest runner source is missing' }
@@ -728,7 +735,9 @@ if ($Action -eq 'app-window') {
 if ($Action -eq 'export-ui') {
     if ([string]$child.vm.State -ne 'Running') { Fail 'child VM must be Running for UI export' }
     if ($ExpectedScreenshotSha256 -notmatch '^[0-9a-fA-F]{64}$') { Fail 'export-ui requires the planned screenshot SHA-256' }
-    $guestPath="C:\ProgramData\AmneziaLab\runs\$RunId\windows-x64\$CaseId\ui-screenshot.png"
+    $guestRoot="C:\ProgramData\AmneziaLab\runs\$RunId\windows-x64\$CaseId"
+    $guestPath=[IO.Path]::GetFullPath($ScreenshotGuestPath)
+    if ([IO.Path]::GetDirectoryName($guestPath) -ne $guestRoot -or [IO.Path]::GetFileName($guestPath) -notmatch '^ui-screenshot-interactive-collect-[0-9a-f]{32}\.png$') { Fail 'exported screenshot path is not a fresh owned collect capture' }
     $evidenceDir=Join-Path $child.root 'evidence'; New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
     $hostPath=Join-Path $evidenceDir 'ui-screenshot.png'
     $session=New-Session $child

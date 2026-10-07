@@ -82,7 +82,19 @@ if ($null -ne $appEvidence) {
     } finally { $captured.Dispose() }
 }
 $evidence = [ordered]@{ schema=1; run_id=$RunId; profile='windows-x64'; case_id=$CaseId; vm_id=$VmId.ToString(); interactive_token=[bool]([Environment]::UserInteractive -and ([int]$explorer[0].SessionId -eq $currentSessionId)); session_id=[int]$explorer[0].SessionId; current_process_session_id=$currentSessionId; explorer_pid=[int]$explorer[0].ProcessId; explorer_owner=[string]$owner.User; explorer_domain=[string]$owner.Domain; screenshot_path=$ScreenshotPath; screenshot_sha256=(Get-FileHash -LiteralPath $ScreenshotPath -Algorithm SHA256).Hash.ToLowerInvariant(); action=$Action; app=$appEvidence; observed_at=[DateTime]::UtcNow.ToString('o') }
-$evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $OutputPath -Encoding UTF8
+function Publish-UiCaptureEvidence([object] $Evidence, [string] $Destination) {
+    if (Test-Path -LiteralPath $Destination) { throw 'capture evidence destination already exists' }
+    $image = Get-Item -LiteralPath $Evidence.screenshot_path -ErrorAction Stop
+    if ($image.PSIsContainer -or ($image.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $image.Length -le 1024) { throw 'capture PNG is incomplete or not a regular file' }
+    $sha = (Get-FileHash -LiteralPath $image.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($sha -ne $Evidence.screenshot_sha256) { throw 'capture PNG and evidence hash differ' }
+    $temporary = "$Destination.$([Guid]::NewGuid().ToString('N')).tmp"
+    try {
+        [IO.File]::WriteAllText($temporary,($Evidence | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temporary -Destination $Destination -ErrorAction Stop
+    } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -ErrorAction Stop } }
+}
+Publish-UiCaptureEvidence $evidence $OutputPath
 $evidence | ConvertTo-Json -Compress
 if ($null -ne $appEvidence) {
     $owned = Get-Process -Id ([int]$appEvidence.pid) -ErrorAction SilentlyContinue
