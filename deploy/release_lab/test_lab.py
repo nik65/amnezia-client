@@ -16,7 +16,16 @@ except ImportError:  # direct invocation from this directory
     from lab import ANDROID_SANDBOX_DISABLED_REASON, AUTOMATED_PROFILE_IDS, SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, build_hyperv_matrix_aggregation, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
 
 
+try:
+    from .test_create_manifest_binding import write_signed_manifest, windows_openssl
+except ImportError:
+    from test_create_manifest_binding import write_signed_manifest, windows_openssl
+
+
 class ReleaseLabContractTests(unittest.TestCase):
+    def setUp(self):
+        windows_openssl(self)
+
     def test_private_link_root_port_is_initial_and_profile_scoped(self):
         source = (Path(__file__).parent / "lab.py").read_text(encoding="utf-8")
         self.assertIn('private_link_root_port = profile_id in {"server-router", "linux-headless-x64"}', source)
@@ -210,6 +219,7 @@ class ReleaseLabContractTests(unittest.TestCase):
             baseline.write_bytes(b"baseline")
             manifest = Path(tmp) / "manifest.json"; manifest.write_text("{}", encoding="utf-8")
             public_key = Path(tmp) / "public.pem"; public_key.write_text("invalid", encoding="utf-8")
+            manifest, public_key = write_signed_manifest(Path(tmp), artifact, '5.0.1.38', 'windows-x64')
             run = controller.create("candidate", {"windows-x64": artifact}, artifact, "dry-run", manifest=manifest, baseline_artifacts={"windows-x64": baseline}, baseline_version="5.0.1.37", candidate_version="5.0.1.38", manifest_public_key=public_key)
             run["dry_run"] = True
             state = controller.load_state(); state["runs"]["dry-run"] = run; controller.save_state(state)
@@ -232,6 +242,7 @@ class ReleaseLabContractTests(unittest.TestCase):
             baseline.write_bytes(b"baseline")
             public_key = root / "public.pem"; public_key.write_text("invalid", encoding="utf-8")
             controller = LabController(root, test_mode=True)
+            manifest, public_key = write_signed_manifest(Path(tmp), artifact, '5.0.1.38', 'windows-x64')
             run = controller.create("candidate", {"windows-x64": artifact}, outer, "candidate", manifest=manifest, baseline_artifacts={"windows-x64": baseline}, baseline_version="5.0.1.37", candidate_version="5.0.1.38", manifest_public_key=public_key)
             # A reset profile must not be allowed to reuse the in-memory
             # receipt.  The controller archive is the durable evidence
@@ -348,6 +359,7 @@ class ReleaseLabContractTests(unittest.TestCase):
             manifest = root / "manifest.json"; manifest.write_text("{}", encoding="utf-8")
             public_key = root / "public.pem"; public_key.write_text("invalid", encoding="utf-8")
             controller = LabController(root, test_mode=True)
+            manifest, public_key = write_signed_manifest(Path(tmp), artifact, '5.0.1.38', 'windows-x64')
             controller.create("candidate", {"windows-x64": artifact}, artifact, "reset-me", manifest=manifest, baseline_artifacts={"windows-x64": baseline}, baseline_version="5.0.1.37", candidate_version="5.0.1.38", manifest_public_key=public_key)
             result = controller.reset("reset-me", "windows-x64")
             self.assertEqual(result["reset_profiles"], ["windows-x64"])
@@ -1100,21 +1112,34 @@ class ReleaseLabContractTests(unittest.TestCase):
             finally:c.release_mutation_lock()
 
     def test_actual_headless_manifests_resolve_signed_provisioning_tree(self):
-        root = Path(__file__).resolve().parents[2]
-        key = Path("C:/keys/selfhosted-update-public.pem")
-        if not key.is_file():
-            self.skipTest("managed public trust anchor is unavailable")
-        cases = [
-            (root / "dist/release-lab-fixtures/full4-baseline-compat-v4-20260913/manifest.json",
-             root / "dist/release-lab-fixtures/full4-baseline-compat-v4-20260913/official-verifier-receipt.json",
-             root / "dist/release-lab-fixtures/full4-baseline-compat-v4-20260913/files/artifacts/ae0ba946446281c359ae448f68568fd580547a0e79f8449b75a9c2d5e62b2d3c/AmneziaHeadless_5.0.1.38_linux_x64.tar.gz", "5.0.1.38", "e6d2bd77790c81cc555eeda542760fedd84fd8d6c73a25bb6ed044a240bfeb9f"),
-            (root / "dist/full-release-5.0.1.39-20260913-final3/updates/manifest.json",
-             root / "Testing/headless-candidate-final3-verified.json",
-             root / "dist/full-release-5.0.1.39-20260913-final3/artifacts/AmneziaHeadless_5.0.1.39_linux_x64.tar.gz", "5.0.1.39", "9d4307a61e06c4fec4ad9085f801dd8cad0e3564a66ca6debc54dc8e9584c289"),
-        ]
-        for manifest, receipt, artifact, version, provisioning_sha in cases:
-            result = headless_runner_inputs(manifest, key, receipt, artifact_record(artifact), version)
-            self.assertEqual(sha256_file(Path(result["provisioning_path"]))[0], provisioning_sha)
+        # Hermetic signed inputs preserve tree/receipt checks without old local releases.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / 'headless.tar.gz'; artifact.write_bytes(b'headless fixture')
+            archive = root / 'files' / 'provisioning.tar.gz'
+            archive.parent.mkdir(); archive.write_bytes(b'provisioning fixture')
+            archive_sha, archive_size = sha256_file(archive)
+            provisioning = {'url': 'files/provisioning.tar.gz', 'sha256': archive_sha,
+                            'size': archive_size, 'packageManifestSha256': 'a' * 64,
+                            'checksumsSha256': 'b' * 64}
+            manifest, key = write_signed_manifest(root, artifact, '5.0.3.5',
+                                                 'linux-headless-x64',
+                                                 extra={'headlessProvisioning': provisioning})
+            module = sys.modules[LabController.__module__]
+            module.validate_signed_manifest(manifest, key, version='5.0.3.5',
+                                            artifacts={'linux-headless-x64': artifact_record(artifact)})
+            receipt = root / 'receipt.json'
+            value = {'schema': 1, 'tool': 'amnezia-verify-provisioning-v1', 'verified': True,
+                     'manifestSha256': sha256_file(manifest)[0], 'publicKeySha256': sha256_file(key)[0],
+                     'archiveSha256': archive_sha, 'archiveSize': archive_size,
+                     'version': '5.0.3.5', 'packageVersion': '5.0.3.5',
+                     'packageManifestSha256': 'a' * 64, 'checksumsSha256': 'b' * 64}
+            receipt.write_text(json.dumps(value))
+            result = headless_runner_inputs(manifest, key, receipt, artifact_record(artifact), '5.0.3.5')
+            self.assertEqual(Path(result['provisioning_path']), archive.resolve())
+            archive.write_bytes(b'tampered provisioning fixture')
+            with self.assertRaisesRegex(LabError, 'differs from signed manifest'):
+                headless_runner_inputs(manifest, key, receipt, artifact_record(artifact), '5.0.3.5')
 
     def test_semantic_helper_closure_rejects_missing_and_changed_source(self):
         root = Path(__file__).resolve().parents[2]

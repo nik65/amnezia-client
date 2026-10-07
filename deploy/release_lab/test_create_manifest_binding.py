@@ -15,7 +15,35 @@ except ImportError:
     import lab
 
 
+def write_signed_manifest(root, artifact, version, platform, *, extra=None, name='manifest.json'):
+    key = Ed25519PrivateKey.generate()
+    public = root / (name + '.public.pem')
+    public.write_bytes(key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo))
+    record = lab.artifact_record(artifact)
+    payload = {'version': version, 'autoInstall': True, 'platforms': {platform: {'autoInstall': True, 'sha256': record['sha256'], 'size': record['size'], 'url': 'http://172.29.172.252:17865/fixture'}}}
+    payload.update(extra or {})
+    raw = json.dumps(payload, separators=(',', ':')).encode()
+    envelope = {'schema': 'amnezia-selfhosted-update-v1', 'signatureAlgorithm': 'Ed25519', 'payload': base64.urlsafe_b64encode(raw).decode().rstrip('='), 'signature': base64.b64encode(key.sign(raw)).decode()}
+    manifest = root / name; manifest.write_text(json.dumps(envelope))
+    return manifest, public
+
+
+def windows_openssl(test):
+    """Use an actual local verifier for hermetic Windows tests, without bypassing crypto."""
+    import os
+    if os.name != 'nt':
+        return
+    executable = pathlib.Path('C:/Program Files/Git/usr/bin/openssl.exe')
+    if not executable.is_file():
+        test.skipTest('actual Windows OpenSSL verifier is unavailable')
+    original = lab.resolve_host_executable
+    resolver = patch.object(lab, 'resolve_host_executable', side_effect=lambda name: str(executable) if name == 'openssl' else original(name))
+    resolver.start(); test.addCleanup(resolver.stop)
+
+
 class CreateManifestBindingTests(unittest.TestCase):
+    def setUp(self):
+        windows_openssl(self)
     def test_signed_manifest_missing_selected_linux_rejected_before_guest_state(self):
         self.reject_mismatch(candidate_platform='windows-x64')
 
