@@ -472,15 +472,18 @@ private slots:
     {
         QTest::addColumn<QString>("protocol");
         QTest::addColumn<bool>("policyOnly");
-        QTest::newRow("wireguard-forward-routes") << QStringLiteral("wireguard") << false;
-        QTest::newRow("awg-forward-routes") << QStringLiteral("amneziawg") << false;
-        QTest::newRow("awg-policy-only") << QStringLiteral("amneziawg") << true;
+        QTest::addColumn<bool>("tableAuto");
+        QTest::newRow("wireguard-forward-routes") << QStringLiteral("wireguard") << false << false;
+        QTest::newRow("awg-forward-routes") << QStringLiteral("amneziawg") << false << false;
+        QTest::newRow("awg-policy-only") << QStringLiteral("amneziawg") << true << false;
+        QTest::newRow("awg-explicit-auto") << QStringLiteral("amneziawg") << false << true;
     }
 
     void managedSplitNativeStagesTableOnly()
     {
         QFETCH(QString, protocol);
         QFETCH(bool, policyOnly);
+        QFETCH(bool, tableAuto);
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const QString sourcePath = directory.filePath(QStringLiteral("source.conf"));
@@ -492,6 +495,7 @@ private slots:
         if (protocol == QStringLiteral("amneziawg"))
             original.replace("[Peer]\n", "Jc = 4\nJmin = 40\nJmax = 70\nS1 = 16\nS2 = 16\nS3 = 16\nS4 = 16\n"
                                         "HeaderProtectionKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n[Peer]\n");
+        if (tableAuto) original.replace("[Peer]\n", "Table = auto\n[Peer]\n");
         QFile source(sourcePath);
         QVERIFY(source.open(QIODevice::WriteOnly));
         QCOMPARE(source.write(original), original.size());
@@ -509,7 +513,7 @@ private slots:
         QVERIFY(!runner->nativeQuickWouldAddRoutes);
         QByteArray staged = runner->nativeQuickConfiguration;
         QCOMPARE(staged.count("Table = off\n"), 1);
-        staged.replace("Table = off\n", "");
+        staged.replace("Table = off\n", tableAuto ? "Table = auto\n" : "");
         QCOMPARE(staged, original);
         const QString stagedPath = runner->calls.constFirst().arguments.at(1);
         QVERIFY(stagedPath != sourcePath);
