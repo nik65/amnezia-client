@@ -2,6 +2,7 @@
 #include "../../../common/awgMigration.h"
 #include "../../../common/awgBackendObservation.h"
 #include "core/utils/constants/configKeys.h"
+#include "core/utils/serverConfigUtils.h"
 #include <QTcpSocket>
 #include <QNetworkProxy>
 #include <QHostAddress>
@@ -225,9 +226,9 @@ void AwgMigrationController::request(const QString &path, const QJsonObject &bod
     socket->setProxy(QNetworkProxy::NoProxy);
     if (!socket->bind(local)) { socket->deleteLater(); return; }
     QNetworkInterface tunnel;
-    for (const auto &interface : QNetworkInterface::allInterfaces()) {
-        for (const auto &entry : interface.addressEntries()) {
-            if (entry.ip() == local) tunnel = interface;
+    for (const auto &adapter : QNetworkInterface::allInterfaces()) {
+        for (const auto &entry : adapter.addressEntries()) {
+            if (entry.ip() == local) tunnel = adapter;
         }
     }
     if (!tunnel.isValid() || !tunnel.flags().testFlag(QNetworkInterface::IsUp)) {
@@ -302,8 +303,8 @@ void AwgMigrationController::request(const QString &path, const QJsonObject &bod
 void AwgMigrationController::enrollOrFetch()
 {
     const auto kind = m_servers->serverKind(m_serverId);
-    if (kind != amnezia::serverConfigUtils::ConfigType::SelfHostedAdmin
-        && kind != amnezia::serverConfigUtils::ConfigType::SelfHostedUser) return;
+    if (kind != serverConfigUtils::ConfigType::SelfHostedAdmin
+        && kind != serverConfigUtils::ConfigType::SelfHostedUser) return;
     if (m_journal.value("state") == "staged" || m_journal.value("state") == "committed"
         || m_journal.value("state") == "recovery_required"
         || m_journal.value("state") == "secret_store_unavailable") return;

@@ -13,6 +13,7 @@ set(AMNEZIA_FOCUSED_TEST_DIRS
     selfhosted_update_bootstrapper_path
     selfhosted_update_policy
     backend_failure_contract
+    awg_migration
 )
 
 foreach(test_dir IN LISTS AMNEZIA_FOCUSED_TEST_DIRS)
