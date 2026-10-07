@@ -61,6 +61,8 @@ import org.amnezia.vpn.protocol.ProtocolState.UNKNOWN
 import org.amnezia.vpn.protocol.VpnException
 import org.amnezia.vpn.protocol.VpnStartException
 import org.amnezia.vpn.protocol.putStatus
+import org.amnezia.vpn.protocol.putStatistics
+import org.amnezia.vpn.protocol.Statistics
 import org.amnezia.vpn.util.LoadLibraryException
 import org.amnezia.vpn.util.Log
 import org.amnezia.vpn.util.Prefs
@@ -458,8 +460,8 @@ open class AmneziaVpnService : VpnService() {
                             }
                             clientMessenger.send {
                                 ServiceEvent.STATISTICS_UPDATE.packToMessage {
-                                    putStatistics(protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
-                                    protocol?.migrationObservation?.let { putString("migrationObservation", it) }
+                                    putStatistics(this@AmneziaVpnService.vpnProto?.protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
+                                    this@AmneziaVpnService.vpnProto?.protocol?.migrationObservation?.let { putString("migrationObservation", it) }
                                 }
                             }
                         }
@@ -664,7 +666,7 @@ open class AmneziaVpnService : VpnService() {
                 serviceNotification.updateNotification(serverName, vpnProto?.label, protocolState)
 
                 if (protocolState == DISCONNECTED) {
-                    protocol?.migrationCleanupObservation?.let { receipt ->
+                    this@AmneziaVpnService.vpnProto?.protocol?.migrationCleanupObservation?.let { receipt ->
                         clientMessengers.send {
                             ServiceEvent.STATISTICS_UPDATE.packToMessage {
                                 putString("migrationObservation", receipt)
@@ -772,8 +774,8 @@ open class AmneziaVpnService : VpnService() {
                         clientMessengers.values.toList().forEach { messenger ->
                             messenger.send {
                                 ServiceEvent.STATISTICS_UPDATE.packToMessage {
-                                    putStatistics(protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
-                                    protocol?.migrationObservation?.let { putString("migrationObservation", it) }
+                                    putStatistics(this@AmneziaVpnService.vpnProto?.protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
+                                    this@AmneziaVpnService.vpnProto?.protocol?.migrationObservation?.let { putString("migrationObservation", it) }
                                 }
                             }
                         }
