@@ -11,6 +11,7 @@
 #include <QUuid>
 
 #include "daemon.h"
+#include "cliResponse.h"
 
 namespace
 {
@@ -26,28 +27,6 @@ QString defaultSocketPath()
 #else
     return QStringLiteral("amneziad");
 #endif
-}
-
-QByteArray readResponseFrame(QLocalSocket &socket, QString &error)
-{
-    QByteArray buffer;
-    while (buffer.size() <= amnezia::headless::MaximumFrameSize) {
-        buffer.append(socket.readAll());
-        const qsizetype newline = buffer.indexOf('\n');
-        if (newline >= 0) {
-            if (newline + 1 > amnezia::headless::MaximumFrameSize) {
-                error = QStringLiteral("daemon response frame is too large");
-                return {};
-            }
-            return buffer.left(newline + 1);
-        }
-        if (!socket.waitForReadyRead(2000)) {
-            error = socket.errorString();
-            return {};
-        }
-    }
-    error = QStringLiteral("daemon response frame is too large");
-    return {};
 }
 
 int printResponse(const QByteArray &frame, bool jsonOutput, const QString &outputPath)
@@ -230,7 +209,9 @@ int main(int argc, char *argv[])
     }
 
     QString responseError;
-    const QByteArray responseFrame = readResponseFrame(socket, responseError);
+    const int responseBudget = command == amnezia::headless::Command::Connect
+            || command == amnezia::headless::Command::Disconnect ? 120000 : 2000;
+    const QByteArray responseFrame = amnezia::headless::readCliResponseFrame(socket, responseError, responseBudget);
     if (responseFrame.isEmpty()) {
         QTextStream(stderr) << "amnezia-cli: daemon response failed: "
                             << responseError << Qt::endl;

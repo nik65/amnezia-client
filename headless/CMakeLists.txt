@@ -103,7 +103,9 @@ add_test(NAME headless_awg_migration COMMAND headless_awg_migration_tests)
 add_executable(headless_protocol_tests
     tests/tst_headless_protocol.cpp
 )
-target_link_libraries(headless_protocol_tests PRIVATE amnezia_headless_core Qt6::Core Qt6::Test)
+target_link_libraries(headless_protocol_tests PRIVATE amnezia_headless_core Qt6::Core Qt6::Network Qt6::Test)
+target_compile_definitions(headless_protocol_tests PRIVATE HEADLESS_CLI_BINARY="$<TARGET_FILE:amnezia-cli>")
+add_dependencies(headless_protocol_tests amnezia-cli)
 
 add_executable(headless_daemon_tests
     tests/tst_headless_daemon.cpp
