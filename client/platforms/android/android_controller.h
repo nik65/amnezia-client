@@ -81,6 +81,7 @@ signals:
     void notificationStateChanged();
     void vpnStateChanged(ConnectionState state);
     void statisticsUpdated(quint64 rxBytes, quint64 txBytes);
+    void migrationPeerObservation(const QJsonObject &observation);
     void fileOpened(QString uri);
     void apkInstallerLaunchAuthorizationRequested(QString fileName, QString packageName,
                                                    QString versionName, qint64 versionCode,
@@ -119,6 +120,7 @@ private:
     static void onNotificationStateChanged(JNIEnv *env, jobject thiz);
     static void onVpnStateChanged(JNIEnv *env, jobject thiz, jint stateCode);
     static void onStatisticsUpdate(JNIEnv *env, jobject thiz, jlong rxBytes, jlong txBytes);
+    static void onMigrationObservation(JNIEnv *env, jobject thiz, jstring observation);
     static void onConfigImported(JNIEnv *env, jobject thiz, jstring data);
     static void onFileOpened(JNIEnv *env, jobject thiz, jstring uri);
     static jboolean authorizeApkInstallerLaunch(JNIEnv *env, jobject thiz, jstring fileName,

@@ -1,4 +1,5 @@
 #include "vpnBackend.h"
+#include "embeddedAwgBackend.h"
 
 #include <QDir>
 #include <QFile>
@@ -17,6 +18,7 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QDateTime>
+#include <QCryptographicHash>
 
 #if defined(Q_OS_UNIX)
 #include <unistd.h>
@@ -582,6 +584,7 @@ VpnBackend::VpnBackend(std::shared_ptr<CommandRunner> runner,
       m_stagingRoot(std::move(stagingRoot))
 {
 }
+VpnBackend::~VpnBackend() = default;
 
 BackendResult VpnBackend::connect(const Profile &profile)
 {
@@ -620,6 +623,29 @@ BackendResult VpnBackend::connect(const Profile &profile)
         }
     }
 
+    if (!m_validatedMigrationPath.isEmpty() && protocol == QStringLiteral("amneziawg")
+        && m_runner->supportsEmbeddedProcessOwnership() && EmbeddedAwgBackend::available()) {
+        QString effectivePath = profile.configPath;
+        QString temporaryDirectory;
+        QString preparationError;
+        if (profile.routingMode == QStringLiteral("all-except")
+            && !prepareFullTunnelConfig(profile, protocol, effectivePath, temporaryDirectory, &preparationError))
+            return failure(QStringLiteral("config_invalid"), preparationError);
+        m_embedded = std::make_unique<EmbeddedAwgBackend>(m_runner);
+        const QString interfaceName = profile.interfaceName.isEmpty() ? QStringLiteral("amn0") : profile.interfaceName;
+        m_session = std::make_unique<Session>(Session {profile.id, protocol, effectivePath, temporaryDirectory, {}, interfaceName, SessionKind::LongRunning});
+        const BackendResult started = m_embedded->start(profile, effectivePath, QFileInfo(profile.configPath).absolutePath());
+        if (!started.ok) {
+            const BackendResult cleanup = m_embedded->stop();
+            if (cleanup.ok) {
+                if (!temporaryDirectory.isEmpty()) QDir(temporaryDirectory).removeRecursively();
+                m_embedded.reset(); m_session.reset();
+            }
+            return failure(cleanup.ok ? started.code : QStringLiteral("cleanup_failed"),
+                           cleanup.ok ? started.message : cleanup.message);
+        }
+        return started;
+    }
     const QString executable = m_runner->resolveExecutable(candidatesForProtocol(protocol));
     if (executable.isEmpty()) {
         return failure(QStringLiteral("backend_unavailable"),
@@ -729,11 +755,53 @@ BackendResult VpnBackend::connect(const Profile &profile)
     return { true, {}, {} };
 }
 
+BackendResult VpnBackend::connectMigrationCandidate(const Profile &original, const QString &candidatePath,
+                                                   const QString &trustedRoot, const QString &sourceSha256)
+{
+    BackendResult validation;
+    if (!configIsUsable(original, validation)) return validation;
+    QFile source(original.configPath);
+    if (!source.open(QIODevice::ReadOnly) || source.size() > 1024 * 1024
+        || QString::fromLatin1(QCryptographicHash::hash(source.readAll(), QCryptographicHash::Sha256).toHex())
+            != sourceSha256) {
+        return failure(QStringLiteral("migration_source_changed"), QStringLiteral("migration source changed"));
+    }
+    const QFileInfo root(trustedRoot), candidate(candidatePath);
+    if (!root.isAbsolute() || !root.isDir() || root.isSymLink() || !candidate.isFile()
+        || candidate.isSymLink() || root.canonicalFilePath() != root.absoluteFilePath()
+        || candidate.canonicalPath() != root.canonicalFilePath()) {
+        return failure(QStringLiteral("migration_cache_unsafe"), QStringLiteral("migration cache is unsafe"));
+    }
+#ifdef Q_OS_UNIX
+    if ((m_requireRootOwnedConfig && (root.ownerId() != 0 || candidate.ownerId() != 0))
+        || root.permissions() & (QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+                                | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther)
+        || candidate.permissions() & (QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+                                      | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther)) {
+        return failure(QStringLiteral("migration_cache_unsafe"), QStringLiteral("migration cache permissions are unsafe"));
+    }
+#endif
+    m_validatedMigrationPath = candidate.canonicalFilePath();
+    Profile effective = original;
+    effective.configPath = m_validatedMigrationPath;
+    const BackendResult result = connect(effective);
+    m_validatedMigrationPath.clear();
+    return result;
+}
+
 BackendResult VpnBackend::disconnect()
 {
     m_lastError = {};
     if (!m_session) {
         return { true, {}, {} };
+    }
+    if (m_embedded) {
+        const BackendResult result = m_embedded->stop();
+        if (result.ok) {
+            if (!m_session->temporaryConfigDirectory.isEmpty()) QDir(m_session->temporaryConfigDirectory).removeRecursively();
+            m_embedded.reset(); m_session.reset();
+        }
+        return result;
     }
 
     CommandResult commandResult { true, 0, {} };
@@ -915,6 +983,7 @@ QString VpnBackend::activeInterface() const
 bool VpnBackend::sessionAlive() const
 {
     if (!m_session) return false;
+    if (m_embedded) return m_embedded->alive() && interfaceHealthy(m_session->interfaceName);
     if (m_session->kind == SessionKind::LongRunning) {
         return m_runner->isSessionAlive(m_session->profileId)
             && interfaceHealthy(m_session->interfaceName);
@@ -966,6 +1035,13 @@ bool VpnBackend::interfaceHealthy(const QString &interfaceName,
         return false;
     }
 
+    if (m_embedded) {
+        if (!m_embedded->alive() || !m_embedded->configured()) return false;
+        if (!requireRecentHandshake) return true;
+        if (m_embedded->handshake(m_embedded->expectedPeer(), QDateTime::currentSecsSinceEpoch() - WireGuardHandshakeMaxAgeSeconds))
+            m_session->handshakeObserved = true;
+        return m_session->handshakeObserved;
+    }
     if (m_session->protocol == QStringLiteral("wireguard")
         || m_session->protocol == QStringLiteral("amneziawg")) {
         const QString tool = m_runner->resolveExecutable(
@@ -1019,6 +1095,61 @@ bool VpnBackend::interfaceHealthy(const QString &interfaceName,
         // traffic once.  An otherwise healthy idle tunnel must not be torn
         // down merely because its last handshake has aged out.
         return m_session->handshakeObserved;
+    }
+    return true;
+}
+
+bool VpnBackend::migrationHandshakeObserved(const QString &expectedPeer, qint64 startedAt) const
+{
+    if (m_embedded) return m_embedded->handshake(expectedPeer, startedAt);
+    if (!m_session || m_session->protocol != QStringLiteral("amneziawg")
+        || expectedPeer.isEmpty() || startedAt <= 0) return false;
+    const QString tool = m_runner->resolveExecutable({ QStringLiteral("awg"),
+        QStringLiteral("/usr/bin/awg"), QStringLiteral("/usr/sbin/awg") });
+    if (tool.isEmpty()) return false;
+    const CommandResult result = m_runner->runCaptured(tool,
+        { QStringLiteral("show"), m_session->interfaceName, QStringLiteral("latest-handshakes") });
+    if (!result.ok) return false;
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    for (const QString &line : result.output.split(QLatin1Char('\n'))) {
+        const QStringList fields = line.trimmed().split(
+            QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+        if (fields.size() != 2 || fields.at(0) != expectedPeer) continue;
+        bool valid = false;
+        const qint64 timestamp = fields.at(1).toLongLong(&valid);
+        if (valid && timestamp >= startedAt && timestamp <= now + 5
+            && now - timestamp <= WireGuardHandshakeMaxAgeSeconds) return true;
+    }
+    return false;
+}
+
+bool VpnBackend::migrationParametersApplied(const QMap<QString, QString> &parameters) const
+{
+    if (m_embedded) return m_embedded->parametersApplied(parameters);
+    if (!m_session || m_session->protocol != QStringLiteral("amneziawg")
+        || (!parameters.contains(QStringLiteral("Hpk")) && !parameters.contains(QStringLiteral("HeaderProtectionKey")))) return false;
+    const QString tool = m_runner->resolveExecutable({ QStringLiteral("awg"),
+        QStringLiteral("/usr/bin/awg"), QStringLiteral("/usr/sbin/awg") });
+    if (tool.isEmpty()) return false;
+    const CommandResult result = m_runner->runCaptured(tool,
+        { QStringLiteral("showconf"), m_session->interfaceName });
+    if (!result.ok || result.output.size() > 1024 * 1024) return false;
+    QMap<QString, QString> actual;
+    bool inInterface = false;
+    for (const QString &raw : result.output.split(QLatin1Char('\n'))) {
+        const QString line = raw.trimmed();
+        if (line.startsWith(QLatin1Char('['))) {
+            inInterface = line == QStringLiteral("[Interface]");
+            continue;
+        }
+        const int separator = line.indexOf(QLatin1Char('='));
+        if (!inInterface || separator < 1) continue;
+        const QString name = line.left(separator).trimmed();
+        if (actual.contains(name)) return false;
+        actual.insert(name, line.mid(separator + 1).trimmed());
+    }
+    for (auto entry = parameters.cbegin(); entry != parameters.cend(); ++entry) {
+        if (!actual.contains(entry.key()) || actual.value(entry.key()) != entry.value()) return false;
     }
     return true;
 }
@@ -1182,7 +1313,7 @@ bool VpnBackend::configIsUsable(const Profile &profile, BackendResult &result) c
         const QString configPath = configInfo.canonicalFilePath();
         const QString rootPrefix = rootPath + QDir::separator();
         if (rootPath.isEmpty() || configPath.isEmpty()
-            || !configPath.startsWith(rootPrefix)) {
+            || (!configPath.startsWith(rootPrefix) && configPath != m_validatedMigrationPath)) {
             result = { false, QStringLiteral("config_not_allowed"),
                        QStringLiteral("profile configuration is outside the trusted directory") };
             return false;

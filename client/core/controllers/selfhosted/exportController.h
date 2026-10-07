@@ -52,6 +52,7 @@ public:
     ExportResult generateAwgConfig(const QString &serverId, int containerIndex, const QString &clientName);
     ExportResult generateXrayConfig(const QString &serverId, const QString &clientName);
     DownloadClientLogsResult downloadClientLogs(const QString &serverId, DockerContainer container, const QString &clientId);
+    static ErrorCode prepareMigrationSourceCollector(const ServerCredentials &credentials, DockerContainer container);
 
 signals:
     void appendClientRequested(const QString &serverId, const QString &clientId, const QString &clientName, DockerContainer container);

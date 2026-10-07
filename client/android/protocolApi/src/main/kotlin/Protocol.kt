@@ -23,6 +23,7 @@ private const val SPLIT_TUNNEL_EXCLUDE = 2
 abstract class Protocol {
 
     abstract val statistics: Statistics
+    open val migrationObservation: String? get() = null
     protected lateinit var context: Context
     protected lateinit var state: MutableStateFlow<ProtocolState>
     protected lateinit var onError: (String) -> Unit

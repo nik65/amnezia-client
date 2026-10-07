@@ -1350,6 +1350,14 @@ ExportController::ExportController(SecureServersRepository* serversRepository,
 {
 }
 
+ErrorCode ExportController::prepareMigrationSourceCollector(const ServerCredentials &credentials, DockerContainer container)
+{
+    if (container != DockerContainer::Awg && container != DockerContainer::Awg2) {
+        return ErrorCode::ServerCheckFailed;
+    }
+    return publishClientLogCollector(credentials, container, {}, {});
+}
+
 ExportController::ExportResult ExportController::generateFullAccessConfig(const QString &serverId)
 {
     ExportResult result;

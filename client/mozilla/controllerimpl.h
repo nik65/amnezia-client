@@ -6,6 +6,7 @@
 #define CONTROLLERIMPL_H
 
 #include <QObject>
+#include <QJsonObject>
 #include <functional>
 #include <QDateTime>
 
@@ -65,6 +66,7 @@ class ControllerImpl : public QObject {
   virtual bool silentServerSwitchingSupported() const { return true; }
 
  signals:
+  void migrationPeerObservation(const QJsonObject &observation);
   // This signal is emitted when the controller is initialized. Note that the
   // VPN tunnel can be already active. In this case, "connected" should be set
   // to true and the "connectionDate" should be set to the activation date if

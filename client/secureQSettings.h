@@ -251,7 +251,8 @@ namespace amnezia::secureSettingsPolicy
         }
         const QString key = canonicalKey(rawKey);
         return key.compare(QLatin1String("Servers/serversList"), Qt::CaseInsensitive) == 0
-                || isSameSettingOrChild(key, QStringLiteral("Conf/remoteLogTokens"));
+                || isSameSettingOrChild(key, QStringLiteral("Conf/remoteLogTokens"))
+                || isSameSettingOrChild(key, QStringLiteral("Conf/awgMigration"));
     }
 
     inline bool isLocalOnlySetting(const QString &rawKey)
@@ -263,6 +264,7 @@ namespace amnezia::secureSettingsPolicy
         if (key.compare(QLatin1String("Conf/installationUuid"), Qt::CaseInsensitive) == 0
             || isSameSettingOrChild(key, QStringLiteral("Conf/remoteLogTokens"))
             || isSameSettingOrChild(key, QStringLiteral("Conf/selfHostedUpdate"))
+            || isSameSettingOrChild(key, QStringLiteral("Conf/awgMigration"))
             || key.compare(QLatin1String("Conf/selfHostedUpdateLastAutoInstallAttempt"),
                            Qt::CaseInsensitive) == 0) {
             return true;
@@ -276,7 +278,7 @@ namespace amnezia::secureSettingsPolicy
             return true;
         }
         const QString key = canonicalKey(rawKey);
-        return isLocalOnlySetting(key);
+        return isLocalOnlySetting(key) || key == QStringLiteral("Servers/serversList");
     }
 
     inline bool isRetainedAcrossSettingsClear(const QString &rawKey)
@@ -289,7 +291,8 @@ namespace amnezia::secureSettingsPolicy
         }
         const QString key = canonicalKey(rawKey);
         return key.compare(QLatin1String("Conf/installationUuid"), Qt::CaseInsensitive) == 0
-                || isSameSettingOrChild(key, QStringLiteral("Conf/selfHostedUpdate"));
+                || isSameSettingOrChild(key, QStringLiteral("Conf/selfHostedUpdate"))
+                || isSameSettingOrChild(key, QStringLiteral("Conf/awgMigration"));
     }
 
     inline QString cacheKey(const QString &canonicalKey)

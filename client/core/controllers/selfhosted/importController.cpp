@@ -27,6 +27,7 @@
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/constants/protocolConstants.h"
 #include "core/utils/qrCodeUtils.h"
+#include "core/models/protocols/awgProtocolConfig.h"
 
 using namespace amnezia;
 using namespace ProtocolUtils;
@@ -604,11 +605,12 @@ QJsonObject ImportController::extractWireGuardConfig(const QString &data, Config
                                              configKey::responsePacketMagicHeader, configKey::underloadPacketMagicHeader,
                                              configKey::transportPacketMagicHeader };
 
-    const QStringList optionalJunkFields = { configKey::cookieReplyPacketJunkSize,
-                                             configKey::transportPacketJunkSize,
-                                             configKey::specialJunk1,    configKey::specialJunk2,    configKey::specialJunk3,
-                                             configKey::specialJunk4,    configKey::specialJunk5
-    };
+    // Keep the native importer aligned with the model/backend field contract.
+    // Explicit zero and disabled toggles are values, not absent parameters.
+    QStringList optionalJunkFields = configKey::awgProtocolKeys();
+    for (const auto &required : requiredJunkFields) {
+        optionalJunkFields.removeAll(required);
+    }
 
     bool hasAllRequiredFields = std::all_of(requiredJunkFields.begin(), requiredJunkFields.end(),
                                             [&configMap](const QString &field) { return !configMap.value(field).isEmpty(); });
@@ -623,19 +625,9 @@ QJsonObject ImportController::extractWireGuardConfig(const QString &data, Config
             }
         }
 
-        bool hasCookieReplyPacketJunkSize = !configMap.value(configKey::cookieReplyPacketJunkSize).isEmpty();
-        bool hasTransportPacketJunkSize = !configMap.value(configKey::transportPacketJunkSize).isEmpty();
-        bool hasSpecialJunk = !configMap.value(configKey::specialJunk1).isEmpty() ||
-                              !configMap.value(configKey::specialJunk2).isEmpty() ||
-                              !configMap.value(configKey::specialJunk3).isEmpty() ||
-                              !configMap.value(configKey::specialJunk4).isEmpty() ||
-                              !configMap.value(configKey::specialJunk5).isEmpty();
-
-        if (hasCookieReplyPacketJunkSize && hasTransportPacketJunkSize) {
-            protocolVersion = "2";
-        } else if (hasSpecialJunk && !hasCookieReplyPacketJunkSize && !hasTransportPacketJunkSize) {
-            protocolVersion = "1.5";
-        }
+        AwgProtocolConfig detectedConfig;
+        detectedConfig.serverConfig = AwgServerConfig::fromJson(lastConfig);
+        protocolVersion = detectedConfig.serverProtocolVersion();
         protocolName = configKey::awg;
         detectedType = ConfigTypes::Awg;
     }

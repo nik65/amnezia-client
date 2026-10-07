@@ -13,6 +13,7 @@
 #include <QHostAddress>
 #include <QObject>
 #include <QStringList>
+#include <QJsonObject>
 
 #include "interfaceconfig.h"
 
@@ -29,6 +30,9 @@ class WireguardUtils : public QObject {
     qint64 m_handshake = 0;
     qint64 m_rxBytes = 0;
     qint64 m_txBytes = 0;
+    bool m_awg3Capable = false;
+    QString m_headerProtectionKeyHash;
+    QJsonObject m_parameterDigests;
   };
 
   explicit WireguardUtils(QObject* parent) : QObject(parent){};

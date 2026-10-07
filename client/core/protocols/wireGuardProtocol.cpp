@@ -13,6 +13,8 @@ WireguardProtocol::WireguardProtocol(const QJsonObject &configuration, QObject *
     : VpnProtocol(configuration, parent)
 {
     m_impl.reset(new LocalSocketController());
+    connect(m_impl.get(), &ControllerImpl::migrationPeerObservation,
+            this, &VpnProtocol::migrationPeerObservation);
     bindControllerSignals();
     connect(m_impl.get(), &ControllerImpl::statusUpdated, this,
             [this](const QString& serverIpv4Gateway,

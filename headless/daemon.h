@@ -18,6 +18,7 @@
 #include "profileStore.h"
 #include "remoteLogUploader.h"
 #include "vpnBackend.h"
+#include "awgMigrationManager.h"
 
 class QLocalSocket;
 
@@ -72,6 +73,8 @@ private:
     void connectAutomaticProfile();
     void refreshManagedRoutes();
     void checkAutomaticUpdates();
+    BackendResult connectManagedProfile(const Profile &profile);
+    void checkAwgMigration();
     bool peerIsRoot(QLocalSocket *client) const;
     bool authorizePrivilegedCommand(QLocalSocket *client, const Request &request) const;
     void ensureBackendHealthy(bool allowMutation = false);
@@ -89,6 +92,8 @@ private:
     QTimer m_healthTimer;
     QTimer m_remoteLogTimer;
     HeadlessRemoteLogUploader m_remoteLogUploader;
+    AwgMigrationManager m_migrationManager;
+    QTimer m_migrationTimer;
     std::unique_ptr<QLockFile> m_instanceLock;
     int m_processedRequestCount = 0;
     QElapsedTimer m_backendConnectedTimer;

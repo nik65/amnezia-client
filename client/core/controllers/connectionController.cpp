@@ -346,6 +346,36 @@ ConnectionController::ConnectionController(SecureServersRepository* serversRepos
       m_appSettingsRepository(appSettingsRepository),
       m_vpnConnection(vpnConnection)
 {
+    m_awgMigration = new AwgMigrationController(m_serversRepository, m_appSettingsRepository, this);
+    connect(m_vpnConnection, &VpnConnection::migrationPeerObservation, m_awgMigration,
+            &AwgMigrationController::observe, Qt::QueuedConnection);
+    m_awgMigration->reconnectLegacy = [this](const QJsonObject &) {
+        const QString id = m_awgMigration->serverId();
+        const auto generation = ++m_awgMigrationReconnectGeneration;
+        auto context = new QObject(this);
+        auto timer = new QTimer(context);
+        timer->setSingleShot(true);
+        timer->start(10000);
+        connect(timer, &QTimer::timeout, context, [this, context, generation]() {
+            if (generation == m_awgMigrationReconnectGeneration) m_awgMigration->cleanupFailed();
+            context->deleteLater();
+        });
+        connect(m_vpnConnection, &VpnConnection::migrationTeardownObserved, context,
+                [this, context, id, generation](const QString &receiptServer, quint64, bool confirmed) {
+            if (generation != m_awgMigrationReconnectGeneration) { context->deleteLater(); return; }
+            if (receiptServer != id) return;
+            if (!confirmed) { m_awgMigration->cleanupFailed(); context->deleteLater(); return; }
+            DockerContainer container;
+            QJsonObject legacy;
+            const int index = m_serversRepository->indexOfServerId(id);
+            if (index >= 0 && prepareConnection(id, legacy, container) == ErrorCode::NoError) {
+                prepareManagedRouteConnectionSnapshot(id);
+                emit openConnectionRequested(id, index, container, legacy);
+            }
+            context->deleteLater();
+        }, Qt::QueuedConnection);
+        emit closeConnectionRequested();
+    };
     connect(m_vpnConnection, &VpnConnection::connectionStateChanged, this, &ConnectionController::onVpnConnectionStateChanged);
     connect(this, &ConnectionController::openConnectionRequested, m_vpnConnection, &VpnConnection::connectToVpn, Qt::QueuedConnection);
     connect(this, &ConnectionController::closeConnectionRequested, m_vpnConnection, &VpnConnection::disconnectFromVpn, Qt::QueuedConnection);
@@ -451,6 +481,8 @@ void ConnectionController::onVpnConnectionStateChanged(Vpn::ConnectionState stat
         m_managedRouteFullRebuildAttempted = false;
         break;
     case Vpn::ConnectionState::Error:
+        m_awgMigration->failed();
+        [[fallthrough]];
     case Vpn::ConnectionState::Unknown:
         m_serverRoutingRulesSyncTimer.stop();
         ++m_serverRoutingRulesSyncGeneration;
@@ -959,8 +991,18 @@ ErrorCode ConnectionController::prepareConnection(const QString &serverId,
     return ErrorCode::NoError;
 }
 
+QString ConnectionController::awgMigrationState(const QString &serverId) const
+{
+    const auto kind = m_serversRepository->serverKind(serverId);
+    if (kind != serverConfigUtils::ConfigType::SelfHostedAdmin && kind != serverConfigUtils::ConfigType::SelfHostedUser)
+        return QStringLiteral("unmanaged");
+    const auto journal = m_serversRepository->migrationJournal(serverId);
+    return journal.value("state").toString(QStringLiteral("waiting"));
+}
+
 ErrorCode ConnectionController::openConnection(const QString &serverId)
 {
+    ++m_awgMigrationReconnectGeneration;
     QJsonObject vpnConfiguration;
     DockerContainer container;
 
@@ -990,12 +1032,15 @@ ErrorCode ConnectionController::openConnection(const QString &serverId)
     m_managedRouteFullRebuildAttempted = false;
     m_cachedLastConnectionError = ErrorCode::NoError;
     prepareManagedRouteConnectionSnapshot(serverId);
+    vpnConfiguration = m_awgMigration->prepare(serverId, vpnConfiguration);
     emit openConnectionRequested(serverId, serverIndex, container, vpnConfiguration);
     return ErrorCode::NoError;
 }
 
 void ConnectionController::closeConnection()
 {
+    ++m_awgMigrationReconnectGeneration;
+    m_awgMigration->cancel();
     if (m_vpnConnection) {
         emit closeConnectionRequested();
     }
@@ -1108,6 +1153,10 @@ QJsonObject ConnectionController::createConnectionConfiguration(int serverIndex,
     vpnConfiguration[configKey::dns2] = dns.second;
 
     vpnConfiguration[configKey::hostName] = hostName;
+    if (ContainerUtils::isAwgContainer(container)
+        && !vpnConfigData.value(configKey::hostName).toString().isEmpty()) {
+        vpnConfiguration[configKey::hostName] = vpnConfigData.value(configKey::hostName);
+    }
     vpnConfiguration[configKey::description] = description;
     vpnConfiguration[configKey::serverIndex] = serverIndex;
     vpnConfiguration[configKey::configVersion] = configVersion;

@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.25)
+project(AwgMigrationTests LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_AUTOMOC ON)
+find_package(Qt6 REQUIRED COMPONENTS Core Test)
+find_package(OpenSSL REQUIRED)
+enable_testing()
+add_executable(awg_migration_tests tst_awg_migration.cpp
+    ../../core/models/protocols/awgProtocolConfig.cpp)
+target_include_directories(awg_migration_tests PRIVATE ../..)
+target_link_libraries(awg_migration_tests PRIVATE Qt6::Core Qt6::Test OpenSSL::Crypto)
+add_test(NAME awg_migration COMMAND awg_migration_tests)

@@ -39,6 +39,10 @@ add_library(amnezia_headless_core STATIC
     "${CMAKE_CURRENT_LIST_DIR}/../client/core/utils/selfhosted/clientLogsTarget.h"
     vpnBackend.cpp
     vpnBackend.h
+    awgMigrationManager.cpp
+    awgMigrationManager.h
+    embeddedAwgBackend.cpp
+    embeddedAwgBackend.h
     privilegedDaemonBridge.cpp
     privilegedDaemonBridge.h
     daemon.cpp
@@ -47,6 +51,32 @@ add_library(amnezia_headless_core STATIC
 target_include_directories(amnezia_headless_core PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
 target_include_directories(amnezia_headless_core PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../client")
 target_link_libraries(amnezia_headless_core PUBLIC Qt6::Core Qt6::Network OpenSSL::Crypto)
+option(AMNEZIA_HEADLESS_EMBED_AWG3 "Embed pinned private-UAPI AWG3 backend" OFF)
+set(AMNEZIA_HEADLESS_AWG3_RESOURCE_DIRECTORY "" CACHE PATH "Directory from prepare_embedded_awg3.py")
+if(AMNEZIA_HEADLESS_EMBED_AWG3)
+    set(awg3_binary "${AMNEZIA_HEADLESS_AWG3_RESOURCE_DIRECTORY}/amneziawg-go")
+    set(awg3_receipt "${AMNEZIA_HEADLESS_AWG3_RESOURCE_DIRECTORY}/awg3-resource-receipt.json")
+    if(NOT EXISTS "${awg3_binary}" OR NOT EXISTS "${awg3_receipt}")
+        message(FATAL_ERROR "Pinned AWG3 binary and source/toolchain/linker receipt are required")
+    endif()
+    file(READ "${awg3_receipt}" awg3_metadata)
+    string(JSON awg3_reference GET "${awg3_metadata}" reference)
+    string(JSON awg3_source GET "${awg3_metadata}" sourceArchiveSha256)
+    string(JSON awg3_socket GET "${awg3_metadata}" socketDirectory)
+    string(JSON awg3_sha GET "${awg3_metadata}" sha256)
+    string(JSON awg3_linker GET "${awg3_metadata}" linkerFlag)
+    file(SHA256 "${awg3_binary}" awg3_actual_sha)
+    if(NOT awg3_reference STREQUAL "awg-go/3.1.20260814"
+       OR NOT awg3_source STREQUAL "a95853baa25d438a3e92ea5207bd315e3a45143b5209488ebf7f0b44e2e2bcc3"
+       OR NOT awg3_socket STREQUAL "/run/amnezia/awg3"
+       OR NOT awg3_linker STREQUAL "-X github.com/amnezia-vpn/amneziawg-go/v3/ipc.socketDirectory=/run/amnezia/awg3"
+       OR NOT awg3_actual_sha STREQUAL awg3_sha)
+        message(FATAL_ERROR "AWG3 resource provenance or bytes do not match the approved pin")
+    endif()
+    qt_add_resources(amnezia_headless_core "headless_awg3" PREFIX "/amnezia/awg3"
+        BASE "${AMNEZIA_HEADLESS_AWG3_RESOURCE_DIRECTORY}" FILES "${awg3_binary}" "${awg3_receipt}")
+    target_compile_definitions(amnezia_headless_core PRIVATE AMNEZIA_EMBEDDED_AWG3_SHA256="${awg3_sha}")
+endif()
 target_sources(amnezia_headless_core PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/../client/core/utils/remoteLogSanitizer.cpp")
 if(NOT DEFINED HEADLESS_BUILD_VERSION OR HEADLESS_BUILD_VERSION STREQUAL "")
@@ -66,6 +96,9 @@ add_executable(amnezia-cli cli.cpp)
 target_link_libraries(amnezia-cli PRIVATE amnezia_headless_core Qt6::Core Qt6::Network)
 
 if(BUILD_TESTING)
+add_executable(headless_awg_migration_tests tests/tst_awg_migration.cpp)
+target_link_libraries(headless_awg_migration_tests PRIVATE amnezia_headless_core Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME headless_awg_migration COMMAND headless_awg_migration_tests)
 add_executable(headless_protocol_tests
     tests/tst_headless_protocol.cpp
 )

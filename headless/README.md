@@ -1,5 +1,24 @@
 # AmneziaVPN headless client для Ubuntu
 
+AWG migration candidates use an embedded `awg-go/3.1.20260814` userspace engine.
+Release builds require `AMNEZIA_HEADLESS_AWG3_RESOURCE_DIRECTORY`, produced offline
+by `deploy/headless/prepare_embedded_awg3.py` from the approved source ZIP and Go
+1.26.0. Its receipt records source/toolchain/linker metadata and binary SHA-256.
+The linker confines UAPI to `/run/amnezia/awg3`; the engine is inside `amneziad`,
+preserving the two-binary updater and its rollback. Missing resources stop a
+release build. Ordinary external legacy backends remain the rollback path.
+
+Migration enrollment uses an authenticated legacy peer tunnel and the existing
+root-private client-log credential. Signed offers bind the peer and source
+configuration; private staging leaves imported profiles intact. The next manual
+or automatic connection tries the candidate and requires applied header
+protection, a fresh expected-peer handshake and a signed challenge through a
+socket bound to the candidate interface. Failure retires owned state and
+restores legacy; incomplete cleanup reports `recovery_required`. Generation
+watermarks survive rollback. Committed profiles remain valid beyond enrollment
+grant expiry. Runtime acceptance requires owned Linux/Windows guest evidence;
+Android still requires a real device.
+
 `headless/` — отдельный native Linux target без QML, GUI и system tray. Он состоит из:
 
 - `amneziad` — долгоживущий daemon на `QCoreApplication`;

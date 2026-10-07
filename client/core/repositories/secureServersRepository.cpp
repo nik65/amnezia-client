@@ -1,6 +1,7 @@
 #include "secureServersRepository.h"
 
 #include <QJsonArray>
+#include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QJsonValue>
 #include <QSet>
@@ -417,6 +418,41 @@ QString SecureServersRepository::addServer(const QString &serverId, const QJsonO
     syncToStorage();
     emit serverAdded(id);
     return id;
+}
+
+QJsonObject SecureServersRepository::migrationJournal(const QString &serverId) const
+{
+    const auto key = QStringLiteral("Conf/awgMigration/") + QString::fromLatin1(
+            QCryptographicHash::hash(serverId.toUtf8(), QCryptographicHash::Sha256).toHex());
+    return QJsonDocument::fromJson(m_settings->value(key).toByteArray()).object();
+}
+
+bool SecureServersRepository::writeMigrationJournal(const QString &serverId, const QJsonObject &journal)
+{
+    const auto key = QStringLiteral("Conf/awgMigration/") + QString::fromLatin1(
+            QCryptographicHash::hash(serverId.toUtf8(), QCryptographicHash::Sha256).toHex());
+    const auto bytes = QJsonDocument(journal).toJson(QJsonDocument::Compact);
+    m_settings->setValue(key, bytes);
+    return m_settings->value(key).toByteArray() == bytes;
+}
+
+bool SecureServersRepository::compareAndSwapServer(const QString &serverId, const QString &expectedHash,
+                                                  const QJsonObject &replacement)
+{
+    if (!m_serverJsonById.contains(serverId)) return false;
+    const auto previous = m_serverJsonById.value(serverId);
+    const auto hash = QString::fromLatin1(QCryptographicHash::hash(
+            QJsonDocument(previous).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+    if (hash != expectedHash || serverConfigUtils::configTypeFromJson(withoutStorageServerId(replacement))
+            != serverConfigUtils::configTypeFromJson(withoutStorageServerId(previous))) return false;
+    m_serverJsonById[serverId] = embedStorageServerId(serverId, withoutStorageServerId(replacement));
+    syncToStorage();
+    const auto stored = QJsonDocument::fromJson(m_settings->value("Servers/serversList").toByteArray()).array();
+    bool persisted = false;
+    for (const auto &entry : stored) if (entry.toObject() == m_serverJsonById[serverId]) persisted = true;
+    if (!persisted) { m_serverJsonById[serverId] = previous; return false; }
+    emit serverEdited(serverId);
+    return true;
 }
 
 void SecureServersRepository::editServer(const QString &serverId, const QJsonObject &serverJson, serverConfigUtils::ConfigType kind)

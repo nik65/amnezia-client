@@ -3,10 +3,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "wireguardutilslinux.h"
+#include "../../../../common/awgBackendObservation.h"
 
 #include <errno.h>
 
 #include <QByteArray>
+#include <QCryptographicHash>
+#include <QRegularExpression>
 #include <QDir>
 #include <QFile>
 #include <QLocalSocket>
@@ -341,6 +344,13 @@ QList<WireguardUtils::PeerStatus> WireguardUtilsLinux::getPeerStatus() {
         peerList.append(status);
     }
 
+    const auto keyLine = reply.split('\n').filter(QRegularExpression("^header_protection_key="));
+    for (auto &peer : peerList) {
+        peer.m_parameterDigests = amnezia::awgBackendObservation::parameterDigests(reply);
+        peer.m_awg3Capable = reply.contains("\nrandom_trailers=") && reply.contains("\ndisable_cookies=");
+        if (!keyLine.isEmpty()) peer.m_headerProtectionKeyHash = QString::fromLatin1(QCryptographicHash::hash(
+                QByteArray::fromHex(keyLine.first().section('=', 1).toUtf8()), QCryptographicHash::Sha256).toHex());
+    }
     return peerList;
 }
 

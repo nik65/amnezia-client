@@ -23,6 +23,7 @@
 #include "core/repositories/secureAppSettingsRepository.h"
 #include "core/protocols/vpnProtocol.h"
 #include "vpnConnection.h"
+#include "awgMigrationController.h"
 
 using namespace amnezia;
 
@@ -55,6 +56,7 @@ public:
     void onManagedSplitTunnelingRulesPublished(int serverIndex);
 
     ErrorCode lastConnectionError() const;
+    QString awgMigrationState(const QString &serverId) const;
 
     bool isConnected() const;
     void setConnectionState(Vpn::ConnectionState state);
@@ -128,6 +130,8 @@ signals:
 #endif
 
 private:
+    AwgMigrationController *m_awgMigration = nullptr;
+    quint64 m_awgMigrationReconnectGeneration = 0;
     struct ManagedRouteSyncSnapshot
     {
         bool hasConfirmedAppliedState = false;

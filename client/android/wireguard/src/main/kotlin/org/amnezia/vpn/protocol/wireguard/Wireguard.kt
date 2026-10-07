@@ -32,6 +32,56 @@ open class Wireguard : Protocol() {
     protected open val ifName: String = "amn0"
     private lateinit var scope: CoroutineScope
     private var statusJob: Job? = null
+    private var migrationConnectionNonce: String = ""
+    override val migrationObservation: String?
+        get() {
+            val active = config ?: return null
+            if (tunnelHandle < 0) return null
+            val native = GoBackend.awgGetConfig(tunnelHandle) ?: return null
+            val fields = native.lineSequence().mapNotNull {
+                val split = it.indexOf('=')
+                if (split < 0) null else it.substring(0, split) to it.substring(split + 1)
+            }.toMap()
+            if (fields["public_key"] != active.publicKeyHex) return null
+            val handshake = fields["last_handshake_time_sec"]?.toLongOrNull() ?: return null
+            val publicBytes = active.publicKeyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            val names = mapOf("jc" to "Jc", "jmin" to "Jmin", "jmax" to "Jmax",
+                "s1" to "S1", "s2" to "S2", "s3" to "S3", "s4" to "S4",
+                "h1" to "H1", "h2" to "H2", "h3" to "H3", "h4" to "H4",
+                "i1" to "I1", "i2" to "I2", "i3" to "I3", "i4" to "I4", "i5" to "I5",
+                "header_protection_key" to "HeaderProtectionKey", "content_padding_addition" to "ContentPaddingAddition",
+                "rekey_after_time" to "RekeyAfterTime", "rekey_timeout" to "RekeyTimeout",
+                "reject_after_time" to "RejectAfterTime", "keepalive_timeout" to "KeepaliveTimeout",
+                "max_handshake_attempts" to "MaxHandshakeAttempts", "random_trailers" to "RandomTrailers", "disable_cookies" to "DisableCookies")
+            fun digest(value: String) = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+            val parameterDigests = JSONObject()
+            for (key in listOf("Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "ContentPaddingAddition"))
+                parameterDigests.put(key, digest("0"))
+            for (key in listOf("I1", "I2", "I3", "I4", "I5")) parameterDigests.put(key, digest(""))
+            for ((nativeKey, key) in names) fields[nativeKey]?.let { value ->
+                val normalized = if (key == "HeaderProtectionKey") {
+                    android.util.Base64.encodeToString(value.chunked(2).map { it.toInt(16).toByte() }.toByteArray(), android.util.Base64.NO_WRAP)
+                } else value.trim()
+                parameterDigests.put(key, digest(normalized))
+            }
+            return JSONObject().apply {
+                put("peerPublicKey", android.util.Base64.encodeToString(publicBytes, android.util.Base64.NO_WRAP))
+                put("lastHandshakeMs", (handshake * 1000).toString())
+                put("rxBytes", fields["rx_bytes"]?.toLongOrNull() ?: 0)
+                put("txBytes", fields["tx_bytes"]?.toLongOrNull() ?: 0)
+                put("deviceIpv4Address", active.addresses.firstOrNull { it.isIpv4 }?.toString()?.substringBefore('/') ?: "")
+                put("backendVersion", GoBackend.awgVersion())
+                put("parameterDigests", parameterDigests)
+                put("connectionNonce", migrationConnectionNonce)
+                put("awg3Capable", fields.containsKey("random_trailers") && fields.containsKey("disable_cookies"))
+                fields["header_protection_key"]?.let { key ->
+                    val raw = key.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                    put("headerProtectionKeyHash", java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(raw).joinToString("") { "%02x".format(it) })
+                }
+            }.toString()
+        }
 
     override val statistics: Statistics
         get() {
@@ -61,6 +111,7 @@ open class Wireguard : Protocol() {
     }
 
     override suspend fun startVpn(config: JSONObject, vpnBuilder: Builder, protect: (Int) -> Boolean) {
+        migrationConnectionNonce = config.optString("migrationConnectionNonce", "")
         val wireguardConfig = parseConfig(config)
         start(wireguardConfig, vpnBuilder, protect)
         this.config = wireguardConfig

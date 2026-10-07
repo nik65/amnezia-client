@@ -612,6 +612,11 @@ QJsonObject Daemon::getStatus() {
     json.insert("date", connection.m_date.toString());
     json.insert("txBytes", QJsonValue(status.m_txBytes));
     json.insert("rxBytes", QJsonValue(status.m_rxBytes));
+    json.insert("peerPublicKey", status.m_pubkey);
+    json.insert("lastHandshakeMs", QString::number(status.m_handshake));
+    json.insert("awg3Capable", status.m_awg3Capable);
+    json.insert("headerProtectionKeyHash", status.m_headerProtectionKeyHash);
+    json.insert("parameterDigests", status.m_parameterDigests);
     return json;
   }
 

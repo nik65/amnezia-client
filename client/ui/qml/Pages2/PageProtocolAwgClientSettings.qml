@@ -47,6 +47,20 @@ PageType {
 
         header: ColumnLayout {
             width: listView.width
+            Label {
+                id: migrationStatus
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                wrapMode: Text.WordWrap
+                text: ConnectionController.awgMigrationStatus(ServersUiController.processedServerId)
+                Timer {
+                    interval: 10000
+                    running: root.visible
+                    repeat: true
+                    onTriggered: migrationStatus.text = ConnectionController.awgMigrationStatus(ServersUiController.processedServerId)
+                }
+            }
             
             BaseHeaderType {
                 Layout.fillWidth: true

@@ -51,6 +51,10 @@ public:
 
     QJsonObject serverJson(int index) const;
     void editServerJson(int index, const QJsonObject &serverJson);
+    QJsonObject migrationJournal(const QString &serverId) const;
+    bool writeMigrationJournal(const QString &serverId, const QJsonObject &journal);
+    bool compareAndSwapServer(const QString &serverId, const QString &expectedHash,
+                              const QJsonObject &replacement);
 
     QVariantMap managedVpnSites(int serverIndex, RouteMode mode) const;
     QVariantMap managedVpnSitesForRouting(int serverIndex, RouteMode mode) const;

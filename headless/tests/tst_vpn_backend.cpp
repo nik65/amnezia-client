@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QDateTime>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QRegularExpression>
 #include <QTemporaryDir>
@@ -59,7 +60,7 @@ public:
         if ((program == QStringLiteral("wg") || program == QStringLiteral("awg"))
             && arguments.contains(QStringLiteral("showconf"))) {
             configProbeRequested = true;
-            return { true, 0, {}, {} };
+            return { true, 0, {}, configOutput };
         }
         if (program == QStringLiteral("ip")
             && arguments.contains(QStringLiteral("addr"))) {
@@ -97,6 +98,7 @@ public:
     bool configProbeRequested = false;
     bool handshakeRequested = false;
     QString handshakeOutput;
+    QString configOutput;
     bool sessionAlive = true;
     CommandResult runResult { true, {}, {} };
     CommandResult startResult { true, {}, {} };
@@ -115,6 +117,68 @@ class VpnBackendTest : public QObject
     Q_OBJECT
 
 private slots:
+    void migrationCandidateRequiresSourceCasAndPrivateTrustedDirectory()
+    {
+        QTemporaryDir directory;
+        const QString originalPath = directory.filePath(QStringLiteral("legacy.conf"));
+        QFile original(originalPath);
+        QVERIFY(original.open(QIODevice::WriteOnly));
+        const QByteArray bytes("[Interface]\n[Peer]\nPublicKey = expected-peer\n");
+        QCOMPARE(original.write(bytes), bytes.size());
+        original.close();
+        const QString cache = directory.filePath(QStringLiteral("cache"));
+        QVERIFY(QDir().mkdir(cache));
+        QVERIFY(QFile::setPermissions(cache, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        const QString candidatePath = QDir(cache).filePath(QStringLiteral("amn0.conf"));
+        QFile candidate(candidatePath);
+        QVERIFY(candidate.open(QIODevice::WriteOnly));
+        candidate.write(bytes);
+        candidate.close();
+        QVERIFY(candidate.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->availablePrograms = { QStringLiteral("awg-quick"), QStringLiteral("awg"), QStringLiteral("ip") };
+        VpnBackend backend(runner, directory.path());
+        const Profile source = profile(QStringLiteral("work"), QStringLiteral("amneziawg"), originalPath);
+        QCOMPARE(backend.connectMigrationCandidate(source, candidatePath, cache, QStringLiteral("wrong")).code,
+                 QStringLiteral("migration_source_changed"));
+        QVERIFY(runner->calls.isEmpty());
+        const QString sha = QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+        QVERIFY(candidate.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadOther));
+        QCOMPARE(backend.connectMigrationCandidate(source, candidatePath, cache, sha).code,
+                 QStringLiteral("migration_cache_unsafe"));
+        QVERIFY(runner->calls.isEmpty());
+        QVERIFY(candidate.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        QVERIFY(backend.connectMigrationCandidate(source, candidatePath, cache, sha).ok);
+        QVERIFY(backend.disconnect().ok);
+    }
+    void migrationAcceptanceRejectsStickyAndForeignHandshake()
+    {
+        QTemporaryDir directory;
+        QFile config(directory.filePath(QStringLiteral("amn0.conf")));
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("[Interface]\n[Peer]\nPublicKey = expected-peer\n");
+        config.close();
+        auto runner = std::make_shared<FakeCommandRunner>();
+        runner->availablePrograms = { QStringLiteral("awg-quick"), QStringLiteral("awg"), QStringLiteral("ip") };
+        VpnBackend backend(runner);
+        QVERIFY(backend.connect(profile(QStringLiteral("work"), QStringLiteral("amneziawg"), config.fileName())).ok);
+        const qint64 start = QDateTime::currentSecsSinceEpoch();
+        runner->handshakeOutput = QStringLiteral("expected-peer %1\n").arg(start - 1);
+        QVERIFY(backend.sessionHealthyAfterRouting());
+        QVERIFY(!backend.migrationHandshakeObserved(QStringLiteral("expected-peer"), start));
+        runner->handshakeOutput = QStringLiteral("foreign-peer %1\n").arg(start);
+        QVERIFY(!backend.migrationHandshakeObserved(QStringLiteral("expected-peer"), start));
+        runner->handshakeOutput = QStringLiteral("expected-peer %1\n").arg(start);
+        QVERIFY(backend.migrationHandshakeObserved(QStringLiteral("expected-peer"), start));
+        const QMap<QString, QString> parameters { { QStringLiteral("Hpk"), QStringLiteral("test-key") } };
+        QVERIFY(!backend.migrationParametersApplied(parameters));
+        runner->configOutput = QStringLiteral("[Interface]\nHpk = other-key\n");
+        QVERIFY(!backend.migrationParametersApplied(parameters));
+        runner->configOutput = QStringLiteral("[Interface]\nHpk = test-key\n");
+        QVERIFY(backend.migrationParametersApplied(parameters));
+        runner->configOutput = QStringLiteral("[Interface]\nHpk = test-key\nHpk = other-key\n");
+        QVERIFY(!backend.migrationParametersApplied(parameters));
+    }
     void runBatchReturnsBoundedStderrAndExitCode()
     {
         QTemporaryDir temporaryDirectory;

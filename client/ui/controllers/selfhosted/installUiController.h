@@ -60,6 +60,9 @@ public:
     ~InstallUiController();
 
 public slots:
+    void prepareAwgMigration(const QString &serverId, int containerIndex,
+                             const QString &endpointHost, int targetPort,
+                             const QString &immutableImage, qint64 generation);
     void install(DockerContainer container, int port, TransportProto transportProto, const QString &serverId);
     void setProcessedServerCredentials(const QString &hostName, const QString &userName, const QString &secretData,
                                        const QString &sshHostKeyFingerprint);

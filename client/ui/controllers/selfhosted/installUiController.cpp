@@ -303,6 +303,34 @@ void InstallUiController::updateClientConfig(const QString &serverId, int contai
     emit installationErrorOccurred(errorCode);
 }
 
+void InstallUiController::prepareAwgMigration(const QString &serverId, int containerIndex,
+        const QString &endpointHost, int targetPort, const QString &immutableImage, qint64 generation)
+{
+    const auto admin = m_serversController->selfHostedAdminConfig(serverId);
+    if (!admin.has_value()) { emit installationErrorOccurred(ErrorCode::InternalError); return; }
+    const auto credentials = m_serversController->getServerCredentials(serverId);
+    auto watcher = new QFutureWatcher<QPair<ErrorCode, QJsonObject>>(this);
+    emit serverIsBusy(true);
+    connect(watcher, &QFutureWatcher<QPair<ErrorCode, QJsonObject>>::finished, this, [this, watcher]() {
+        const auto result = watcher->result();
+        watcher->deleteLater();
+        emit serverIsBusy(false);
+        if (result.first != ErrorCode::NoError || !result.second.value("prepared").toBool()) {
+            emit installationErrorOccurred(result.first == ErrorCode::NoError ? ErrorCode::InternalError : result.first);
+            return;
+        }
+        emit updateContainerFinished(tr("AWG 3.1 migration prepared. Eligible clients will switch on their next connection. Legacy connections remain available."), false);
+    });
+    auto installer = m_installController;
+    watcher->setFuture(QtConcurrent::run([installer, credentials, containerIndex, endpointHost,
+                                        targetPort, immutableImage, generation]() {
+        QJsonObject result;
+        const auto error = installer->prepareAwgMigration(credentials, static_cast<DockerContainer>(containerIndex),
+                endpointHost, targetPort, immutableImage, generation, result);
+        return qMakePair(error, result);
+    }));
+}
+
 void InstallUiController::updateServerConfig(const QString &serverId, int containerIndex, int protocolIndex, bool closePage)
 {
     DockerContainer container = static_cast<DockerContainer>(containerIndex);

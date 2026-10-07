@@ -1,5 +1,17 @@
 #include "connectionUiController.h"
 
+QString ConnectionUiController::awgMigrationStatus(const QString &serverId) const
+{
+    const auto state = m_connectionController->awgMigrationState(serverId);
+    if (state == "unmanaged") return tr("Automatic migration is unavailable for this imported profile.");
+    if (state == "staged") return tr("AWG 3.1 is ready for your next connection.");
+    if (state == "trial" || state == "committing") return tr("Checking the AWG 3.1 connection.");
+    if (state == "committed" || state == "ack_pending") return tr("This profile has migrated to AWG 3.1.");
+    if (state == "rolled_back") return tr("The previous connection settings were restored.");
+    if (state == "recovery_required") return tr("Connection recovery needs attention.");
+    return tr("Automatic migration is waiting for server preparation and a compatible VPN engine.");
+}
+
 #if defined(Q_OS_ANDROID) || defined(Q_OS_IOS) || defined(MACOS_NE)
     #include <QGuiApplication>
 #else

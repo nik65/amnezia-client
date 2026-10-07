@@ -146,6 +146,7 @@ set(SOURCES ${SOURCES}
     ${CLIENT_ROOT_DIR}/core/controllers/allowedDnsController.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/selfhosted/exportController.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/connectionController.cpp
+    ${CLIENT_ROOT_DIR}/core/controllers/awgMigrationController.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/connectionHealthController.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/routeInspectorController.cpp
     ${CLIENT_ROOT_DIR}/core/controllers/settingsController.cpp

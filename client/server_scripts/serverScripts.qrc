@@ -1,5 +1,11 @@
 <RCC>
     <qresource prefix="/server_scripts">
+        <file>awg_migration/prepare.py</file>
+        <file>awg_migration/service.py</file>
+        <file>awg_migration/target.py</file>
+        <file>awg_migration/policy.py</file>
+        <file>awg_migration/journal.py</file>
+        <file>awg_migration/feeds.py</file>
         <file>awg/configure_container.sh</file>
         <file>awg/Dockerfile</file>
         <file>awg/run_container.sh</file>

@@ -1,4 +1,6 @@
 #include "vpnConnection.h"
+#include <QPointer>
+#include <QUuid>
 
 #include <limits>
 
@@ -1733,6 +1735,7 @@ void VpnConnection::connectToVpn(const QString &serverId, int serverIndex,
     m_serverId = serverId;
     m_container = container;
     m_vpnConfiguration = vpnConfiguration;
+    m_vpnConfiguration["migrationConnectionNonce"] = QUuid::createUuid().toString(QUuid::WithoutBraces);
     setConnectionState(Vpn::ConnectionState::Connecting);
 
 #ifdef AMNEZIA_DESKTOP
@@ -1778,6 +1781,18 @@ void VpnConnection::createProtocolConnections()
     connect(m_vpnProtocol.data(), &VpnProtocol::protocolError, this, &VpnConnection::vpnProtocolError);
     connect(m_vpnProtocol.data(), &VpnProtocol::connectionStateChanged, this, &VpnConnection::setConnectionState);
     connect(m_vpnProtocol.data(), SIGNAL(bytesChanged(quint64, quint64)), this, SLOT(onBytesChanged(quint64, quint64)));
+    const quint64 migrationEpoch = m_connectionEpoch;
+    const QString migrationServerId = m_serverId;
+    const QPointer<VpnProtocol> migrationProtocol(m_vpnProtocol.data());
+    connect(m_vpnProtocol.data(), &VpnProtocol::migrationPeerObservation, this,
+            [this, migrationEpoch, migrationServerId, migrationProtocol](const QJsonObject &observation) {
+                if (migrationEpoch != m_connectionEpoch || migrationServerId != m_serverId
+                    || !migrationProtocol || migrationProtocol.data() != m_vpnProtocol.data()) return;
+#ifdef Q_OS_ANDROID
+                if (observation.value("connectionNonce") != m_vpnConfiguration.value("migrationConnectionNonce")) return;
+#endif
+                emit migrationPeerObservation(migrationServerId, migrationEpoch, observation);
+            });
 
 #ifdef AMNEZIA_DESKTOP
     IpcClient::withInterface([this](QSharedPointer<IpcInterfaceReplica> rep) {
@@ -1991,6 +2006,8 @@ void VpnConnection::createAndroidConnections()
     connect(AndroidController::instance(), &AndroidController::connectionStateChanged, androidVpnProtocol,
             &AndroidVpnProtocol::setConnectionState);
     connect(AndroidController::instance(), &AndroidController::statisticsUpdated, androidVpnProtocol, &AndroidVpnProtocol::setBytesChanged);
+    connect(AndroidController::instance(), &AndroidController::migrationPeerObservation,
+            androidVpnProtocol, &VpnProtocol::migrationPeerObservation);
 }
 
 AndroidVpnProtocol *VpnConnection::createDefaultAndroidVpnProtocol()
@@ -2217,6 +2234,16 @@ void VpnConnection::setConnectionState(Vpn::ConnectionState state) {
         return;
 
     m_connectionState = state;
+    if (state == Vpn::ConnectionState::Disconnected) {
+        const auto epoch = m_connectionEpoch;
+        const auto serverId = m_serverId;
+        QTimer::singleShot(0, this, [this, epoch, serverId]() {
+            if (epoch != m_connectionEpoch || serverId != m_serverId
+                || m_connectionState != Vpn::ConnectionState::Disconnected) return;
+            emit migrationTeardownObserved(serverId, epoch,
+                    m_startupRouteTeardownConfirmed && m_vpnProtocol.isNull());
+        });
+    }
     emit connectionContextChanged(m_serverId, serverRoutingRulesSyncHost(), m_connectionEpoch);
     emit connectionStateChanged(state);
 }

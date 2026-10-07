@@ -524,6 +524,9 @@ void LocalSocketController::parseCommand(const QByteArray& command) {
       return;
     }
 
+    if (obj.value("peerPublicKey").isString() && obj.value("lastHandshakeMs").isString()) {
+      emit migrationPeerObservation(obj);
+    }
     emit statusUpdated(serverIpv4Gateway.toString(),
                        deviceIpv4Address.toString(), txBytes.toDouble(),
                        rxBytes.toDouble());

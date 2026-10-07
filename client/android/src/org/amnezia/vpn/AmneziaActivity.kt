@@ -153,6 +153,9 @@ class AmneziaActivity : QtActivity() {
                     }
 
                     ServiceEvent.STATISTICS_UPDATE -> {
+                        msg.data?.getString("migrationObservation")?.let {
+                            QtAndroidController.onMigrationObservation(it)
+                        }
                         msg.data?.getStatistics()?.let { (rxBytes, txBytes) ->
                             QtAndroidController.onStatisticsUpdate(rxBytes, txBytes)
                         }

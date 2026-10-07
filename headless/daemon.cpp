@@ -109,8 +109,12 @@ Daemon::Daemon(QString socketPath, QString profileStorePath,
       m_routingController(runner ? runner : std::make_shared<RealCommandRunner>(stagingRoot),
                           routeStatePathForStore(m_profileStore.path()), false),
       m_updateManager(runner, updateStatePathForStore(m_profileStore.path())),
-      m_remoteLogUploader(std::move(remoteLogConfigPath), this)
+      m_remoteLogUploader(std::move(remoteLogConfigPath), this),
+      m_migrationManager(QDir(QFileInfo(m_profileStore.path()).absolutePath()).filePath(QStringLiteral("awg-migrations")),
+                         m_remoteLogUploader.configPath(), requireRootOwnedConfig)
 {
+    connect(&m_migrationTimer, &QTimer::timeout, this, &Daemon::checkAwgMigration);
+    m_migrationTimer.setInterval(60000);
     connect(&m_server, &QLocalServer::newConnection,
             this, &Daemon::acceptConnections);
     m_routingRefreshTimer.setInterval(24 * 60 * 60 * 1000);
@@ -167,6 +171,7 @@ bool Daemon::start(QString *error)
         m_startPhase = StartPhase::NotStarted;
         return false;
     }
+    if (!m_migrationManager.load(error)) return failStart(QStringLiteral("migration state requires recovery"));
     QString remoteLogError;
     if (!m_remoteLogUploader.load(&remoteLogError)) {
         qWarning() << "Headless remote log uploader disabled:" << remoteLogError;
@@ -275,6 +280,7 @@ bool Daemon::start(QString *error)
     m_startPhase = StartPhase::Listening;
     m_updateTimer.start();
     m_healthTimer.start();
+    m_migrationTimer.start();
     QTimer::singleShot(1000, this, &Daemon::connectAutomaticProfile);
     QTimer::singleShot(10'000, this, &Daemon::checkAutomaticUpdates);
     return true;
@@ -282,6 +288,7 @@ bool Daemon::start(QString *error)
 
 void Daemon::stop()
 {
+    m_migrationTimer.stop();
     // Retire the routing/DNS receipt while the owned interface is still live.
     // If guarded cleanup fails, leave the backend and receipt owned for
     // explicit recovery; never report a clean shutdown for partial work.
@@ -497,62 +504,24 @@ QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
                                QStringLiteral("profile does not exist"));
         }
 
-        const BackendResult result = m_vpnBackend.connect(storedProfile);
+        const BackendResult result = connectManagedProfile(storedProfile);
         if (!result.ok) {
             return encodeError(request.requestId, result.code, result.message);
         }
         m_backendOwned = true;
-        const RoutingResult routingResult = m_routingController.connect(storedProfile);
-        if (!routingResult.ok) {
-            // all-except has an explicit availability-preserving fallback:
-            // the controller may have committed healthy only-forward routes
-            // while retaining the connected VPN session.  Do not tear down
-            // that session merely because the requested policy was degraded.
-            if (routingResult.code == QStringLiteral("routing_degraded")
-                && !m_routingController.status().value(QStringLiteral("recoveryRequired")).toBool()) {
-                m_routingOwned = true;
-                m_state = QStringLiteral("connected");
-                m_backendConnectedTimer.start();
-                m_activeProfile = storedProfile.id;
-                m_activeProfileData = storedProfile;
-                if (!storedProfile.serverRulesUrl.isEmpty()) {
-                    // Keep retrying the bounded policy fetch while the
-                    // verified only-forward fallback keeps the session usable.
-                    m_routingRefreshTimer.start();
-                } else {
-                    m_routingRefreshTimer.stop();
-                }
-                return encodeError(request.requestId, routingResult.code, routingResult.message);
-            }
-            // The reconciler owns rollback of its own transaction.  This
-            // daemon did not acquire routing ownership on a failed connect,
-            // so do not issue an extra cleanup mutation here.
-            const BackendResult backendCleanup = m_vpnBackend.disconnect();
-            if (backendCleanup.ok) m_backendOwned = false;
-            m_routingRefreshTimer.stop();
-            if (!backendCleanup.ok) {
-                m_state = QStringLiteral("cleanup_failed");
-                m_activeProfile = storedProfile.id;
-                m_activeProfileData = storedProfile;
-                return encodeError(request.requestId, QStringLiteral("cleanup_failed"),
-                                   QStringLiteral("connection failed and cleanup requires recovery"));
-            }
-            m_state = QStringLiteral("disconnected");
-            m_backendConnectedTimer.invalidate();
-            m_activeProfile.clear();
-            m_activeProfileData.reset();
-            return encodeError(request.requestId, routingResult.code, routingResult.message);
-        }
         m_routingOwned = true;
         m_state = QStringLiteral("connected");
         m_backendConnectedTimer.start();
         m_activeProfile = storedProfile.id;
         m_activeProfileData = storedProfile;
+        m_activeProfileData->configPath = m_vpnBackend.activeConfigPath();
         if (!storedProfile.serverRulesUrl.isEmpty()) {
             m_routingRefreshTimer.start();
         } else {
             m_routingRefreshTimer.stop();
         }
+        if (result.code == QStringLiteral("routing_degraded"))
+            return encodeError(request.requestId, result.code, result.message);
         return statusResponse(request.requestId);
     }
     case Command::Disconnect: {
@@ -744,6 +713,7 @@ QByteArray Daemon::statusResponse(const QString &requestId)
         { QStringLiteral("routingOffline"), routing.value(QStringLiteral("interfaceOffline")).toBool() },
         { QStringLiteral("remoteLogs"), m_remoteLogUploader.status() },
         { QStringLiteral("updates"), m_updateManager.status() },
+        { QStringLiteral("awgMigration"), m_migrationManager.status() },
     });
 }
 
@@ -829,53 +799,107 @@ void Daemon::connectAutomaticProfile()
             continue;
         }
 
-        const BackendResult backend = m_vpnBackend.connect(profile);
+        const BackendResult backend = connectManagedProfile(profile);
         if (!backend.ok) {
             qWarning() << "Headless automatic VPN connection failed:" << backend.code;
             return;
         }
         m_backendOwned = true;
-        const RoutingResult routing = m_routingController.connect(profile);
-        if (!routing.ok) {
-            if (routing.code == QStringLiteral("routing_degraded")
-                && !m_routingController.status().value(QStringLiteral("recoveryRequired")).toBool()) {
-                // all-except has a verified availability-preserving fallback;
-                // do not tear down the healthy backend or strand its receipt.
-                m_state = QStringLiteral("connected");
-                m_routingOwned = true;
-                m_backendConnectedTimer.start();
-                m_activeProfile = profile.id;
-                m_activeProfileData = profile;
-                if (!profile.serverRulesUrl.isEmpty()) {
-                    m_routingRefreshTimer.start();
-                } else {
-                    m_routingRefreshTimer.stop();
-                }
-                qWarning() << "Headless automatic route setup degraded; retaining only-forward fallback";
-                return;
-            }
-            const BackendResult backendCleanup = m_vpnBackend.disconnect();
-            if (backendCleanup.ok) m_backendOwned = false;
-            m_routingRefreshTimer.stop();
-            if (!backendCleanup.ok) {
-                m_state = QStringLiteral("cleanup_failed");
-                m_activeProfile = profile.id;
-                m_activeProfileData = profile;
-            }
-            qWarning() << "Headless automatic route setup failed:" << routing.code;
-            return;
-        }
-
         m_state = QStringLiteral("connected");
         m_routingOwned = true;
         m_backendConnectedTimer.start();
         m_activeProfile = profile.id;
         m_activeProfileData = profile;
+        m_activeProfileData->configPath = m_vpnBackend.activeConfigPath();
         if (!profile.serverRulesUrl.isEmpty()) {
             m_routingRefreshTimer.start();
         }
         return;
     }
+}
+
+BackendResult Daemon::connectManagedProfile(const Profile &profile)
+{
+    if (!m_vpnBackend.activeProfile().isEmpty())
+        return { false, QStringLiteral("already_connected"), QStringLiteral("a VPN profile is already active") };
+    QString candidatePath, sourceHash;
+    const bool candidate = m_migrationManager.candidate(profile, candidatePath, sourceHash);
+    const auto connectLegacy = [&]() -> BackendResult {
+        const BackendResult backend = m_vpnBackend.connect(profile);
+        if (!backend.ok) return backend;
+        m_backendOwned = true;
+        const RoutingResult routing = m_routingController.connect(profile);
+        if (routing.ok || (routing.code == QStringLiteral("routing_degraded")
+            && !m_routingController.status().value(QStringLiteral("recoveryRequired")).toBool())) {
+            m_routingOwned = true;
+            return { true, routing.code, routing.message };
+        }
+        const BackendResult cleaned = m_vpnBackend.disconnect();
+        if (cleaned.ok) m_backendOwned = false;
+        else m_state = QStringLiteral("cleanup_failed");
+        return { false, cleaned.ok ? routing.code : QStringLiteral("cleanup_failed"),
+                 cleaned.ok ? routing.message : QStringLiteral("connection cleanup failed") };
+    };
+    if (!candidate) return connectLegacy();
+    if (!m_migrationManager.begin(profile))
+        return { false, QStringLiteral("migration_journal_failed"), QStringLiteral("migration journal write failed") };
+    const qint64 started = QDateTime::currentSecsSinceEpoch();
+    const BackendResult backend = m_vpnBackend.connectMigrationCandidate(profile, candidatePath,
+        m_migrationManager.profileRoot(profile), sourceHash);
+    if (backend.ok) {
+        m_backendOwned = true;
+        Profile effective = profile;
+        effective.configPath = candidatePath;
+        const RoutingResult routing = m_routingController.connect(effective);
+        if (routing.ok || routing.code == QStringLiteral("routing_degraded")) m_routingOwned = true;
+        if (routing.ok && m_migrationManager.verify(profile, m_vpnBackend, started)
+            && m_migrationManager.commit(profile)) return { true, {}, {} };
+        // The routing reconciler owns policy revisions. Rollback retires only
+        // this connection's routes; it never restores a stale policy snapshot.
+        if (m_routingController.status().value(QStringLiteral("recoveryRequired")).toBool()) {
+            m_state = QStringLiteral("recovery_required");
+            return { false, m_state, QStringLiteral("migration routing requires recovery") };
+        }
+        if (m_routingOwned) {
+            const RoutingResult cleaned = m_routingController.disconnect();
+            if (!cleaned.ok) {
+                m_state = QStringLiteral("recovery_required");
+                return { false, m_state, QStringLiteral("migration routes could not be retired") };
+            }
+            m_routingOwned = false;
+        }
+        const BackendResult cleaned = m_vpnBackend.disconnect();
+        if (!cleaned.ok) {
+            m_state = QStringLiteral("recovery_required");
+            return { false, m_state, QStringLiteral("migration interface could not be retired") };
+        }
+        m_backendOwned = false;
+    } else if (!m_vpnBackend.activeProfile().isEmpty() || m_vpnBackend.configuredInterfacePresent(profile)
+               || m_vpnBackend.configuredDnsBindingPresent(profile)) {
+        m_backendOwned = !m_vpnBackend.activeProfile().isEmpty();
+        m_state = QStringLiteral("recovery_required");
+        return { false, m_state, QStringLiteral("failed migration may have left native state") };
+    }
+    if (!m_migrationManager.abandon(profile)) {
+        m_state = QStringLiteral("recovery_required");
+        return { false, m_state, QStringLiteral("migration rollback journal write failed") };
+    }
+    const BackendResult legacy = connectLegacy();
+    if (!legacy.ok) {
+        m_state = QStringLiteral("recovery_required");
+        return { false, m_state, QStringLiteral("legacy connection could not be restored") };
+    }
+    return legacy;
+}
+
+void Daemon::checkAwgMigration()
+{
+    MutationScope mutationScope(m_mutationInFlight, true);
+    if (!mutationScope.acquired() || m_state != QStringLiteral("connected") || !m_activeProfileData
+        || !m_vpnBackend.sessionHealthyAfterRouting()) return;
+    Profile original;
+    if (m_profileStore.profile(m_activeProfileData->id, original))
+        m_migrationManager.enroll(original, m_vpnBackend.activeInterface());
 }
 
 void Daemon::checkAutomaticUpdates()

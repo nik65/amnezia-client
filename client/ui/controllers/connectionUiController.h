@@ -34,6 +34,7 @@ public:
     QString connectionStateText() const;
 
 public slots:
+    QString awgMigrationStatus(const QString &serverId) const;
     void toggleConnection();
 
     void openConnection();

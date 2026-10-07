@@ -32,8 +32,7 @@ namespace
             return true;
         }
 
-        return AwgProtocolConfig::isToggleEnabled(config.randomTrailers)
-                || AwgProtocolConfig::isToggleEnabled(config.disableCookies);
+        return hasValue(config.randomTrailers) || hasValue(config.disableCookies);
     }
 
     template <typename T>
@@ -428,7 +427,9 @@ bool AwgProtocolConfig::isToggleEnabled(const QString &value)
 {
     const QString trimmedValue = value.trimmed();
     return !trimmedValue.isEmpty()
-            && trimmedValue.compare(QLatin1String(protocols::awg::awgBoolOff), Qt::CaseInsensitive) != 0;
+            && trimmedValue.compare(QLatin1String(protocols::awg::awgBoolOff), Qt::CaseInsensitive) != 0
+            && trimmedValue.compare(QLatin1String("false"), Qt::CaseInsensitive) != 0
+            && trimmedValue != QLatin1String("0");
 }
 
 QString AwgProtocolConfig::protocolVersionString(const QString &version)

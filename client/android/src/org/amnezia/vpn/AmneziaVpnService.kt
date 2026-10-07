@@ -710,6 +710,7 @@ open class AmneziaVpnService : VpnService() {
                     clientMessenger.send {
                         ServiceEvent.STATISTICS_UPDATE.packToMessage {
                             putStatistics(protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
+                            protocol?.migrationObservation?.let { putString("migrationObservation", it) }
                         }
                     }
                     delay(STATISTICS_SENDING_TIMEOUT)

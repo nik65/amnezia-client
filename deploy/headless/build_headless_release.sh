@@ -37,6 +37,8 @@ cmake_args=(
     -DCMAKE_INSTALL_PREFIX=/usr/local
     -DBUILD_TESTING=OFF
     -DHEADLESS_BUILD_VERSION="$VERSION"
+    -DAMNEZIA_HEADLESS_EMBED_AWG3=ON
+    "-DAMNEZIA_HEADLESS_AWG3_RESOURCE_DIRECTORY=${AMNEZIA_HEADLESS_AWG3_RESOURCE_DIRECTORY:?pinned AWG3 resource directory is required}"
 )
 # Keep the normal build on the system OpenSSL, while allowing hermetic release
 # runners to point at a staged development package without changing the repo's

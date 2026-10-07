@@ -120,6 +120,9 @@ public slots:
     void setConnectionState(Vpn::ConnectionState state);
 
 signals:
+    void migrationPeerObservation(const QString &serverId, quint64 connectionEpoch,
+                                  const QJsonObject &observation);
+    void migrationTeardownObserved(const QString &serverId, quint64 connectionEpoch, bool confirmed);
     void bytesChanged(quint64 receivedBytes, quint64 sentBytes);
     void connectionStateChanged(Vpn::ConnectionState state);
     void connectionContextChanged(const QString &serverId,

@@ -436,6 +436,40 @@ PageType {
             }
 
             BasicButtonType {
+                visible: delegateItem.isEnabled
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                text: qsTr("Prepare automatic migration to AWG 3.1")
+                clickedFunc: function() { migrationDialog.open() }
+            }
+
+            Dialog {
+                id: migrationDialog
+                title: qsTr("Prepare AWG 3.1 migration")
+                modal: true
+                anchors.centerIn: Overlay.overlay
+                width: Math.min(root.width - 32, 480)
+                standardButtons: Dialog.Ok | Dialog.Cancel
+                contentItem: ColumnLayout {
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: qsTr("A parallel endpoint keeps existing clients connected. Enter the approved AWG 3.1 image digest and a new UDP port.")
+                    }
+                    TextField { id: migrationHost; Layout.fillWidth: true; placeholderText: qsTr("Server hostname or IPv4 address") }
+                    TextField { id: migrationPort; Layout.fillWidth: true; placeholderText: qsTr("New UDP port"); inputMethodHints: Qt.ImhDigitsOnly }
+                    TextField { id: migrationImage; Layout.fillWidth: true; placeholderText: qsTr("Approved image@sha256:digest") }
+                    TextField { id: migrationGeneration; Layout.fillWidth: true; placeholderText: qsTr("Migration generation"); text: "1"; inputMethodHints: Qt.ImhDigitsOnly }
+                }
+                onAccepted: {
+                    InstallController.prepareAwgMigration(ServersUiController.processedServerId,
+                        ServersUiController.processedContainerIndex, migrationHost.text,
+                        parseInt(migrationPort.text), migrationImage.text, parseInt(migrationGeneration.text))
+                }
+            }
+
+            BasicButtonType {
                 id: saveRestartButton
 
                 Layout.fillWidth: true
