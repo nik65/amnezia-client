@@ -10,3 +10,8 @@ add_executable(awg_migration_tests tst_awg_migration.cpp
 target_include_directories(awg_migration_tests PRIVATE ../..)
 target_link_libraries(awg_migration_tests PRIVATE Qt6::Core Qt6::Test OpenSSL::Crypto)
 add_test(NAME awg_migration COMMAND awg_migration_tests)
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME awg_migration_active_paths COMMAND ${Python3_EXECUTABLE}
+        "${CMAKE_CURRENT_LIST_DIR}/test_active_migration_paths.py")
+endif()

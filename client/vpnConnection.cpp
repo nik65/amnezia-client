@@ -1784,12 +1784,23 @@ void VpnConnection::createProtocolConnections()
     const quint64 migrationEpoch = m_connectionEpoch;
     const QString migrationServerId = m_serverId;
     const QPointer<VpnProtocol> migrationProtocol(m_vpnProtocol.data());
+    connect(m_vpnProtocol.data(), &VpnProtocol::migrationNativeCleanup, this,
+            [this, migrationEpoch, migrationServerId](const QString &nonce, bool confirmed) {
+                if (migrationEpoch != m_connectionEpoch || migrationServerId != m_serverId
+                    || nonce.isEmpty() || nonce != m_vpnConfiguration.value("migrationConnectionNonce").toString()) return;
+                m_migrationNativeCleanupEpoch = confirmed ? migrationEpoch : 0;
+            });
     connect(m_vpnProtocol.data(), &VpnProtocol::migrationPeerObservation, this,
             [this, migrationEpoch, migrationServerId, migrationProtocol](const QJsonObject &observation) {
                 if (migrationEpoch != m_connectionEpoch || migrationServerId != m_serverId
                     || !migrationProtocol || migrationProtocol.data() != m_vpnProtocol.data()) return;
 #ifdef Q_OS_ANDROID
                 if (observation.value("connectionNonce") != m_vpnConfiguration.value("migrationConnectionNonce")) return;
+                if (observation.value("nativeCleanupConfirmed").isBool()
+                    && observation.value("nativeCleanupConfirmed").toBool()) {
+                    m_migrationNativeCleanupEpoch = migrationEpoch;
+                    return;
+                }
 #endif
                 emit migrationPeerObservation(migrationServerId, migrationEpoch, observation);
             });
@@ -2241,7 +2252,7 @@ void VpnConnection::setConnectionState(Vpn::ConnectionState state) {
             if (epoch != m_connectionEpoch || serverId != m_serverId
                 || m_connectionState != Vpn::ConnectionState::Disconnected) return;
             emit migrationTeardownObserved(serverId, epoch,
-                    m_startupRouteTeardownConfirmed && m_vpnProtocol.isNull());
+                    m_startupRouteTeardownConfirmed && m_migrationNativeCleanupEpoch == epoch);
         });
     }
     emit connectionContextChanged(m_serverId, serverRoutingRulesSyncHost(), m_connectionEpoch);

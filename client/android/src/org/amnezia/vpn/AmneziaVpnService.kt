@@ -456,6 +456,12 @@ open class AmneziaVpnService : VpnService() {
                                     putStatus(this@AmneziaVpnService.protocolState.value)
                                 }
                             }
+                            clientMessenger.send {
+                                ServiceEvent.STATISTICS_UPDATE.packToMessage {
+                                    putStatistics(protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
+                                    protocol?.migrationObservation?.let { putString("migrationObservation", it) }
+                                }
+                            }
                         }
                     }
 
@@ -624,7 +630,7 @@ open class AmneziaVpnService : VpnService() {
             }
 
             screenOffReceiver = registerBroadcastReceiver(Intent.ACTION_SCREEN_OFF) {
-                stopTrafficStatsUpdateJob()
+                // Keep bound-client native observations active with screen off.
             }
         }
     }
@@ -656,6 +662,16 @@ open class AmneziaVpnService : VpnService() {
                 Log.d(TAG, "Protocol state changed: $protocolState")
 
                 serviceNotification.updateNotification(serverName, vpnProto?.label, protocolState)
+
+                if (protocolState == DISCONNECTED) {
+                    protocol?.migrationCleanupObservation?.let { receipt ->
+                        clientMessengers.send {
+                            ServiceEvent.STATISTICS_UPDATE.packToMessage {
+                                putString("migrationObservation", receipt)
+                            }
+                        }
+                    }
+                }
 
                 clientMessengers.send {
                     ServiceEvent.STATUS_CHANGED.packToMessage {
@@ -710,7 +726,6 @@ open class AmneziaVpnService : VpnService() {
                     clientMessenger.send {
                         ServiceEvent.STATISTICS_UPDATE.packToMessage {
                             putStatistics(protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
-                            protocol?.migrationObservation?.let { putString("migrationObservation", it) }
                         }
                     }
                     delay(STATISTICS_SENDING_TIMEOUT)
@@ -734,16 +749,13 @@ open class AmneziaVpnService : VpnService() {
     @MainThread
     private fun disableNotification() {
         unregisterScreenStateBroadcastReceivers()
-        stopTrafficStatsUpdateJob()
+        // Native migration observations must continue for bound clients.
     }
 
     @MainThread
     private fun launchTrafficStatsUpdate() {
         stopTrafficStatsUpdateJob()
-        if (isConnected &&
-            serviceNotification.isNotificationEnabled() &&
-            getSystemService<PowerManager>()?.isInteractive != false
-        ) {
+        if (isConnected) {
             Log.v(TAG, "Launch traffic stats update")
             trafficStats.reset()
             startTrafficStatsUpdateJob()
@@ -752,10 +764,20 @@ open class AmneziaVpnService : VpnService() {
 
     @MainThread
     private fun startTrafficStatsUpdateJob() {
-        if (trafficStatsUpdateJob == null && trafficStats.isSupported()) {
+        if (trafficStatsUpdateJob == null) {
             Log.d(TAG, "Start traffic stats update")
             trafficStatsUpdateJob = mainScope.launch {
                 while (true) {
+                    if (isConnected) {
+                        clientMessengers.values.toList().forEach { messenger ->
+                            messenger.send {
+                                ServiceEvent.STATISTICS_UPDATE.packToMessage {
+                                    putStatistics(protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
+                                    protocol?.migrationObservation?.let { putString("migrationObservation", it) }
+                                }
+                            }
+                        }
+                    }
                     trafficStats.getSpeed().let { speed ->
                         if (isConnected) {
                             serviceNotification.updateSpeed(speed)

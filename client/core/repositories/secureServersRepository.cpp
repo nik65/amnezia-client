@@ -6,6 +6,8 @@
 #include <QJsonValue>
 #include <QSet>
 #include <QUuid>
+#include <QFileInfo>
+#include "../../../common/awgMigrationSecretStore.h"
 
 #include "core/utils/serverConfigUtils.h"
 #include "core/utils/constants/apiKeys.h"
@@ -422,18 +424,32 @@ QString SecureServersRepository::addServer(const QString &serverId, const QJsonO
 
 QJsonObject SecureServersRepository::migrationJournal(const QString &serverId) const
 {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+    if (!awgMigrationSecretStore::available()) return QJsonObject{{"state", "secret_store_unavailable"}};
+    const auto bytes = awgMigrationSecretStore::read(serverId);
+    const auto path = awgMigrationSecretStore::journalPath(awgMigrationSecretStore::directory(), serverId);
+    const auto journal = QJsonDocument::fromJson(bytes);
+    if (QFileInfo::exists(path) && (bytes.isEmpty() || !journal.isObject()))
+        return QJsonObject{{"state", "secret_store_unavailable"}};
+    return journal.object();
+#else
     const auto key = QStringLiteral("Conf/awgMigration/") + QString::fromLatin1(
             QCryptographicHash::hash(serverId.toUtf8(), QCryptographicHash::Sha256).toHex());
     return QJsonDocument::fromJson(m_settings->value(key).toByteArray()).object();
+#endif
 }
 
 bool SecureServersRepository::writeMigrationJournal(const QString &serverId, const QJsonObject &journal)
 {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+    return awgMigrationSecretStore::write(serverId, QJsonDocument(journal).toJson(QJsonDocument::Compact));
+#else
     const auto key = QStringLiteral("Conf/awgMigration/") + QString::fromLatin1(
             QCryptographicHash::hash(serverId.toUtf8(), QCryptographicHash::Sha256).toHex());
     const auto bytes = QJsonDocument(journal).toJson(QJsonDocument::Compact);
     m_settings->setValue(key, bytes);
     return m_settings->value(key).toByteArray() == bytes;
+#endif
 }
 
 bool SecureServersRepository::compareAndSwapServer(const QString &serverId, const QString &expectedHash,

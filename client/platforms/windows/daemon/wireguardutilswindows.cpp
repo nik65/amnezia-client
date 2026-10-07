@@ -174,10 +174,10 @@ bool WireguardUtilsWindows::deleteInterface() {
 
   const bool firewallDisabled =
       m_firewall != nullptr && m_firewall->disableKillSwitch();
-  m_tunnel.stop();
+  const bool nativeStopped = m_tunnel.stop();
   m_luid = 0;
   m_configuredPeers.clear();
-  return firewallDisabled;
+  return firewallDisabled && nativeStopped;
 }
 
 bool WireguardUtilsWindows::updatePeer(const InterfaceConfig& config) {

@@ -36,6 +36,7 @@ class DaemonLocalServerConnection final : public QObject {
   QByteArray m_buffer;
   QTimer m_incompleteFrameTimer;
   bool m_receivedValidFrame = false;
+  QString m_migrationNonce;
 };
 
 #endif  // DAEMONLOCALSERVERCONNECTION_H

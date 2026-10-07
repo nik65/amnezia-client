@@ -9,6 +9,7 @@ QString ConnectionUiController::awgMigrationStatus(const QString &serverId) cons
     if (state == "committed" || state == "ack_pending") return tr("This profile has migrated to AWG 3.1.");
     if (state == "rolled_back") return tr("The previous connection settings were restored.");
     if (state == "recovery_required") return tr("Connection recovery needs attention.");
+    if (state == "secret_store_unavailable") return tr("Automatic migration is unavailable: protected local storage could not be opened.");
     return tr("Automatic migration is waiting for server preparation and a compatible VPN engine.");
 }
 

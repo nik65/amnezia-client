@@ -853,7 +853,10 @@ BackendResult Daemon::connectManagedProfile(const Profile &profile)
         const RoutingResult routing = m_routingController.connect(effective);
         if (routing.ok || routing.code == QStringLiteral("routing_degraded")) m_routingOwned = true;
         if (routing.ok && m_migrationManager.verify(profile, m_vpnBackend, started)
-            && m_migrationManager.commit(profile)) return { true, {}, {} };
+            && m_migrationManager.commit(profile)) {
+            m_migrationManager.acknowledge(profile, m_vpnBackend);
+            return { true, {}, {} };
+        }
         // The routing reconciler owns policy revisions. Rollback retires only
         // this connection's routes; it never restores a stale policy snapshot.
         if (m_routingController.status().value(QStringLiteral("recoveryRequired")).toBool()) {
@@ -899,7 +902,7 @@ void Daemon::checkAwgMigration()
         || !m_vpnBackend.sessionHealthyAfterRouting()) return;
     Profile original;
     if (m_profileStore.profile(m_activeProfileData->id, original))
-        m_migrationManager.enroll(original, m_vpnBackend.activeInterface());
+        m_migrationManager.enroll(original, m_vpnBackend.activeInterface(), &m_vpnBackend);
 }
 
 void Daemon::checkAutomaticUpdates()

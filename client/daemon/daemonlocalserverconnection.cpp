@@ -133,6 +133,7 @@ bool DaemonLocalServerConnection::parseCommand(const QByteArray& data) {
   logger.debug() << "Command received:" << type;
 
   if (type == "activate") {
+    m_migrationNonce = obj.value("migrationConnectionNonce").toString();
     InterfaceConfig config;
     if (!Daemon::parseConfig(obj, config)) {
       logger.error() << "Invalid configuration";
@@ -140,6 +141,7 @@ bool DaemonLocalServerConnection::parseCommand(const QByteArray& data) {
       return false;
     }
 
+    Daemon::instance()->migrationNonce = m_migrationNonce;
     if (!Daemon::instance()->activate(config)) {
       logger.error() << "Failed to activate the interface";
       emit disconnected();
@@ -148,7 +150,14 @@ bool DaemonLocalServerConnection::parseCommand(const QByteArray& data) {
   }
 
   if (type == "deactivate") {
-    Daemon::instance()->deactivate(true);
+    const QString nonce = obj.value("migrationConnectionNonce").toString();
+    const bool owned = !nonce.isEmpty() && nonce == m_migrationNonce
+            && nonce == Daemon::instance()->migrationNonce;
+    const bool cleaned = owned && Daemon::instance()->deactivate(false);
+    write(QJsonObject{{"type", "migrationNativeCleanup"}, {"nonce", nonce}, {"confirmed", cleaned}});
+    if (cleaned) { m_migrationNonce.clear(); Daemon::instance()->migrationNonce.clear(); disconnected(); }
+    // Legacy callers have no migration epoch and retain their ordinary stop path.
+    else if (nonce.isEmpty()) Daemon::instance()->deactivate(true);
     return true;
   }
 

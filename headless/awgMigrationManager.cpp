@@ -107,8 +107,8 @@ bool AwgMigrationManager::load(QString *error) {
         auto value = doc.object();
         const QString phase = value.value("phase").toString();
         const double generation = value.value("highestGeneration").toDouble(-1);
-        if (!QStringList {QStringLiteral("staged"), QStringLiteral("trying"), QStringLiteral("committed"), QStringLiteral("rolled_back")}.contains(phase)
-            || generation < 1 || generation > 9007199254740991.0 || generation != static_cast<qint64>(generation)) {
+        if (!QStringList {QStringLiteral("staged"), QStringLiteral("expired"), QStringLiteral("trying"), QStringLiteral("committed"), QStringLiteral("rolled_back")}.contains(phase)
+            || generation < 0 || generation > 9007199254740991.0 || generation != static_cast<qint64>(generation)) {
             if (error) *error = QStringLiteral("migration phase or generation watermark is invalid");
             return false;
         }
@@ -264,22 +264,50 @@ bool AwgMigrationManager::exchange(const QString &interfaceName, const QString &
 #endif
 }
 
-bool AwgMigrationManager::enroll(const Profile &profile, const QString &interfaceName)
+QJsonObject AwgMigrationManager::enrollmentRequest(const amnezia::awgMigration::Binding &binding)
 {
-    if (state(profile).value("phase").toString() == QStringLiteral("committed")) return acknowledge(profile, interfaceName);
+    return {{"schema", amnezia::awgMigration::Schema}, {"peerPublicKey", binding.peerPublicKey},
+            {"sourceFingerprint", binding.sourceFingerprint}, {"nonce", binding.nonce}};
+}
+bool AwgMigrationManager::retireStaged(const Profile &profile, QJsonObject &journal)
+{
+    if (journal.value("phase").toString() != QStringLiteral("staged")) return true;
+    const auto offer = journal.value("offer").toObject();
+    if (!journal.contains("stagedGeneration")) journal.insert("stagedGeneration", offer.value("generation"));
+    if (!journal.contains("stagedTargetHash")) journal.insert("stagedTargetHash", amnezia::awgMigration::digest(offer.value("target").toObject()));
+    for (const auto &name : {"offer", "envelope", "grant", "grantExpiresAt", "bindingNonce", "candidatePath", "candidateHash"}) journal.remove(name);
+    journal.insert("phase", "expired");
+    return writeState(profile, journal);
+}
+bool AwgMigrationManager::validateRefreshedOffer(const QJsonObject &offer, const QJsonObject &previous,
+                                               const amnezia::awgMigration::Binding &binding, qint64 now)
+{
+    auto next = binding;
+    const qint64 staged = previous.value("stagedGeneration").toVariant().toLongLong();
+    next.highestGeneration = qMax(next.highestGeneration, staged - 1);
+    if (!amnezia::awgMigration::validateOffer(offer, next, now)) return false;
+    return offer.value("generation").toVariant().toLongLong() != staged
+        || amnezia::awgMigration::digest(offer.value("target").toObject()) == previous.value("stagedTargetHash").toString();
+}
+bool AwgMigrationManager::enroll(const Profile &profile, const QString &interfaceName, VpnBackend *backend)
+{
+    if (state(profile).value("phase").toString() == QStringLiteral("committed")) return backend && acknowledge(profile, *backend);
     QByteArray sourceBytes, credentials;
     QJsonObject identity;
     amnezia::awgMigration::Binding binding;
     if (!source(profile, sourceBytes, identity, binding) || !read(m_credentialsPath, credentials)) return false;
     auto previous = state(profile);
-    if (previous.value("phase").toString() == QStringLiteral("staged")) return true;
+    if (previous.value("phase").toString() == QStringLiteral("staged")) {
+        QString path, sha;
+        if (candidate(profile, path, sha)) return true;
+        previous = state(profile);
+        if (previous.value("phase").toString() == QStringLiteral("staged") && !retireStaged(profile, previous)) return false;
+    }
     binding.highestGeneration = previous.value("highestGeneration").toVariant().toLongLong();
     binding.nonce = QUuid::createUuid().toString(QUuid::Id128);
     const auto logs = QJsonDocument::fromJson(credentials).object().value("clientLogs").toObject();
     QJsonObject headers { {"X-Amnezia-Client-Id", logs.value("clientId")}, {"X-Amnezia-Log-Token", logs.value("token")} };
-    QJsonObject request { {"schema", amnezia::awgMigration::Schema}, {"serverPublicKey", binding.serverPublicKey},
-        {"peerPublicKey", binding.peerPublicKey}, {"containerId", binding.containerId},
-        {"sourceFingerprint", binding.sourceFingerprint}, {"nonce", binding.nonce} };
+    const QJsonObject request = enrollmentRequest(binding);
     QJsonObject bootstrap;
     if (!exchange(interfaceName, QString::fromLatin1(Listener), Port, QStringLiteral("/migration/v1/bootstrap"), request, headers, bootstrap)) return false;
     const QByteArray key = amnezia::awgMigration::strictBase64(bootstrap.value("signingPublicKey").toString(), 32);
@@ -299,7 +327,7 @@ bool AwgMigrationManager::enroll(const Profile &profile, const QString &interfac
     QJsonObject envelope, offer;
     if (!exchange(interfaceName, QString::fromLatin1(Listener), Port, QStringLiteral("/migration/v1/offer"), request, headers, envelope)
         || !amnezia::awgMigration::verifyEnvelope(envelope, key, offer)
-        || !amnezia::awgMigration::validateOffer(offer, binding, now)) return false;
+        || !validateRefreshedOffer(offer, previous, binding, now)) return false;
     const auto target = offer.value("target").toObject();
     const QString endpoint = target.value("endpoint").toString();
     const auto endpointMatch = QRegularExpression(QStringLiteral("^([0-9.]+):([0-9]{1,5})$")).match(endpoint);
@@ -343,7 +371,9 @@ bool AwgMigrationManager::enroll(const Profile &profile, const QString &interfac
     QJsonObject journal { {"phase", "staged"}, {"sourceHash", hash(sourceBytes)}, {"sourcePath", profile.configPath},
         {"candidatePath", path}, {"candidateHash", hash(candidate)}, {"offer", offer}, {"envelope", envelope},
         {"signingPublicKey", bootstrap.value("signingPublicKey")}, {"grant", bootstrap.value("grant")},
-        {"highestGeneration", offer.value("generation")}, {"bindingNonce", binding.nonce} };
+        {"highestGeneration", previous.value("highestGeneration").toDouble(0)}, {"bindingNonce", binding.nonce},
+        {"stagedGeneration", offer.value("generation")}, {"stagedTargetHash", amnezia::awgMigration::digest(target)},
+        {"grantExpiresAt", bootstrap.value("expiresAt")} };
     // Backup and candidate exist before the journal makes the attempt selectable.
     if (!save(QDir(root).filePath(QStringLiteral("legacy.conf")), sourceBytes) || !save(path, candidate)
         || !writeState(profile, journal)) return false;
@@ -353,11 +383,14 @@ bool AwgMigrationManager::enroll(const Profile &profile, const QString &interfac
 bool AwgMigrationManager::candidate(const Profile &profile, QString &path, QString &sourceHash)
 {
     if (profile.protocol != QStringLiteral("amneziawg")) return false;
-    const auto journal = state(profile);
+    auto journal = state(profile);
     const QString phase = journal.value("phase").toString();
     if (phase != QStringLiteral("staged") && phase != QStringLiteral("committed")) return false;
     QByteArray original, candidateBytes;
-    if (!read(profile.configPath, original) || hash(original) != journal.value("sourceHash").toString()) return false;
+    if (!read(profile.configPath, original) || hash(original) != journal.value("sourceHash").toString()) {
+        if (phase == QStringLiteral("staged")) retireStaged(profile, journal);
+        return false;
+    }
     path = journal.value("candidatePath").toString();
     if (QFileInfo(path).absolutePath() != profileRoot(profile) || !read(path, candidateBytes)
         || hash(candidateBytes) != journal.value("candidateHash").toString()) return false;
@@ -365,13 +398,18 @@ bool AwgMigrationManager::candidate(const Profile &profile, QString &path, QStri
     if (!amnezia::awgMigration::verifyEnvelope(journal.value("envelope").toObject(),
         amnezia::awgMigration::strictBase64(journal.value("signingPublicKey").toString(), 32), offer)
         || offer != journal.value("offer").toObject()) return false;
-    if (phase == QStringLiteral("staged") && offer.value("expiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()) return false;
+    if (phase == QStringLiteral("staged") && offer.value("expiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()) {
+        retireStaged(profile, journal);
+        return false;
+    }
     sourceHash = journal.value("sourceHash").toString();
     return true;
 }
 bool AwgMigrationManager::begin(const Profile &profile) {
     auto journal = state(profile);
     journal.insert("previousPhase", journal.value("phase"));
+    journal.insert("highestGeneration", qMax(journal.value("highestGeneration").toDouble(0),
+                                             journal.value("offer").toObject().value("generation").toDouble(0)));
     journal.insert("phase", "trying");
     return writeState(profile, journal);
 }
@@ -427,15 +465,68 @@ bool AwgMigrationManager::abandon(const Profile &profile) {
     m_lastState = QStringLiteral("rolled_back");
     return writeState(profile, journal);
 }
-bool AwgMigrationManager::acknowledge(const Profile &profile, const QString &interfaceName) {
+bool AwgMigrationManager::validateRenewal(const QJsonObject &renewal, const QJsonObject &journal,
+                                        const QString &nonce, qint64 now)
+{
+    const auto offer = journal.value("offer").toObject();
+    if (!amnezia::awgMigration::hasExactKeys(renewal, {"schema", "serverPublicKey", "peerPublicKey", "containerId", "generation", "nonce", "grant", "sourceFingerprint", "targetHash", "expiresAt"})
+        || renewal.value("schema").toInt(-1) != 1 || renewal.value("nonce").toString() != nonce
+        || renewal.value("expiresAt").toDouble(-1) <= now
+        || renewal.value("expiresAt").toDouble(-1) > now + 86400 + 5
+        || renewal.value("grant").toString().isEmpty() || renewal.value("grant").toString().size() > 4096
+        || renewal.value("targetHash").toString() != amnezia::awgMigration::digest(offer.value("target").toObject())) return false;
+    for (const auto &field : {"serverPublicKey", "peerPublicKey", "containerId", "generation", "sourceFingerprint"})
+        if (renewal.value(field) != offer.value(field)) return false;
+    return true;
+}
+bool AwgMigrationManager::acknowledge(const Profile &profile, VpnBackend &backend) {
     auto journal = state(profile);
+    if (journal.value("phase").toString() != QStringLiteral("committed")) return false;
     if (!journal.value("ackPending").toBool()) return true;
     const auto offer = journal.value("offer").toObject();
+    QMap<QString, QString> parameters;
+    const auto fields = offer.value("target").toObject().value("parameters").toObject();
+    for (auto field = fields.begin(); field != fields.end(); ++field) parameters.insert(nativeParameter(field.key()), field.value().toString());
+    // A legacy connection must never send or confirm the committed candidate ACK.
+    if (!backend.migrationParametersApplied(parameters)) return false;
+    const QString interfaceName = backend.activeInterface();
     QJsonObject response;
-    const QJsonObject request { {"schema", 1}, {"grant", journal.value("grant")}, {"generation", offer.value("generation")},
-        {"peerPublicKey", offer.value("peerPublicKey")}, {"challengeReceipt", journal.value("challengeReceipt")} };
-    if (!exchange(interfaceName, QString::fromLatin1(Listener), Port, QStringLiteral("/migration/v1/ack"), request,
-        {{"X-Amnezia-Migration-Grant", journal.value("grant")}}, response) || !response.value("ok").toBool()) return false;
+    const auto sendAck = [&]() {
+        const QJsonObject request { {"schema", 1}, {"grant", journal.value("grant")}, {"generation", offer.value("generation")},
+            {"peerPublicKey", offer.value("peerPublicKey")}, {"challengeReceipt", journal.value("challengeReceipt")} };
+        return exchange(interfaceName, QString::fromLatin1(Listener), Port, QStringLiteral("/migration/v1/ack"), request,
+            {{"X-Amnezia-Migration-Grant", journal.value("grant")}}, response)
+            && response.value("ok").isBool() && response.value("ok").toBool()
+            && response.value("acknowledged").isBool() && response.value("acknowledged").toBool();
+    };
+    const qint64 checkedAt = QDateTime::currentSecsSinceEpoch();
+    const bool expiredGrant = journal.value("grantExpiresAt").toDouble(0) <= checkedAt;
+    if (!expiredGrant && !sendAck()) return false;
+    if (expiredGrant) {
+        const qint64 now = QDateTime::currentSecsSinceEpoch();
+        if (!backend.migrationHandshakeObserved(offer.value("serverPublicKey").toString(), now - 120)) return false;
+        QByteArray credentialBytes;
+        if (!read(m_credentialsPath, credentialBytes)) return false;
+        const auto logs = QJsonDocument::fromJson(credentialBytes).object().value("clientLogs").toObject();
+        const QString expectedClient = hash((offer.value("containerId").toString() + QLatin1Char('\t') + offer.value("peerPublicKey").toString()).toUtf8());
+        if (logs.value("clientId").toString() != expectedClient || logs.value("token").toString().isEmpty()) return false;
+        const QString nonce = QUuid::createUuid().toString(QUuid::Id128);
+        const QJsonObject request {{"schema", 1}, {"grant", journal.value("grant")},
+            {"peerPublicKey", offer.value("peerPublicKey")}, {"generation", offer.value("generation")},
+            {"nonce", nonce}, {"challengeReceipt", journal.value("challengeReceipt")}};
+        QJsonObject envelope, renewal;
+        if (!exchange(interfaceName, QString::fromLatin1(Listener), Port, QStringLiteral("/migration/v1/renew"), request,
+                {{"X-Amnezia-Client-Id", logs.value("clientId")}, {"X-Amnezia-Log-Token", logs.value("token")}}, envelope)
+            || !amnezia::awgMigration::verifyEnvelope(envelope,
+                amnezia::awgMigration::strictBase64(journal.value("signingPublicKey").toString(), 32), renewal)
+            || !validateRenewal(renewal, journal, nonce, now)) return false;
+        journal.insert("grant", renewal.value("grant"));
+        journal.insert("grantExpiresAt", renewal.value("expiresAt"));
+        journal.insert("renewalReceipt", envelope);
+        // Save renewed authorization before network delivery. A crash resumes
+        // the same committed generation, target and original proof receipt.
+        if (!writeState(profile, journal) || !sendAck()) return false;
+    }
     journal.insert("ackPending", false);
     return writeState(profile, journal);
 }

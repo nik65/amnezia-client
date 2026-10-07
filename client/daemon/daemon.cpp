@@ -489,12 +489,9 @@ bool Daemon::deactivate(bool emitSignals) {
     }
   }
 
-  if (emitSignals) {
-    emit disconnected();
-  }
-
   // Cleanup DNS
-  if (!dnsutils()->restoreResolvers()) {
+  bool cleaned = dnsutils()->restoreResolvers();
+  if (!cleaned) {
     logger.warning() << "Failed to restore DNS resolvers.";
   }
 
@@ -503,21 +500,25 @@ bool Daemon::deactivate(bool emitSignals) {
     const InterfaceConfig& config = state.m_config;
     logger.debug() << "Deleting routes for" << config.m_hopType;
     for (const IPAddress& ip : config.m_allowedIPAddressRanges) {
-      wgutils()->deleteRoutePrefix(ip);
+      cleaned = wgutils()->deleteRoutePrefix(ip) && cleaned;
     }
-    wgutils()->deletePeer(config);
+    cleaned = wgutils()->deletePeer(config) && cleaned;
   }
 
   // Cleanup routing for excluded addresses.
   for (auto iterator = m_excludedAddrSet.constBegin();
        iterator != m_excludedAddrSet.constEnd(); ++iterator) {
-    wgutils()->deleteExclusionRoute(iterator.key());
+    cleaned = wgutils()->deleteExclusionRoute(iterator.key()) && cleaned;
   }
   m_excludedAddrSet.clear();
 
-  m_connections.clear();
   // Delete the interface
-  return wgutils()->deleteInterface();
+  cleaned = wgutils()->deleteInterface() && cleaned;
+  if (cleaned) {
+    m_connections.clear();
+    if (emitSignals) emit disconnected();
+  }
+  return cleaned;
 }
 
 QString Daemon::logs() {

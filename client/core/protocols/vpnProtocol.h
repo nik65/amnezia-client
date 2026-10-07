@@ -74,6 +74,7 @@ public:
 
 signals:
     void migrationPeerObservation(const QJsonObject &observation);
+    void migrationNativeCleanup(const QString &nonce, bool confirmed);
     void bytesChanged(quint64 receivedBytes, quint64 sentBytes);
     void connectionStateChanged(Vpn::ConnectionState state);
     void timeoutTimerEvent();

@@ -1,12 +1,47 @@
 #include <QtTest>
 #include "../../../common/awgMigration.h"
 #include "../../../common/awgBackendObservation.h"
+#include "../../../common/awgMigrationSecretStore.h"
+#include <QTemporaryDir>
 #include "core/models/protocols/awgProtocolConfig.h"
 
 using namespace amnezia::awgMigration;
 class AwgMigrationTests : public QObject {
     Q_OBJECT
 private slots:
+    void protectedMigrationStoreRejectsTamperingAndForeignPaths()
+    {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto key = awgMigrationSecretStore::key(dir.path());
+        QCOMPARE(key.size(), 32);
+        const QByteArray plain("{\"grant\":\"confidential\",\"highestGeneration\":7}");
+        const auto encrypted = awgMigrationSecretStore::crypt(plain, key, true);
+        QVERIFY(!encrypted.contains("confidential"));
+        QCOMPARE(awgMigrationSecretStore::crypt(encrypted, key, false), plain);
+        auto damaged = encrypted;
+        damaged[damaged.size() - 1] = char(damaged.back() ^ 1);
+        QVERIFY(awgMigrationSecretStore::crypt(damaged, key, false).isEmpty());
+        QVERIFY(awgMigrationSecretStore::crypt(encrypted, QByteArray(32, 'x'), false).isEmpty());
+        const auto path = dir.path() + "/journal";
+        QVERIFY(awgMigrationSecretStore::atomicWrite(path, encrypted));
+        QByteArray read;
+        QVERIFY(awgMigrationSecretStore::privateFile(path, &read));
+        QCOMPARE(read, encrypted);
+        QVERIFY(QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner | QFile::ReadGroup));
+        QVERIFY(!awgMigrationSecretStore::privateFile(path, &read));
+        QVERIFY(!awgMigrationSecretStore::atomicWrite(path, encrypted));
+        const auto link = dir.path() + "/link";
+        QVERIFY(QFile::link(path, link));
+        QVERIFY(!awgMigrationSecretStore::privateFile(link, &read));
+        QVERIFY(!awgMigrationSecretStore::atomicWrite(link, encrypted));
+        QVERIFY(QFile::remove(dir.path() + "/key"));
+        QVERIFY(awgMigrationSecretStore::key(dir.path()).isEmpty());
+#else
+        QSKIP("Linux migration secret-store permission contract");
+#endif
+    }
     void nativeParametersProveAppliedValuesWithoutLeakingKey()
     {
         const QByteArray key(32, 'k');

@@ -75,7 +75,8 @@ class MigrationService:
         with open(os.path.join(self.directory, 'ready.json'), encoding='utf-8') as stream:
             state = json.load(stream)
         now = int(time.time())
-        if state['expiresAt'] <= now or state['containerId'] != self.scope:
+        target_outbox = self.role == 'target' and handler.path in ('/migration/v1/renew', '/migration/v1/ack')
+        if (state['expiresAt'] <= now and not target_outbox) or state['containerId'] != self.scope:
             raise ValueError('inactive')
         peer = body['peerPublicKey']
         if not isinstance(peer, str) or not KEY.fullmatch(peer):
@@ -91,11 +92,16 @@ class MigrationService:
             '/migration/v1/offer': {'schema', 'peerPublicKey', 'sourceFingerprint', 'nonce'},
             '/migration/v1/challenge': {'schema', 'peerPublicKey', 'generation', 'grant', 'nonce'},
             '/migration/v1/ack': {'schema', 'peerPublicKey', 'generation', 'grant', 'challengeReceipt'},
+            '/migration/v1/renew': {'schema', 'peerPublicKey', 'generation', 'grant', 'nonce', 'challengeReceipt'},
         }
         if path not in expected_fields or set(body) != expected_fields[path]:
             raise ValueError('request fields')
         with sqlite3.connect(os.path.join(self.directory, 'grants.sqlite3'), timeout=5) as db:
-            db.execute('CREATE TABLE IF NOT EXISTS grants (digest TEXT PRIMARY KEY, peer TEXT, fingerprint TEXT, generation INTEGER, expires INTEGER, challenge TEXT, proved INTEGER DEFAULT 0, ack INTEGER DEFAULT 0, issued INTEGER)')
+            db.execute('CREATE TABLE IF NOT EXISTS grants (digest TEXT PRIMARY KEY, peer TEXT, fingerprint TEXT, generation INTEGER, expires INTEGER, challenge TEXT, proved INTEGER DEFAULT 0, ack INTEGER DEFAULT 0, issued INTEGER, proofExpires INTEGER)')
+            if 'proofExpires' not in {value[1] for value in db.execute('PRAGMA table_info(grants)')}:
+                db.execute('ALTER TABLE grants ADD COLUMN proofExpires INTEGER')
+                db.execute('UPDATE grants SET proofExpires=expires')
+            db.execute('CREATE TABLE IF NOT EXISTS renewalNonces (digest TEXT PRIMARY KEY)')
             if path == '/migration/v1/bootstrap' and self.role == 'source':
                 client = authenticate()
                 if client is None:
@@ -106,14 +112,14 @@ class MigrationService:
                 if not NONCE.fullmatch(nonce) or not re.fullmatch('[a-f0-9]{64}', fingerprint):
                     raise ValueError('binding')
                 grant = secrets.token_urlsafe(48)
-                db.execute('DELETE FROM grants WHERE expires < ?', (now,))
-                count = db.execute('SELECT count(*) FROM grants WHERE peer=?', (peer,)).fetchone()[0]
+                db.execute('DELETE FROM grants WHERE expires < ? AND proved=0', (now,))
+                count = db.execute('SELECT count(*) FROM grants WHERE peer=? AND expires>?', (peer, now)).fetchone()[0]
                 if count >= 32:
                     raise ValueError('grant limit')
                 expiry = min(now + 86400, state['expiresAt'])
-                db.execute('INSERT INTO grants(digest,peer,fingerprint,generation,expires,challenge,issued) VALUES(?,?,?,?,?,?,?)',
+                db.execute('INSERT INTO grants(digest,peer,fingerprint,generation,expires,challenge,issued,proofExpires) VALUES(?,?,?,?,?,?,?,?)',
                            (hashlib.sha256(grant.encode()).hexdigest(), peer, fingerprint,
-                            state['generation'], expiry, secrets.token_urlsafe(32), now))
+                            state['generation'], expiry, secrets.token_urlsafe(32), now, expiry))
                 response = {'schema': 1, 'serverPublicKey': state['serverPublicKey'],
                             'containerId': self.scope, 'peerPublicKey': peer,
                             'sourceFingerprint': fingerprint, 'nonce': nonce,
@@ -121,11 +127,14 @@ class MigrationService:
                             'generation': state['generation'], 'expiresAt': expiry}
             else:
                 grant = handler.headers.get('X-Amnezia-Migration-Grant', body.get('grant', ''))
+                if 'grant' in body and body['grant'] != grant:
+                    raise ValueError('ambiguous grant')
                 if not isinstance(grant, str) or not NONCE.fullmatch(grant):
                     raise ValueError('grant')
                 digest = hashlib.sha256(grant.encode()).hexdigest()
-                row = db.execute('SELECT peer,fingerprint,generation,expires,challenge,proved,issued FROM grants WHERE digest=?', (digest,)).fetchone()
-                if not row or row[0] != peer or row[2] != state['generation'] or row[3] <= now:
+                row = db.execute('SELECT peer,fingerprint,generation,expires,challenge,proved,issued,proofExpires FROM grants WHERE digest=?', (digest,)).fetchone()
+                renewing = path == '/migration/v1/renew' and self.role == 'target'
+                if not row or row[0] != peer or row[2] != state['generation'] or (row[3] <= now and not renewing):
                     raise ValueError('grant binding')
                 common = {'schema': 1, 'serverPublicKey': state['serverPublicKey'], 'containerId': self.scope,
                           'peerPublicKey': peer, 'generation': row[2], 'expiresAt': row[3]}
@@ -137,7 +146,7 @@ class MigrationService:
                                   target={'endpoint': state['endpoint'], 'clientAddress': mapping['clientAddress'], 'parameters': state['parameters']},
                                   challenge={'address': state['challengeAddress'], 'port': state['challengePort'], 'nonce': row[4]})
                     response = sign(common, self.directory)
-                elif path in ('/migration/v1/challenge', '/migration/v1/ack') and self.role == 'target':
+                elif path in ('/migration/v1/challenge', '/migration/v1/ack', '/migration/v1/renew') and self.role == 'target':
                     if type(body['generation']) is not int or body['generation'] != row[2]:
                         raise ValueError('generation')
                     with open(os.path.join(self.directory, 'handshakes.tsv'), encoding='utf-8') as stream:
@@ -155,11 +164,29 @@ class MigrationService:
                         if not row[5]:
                             raise ValueError('unproved')
                         # Compare receipt to the exact signed payload expected for this grant.
-                        common.update(nonce=row[4], targetAddress=mapping['targetIp'])
+                        common.update(nonce=row[4], targetAddress=mapping['targetIp'], expiresAt=row[7])
                         if body['challengeReceipt'] != sign(common, self.directory):
                             raise ValueError('receipt')
-                        db.execute('UPDATE grants SET ack=1 WHERE digest=?', (digest,))
-                        response = {'schema': 1, 'ok': True, 'acknowledged': True, 'generation': row[2]}
+                        if renewing:
+                            if authenticate() != mapping['clientId'] or not NONCE.fullmatch(body['nonce']):
+                                raise ValueError('renew authentication')
+                            db.execute('INSERT INTO renewalNonces(digest) VALUES(?)',
+                                (hashlib.sha256((peer + '\t' + body['nonce']).encode()).hexdigest(),))
+                            active = db.execute('SELECT count(*) FROM grants WHERE peer=? AND expires>?', (peer, now)).fetchone()[0]
+                            if active >= 32:
+                                raise ValueError('grant limit')
+                            new_grant = secrets.token_urlsafe(48)
+                            expiry = now + 86400
+                            db.execute('INSERT INTO grants(digest,peer,fingerprint,generation,expires,challenge,issued,proofExpires,proved) VALUES(?,?,?,?,?,?,?,?,1)',
+                                (hashlib.sha256(new_grant.encode()).hexdigest(), peer, row[1], row[2], expiry, row[4], row[6], row[7]))
+                            target = {'endpoint': state['endpoint'], 'clientAddress': mapping['clientAddress'], 'parameters': state['parameters']}
+                            response = sign({'schema': 1, 'serverPublicKey': state['serverPublicKey'],
+                                'peerPublicKey': peer, 'containerId': self.scope, 'generation': row[2],
+                                'nonce': body['nonce'], 'grant': new_grant, 'sourceFingerprint': row[1],
+                                'targetHash': hashlib.sha256(canonical(target)).hexdigest(), 'expiresAt': expiry}, self.directory)
+                        else:
+                            db.execute('UPDATE grants SET ack=1 WHERE digest=?', (digest,))
+                            response = {'schema': 1, 'ok': True, 'acknowledged': True, 'generation': row[2]}
                 else:
                     raise ValueError('role/path')
             raw = canonical(response)

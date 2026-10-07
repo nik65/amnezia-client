@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+import sqlite3
 from unittest.mock import patch
 import service
 
@@ -133,6 +134,36 @@ class MigrationServiceTests(unittest.TestCase):
         self.assertEqual(403, self.request('bootstrap', body).status)
         with self.assertRaises(ValueError):
             service.unique_object([('schema', 1), ('schema', 2)])
+
+    def test_expired_committed_proof_renews_only_on_authenticated_native_target(self):
+        grant = self.enroll()
+        offer = json.loads(base64.b64decode(self.offer(grant).response()['payload']))
+        request = {'schema': 1, 'peerPublicKey': PEER, 'generation': 1, 'grant': grant,
+                   'nonce': offer['challenge']['nonce']}
+        receipt = self.request('challenge', request, role=self.target).response()
+        later = self.now + 4000
+        (self.directory / 'handshakes.tsv').write_text(PEER + '\t' + str(later))
+        renew = {'schema': 1, 'peerPublicKey': PEER, 'generation': 1, 'grant': grant,
+                 'nonce': 'r' * 43, 'challengeReceipt': receipt}
+        with patch('service.time.time', return_value=later):
+            self.assertEqual(403, self.request('renew', renew).status)
+            self.assertEqual(403, self.request('renew', renew, role=self.target, client='b' * 64).status)
+            self.assertEqual(403, self.request('renew', renew, role=self.target, ip='10.8.1.3').status)
+            response = self.request('renew', renew, role=self.target)
+            self.assertEqual(200, response.status)
+            renewed = json.loads(base64.b64decode(response.response()['payload']))
+            self.assertEqual(renew['nonce'], renewed['nonce'])
+            self.assertEqual(FP, renewed['sourceFingerprint'])
+            self.assertEqual(1, renewed['generation'])
+            self.assertEqual(hashlib.sha256(service.canonical(offer['target'])).hexdigest(), renewed['targetHash'])
+            self.assertEqual(403, self.request('renew', renew, role=self.target).status)
+            ack = {'schema': 1, 'peerPublicKey': PEER, 'generation': 1,
+                   'grant': renewed['grant'], 'challengeReceipt': receipt}
+            self.assertEqual(200, self.request('ack', ack, role=self.target).status)
+            self.assertEqual(200, self.request('ack', ack, role=self.target).status)
+        with sqlite3.connect(self.directory / 'grants.sqlite3') as db:
+            old = db.execute('SELECT proved FROM grants WHERE digest=?', (hashlib.sha256(grant.encode()).hexdigest(),)).fetchone()
+            self.assertEqual(1, old[0])
 
 
 if __name__ == '__main__':

@@ -19,6 +19,7 @@ import tempfile
 import time
 from journal import Journal, inspect as inspect_container
 from policy import namespace_snapshot, firewall_script, client_policy_epoch, mtu
+from feeds import feed_mounts
 
 ROOT = Path('/opt/amnezia/awg-migration')
 COLLECTOR_ROOT = Path('/opt/amnezia/client-logs')
@@ -260,8 +261,7 @@ def prepare(args):
                 '--label', 'amnezia.migration.owner=' + ownership, '--network', 'container:' + target,
                 '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
                 '-e', 'AMNEZIA_FEED_PORTS=' + ','.join(feed_ports), '-e', 'PYTHONDONTWRITEBYTECODE=1',
-                '-v', str(directory) + ':/migration:ro', '-v', '/opt/amnezia/server-routing-rules:/routing:ro',
-                '-v', '/opt/amnezia/client-updates:/updates:ro', '--entrypoint', 'python', log_image, '/migration/feeds.py')
+                *feed_mounts(directory), '--entrypoint', 'python', log_image, '/app/feeds.py')
             journal.record(target + '-feeds')
             for port in feed_ports:
                 feed_file = Path('/opt/amnezia/server-routing-rules/rules.json') if port == '17864' else Path('/opt/amnezia/client-updates/manifest.json')
@@ -290,7 +290,8 @@ def prepare(args):
         run('docker', 'run', '-d', '--name', collector, '--log-driver', 'none', '--restart', 'unless-stopped',
             '--label', 'amnezia.migration.owner=' + ownership,
             '--network', 'container:' + target, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
-            '-v', str(directory) + ':/migration:rw', '--entrypoint', 'python', target + '-control-image', '/migration/target.py')
+            '-v', str(directory) + ':/migration:rw', '-v', str(COLLECTOR_ROOT) + ':/logs:ro',
+            '--entrypoint', 'python', target + '-control-image', '/migration/target.py')
         journal.record(collector)
         probe = 'import socket; s=socket.create_connection(("127.0.0.1",18082),timeout=2);s.close()'
         for attempt in range(10):

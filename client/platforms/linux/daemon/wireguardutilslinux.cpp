@@ -15,6 +15,7 @@
 #include <QLocalSocket>
 #include <QTimer>
 #include <QThread>
+#include <QNetworkInterface>
 
 #include "linuxfirewall.h"
 #include "leakdetector.h"
@@ -225,6 +226,9 @@ bool WireguardUtilsLinux::deleteInterface() {
         m_tunnel.waitForFinished(WG_TUN_PROC_TIMEOUT);
     }
 
+    if (m_tunnel.state() != QProcess::NotRunning) return false;
+    // Native process exit is insufficient if an interface remains present.
+    if (QNetworkInterface::interfaceFromName(WG_INTERFACE).isValid()) return false;
     // Garbage collect.
     QDir wgRuntimeDir(WG_RUNTIME_DIR);
     QFile::remove(wgRuntimeDir.filePath(QString(WG_INTERFACE) + ".name"));

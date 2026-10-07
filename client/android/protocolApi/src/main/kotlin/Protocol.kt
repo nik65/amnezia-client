@@ -24,6 +24,7 @@ abstract class Protocol {
 
     abstract val statistics: Statistics
     open val migrationObservation: String? get() = null
+    open val migrationCleanupObservation: String? get() = null
     protected lateinit var context: Context
     protected lateinit var state: MutableStateFlow<ProtocolState>
     protected lateinit var onError: (String) -> Unit

@@ -55,10 +55,10 @@ WindowsTunnelService::~WindowsTunnelService() {
   CloseServiceHandle((SC_HANDLE)m_scm);
 }
 
-void WindowsTunnelService::stop() {
+bool WindowsTunnelService::stop() {
   SC_HANDLE service = (SC_HANDLE)m_service;
   if (service) {
-    stopAndDeleteTunnelService(service);
+    if (!stopAndDeleteTunnelService(service)) return false;
     CloseServiceHandle(service);
     m_service = nullptr;
   }
@@ -70,6 +70,7 @@ void WindowsTunnelService::stop() {
     m_logthread.wait();
     m_logworker = nullptr;
   }
+  return true;
 }
 
 bool WindowsTunnelService::isRunning() {

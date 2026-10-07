@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 
 
 def atomic(path, value):
@@ -86,6 +87,8 @@ class Journal:
         source = inspect(self.run, self.value['sourceId'])
         if source is None or source['Name'] != '/' + self.value['source']:
             raise ValueError('source namespace replaced')
+        if self.value.get('sourceRules'):
+            self.ensure_source_rules()
         source_epoch = source['State'].get('StartedAt')
         parent = self.value.get('target')
         target = self.owned(parent) if parent else None
@@ -96,8 +99,33 @@ class Journal:
                 self.run('docker', 'restart', observed['Id'])
             elif name != parent and not name.endswith('-source-control') and target_epoch != self.value.get('targetEpoch'):
                 self.run('docker', 'restart', observed['Id'])
+            if name.endswith('-source-control'):
+                probe = 'import socket; s=socket.create_connection(("127.0.0.1",18082),timeout=2);s.close()'
+                for attempt in range(10):
+                    try:
+                        self.run('docker', 'exec', observed['Id'], 'python', '-c', probe)
+                        break
+                    except subprocess.SubprocessError:
+                        time.sleep(1)
+                else:
+                    raise ValueError('source control listener not ready')
         self.value.update(sourceEpoch=source_epoch, targetEpoch=target_epoch)
         self.save('ready')
+
+    def ensure_source_rules(self):
+        owner, iface = self.value['owner'], self.value['sourceIface']
+        source = inspect(self.run, self.value['sourceId'])
+        if source is None or source['Name'] != '/' + self.value['source']:
+            raise ValueError('source namespace replaced')
+        rules = [('-I INPUT 1', f'-p tcp --dport 18082 -m comment --comment {owner} -j REJECT'),
+                 ('-I INPUT 1', f'-i {iface} -p tcp --dport 18082 -m comment --comment {owner} -j ACCEPT'),
+                 ('-t nat -A PREROUTING', f'-i {iface} -d 172.29.172.251/32 -p tcp --dport 18082 -m comment --comment {owner} -j REDIRECT --to-ports 18082')]
+        for insertion, rule in rules:
+            check = insertion.replace('-I INPUT 1', '-C INPUT').replace('-A PREROUTING', '-C PREROUTING')
+            self.run('docker', 'exec', self.value['sourceId'], 'sh', '-c',
+                     'iptables ' + check + ' ' + rule + ' 2>/dev/null || iptables ' + insertion + ' ' + rule)
+            # Read back every exact owned rule before claiming readiness.
+            self.run('docker', 'exec', self.value['sourceId'], 'sh', '-c', 'iptables ' + check + ' ' + rule)
 
     def cleanup(self):
         for name in reversed(list(self.value['containers'])):

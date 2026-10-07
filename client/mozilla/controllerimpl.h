@@ -67,6 +67,7 @@ class ControllerImpl : public QObject {
 
  signals:
   void migrationPeerObservation(const QJsonObject &observation);
+  void migrationNativeCleanup(const QString &nonce, bool confirmed);
   // This signal is emitted when the controller is initialized. Note that the
   // VPN tunnel can be already active. In this case, "connected" should be set
   // to true and the "connectionDate" should be set to the activation date if

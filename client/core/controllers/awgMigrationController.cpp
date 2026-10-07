@@ -305,8 +305,10 @@ void AwgMigrationController::enrollOrFetch()
     if (kind != amnezia::serverConfigUtils::ConfigType::SelfHostedAdmin
         && kind != amnezia::serverConfigUtils::ConfigType::SelfHostedUser) return;
     if (m_journal.value("state") == "staged" || m_journal.value("state") == "committed"
-        || m_journal.value("state") == "recovery_required") return;
+        || m_journal.value("state") == "recovery_required"
+        || m_journal.value("state") == "secret_store_unavailable") return;
     const auto configuration = client(m_originalConnection);
+    if (m_journal.value("state") == "ack_pending") { acknowledge(); return; }
     if (m_journal.value("grantExpiresAt").toDouble() > 0
         && m_journal.value("grantExpiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()) {
         m_journal.remove("grant");
@@ -388,6 +390,32 @@ void AwgMigrationController::challenge()
 void AwgMigrationController::acknowledge()
 {
     const auto offer = m_journal.value("offer").toObject();
+    if (m_journal.value("grantExpiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()) {
+        const QString nonce = QString::number(QRandomGenerator::system()->generate64(), 16).rightJustified(16, '0')
+                + QString::number(QRandomGenerator::system()->generate64(), 16).rightJustified(16, '0');
+        const QJsonObject renewal{{"schema", Schema}, {"grant", m_journal.value("grant")},
+            {"peerPublicKey", offer.value("peerPublicKey")}, {"generation", offer.value("generation")},
+            {"nonce", nonce}, {"challengeReceipt", m_journal.value("challengeReceipt")}};
+        request("/migration/v1/renew", renewal, [this, offer, nonce](const QJsonObject &envelope) {
+            QJsonObject proof;
+            if (!verifyEnvelope(envelope, strictBase64(m_journal.value("signingPublicKey").toString(), 32), proof)
+                || !hasExactKeys(proof, {"schema", "serverPublicKey", "peerPublicKey", "containerId", "generation",
+                                        "nonce", "grant", "sourceFingerprint", "targetHash", "expiresAt"})
+                || proof.value("schema").toInt() != Schema || proof.value("nonce").toString() != nonce
+                || proof.value("serverPublicKey") != offer.value("serverPublicKey")
+                || proof.value("peerPublicKey") != offer.value("peerPublicKey")
+                || proof.value("containerId") != offer.value("containerId")
+                || proof.value("generation") != offer.value("generation")
+                || proof.value("sourceFingerprint") != offer.value("sourceFingerprint")
+                || proof.value("targetHash").toString() != digest(offer.value("target").toObject())
+                || proof.value("expiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()
+                || proof.value("grant").toString().isEmpty()) return;
+            m_journal["grant"] = proof.value("grant");
+            m_journal["grantExpiresAt"] = proof.value("expiresAt");
+            if (persist("ack_pending")) acknowledge();
+        });
+        return;
+    }
     const QJsonObject body{{"schema", Schema}, {"grant", m_journal.value("grant")},
         {"generation", offer.value("generation")}, {"peerPublicKey", offer.value("peerPublicKey")},
         {"challengeReceipt", m_journal.value("challengeReceipt")}};

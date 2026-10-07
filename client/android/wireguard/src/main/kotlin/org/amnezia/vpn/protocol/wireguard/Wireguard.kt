@@ -33,6 +33,11 @@ open class Wireguard : Protocol() {
     private lateinit var scope: CoroutineScope
     private var statusJob: Job? = null
     private var migrationConnectionNonce: String = ""
+    private var cleanedNonce: String = ""
+    override val migrationCleanupObservation: String?
+        get() = cleanedNonce.takeIf { it.isNotEmpty() }?.let {
+            JSONObject().put("connectionNonce", it).put("nativeCleanupConfirmed", true).toString()
+        }
     override val migrationObservation: String?
         get() {
             val active = config ?: return null
@@ -112,6 +117,7 @@ open class Wireguard : Protocol() {
 
     override suspend fun startVpn(config: JSONObject, vpnBuilder: Builder, protect: (Int) -> Boolean) {
         migrationConnectionNonce = config.optString("migrationConnectionNonce", "")
+        cleanedNonce = ""
         val wireguardConfig = parseConfig(config)
         start(wireguardConfig, vpnBuilder, protect)
         this.config = wireguardConfig
@@ -284,6 +290,12 @@ open class Wireguard : Protocol() {
         val handleToClose = tunnelHandle
         tunnelHandle = -1
         GoBackend.awgTurnOff(handleToClose)
+        // TurnOff closes the native device synchronously; additionally require
+        // the owned handle to disappear before authorizing any legacy retry.
+        if (handleToClose >= 0 && GoBackend.awgGetConfig(handleToClose) == null
+            && GoBackend.awgGetSocketV4(handleToClose) < 0 && GoBackend.awgGetSocketV6(handleToClose) < 0) {
+            cleanedNonce = migrationConnectionNonce
+        }
     }
 
     override fun stopVpn() {

@@ -80,9 +80,14 @@ class JournalTests(unittest.TestCase):
             self.journal.record(name)
         self.journal.save('ready')
         self.docker.objects['source']['State']['StartedAt'] = 'epoch2'
+        self.journal.value['sourceRules'] = True
         self.journal.recover_ready()
         self.assertIn(('docker', 'restart', 'control-id'), self.docker.calls)
         self.assertNotIn(('docker', 'restart', 'source-id'), self.docker.calls)
+        writes = [call[-1] for call in self.docker.calls if call[1] == 'exec']
+        self.assertEqual(3, sum('|| iptables' in command for command in writes))
+        self.assertEqual(3, sum(command.startswith('iptables ') and '||' not in command for command in writes))
+        self.assertTrue(any('-C PREROUTING' in command and '--to-ports 18082' in command for command in writes))
 
 
 if __name__ == '__main__': unittest.main()

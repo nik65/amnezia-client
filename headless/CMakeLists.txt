@@ -98,6 +98,7 @@ target_link_libraries(amnezia-cli PRIVATE amnezia_headless_core Qt6::Core Qt6::N
 if(BUILD_TESTING)
 add_executable(headless_awg_migration_tests tests/tst_awg_migration.cpp)
 target_link_libraries(headless_awg_migration_tests PRIVATE amnezia_headless_core Qt6::Core Qt6::Network Qt6::Test)
+target_compile_definitions(headless_awg_migration_tests PRIVATE AWG_MIGRATION_WIRE_FIXTURE_PATH="${CMAKE_CURRENT_LIST_DIR}/../deploy/headless/awg_migration_wire_contract.json")
 add_test(NAME headless_awg_migration COMMAND headless_awg_migration_tests)
 add_executable(headless_protocol_tests
     tests/tst_headless_protocol.cpp

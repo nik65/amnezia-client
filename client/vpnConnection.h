@@ -165,6 +165,7 @@ private:
     int m_serverIndex = -1;
     QString m_serverId;
     quint64 m_connectionEpoch = 0;
+    quint64 m_migrationNativeCleanupEpoch = 0;
     quint64 m_latestManagedRouteReconcileGeneration = 0;
     quint64 m_latestPreparedManagedRouteSnapshotGeneration = 0;
     bool m_connectionRestoredWithoutStartup = false;

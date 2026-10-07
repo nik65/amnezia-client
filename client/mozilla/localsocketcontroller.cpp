@@ -157,6 +157,7 @@ void LocalSocketController::daemonConnected() {
 }
 
 void LocalSocketController::activate(const QJsonObject &rawConfig) {
+  m_migrationNonce = rawConfig.value("migrationConnectionNonce").toString();
   QString protocolName = rawConfig.value("protocol").toString();
 
   int splitTunnelType = rawConfig.value("splitTunnelType").toInt();
@@ -172,6 +173,7 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
 
   QJsonObject json;
   json.insert("type", "activate");
+  json.insert("migrationConnectionNonce", m_migrationNonce);
   //  json.insert("hopindex", QJsonValue((double)hop.m_hopindex));
   json.insert("privateKey", wgConfig.value(amnezia::configKey::clientPrivKey));
   json.insert("deviceIpv4Address", wgConfig.value(amnezia::configKey::clientIp));
@@ -336,8 +338,8 @@ void LocalSocketController::deactivate() {
 
   QJsonObject json;
   json.insert("type", "deactivate");
+  json.insert("migrationConnectionNonce", m_migrationNonce);
   write(json);
-  emit disconnected();
 }
 
 void LocalSocketController::checkStatus() {
@@ -461,6 +463,12 @@ void LocalSocketController::parseCommand(const QByteArray& command) {
     return;
   }
   QString type = typeValue.toString();
+  if (type == "migrationNativeCleanup") {
+    const auto nonce = obj.value("nonce").toString();
+    if (!nonce.isEmpty() && nonce == m_migrationNonce)
+      emit migrationNativeCleanup(nonce, obj.value("confirmed").isBool() && obj.value("confirmed").toBool());
+    return;
+  }
 
   logger.debug() << "Parse command:" << type;
 

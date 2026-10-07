@@ -13,11 +13,12 @@ public:
     AwgMigrationManager(QString root, QString credentialsPath, bool requireRoot);
     bool load(QString *error);
     bool candidate(const Profile &profile, QString &path, QString &sourceHash);
-    bool enroll(const Profile &profile, const QString &interfaceName);
+    bool enroll(const Profile &profile, const QString &interfaceName, VpnBackend *backend = nullptr);
     bool begin(const Profile &profile);
     bool verify(const Profile &profile, VpnBackend &backend, qint64 startedAt);
     bool commit(const Profile &profile);
     bool abandon(const Profile &profile);
+    bool acknowledge(const Profile &profile, VpnBackend &backend);
     QJsonObject status() const;
     QString profileRoot(const Profile &profile) const;
 private:
@@ -32,7 +33,12 @@ private:
     bool exchange(const QString &interfaceName, const QString &address, int port,
                   const QString &path, const QJsonObject &body, const QJsonObject &headers,
                   QJsonObject &response) const;
-    bool acknowledge(const Profile &profile, const QString &interfaceName);
+    bool retireStaged(const Profile &profile, QJsonObject &journal);
+    static QJsonObject enrollmentRequest(const amnezia::awgMigration::Binding &binding);
+    static bool validateRefreshedOffer(const QJsonObject &offer, const QJsonObject &previous,
+                                      const amnezia::awgMigration::Binding &binding, qint64 now);
+    static bool validateRenewal(const QJsonObject &renewal, const QJsonObject &journal,
+                               const QString &nonce, qint64 now);
     QString m_root;
     QString m_credentialsPath;
     bool m_requireRoot;
