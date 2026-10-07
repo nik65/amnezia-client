@@ -1630,6 +1630,13 @@ class LabController:
             if baseline_manifest is None or headless_baseline_receipt is None or headless_candidate_receipt is None:
                 raise LabError("headless run requires baseline manifest and verified baseline/candidate provisioning receipts")
         baseline_records = {name: artifact_record(path) for name, path in baseline_artifacts.items()}
+        # Bind the selected platforms before creating any guest disk/state.
+        if lane != "publisher-diagnostic":
+            validate_signed_manifest(manifest, manifest_public_key,
+                                     version=str(candidate_version), artifacts=records)
+            if baseline_manifest is not None:
+                validate_signed_manifest(baseline_manifest, manifest_public_key,
+                                         version=str(baseline_version), artifacts=baseline_records)
         baseline_outer_record = artifact_record(baseline_outer_artifact) if baseline_outer_artifact else None
         if lane != "publisher-diagnostic" and self.windows_backend == "hyperv" and outer_artifact is not None and baseline_outer_artifact is None:
             raise LabError("Hyper-V Windows run requires an explicit baseline outer artifact")
