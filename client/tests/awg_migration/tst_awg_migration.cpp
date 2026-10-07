@@ -3,12 +3,74 @@
 #include "../../../common/awgBackendObservation.h"
 #include "../../../common/awgMigrationSecretStore.h"
 #include <QTemporaryDir>
+#include "core/utils/migrationTeardownContext.h"
 #include "core/models/protocols/awgProtocolConfig.h"
 
 using namespace amnezia::awgMigration;
 class AwgMigrationTests : public QObject {
     Q_OBJECT
 private slots:
+    void retainedTeardownAfterActiveWrapperCleared_data()
+    {
+        QTest::addColumn<bool>("android");
+        QTest::newRow("desktop IPC") << false;
+        QTest::newRow("Android JNI observation") << true;
+    }
+    void retainedTeardownAfterActiveWrapperCleared()
+    {
+        QFETCH(bool, android);
+        quint64 epoch = 41;
+        bool ownerDestroyed = false;
+        bool fallback = false;
+        int completions = 0;
+        QSharedPointer<QObject> active(new QObject);
+        QObject::connect(active.data(), &QObject::destroyed, [&]() { ownerDestroyed = true; });
+        const quint64 originalEpoch = epoch++;
+        QPointer<MigrationTeardownContext> retirement = new MigrationTeardownContext(active, "session-A", originalEpoch,
+                epoch, true, [&]() { return epoch; }, [&](bool confirmed) {
+                    ++completions;
+                    fallback = confirmed;
+                    QVERIFY(ownerDestroyed); // release owned IPC receiver before fallback
+                }, this);
+        active.clear(); // production clears its active slot before native stop completes
+        QVERIFY(!ownerDestroyed);
+        retirement->observe("foreign-session", originalEpoch, true);
+        retirement->observe("session-A", originalEpoch - 1, true);
+        QCOMPARE(completions, 0);
+        QTimer::singleShot(0, retirement, [retirement, android, originalEpoch]() {
+            if (android) retirement->observeAndroid(QJsonObject{{"connectionNonce", "session-A"},
+                        {"nativeCleanupConfirmed", true}}, originalEpoch);
+            else retirement->observe("session-A", originalEpoch, true);
+        });
+        QTRY_COMPARE(completions, 1);
+        QVERIFY(fallback);
+        QTRY_VERIFY(retirement.isNull());
+    }
+    void retainedTeardownFailureNeverAuthorizesFallback_data()
+    {
+        QTest::addColumn<QString>("failure");
+        for (const auto &failure : {"timeout", "native-error", "routes-failed", "epoch-retired"})
+            QTest::newRow(failure) << QString(failure);
+    }
+    void retainedTeardownFailureNeverAuthorizesFallback()
+    {
+        QFETCH(QString, failure);
+        quint64 epoch = 2;
+        int completions = 0;
+        bool fallback = true;
+        QSharedPointer<QObject> active(new QObject);
+        auto *retirement = new MigrationTeardownContext(active, "session-A", 1, 2, failure != "routes-failed",
+                [&]() { return epoch; }, [&](bool confirmed) { ++completions; fallback = confirmed; }, this);
+        active.clear();
+        if (failure == "epoch-retired") ++epoch;
+        if (failure == "timeout") retirement->expire();
+        else retirement->observe("session-A", 1, failure != "native-error");
+        QCOMPARE(completions, 1);
+        QVERIFY(!fallback);
+        retirement->observe("session-A", 1, true); // deferred duplicate cannot reverse failure
+        QCOMPARE(completions, 1);
+        QVERIFY(!fallback);
+    }
     void protectedMigrationStoreRejectsTamperingAndForeignPaths()
     {
 #if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)

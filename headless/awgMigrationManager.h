@@ -10,7 +10,7 @@ namespace amnezia::headless {
 // All writes are confined to a private cache. The imported profile is immutable.
 class AwgMigrationManager final {
 public:
-    AwgMigrationManager(QString root, QString credentialsPath, bool requireRoot);
+    AwgMigrationManager(QString root, QString credentialsPath, bool requireRoot, QString trustedSourceRoot = {});
     bool load(QString *error);
     bool candidate(const Profile &profile, QString &path, QString &sourceHash);
     bool enroll(const Profile &profile, const QString &interfaceName, VpnBackend *backend = nullptr);
@@ -25,6 +25,7 @@ private:
     friend class ::AwgMigrationTest;
     bool secureDirectory(const QString &path) const;
     bool read(const QString &path, QByteArray &bytes) const;
+    bool readLegacy(const QString &path, QByteArray &bytes) const;
     bool save(const QString &path, const QByteArray &bytes) const;
     bool writeState(const Profile &profile, const QJsonObject &state);
     QJsonObject state(const Profile &profile) const;
@@ -41,6 +42,7 @@ private:
                                const QString &nonce, qint64 now);
     QString m_root;
     QString m_credentialsPath;
+    QString m_sourceRoot;
     bool m_requireRoot;
     QString m_lastState = QStringLiteral("not_enrolled");
 };

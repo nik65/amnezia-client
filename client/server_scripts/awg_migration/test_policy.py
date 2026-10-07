@@ -37,7 +37,7 @@ class PolicyTests(unittest.TestCase):
         result = namespace_snapshot(self.run_fixture, 'source', INTERFACE, 'wg0')
         self.assertEqual(1280, result['mtu'])
         self.assertEqual('eth1', result['egress']['172.29.172.254'])
-        self.assertTrue(all('wg0' not in rule for rule in result['filter']))
+        self.assertTrue(all('wg0' not in rule.split() for rule in result['filter']))
 
     def test_custom_effective_policy_and_mtu_drift_fail_closed(self):
         with self.assertRaises(ValueError): namespace_snapshot(self.run_fixture, 'source', {**INTERFACE, 'MTU': '1420'}, 'wg0')

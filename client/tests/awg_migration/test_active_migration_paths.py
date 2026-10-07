@@ -37,7 +37,8 @@ class ActiveMigrationPaths(unittest.TestCase):
         self.assertNotIn("emit disconnected()", stop.split("write(json);", 1)[1])
         self.assertIn("nonce == m_migrationNonce", socket)
         vpn = source("vpnConnection.cpp")
-        self.assertIn("m_migrationNativeCleanupEpoch == epoch", vpn)
+        self.assertIn("new MigrationTeardownContext", vpn)
+        self.assertIn("context->observeAndroid(receipt, retiringEpoch)", vpn)
         self.assertNotIn("m_startupRouteTeardownConfirmed && m_vpnProtocol.isNull()", vpn)
 
     def test_committed_ack_renews_target_without_erasing_receipt(self):

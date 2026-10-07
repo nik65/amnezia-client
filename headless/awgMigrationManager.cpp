@@ -15,6 +15,7 @@
 #include <poll.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <grp.h>
 #endif
 
 namespace amnezia::headless {
@@ -34,8 +35,11 @@ QString nativeParameter(const QString &key) {
 }
 }
 
-AwgMigrationManager::AwgMigrationManager(QString root, QString credentialsPath, bool requireRoot)
-    : m_root(std::move(root)), m_credentialsPath(std::move(credentialsPath)), m_requireRoot(requireRoot) {}
+AwgMigrationManager::AwgMigrationManager(QString root, QString credentialsPath, bool requireRoot, QString trustedSourceRoot)
+    : m_root(std::move(root)), m_credentialsPath(std::move(credentialsPath)),
+      m_sourceRoot(std::move(trustedSourceRoot)), m_requireRoot(requireRoot) {
+    if (m_sourceRoot.isEmpty() && m_requireRoot) m_sourceRoot = QStringLiteral("/etc/amnezia/profiles");
+}
 
 bool AwgMigrationManager::secureDirectory(const QString &path) const
 {
@@ -56,6 +60,42 @@ bool AwgMigrationManager::read(const QString &path, QByteArray &bytes) const
         || (m_requireRoot && info.ownerId() != 0)
         || info.permissions() & (QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
                                  | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther)) return false;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024) return false;
+    bytes = file.readAll();
+    return file.error() == QFileDevice::NoError;
+}
+bool AwgMigrationManager::readLegacy(const QString &path, QByteArray &bytes) const
+{
+    const QFileInfo info(path);
+    if (!info.isAbsolute() || !info.isFile() || info.isSymLink()
+        || info.canonicalFilePath() != info.absoluteFilePath()
+        || (m_requireRoot && info.ownerId() != 0)
+        || info.permissions() & (QFileDevice::WriteGroup | QFileDevice::ReadOther | QFileDevice::WriteOther
+                                 | QFileDevice::ExeGroup | QFileDevice::ExeOther)) return false;
+    const QFileInfo sourceRoot(m_sourceRoot.isEmpty() ? info.absolutePath() : m_sourceRoot);
+    if (!sourceRoot.isAbsolute() || !sourceRoot.isDir() || sourceRoot.isSymLink()
+        || sourceRoot.canonicalFilePath() != sourceRoot.absoluteFilePath()
+        || !info.canonicalFilePath().startsWith(sourceRoot.canonicalFilePath() + QDir::separator())) return false;
+#ifdef Q_OS_LINUX
+    const group *amneziaGroup = ::getgrnam("amnezia");
+    const auto trustedGroup = [&](uint gid) { return gid == 0 || (amneziaGroup && gid == amneziaGroup->gr_gid); };
+    if ((info.permissions() & QFileDevice::ReadGroup) && !trustedGroup(info.groupId())) return false;
+#else
+    if (info.permissions() & QFileDevice::ReadGroup) return false;
+#endif
+    QString parent = info.absolutePath();
+    while (true) {
+        const QFileInfo directory(parent);
+        if (!directory.isDir() || directory.isSymLink()
+            || directory.canonicalFilePath() != directory.absoluteFilePath()
+            || (m_requireRoot && directory.ownerId() != 0)
+            || directory.permissions() & (QFileDevice::WriteGroup | QFileDevice::WriteOther)) return false;
+        if (parent == sourceRoot.absoluteFilePath()) break;
+        const QString next = directory.dir().absolutePath();
+        if (next == parent || !parent.startsWith(sourceRoot.absoluteFilePath() + QDir::separator())) return false;
+        parent = next;
+    }
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024) return false;
     bytes = file.readAll();
@@ -125,7 +165,7 @@ bool AwgMigrationManager::load(QString *error) {
 bool AwgMigrationManager::source(const Profile &profile, QByteArray &bytes, QJsonObject &identity,
                                 amnezia::awgMigration::Binding &binding) const
 {
-    if (profile.protocol != QStringLiteral("amneziawg") || !read(profile.configPath, bytes)) return false;
+    if (profile.protocol != QStringLiteral("amneziawg") || !readLegacy(profile.configPath, bytes)) return false;
     QMap<QString, QString> iface, peer;
     QString section;
     int peers = 0;
@@ -387,7 +427,7 @@ bool AwgMigrationManager::candidate(const Profile &profile, QString &path, QStri
     const QString phase = journal.value("phase").toString();
     if (phase != QStringLiteral("staged") && phase != QStringLiteral("committed")) return false;
     QByteArray original, candidateBytes;
-    if (!read(profile.configPath, original) || hash(original) != journal.value("sourceHash").toString()) {
+    if (!readLegacy(profile.configPath, original) || hash(original) != journal.value("sourceHash").toString()) {
         if (phase == QStringLiteral("staged")) retireStaged(profile, journal);
         return false;
     }
@@ -453,7 +493,7 @@ bool AwgMigrationManager::verify(const Profile &profile, VpnBackend &backend, qi
 bool AwgMigrationManager::commit(const Profile &profile) {
     auto journal = state(profile);
     QByteArray original;
-    if (!read(profile.configPath, original) || hash(original) != journal.value("sourceHash").toString()) return false;
+    if (!readLegacy(profile.configPath, original) || hash(original) != journal.value("sourceHash").toString()) return false;
     journal.insert("phase", "committed");
     if (journal.value("previousPhase").toString() != QStringLiteral("committed")) journal.insert("ackPending", true);
     m_lastState = QStringLiteral("committed");

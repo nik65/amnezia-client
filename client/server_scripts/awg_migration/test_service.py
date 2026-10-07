@@ -8,6 +8,8 @@ import tempfile
 import time
 import unittest
 import sqlite3
+from contextlib import closing
+import os
 from unittest.mock import patch
 import service
 
@@ -161,9 +163,40 @@ class MigrationServiceTests(unittest.TestCase):
                    'grant': renewed['grant'], 'challengeReceipt': receipt}
             self.assertEqual(200, self.request('ack', ack, role=self.target).status)
             self.assertEqual(200, self.request('ack', ack, role=self.target).status)
-        with sqlite3.connect(self.directory / 'grants.sqlite3') as db:
+        with closing(sqlite3.connect(self.directory / 'grants.sqlite3')) as db:
             old = db.execute('SELECT proved FROM grants WHERE digest=?', (hashlib.sha256(grant.encode()).hexdigest(),)).fetchone()
             self.assertEqual(1, old[0])
+
+    def test_repeated_dispatch_closes_real_database_handles_on_success_and_failure(self):
+        real_connect = sqlite3.connect
+        connections = []
+        def tracked(*args, **kwargs):
+            connection = real_connect(*args, **kwargs)
+            connections.append(connection)
+            return connection
+        body = {'schema': 1, 'peerPublicKey': PEER, 'sourceFingerprint': FP, 'nonce': NONCE}
+        with patch('service.sqlite3.connect', side_effect=tracked):
+            for _ in range(20):
+                self.assertEqual(200, self.request('bootstrap', body).status)
+                self.assertEqual(403, self.request('bootstrap', body, client='wrong').status)
+        self.assertEqual(40, len(connections))
+        for connection in connections:
+            with self.assertRaises(sqlite3.ProgrammingError): connection.execute('SELECT 1')
+        # Keep the connection objects alive: GC must not be required to unlock files.
+        original, renamed = self.directory / 'grants.sqlite3', self.directory / 'renamed.sqlite3'
+        os.replace(original, renamed)
+        os.replace(renamed, original)
+
+    def test_real_database_exception_rolls_back_before_close(self):
+        path = self.directory / 'rollback.sqlite3'
+        with service.grant_database(path) as db:
+            db.execute('CREATE TABLE receipt (value INTEGER)')
+        with self.assertRaises(ValueError):
+            with service.grant_database(path) as db:
+                db.execute('INSERT INTO receipt(value) VALUES(1)')
+                raise ValueError('injected protocol rejection')
+        with service.grant_database(path) as db:
+            self.assertEqual(0, db.execute('SELECT count(*) FROM receipt').fetchone()[0])
 
 
 if __name__ == '__main__':

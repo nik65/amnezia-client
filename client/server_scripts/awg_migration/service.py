@@ -1,5 +1,6 @@
 """Private, peer-bound AWG migration control plane; never a public update feed."""
 import base64
+from contextlib import closing, contextmanager
 import hashlib
 import ipaddress
 import json
@@ -31,6 +32,15 @@ def unique_object(pairs):
             raise ValueError('duplicate JSON field')
         result[key] = value
     return result
+
+
+@contextmanager
+def grant_database(path):
+    # sqlite's connection context controls transactions but does not close it.
+    # Keep rollback/commit inside explicit lifetime ownership on every exit path.
+    with closing(sqlite3.connect(path, timeout=5)) as connection:
+        with connection:
+            yield connection
 
 
 def sign(payload, directory):
@@ -96,7 +106,7 @@ class MigrationService:
         }
         if path not in expected_fields or set(body) != expected_fields[path]:
             raise ValueError('request fields')
-        with sqlite3.connect(os.path.join(self.directory, 'grants.sqlite3'), timeout=5) as db:
+        with grant_database(os.path.join(self.directory, 'grants.sqlite3')) as db:
             db.execute('CREATE TABLE IF NOT EXISTS grants (digest TEXT PRIMARY KEY, peer TEXT, fingerprint TEXT, generation INTEGER, expires INTEGER, challenge TEXT, proved INTEGER DEFAULT 0, ack INTEGER DEFAULT 0, issued INTEGER, proofExpires INTEGER)')
             if 'proofExpires' not in {value[1] for value in db.execute('PRAGMA table_info(grants)')}:
                 db.execute('ALTER TABLE grants ADD COLUMN proofExpires INTEGER')

@@ -12,7 +12,8 @@ from feeds import FeedServer, feed_mounts
 class MountPlanTests(unittest.TestCase):
     def test_only_script_not_migration_private_directory_is_mounted(self):
         plan = feed_mounts('/opt/amnezia/awg-migration/amnezia-awg2/1')
-        self.assertIn('/opt/amnezia/awg-migration/amnezia-awg2/1/feeds.py:/app/feeds.py:ro', plan)
+        expected_script = str(Path('/opt/amnezia/awg-migration/amnezia-awg2/1') / 'feeds.py') + ':/app/feeds.py:ro'
+        self.assertIn(expected_script, plan)
         self.assertFalse(any(':/migration' in part for part in plan))
         self.assertFalse(any('signing.pem' in part or 'awg0.conf' in part for part in plan))
 

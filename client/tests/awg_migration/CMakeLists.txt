@@ -6,6 +6,7 @@ find_package(Qt6 REQUIRED COMPONENTS Core Test)
 find_package(OpenSSL REQUIRED)
 enable_testing()
 add_executable(awg_migration_tests tst_awg_migration.cpp
+    ../../core/utils/migrationTeardownContext.h
     ../../core/models/protocols/awgProtocolConfig.cpp)
 target_include_directories(awg_migration_tests PRIVATE ../..)
 target_link_libraries(awg_migration_tests PRIVATE Qt6::Core Qt6::Test OpenSSL::Crypto)

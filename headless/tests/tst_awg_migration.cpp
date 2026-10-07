@@ -1,6 +1,10 @@
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
+#ifdef Q_OS_LINUX
+#include <unistd.h>
+#include <grp.h>
+#endif
 #include "awgMigrationManager.h"
 using namespace amnezia::headless;
 
@@ -39,6 +43,52 @@ class AwgMigrationTest : public QObject {
         return {{"payload", QString::fromLatin1(bytes.toBase64())}, {"signature", QString::fromLatin1(signature.toBase64())}};
     }
 private slots:
+    void legacyReadRejectsUnsafeGroupWriteSymlinkAndOutsideRoot() {
+        QTemporaryDir directory;
+        const QString root = directory.filePath("profiles");
+        QVERIFY(QDir().mkdir(root));
+        AwgMigrationManager manager(directory.filePath("migration"), {}, false, root);
+        const QString source = QDir(root).filePath("legacy.conf");
+        QVERIFY(manager.save(source, QByteArray("private-source")));
+        QByteArray bytes;
+        QVERIFY(manager.readLegacy(source, bytes));
+        QCOMPARE(bytes, QByteArray("private-source"));
+        QVERIFY(QFile::setPermissions(source, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::WriteGroup));
+        QVERIFY(!manager.readLegacy(source, bytes));
+        QVERIFY(QFile::setPermissions(source, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        const QString outside = directory.filePath("outside.conf");
+        QVERIFY(manager.save(outside, QByteArray("foreign-source")));
+        QVERIFY(!manager.readLegacy(outside, bytes));
+        const QString link = QDir(root).filePath("link.conf");
+        QVERIFY(QFile::link(source, link));
+        QVERIFY(!manager.readLegacy(link, bytes));
+        QVERIFY(QFile::setPermissions(root, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner | QFileDevice::WriteGroup));
+        QVERIFY(!manager.readLegacy(source, bytes));
+    }
+    void rootTrustedGroup640IsLegacyOnlyAndForeignGroupIsRejected() {
+#ifdef Q_OS_LINUX
+        if (::geteuid() != 0) QSKIP("root group fixture requires an owned disposable Linux guest");
+        QTemporaryDir directory;
+        const QString root = directory.filePath("profiles");
+        QVERIFY(QDir().mkdir(root));
+        QVERIFY(QFile::setPermissions(root, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        AwgMigrationManager manager(directory.filePath("migration"), {}, true, root);
+        const QString source = QDir(root).filePath("legacy.conf");
+        QVERIFY(manager.save(source, QByteArray("private-source")));
+        QVERIFY(::chown(source.toLocal8Bit().constData(), 0, 0) == 0);
+        QVERIFY(QFile::setPermissions(source, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup));
+        QByteArray bytes;
+        QVERIFY(manager.readLegacy(source, bytes));
+        QVERIFY(!manager.read(source, bytes)); // Private material remains 0600.
+        uint arbitraryGroup = 424242;
+        const group *trusted = ::getgrnam("amnezia");
+        if (trusted && trusted->gr_gid == arbitraryGroup) ++arbitraryGroup;
+        QVERIFY(::chown(source.toLocal8Bit().constData(), 0, arbitraryGroup) == 0);
+        QVERIFY(!manager.readLegacy(source, bytes));
+#else
+        QSKIP("Linux ownership contract");
+#endif
+    }
     void productionEnrollmentRequestMatchesRealServerFixture() {
         QFile file(QString::fromUtf8(AWG_MIGRATION_WIRE_FIXTURE_PATH));
         QVERIFY(file.open(QIODevice::ReadOnly));

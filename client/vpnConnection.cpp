@@ -1,4 +1,5 @@
 #include "vpnConnection.h"
+#include "core/utils/migrationTeardownContext.h"
 #include <QPointer>
 #include <QUuid>
 
@@ -1707,6 +1708,10 @@ void VpnConnection::connectToVpn(const QString &serverId, int serverIndex,
                                  DockerContainer container,
                                  const QJsonObject &vpnConfiguration)
 {
+    if (m_migrationTeardownContext || m_migrationTeardownRecoveryRequired) {
+        emit migrationTeardownObserved(m_serverId, m_connectionEpoch, false);
+        return;
+    }
     qDebug() << QString("Trying to connect to VPN, server id is %1, container is %2, route mode is")
                         .arg(serverId)
                         .arg(ContainerUtils::containerToString(container))
@@ -1784,12 +1789,6 @@ void VpnConnection::createProtocolConnections()
     const quint64 migrationEpoch = m_connectionEpoch;
     const QString migrationServerId = m_serverId;
     const QPointer<VpnProtocol> migrationProtocol(m_vpnProtocol.data());
-    connect(m_vpnProtocol.data(), &VpnProtocol::migrationNativeCleanup, this,
-            [this, migrationEpoch, migrationServerId](const QString &nonce, bool confirmed) {
-                if (migrationEpoch != m_connectionEpoch || migrationServerId != m_serverId
-                    || nonce.isEmpty() || nonce != m_vpnConfiguration.value("migrationConnectionNonce").toString()) return;
-                m_migrationNativeCleanupEpoch = confirmed ? migrationEpoch : 0;
-            });
     connect(m_vpnProtocol.data(), &VpnProtocol::migrationPeerObservation, this,
             [this, migrationEpoch, migrationServerId, migrationProtocol](const QJsonObject &observation) {
                 if (migrationEpoch != m_connectionEpoch || migrationServerId != m_serverId
@@ -1798,7 +1797,6 @@ void VpnConnection::createProtocolConnections()
                 if (observation.value("connectionNonce") != m_vpnConfiguration.value("migrationConnectionNonce")) return;
                 if (observation.value("nativeCleanupConfirmed").isBool()
                     && observation.value("nativeCleanupConfirmed").toBool()) {
-                    m_migrationNativeCleanupEpoch = migrationEpoch;
                     return;
                 }
 #endif
@@ -2041,6 +2039,7 @@ QString VpnConnection::bytesPerSecToText(quint64 bytes)
 }
 
 void VpnConnection::reconnectToVpn() {
+    if (m_migrationTeardownContext || m_migrationTeardownRecoveryRequired) return;
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
     if (m_vpnConfiguration.isEmpty() || m_container == DockerContainer::None
         || m_connectionState != Vpn::ConnectionState::Connected) {
@@ -2147,6 +2146,8 @@ void VpnConnection::reconnectToVpn() {
 
 void VpnConnection::disconnectFromVpn()
 {
+    if (m_migrationTeardownContext) return;
+    const quint64 retiringEpoch = m_connectionEpoch;
     clearManagedRouteReconnectSession();
     m_startupRouteTeardownConfirmed = clearSavedRoutesWithReceipt();
     if (!m_startupRouteTeardownConfirmed) {
@@ -2166,6 +2167,40 @@ void VpnConnection::disconnectFromVpn()
     }
 
     setConnectionState(Vpn::ConnectionState::Disconnecting);
+
+#if defined(Q_OS_ANDROID) || defined(AMNEZIA_DESKTOP)
+    if (ContainerUtils::isAwgContainer(m_container)) {
+        const auto retiringProtocol = m_vpnProtocol;
+        const auto nonce = m_vpnConfiguration.value("migrationConnectionNonce").toString();
+        const auto disconnectEpoch = m_connectionEpoch;
+        const auto serverId = m_serverId;
+        auto *context = new MigrationTeardownContext(retiringProtocol.staticCast<QObject>(), nonce,
+                retiringEpoch, disconnectEpoch, m_startupRouteTeardownConfirmed,
+                [this]() { return m_connectionEpoch; },
+                [this, serverId, disconnectEpoch](bool confirmed) {
+                    m_migrationTeardownContext = nullptr;
+                    m_migrationTeardownRecoveryRequired = !confirmed;
+                    setConnectionState(confirmed ? Vpn::ConnectionState::Disconnected : Vpn::ConnectionState::Error);
+                    emit migrationTeardownObserved(serverId, disconnectEpoch, confirmed);
+                }, this);
+        m_migrationTeardownContext = context;
+        // Retire active state/observation subscriptions before changing the slot.
+        disconnect(retiringProtocol.data(), nullptr, this, nullptr);
+        connect(retiringProtocol.data(), &VpnProtocol::migrationNativeCleanup, context,
+                [context, retiringEpoch](const QString &receiptNonce, bool confirmed) {
+                    context->observe(receiptNonce, retiringEpoch, confirmed);
+                });
+#ifdef Q_OS_ANDROID
+        connect(retiringProtocol.data(), &VpnProtocol::migrationPeerObservation, context,
+                [context, retiringEpoch](const QJsonObject &receipt) {
+                    context->observeAndroid(receipt, retiringEpoch);
+                });
+#endif
+        m_vpnProtocol.clear();
+        retiringProtocol->stop();
+        return;
+    }
+#endif
 
 #ifdef Q_OS_ANDROID
     auto *const connection = new QMetaObject::Connection;
@@ -2245,16 +2280,6 @@ void VpnConnection::setConnectionState(Vpn::ConnectionState state) {
         return;
 
     m_connectionState = state;
-    if (state == Vpn::ConnectionState::Disconnected) {
-        const auto epoch = m_connectionEpoch;
-        const auto serverId = m_serverId;
-        QTimer::singleShot(0, this, [this, epoch, serverId]() {
-            if (epoch != m_connectionEpoch || serverId != m_serverId
-                || m_connectionState != Vpn::ConnectionState::Disconnected) return;
-            emit migrationTeardownObserved(serverId, epoch,
-                    m_startupRouteTeardownConfirmed && m_migrationNativeCleanupEpoch == epoch);
-        });
-    }
     emit connectionContextChanged(m_serverId, serverRoutingRulesSyncHost(), m_connectionEpoch);
     emit connectionStateChanged(state);
 }

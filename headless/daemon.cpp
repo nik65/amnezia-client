@@ -104,14 +104,14 @@ Daemon::Daemon(QString socketPath, QString profileStorePath,
     : QObject(parent),
       m_socketPath(socketPath.trimmed().isEmpty() ? defaultSocketPath() : std::move(socketPath)),
       m_profileStore(std::move(profileStorePath)),
-      m_vpnBackend(runner, std::move(configRoot), requireRootOwnedConfig,
+      m_vpnBackend(runner, configRoot, requireRootOwnedConfig,
                    stagingRoot),
       m_routingController(runner ? runner : std::make_shared<RealCommandRunner>(stagingRoot),
                           routeStatePathForStore(m_profileStore.path()), false),
       m_updateManager(runner, updateStatePathForStore(m_profileStore.path())),
       m_remoteLogUploader(std::move(remoteLogConfigPath), this),
       m_migrationManager(QDir(QFileInfo(m_profileStore.path()).absolutePath()).filePath(QStringLiteral("awg-migrations")),
-                         m_remoteLogUploader.configPath(), requireRootOwnedConfig)
+                         m_remoteLogUploader.configPath(), requireRootOwnedConfig, configRoot)
 {
     connect(&m_migrationTimer, &QTimer::timeout, this, &Daemon::checkAwgMigration);
     m_migrationTimer.setInterval(60000);
