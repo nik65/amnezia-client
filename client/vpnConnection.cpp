@@ -2189,12 +2189,12 @@ void VpnConnection::disconnectFromVpn()
         connect(retiringProtocol.data(), &VpnProtocol::migrationNativeCleanup, context,
                 [context, retiringEpoch](const QString &receiptNonce, bool confirmed) {
                     context->observe(receiptNonce, retiringEpoch, confirmed);
-                });
+                }, Qt::QueuedConnection);
 #ifdef Q_OS_ANDROID
         connect(retiringProtocol.data(), &VpnProtocol::migrationPeerObservation, context,
                 [context, retiringEpoch](const QJsonObject &receipt) {
                     context->observeAndroid(receipt, retiringEpoch);
-                });
+                }, Qt::QueuedConnection);
 #endif
         m_vpnProtocol.clear();
         retiringProtocol->stop();

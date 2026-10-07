@@ -7,9 +7,50 @@
 #include "core/models/protocols/awgProtocolConfig.h"
 
 using namespace amnezia::awgMigration;
+class CleanupSignalSender final : public QObject {
+    Q_OBJECT
+public:
+    bool continuedAfterEmit = false;
+    void cleanup(const QString &nonce) {
+        emit nativeCleanup(nonce, true);
+        // Models LocalSocketController::parseCommand returning to readData,
+        // which still accesses its own socket and other members after emission.
+        continuedAfterEmit = true;
+    }
+signals:
+    void nativeCleanup(const QString &nonce, bool confirmed);
+};
 class AwgMigrationTests : public QObject {
     Q_OBJECT
 private slots:
+    void nativeSenderSurvivesEmissionAndIsReleasedBeforeFallback()
+    {
+        bool senderDestroyed = false;
+        bool fallback = false;
+        quint64 epoch = 2;
+        QSharedPointer<CleanupSignalSender> active(new CleanupSignalSender);
+        QObject::connect(active.data(), &QObject::destroyed, [&]() { senderDestroyed = true; });
+        const QPointer<CleanupSignalSender> sender(active.data());
+        auto *retirement = new MigrationTeardownContext(active.staticCast<QObject>(), "owned-session", 1, 2, true,
+                [&]() { return epoch; }, [&](bool confirmed) {
+                    QVERIFY(senderDestroyed);
+                    fallback = confirmed;
+                }, this);
+        QObject::connect(sender.data(), &CleanupSignalSender::nativeCleanup, retirement,
+                [retirement](const QString &nonce, bool confirmed) { retirement->observe(nonce, 1, confirmed); },
+                Qt::QueuedConnection);
+        active.clear();
+        sender->cleanup("foreign-session");
+        QVERIFY(sender && sender->continuedAfterEmit);
+        QVERIFY(!senderDestroyed);
+        QCoreApplication::processEvents();
+        QVERIFY(sender && !fallback);
+        sender->cleanup("owned-session");
+        QVERIFY(sender && sender->continuedAfterEmit);
+        QVERIFY(!senderDestroyed); // sender stack unwinds before owner release
+        QTRY_VERIFY(fallback);
+        QVERIFY(sender.isNull());
+    }
     void retainedTeardownAfterActiveWrapperCleared_data()
     {
         QTest::addColumn<bool>("android");
