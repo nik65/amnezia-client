@@ -55,18 +55,21 @@ void WindowsNetworkWatcher::initialize() {
 
 
   DWORD negotiatedVersion;
-  if (WlanOpenHandle(2, nullptr, &negotiatedVersion, &m_wlanHandle) !=
-      ERROR_SUCCESS) {
-    WindowsUtils::windowsLog("Failed to open the WLAN handle");
+  const DWORD openResult = WlanOpenHandle(2, nullptr, &negotiatedVersion, &m_wlanHandle);
+  if (openResult != ERROR_SUCCESS) {
+    logger.error() << "Failed to open the WLAN handle" << "errorCode" << openResult
+                   << WindowsUtils::getErrorMessage(openResult);
     return;
   }
 
   DWORD prefNotifSource;
-  if (WlanRegisterNotification(m_wlanHandle, WLAN_NOTIFICATION_SOURCE_MSM,
+  const DWORD notificationResult = WlanRegisterNotification(m_wlanHandle, WLAN_NOTIFICATION_SOURCE_MSM,
                                true /* ignore duplicates */,
                                (WLAN_NOTIFICATION_CALLBACK)wlanCallback, this,
-                               nullptr, &prefNotifSource) != ERROR_SUCCESS) {
-    WindowsUtils::windowsLog("Failed to register a wlan callback");
+                               nullptr, &prefNotifSource);
+  if (notificationResult != ERROR_SUCCESS) {
+    logger.error() << "Failed to register a wlan callback" << "errorCode" << notificationResult
+                   << WindowsUtils::getErrorMessage(notificationResult);
     return;
   }
 

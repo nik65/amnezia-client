@@ -384,6 +384,13 @@ open class AmneziaVpnService : VpnService() {
     private var remoteLogPausedGeneration = -1L
     private var remoteLogActiveConnection: HttpURLConnection? = null
     private var remoteLogInstallationIdCache: String? = null
+    // Only reduced health metadata crosses the existing private service Messenger.
+    private var remoteLogHealthState = 4
+    private var remoteLogHealthError = 0
+    private var remoteLogHealthHttp = 0
+    private var remoteLogHealthPending = 0L
+    private var remoteLogHealthSuccess = 0L
+    private var remoteLogHealthRetry = 0L
     private val remoteLogOriginLock = Any()
     private val remoteLogSanitizerContractVerified: Boolean by lazy(NONE) {
         verifyRemoteLogSanitizerContract()
@@ -455,11 +462,13 @@ open class AmneziaVpnService : VpnService() {
                         clientMessengers[msg.replyTo]?.let { clientMessenger ->
                             clientMessenger.send {
                                 ServiceEvent.STATUS.packToMessage {
+                                    putString("remoteLogHealth", remoteLogHealthSnapshot())
                                     putStatus(this@AmneziaVpnService.protocolState.value)
                                 }
                             }
                             clientMessenger.send {
                                 ServiceEvent.STATISTICS_UPDATE.packToMessage {
+                                    putString("remoteLogHealth", remoteLogHealthSnapshot())
                                     putStatistics(this@AmneziaVpnService.vpnProto?.protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
                                     this@AmneziaVpnService.vpnProto?.protocol?.migrationObservation?.let { putString("migrationObservation", it) }
                                 }
@@ -669,6 +678,7 @@ open class AmneziaVpnService : VpnService() {
                     this@AmneziaVpnService.vpnProto?.protocol?.migrationCleanupObservation?.let { receipt ->
                         clientMessengers.send {
                             ServiceEvent.STATISTICS_UPDATE.packToMessage {
+                                putString("remoteLogHealth", remoteLogHealthSnapshot())
                                 putString("migrationObservation", receipt)
                             }
                         }
@@ -677,6 +687,7 @@ open class AmneziaVpnService : VpnService() {
 
                 clientMessengers.send {
                     ServiceEvent.STATUS_CHANGED.packToMessage {
+                        putString("remoteLogHealth", remoteLogHealthSnapshot())
                         putStatus(protocolState)
                     }
                 }
@@ -727,6 +738,7 @@ open class AmneziaVpnService : VpnService() {
                 while (true) {
                     clientMessenger.send {
                         ServiceEvent.STATISTICS_UPDATE.packToMessage {
+                            putString("remoteLogHealth", remoteLogHealthSnapshot())
                             putStatistics(protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
                         }
                     }
@@ -774,6 +786,7 @@ open class AmneziaVpnService : VpnService() {
                         clientMessengers.values.toList().forEach { messenger ->
                             messenger.send {
                                 ServiceEvent.STATISTICS_UPDATE.packToMessage {
+                                    putString("remoteLogHealth", remoteLogHealthSnapshot())
                                     putStatistics(this@AmneziaVpnService.vpnProto?.protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
                                     this@AmneziaVpnService.vpnProto?.protocol?.migrationObservation?.let { putString("migrationObservation", it) }
                                 }
@@ -912,6 +925,15 @@ open class AmneziaVpnService : VpnService() {
                 remoteLogTarget = parsedTarget
                 remoteLogTargetGeneration++
                 remoteLogPausedGeneration = -1L
+                remoteLogHealthState = 4
+                remoteLogHealthError = 0
+                remoteLogHealthHttp = 0
+                remoteLogHealthPending = 0L
+                remoteLogHealthRetry = 0L
+                remoteLogHealthSuccess = runCatching { Prefs.load<Long>(remoteLogHealthSuccessKey(parsedTarget)) }.getOrDefault(0L)
+                    .takeIf { it in 1..System.currentTimeMillis() } ?: 0L
+                if (remoteLogHealthSuccess > 0 && System.currentTimeMillis() - remoteLogHealthSuccess <= 15 * 60 * 1000)
+                    remoteLogHealthState = 3
                 targetChanged = true
             }
             parsedTarget
@@ -924,6 +946,55 @@ open class AmneziaVpnService : VpnService() {
         staleJob?.cancel()
         if (targetChanged) writeRemoteLogOriginCheckpoint()
         launchRemoteLogUploadJobIfNeeded()
+        publishRemoteLogHealth()
+    }
+
+    private fun remoteLogHealthSuccessKey(target: RemoteLogTarget) =
+        "remoteLogHealthSuccess_" + remoteLogTargetIdentity(target)
+
+    private fun remoteLogHealthSnapshot(): String = synchronized(remoteLogTargetLock) {
+        val state = when {
+            protocolState.value != CONNECTED -> 0
+            remoteLogTarget == null -> 1
+            remoteLogHealthState == 3 && System.currentTimeMillis() - remoteLogHealthSuccess > 15 * 60 * 1000 -> 4
+            else -> remoteLogHealthState
+        }
+        JSONObject().apply {
+            put("schema", 1)
+            put("state", state)
+            put("lastSuccessMs", remoteLogHealthSuccess)
+            put("pendingBytes", remoteLogHealthPending)
+            put("errorCategory", remoteLogHealthError)
+            put("httpStatus", remoteLogHealthHttp)
+            put("nextRetryMs", remoteLogHealthRetry)
+        }.toString()
+    }
+
+    private fun publishRemoteLogHealth() {
+        val snapshot = remoteLogHealthSnapshot()
+        clientMessengers.send {
+            ServiceEvent.STATISTICS_UPDATE.packToMessage { putString("remoteLogHealth", snapshot) }
+        }
+    }
+
+    private fun recordRemoteLogHealth(attempt: RemoteLogAttempt, state: Int, error: Int = 0,
+                                     http: Int = 0, pending: Long? = null) {
+        val changed = synchronized(remoteLogTargetLock) {
+            if (attempt.generation != remoteLogTargetGeneration || remoteLogTarget != attempt.target
+                || protocolState.value != CONNECTED) false else {
+                remoteLogHealthState = state
+                remoteLogHealthError = error
+                remoteLogHealthHttp = http.takeIf { it in 100..599 } ?: 0
+                remoteLogHealthRetry = 0L
+                pending?.let { remoteLogHealthPending = it.coerceIn(0, 1073741824) }
+                if (state == 3) {
+                    remoteLogHealthSuccess = System.currentTimeMillis()
+                    runCatching { Prefs.save(remoteLogHealthSuccessKey(attempt.target), remoteLogHealthSuccess) }
+                }
+                true
+            }
+        }
+        if (changed) publishRemoteLogHealth()
     }
 
     private fun launchRemoteLogUploadJobIfNeeded() {
@@ -966,6 +1037,18 @@ open class AmneziaVpnService : VpnService() {
                                 }
                             }
                         }
+                        synchronized(remoteLogTargetLock) {
+                            if (generationBeforeAttempt == generationAfterAttempt && generationAfterAttempt == remoteLogTargetGeneration) {
+                                if (remoteLogHealthState == 2) {
+                                    remoteLogHealthState = if (outcome.result == RemoteLogUploadResult.RETRY) 5
+                                        else if (remoteLogHealthSuccess > 0) 3 else 4
+                                    remoteLogHealthError = if (outcome.result == RemoteLogUploadResult.RETRY) 7 else 0
+                                }
+                                remoteLogHealthRetry = if (outcome.result == RemoteLogUploadResult.RETRY)
+                                    System.currentTimeMillis() + nextDelay else 0L
+                            }
+                        }
+                        publishRemoteLogHealth()
                         delay(nextDelay)
                     }
                 } finally {
@@ -983,6 +1066,12 @@ open class AmneziaVpnService : VpnService() {
     private fun stopRemoteLogUploader() {
         val (activeConnection, uploadJob) = synchronized(remoteLogTargetLock) {
             remoteLogTarget = null
+            remoteLogHealthState = 4
+            remoteLogHealthError = 0
+            remoteLogHealthHttp = 0
+            remoteLogHealthPending = 0L
+            remoteLogHealthSuccess = 0L
+            remoteLogHealthRetry = 0L
             remoteLogTargetGeneration++
             remoteLogPausedGeneration = -1L
             val connection = remoteLogActiveConnection
@@ -993,6 +1082,7 @@ open class AmneziaVpnService : VpnService() {
         }
         activeConnection?.disconnect()
         uploadJob?.cancel()
+        publishRemoteLogHealth()
     }
 
     private fun currentRemoteLogAttempt(): RemoteLogAttempt? = synchronized(remoteLogTargetLock) {
@@ -1110,6 +1200,7 @@ open class AmneziaVpnService : VpnService() {
             )
         }
         var attempt = initialAttempt
+        recordRemoteLogHealth(attempt, 2)
         return try {
             if (requiredInitialAttempt != null && attempt != requiredInitialAttempt) {
                 return RemoteLogUploadOutcome(RemoteLogUploadResult.IDLE)
@@ -1171,6 +1262,7 @@ open class AmneziaVpnService : VpnService() {
                 logBytes = logBytes,
                 explicitSecrets = payloadSecrets
             ) ?: return RemoteLogUploadOutcome(RemoteLogUploadResult.IDLE)
+            recordRemoteLogHealth(attempt, 2, pending = payload.data.size.toLong())
             if (!saveRemoteLogCursorForAttempt(attempt, payload.cursorBeforeUpload)) {
                 Log.w(TAG, "Remote log cursor could not be persisted; upload postponed")
                 return RemoteLogUploadOutcome(
@@ -1221,9 +1313,12 @@ open class AmneziaVpnService : VpnService() {
                         }
                     )
                 } else {
+                    recordRemoteLogHealth(attempt, 3, http = statusCode, pending = 0)
                     RemoteLogUploadOutcome(RemoteLogUploadResult.ACCEPTED)
                 }
             } else {
+                recordRemoteLogHealth(attempt, 5, if (statusCode == 401 || statusCode == 403) 3 else 6,
+                    http = statusCode)
                 if (statusCode in 200..299) {
                     Log.w(TAG, "Remote log upload response did not acknowledge the expected batch")
                 }
@@ -1290,6 +1385,7 @@ open class AmneziaVpnService : VpnService() {
                 RemoteLogUploadOutcome(RemoteLogUploadResult.IDLE)
             } else {
                 Log.w(TAG, "Remote log upload failed: ${e.javaClass.simpleName}")
+                recordRemoteLogHealth(attempt, 5, if (e is java.net.SocketTimeoutException) 5 else 4)
                 RemoteLogUploadOutcome(RemoteLogUploadResult.RETRY)
             }
         } finally {
@@ -1307,6 +1403,7 @@ open class AmneziaVpnService : VpnService() {
         }
 
         var connection: HttpURLConnection? = null
+        var responseStatus = 0
         return try {
             connection = (URL(CLIENT_LOGS_BOOTSTRAP_ENDPOINT).openConnection(Proxy.NO_PROXY) as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -1322,8 +1419,11 @@ open class AmneziaVpnService : VpnService() {
             if (!registerRemoteLogConnection(attempt, connection)) return RemoteLogBootstrapOutcome()
             connection.outputStream.use { }
             val statusCode = connection.responseCode
+            responseStatus = statusCode
             if (!isRemoteLogAttemptActive(attempt)) return RemoteLogBootstrapOutcome()
             if (statusCode !in 200..299) {
+                recordRemoteLogHealth(attempt, 5, if (statusCode == 401 || statusCode == 403) 3 else 2,
+                    http = statusCode)
                 Log.w(TAG, "Remote log bootstrap failed: status=$statusCode")
                 return when {
                     statusCode <= 0 -> RemoteLogBootstrapOutcome()
@@ -1342,6 +1442,7 @@ open class AmneziaVpnService : VpnService() {
             }
             val response = readLimitedUtf8(connection.inputStream, CLIENT_LOGS_MAX_BOOTSTRAP_RESPONSE_BYTES)
             if (response == null) {
+                recordRemoteLogHealth(attempt, 5, 2, http = statusCode)
                 Log.w(TAG, "Remote log bootstrap response is too large")
                 return RemoteLogBootstrapOutcome(permanentFailure = true)
             }
@@ -1352,6 +1453,7 @@ open class AmneziaVpnService : VpnService() {
             if (endpoint != target.endpoint || clientId != target.clientId ||
                 !SHA256_HEX_PATTERN.matches(clientId) || !isValidRemoteLogToken(token)
             ) {
+                recordRemoteLogHealth(attempt, 5, 2, http = statusCode)
                 Log.w(TAG, "Remote log bootstrap returned invalid target")
                 return RemoteLogBootstrapOutcome(permanentFailure = true)
             }
@@ -1359,10 +1461,12 @@ open class AmneziaVpnService : VpnService() {
         } catch (e: CancellationException) {
             throw e
         } catch (e: JSONException) {
+            recordRemoteLogHealth(attempt, 5, 2, http = responseStatus)
             Log.w(TAG, "Remote log bootstrap returned invalid JSON")
             RemoteLogBootstrapOutcome(permanentFailure = true)
         } catch (e: Exception) {
             Log.w(TAG, "Remote log bootstrap failed: ${e.javaClass.simpleName}")
+            recordRemoteLogHealth(attempt, 5, if (e is java.net.SocketTimeoutException) 5 else 4)
             RemoteLogBootstrapOutcome()
         } finally {
             connection?.let {

@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(PROJECT AmneziaVPN)
 if(NOT AMNEZIAVPN_VERSION)
-    set(AMNEZIAVPN_VERSION 5.0.3.6 CACHE STRING "Client app version")
+    set(AMNEZIAVPN_VERSION 5.0.3.7 CACHE STRING "Client app version")
 endif()
 
 set(QT_CREATOR_SKIP_PACKAGE_MANAGER_SETUP ON CACHE BOOL "" FORCE)
@@ -58,7 +58,7 @@ foreach(_branding_var IN ITEMS
     endif()
 endforeach()
 # Keep the fork code monotonic beyond the upstream 5.0.3.0 code (2163).
-set(APP_ANDROID_VERSION_CODE 2192)
+set(APP_ANDROID_VERSION_CODE 2193)
 if(DEFINED APP_ANDROID_VERSION_CODE_OFFSET)
     math(EXPR APP_ANDROID_VERSION_CODE "${APP_ANDROID_VERSION_CODE} + ${APP_ANDROID_VERSION_CODE_OFFSET}")
 endif()

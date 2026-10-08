@@ -155,6 +155,10 @@ PageType {
         if (lastError !== "") {
             details.push(lastError);
         }
+        var httpStatus = root.remoteLogHealthController ? Number(root.remoteLogHealthController.lastHttpStatus || 0) : 0;
+        if (httpStatus >= 100 && httpStatus <= 599) {
+            details.push(qsTr("Collector response: HTTP %1").arg(httpStatus));
+        }
         if (details.length > 0) {
             return details.join("\n");
         }

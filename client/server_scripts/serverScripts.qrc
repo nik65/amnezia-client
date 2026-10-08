@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/server_scripts">
+        <file>client_logs/collector_route.py</file>
         <file>awg_migration/prepare.py</file>
         <file>awg_migration/trusted_image.py</file>
         <file>awg_migration/automatic.py</file>

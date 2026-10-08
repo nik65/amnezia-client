@@ -1,8 +1,23 @@
 #include "remoteLogHealthUiController.h"
+#include <cmath>
+#include <QSet>
+#ifdef Q_OS_ANDROID
+#include "platforms/android/android_controller.h"
+#endif
 
 RemoteLogHealthUiController::RemoteLogHealthUiController(RemoteLogUploader *uploader, QObject *parent)
     : QObject(parent), m_uploader(uploader)
 {
+#ifdef Q_OS_ANDROID
+    connect(AndroidController::instance(), &AndroidController::remoteLogHealthObserved,
+            this, &RemoteLogHealthUiController::observeServiceHealth);
+    connect(AndroidController::instance(), &AndroidController::serviceDisconnected, this, [this]() {
+        m_serviceHealth = {};
+        emit stateChanged(); emit statusChanged(); emit lastSuccessChanged();
+        emit lastSuccessAtChanged(); emit pendingBytesChanged(); emit lastErrorCategoryChanged();
+        emit nextRetryAtChanged(); emit healthChanged();
+    });
+#endif
     if (!m_uploader) {
         return;
     }
@@ -33,6 +48,8 @@ RemoteLogHealthUiController::RemoteLogHealthUiController(RemoteLogUploader *uplo
 
 RemoteLogHealthUiController::State RemoteLogHealthUiController::state() const
 {
+    if (!m_uploader && !m_serviceHealth.isEmpty())
+        return static_cast<State>(m_serviceHealth.value("state").toInt());
     return m_uploader ? static_cast<State>(static_cast<int>(m_uploader->state())) : State::Unavailable;
 }
 
@@ -64,16 +81,20 @@ bool RemoteLogHealthUiController::healthy() const
 
 QDateTime RemoteLogHealthUiController::lastSuccess() const
 {
+    if (!m_uploader && m_serviceHealth.value("lastSuccessMs").toDouble() > 0)
+        return QDateTime::fromMSecsSinceEpoch(qint64(m_serviceHealth.value("lastSuccessMs").toDouble()));
     return m_uploader ? m_uploader->lastSuccess() : QDateTime();
 }
 
 qint64 RemoteLogHealthUiController::pendingBytes() const
 {
+    if (!m_uploader) return qint64(m_serviceHealth.value("pendingBytes").toDouble());
     return m_uploader ? m_uploader->pendingBytes() : 0;
 }
 
 RemoteLogHealthUiController::ErrorCategory RemoteLogHealthUiController::lastErrorCategory() const
 {
+    if (!m_uploader) return static_cast<ErrorCategory>(m_serviceHealth.value("errorCategory").toInt());
     return m_uploader
             ? static_cast<ErrorCategory>(static_cast<int>(m_uploader->lastErrorCategory()))
             : ErrorCategory::None;
@@ -104,7 +125,44 @@ QString RemoteLogHealthUiController::lastErrorLabel() const
 
 QDateTime RemoteLogHealthUiController::nextRetryAt() const
 {
+    if (!m_uploader && m_serviceHealth.value("nextRetryMs").toDouble() > 0)
+        return QDateTime::fromMSecsSinceEpoch(qint64(m_serviceHealth.value("nextRetryMs").toDouble()));
     return m_uploader ? m_uploader->nextRetryAt() : QDateTime();
+}
+
+int RemoteLogHealthUiController::lastHttpStatus() const
+{
+    return m_uploader ? 0 : m_serviceHealth.value("httpStatus").toInt();
+}
+
+void RemoteLogHealthUiController::observeServiceHealth(const QJsonObject &snapshot)
+{
+    if (m_uploader) return;
+    const QSet<QString> keys{"schema", "state", "lastSuccessMs", "pendingBytes",
+                             "errorCategory", "httpStatus", "nextRetryMs"};
+    const auto actualKeys = snapshot.keys();
+    if (QSet<QString>(actualKeys.begin(), actualKeys.end()) != keys) return;
+    const auto validInteger = [&snapshot](const char *key, double maximum) {
+        const auto value = snapshot.value(key);
+        const double number = value.toDouble(-1);
+        return value.isDouble() && std::isfinite(number) && number >= 0
+                && number <= maximum && std::floor(number) == number;
+    };
+    const double deadline = QDateTime::currentMSecsSinceEpoch() + 24.0 * 60 * 60 * 1000;
+    if (snapshot.value("schema").toInt() != 1 || !validInteger("schema", 1)
+        || !validInteger("state", 5) || !validInteger("errorCategory", 7)
+        || !validInteger("httpStatus", 599) || !validInteger("pendingBytes", 1073741824)
+        || !validInteger("lastSuccessMs", QDateTime::currentMSecsSinceEpoch() + 300000.0)
+        || !validInteger("nextRetryMs", deadline)) return;
+    const int http = snapshot.value("httpStatus").toInt();
+    if (http != 0 && http < 100) return;
+    if (snapshot.value("state").toInt() == 3
+        && (snapshot.value("lastSuccessMs").toDouble() <= 0
+            || snapshot.value("errorCategory").toInt() != 0)) return;
+    m_serviceHealth = snapshot;
+    emit stateChanged(); emit statusChanged(); emit lastSuccessChanged();
+    emit lastSuccessAtChanged(); emit pendingBytesChanged(); emit lastErrorCategoryChanged();
+    emit nextRetryAtChanged(); emit healthChanged();
 }
 
 bool RemoteLogHealthUiController::retryAvailable() const

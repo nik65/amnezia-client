@@ -9,7 +9,7 @@
 class AwgMigrationController final : public QObject {
 public:
     AwgMigrationController(SecureServersRepository *, SecureAppSettingsRepository *, QObject *parent);
-    QJsonObject prepare(const QString &serverId, const QJsonObject &connection);
+    QJsonObject prepare(const QString &serverId, const QJsonObject &connection, bool allowTrial = true);
     void observe(const QString &serverId, quint64 epoch, const QJsonObject &observation);
     void cancel();
     void failed();
@@ -17,6 +17,8 @@ public:
     void cleanupFailed() { persist("recovery_required"); }
     std::function<void(const QJsonObject &)> reconnectLegacy;
 private:
+    void recordFailure(const QString &reason, int httpStatus = 0);
+    void clearFailure();
     void enrollOrFetch();
     void challenge();
     void acknowledge();
@@ -34,4 +36,5 @@ private:
     double m_initialRx = 0, m_initialTx = 0;
     bool m_trial = false, m_busy = false, m_cancelled = false;
     bool m_committingProfile = false;
+    bool m_allowTrial = true;
 };

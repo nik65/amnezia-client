@@ -5,6 +5,7 @@
 #include <QDebug>
 #include <QByteArray>
 #include <QStringList>
+#include <QFile>
 
 #include "core/configurators/configuratorBase.h"
 #include "core/utils/selfhosted/sshSession.h"
@@ -1236,10 +1237,23 @@ ErrorCode publishClientLogCollector(const ServerCredentials &credentials,
         return errorCode;
     }
 
+    const QString routeTmpFileName = QStringLiteral("/tmp/%1.py").arg(Utils::getRandomString(16));
+    QFile routeResource(QStringLiteral(":/server_scripts/client_logs/collector_route.py"));
+    if (!routeResource.open(QIODevice::ReadOnly)) {
+        sshSession.runScript(credentials, QStringLiteral("sudo rm -f '%1'").arg(scriptTmpFileName));
+        return ErrorCode::InternalError;
+    }
+    errorCode = sshSession.uploadFileToHost(credentials, routeResource.readAll(), routeTmpFileName);
+    if (errorCode != ErrorCode::NoError) {
+        sshSession.runScript(credentials, QStringLiteral("sudo rm -f '%1' '%2'").arg(scriptTmpFileName, routeTmpFileName));
+        return errorCode;
+    }
+
     const QString tokenTmpFileName = upsertToken ? QStringLiteral("/tmp/%1.tsv").arg(Utils::getRandomString(16)) : QString();
-    auto cleanupTmpFiles = [&sshSession, &credentials, &scriptTmpFileName, &tokenTmpFileName]() {
+    auto cleanupTmpFiles = [&sshSession, &credentials, &scriptTmpFileName, &tokenTmpFileName, &routeTmpFileName]() {
         QStringList files;
         files.append(QStringLiteral("'%1'").arg(scriptTmpFileName));
+        files.append(QStringLiteral("'%1'").arg(routeTmpFileName));
         if (!tokenTmpFileName.isEmpty()) {
             files.append(QStringLiteral("'%1'").arg(tokenTmpFileName));
         }
@@ -1274,6 +1288,29 @@ ErrorCode publishClientLogCollector(const ServerCredentials &credentials,
                  ContainerUtils::containerToString(container));
 
     QString script = QStringLiteral(R"SH(
+if [ '__PUBLISH_TUNNEL__' = '1' ]; then command -v python3 >/dev/null && command -v systemctl >/dev/null && [ -d /run/systemd/system ] && [ ! -L '__HOST_DIRECTORY__' ] || { echo __ERROR_MARKER__:route_runtime; exit 0; }; if [ -e '__HOST_DIRECTORY__' ]; then [ "$(sudo stat -c '%u:%a' '__HOST_DIRECTORY__')" = '0:700' ] || { echo __ERROR_MARKER__:route_directory; exit 0; }; fi; fi
+if [ '__PUBLISH_TUNNEL__' = '1' ]; then
+sudo python3 - <<'ROUTE_GUARD' || { echo __ERROR_MARKER__:previous_collector_ownership; exit 0; }
+import json,subprocess
+def inspect(name):
+    return json.loads(subprocess.run(['docker','inspect',name],check=True,capture_output=True,timeout=15).stdout)[0]
+source=inspect('__VPN_CONTAINER__')
+if source['Name']!='/__VPN_CONTAINER__' or not source['State']['Running'] or source['State']['Pid']<=0: raise ValueError('source ownership')
+names=subprocess.run(['docker','ps','-a','--format','{{.Names}}'],check=True,capture_output=True,timeout=15).stdout.decode().splitlines()
+if '__TUNNEL_CONTAINER__' in names:
+    collector=inspect('__TUNNEL_CONTAINER__')
+    mount=[m for m in collector['Mounts'] if m['Destination']=='/data']
+    config=collector['Config'];labels=config.get('Labels') or {}
+    env=set(config.get('Env') or [])
+    if (collector['Name']!='/__TUNNEL_CONTAINER__' or config['Image']!='__COLLECTOR_IMAGE__'
+        or collector['HostConfig']['NetworkMode']!='container:'+source['Id']
+        or len(mount)!=1 or mount[0]['Source']!='__HOST_DIRECTORY__' or not mount[0]['RW']
+        or config.get('Entrypoint')!=['python'] or config.get('Cmd')!=['/data/collector.py']
+        or 'AMNEZIA_CLIENT_LOGS_SCOPE=__CONTAINER_SCOPE__' not in env
+        or labels.get('org.amnezia.client-logs.route','__CONTAINER_SCOPE__')!='__CONTAINER_SCOPE__'):
+        raise ValueError('previous collector ownership')
+ROUTE_GUARD
+fi
 sudo install -d -m 0700 '__HOST_DIRECTORY__' '__HOST_DIRECTORY__/logs' '__HOST_DIRECTORY__/legacy' || echo __ERROR_MARKER__:mkdir
 sudo install -m 0755 '__SCRIPT_TMP_FILE__' '__HOST_DIRECTORY__/collector.py' || echo __ERROR_MARKER__:script_install
 sudo touch '__HOST_DIRECTORY__/tokens.tsv' || echo __ERROR_MARKER__:tokens_touch
@@ -1289,9 +1326,49 @@ sudo docker ps --format '{{.Names}}' | grep -qx '__BRIDGE_CONTAINER__' || echo _
 if [ '__PUBLISH_TUNNEL__' = '1' ]; then sudo docker ps --format '{{.Names}}' | grep -qx '__TUNNEL_CONTAINER__' || echo __ERROR_MARKER__:missing_tunnel_container; fi
 )SH");
 
+    // The timer belongs to this publication flow and may restart only its bound collector.
+    const auto routeBegin = script.indexOf(QStringLiteral("sudo docker exec -i '__VPN_CONTAINER__' sh -c 'while iptables"));
+    const auto routeEnd = script.indexOf(QStringLiteral("; sudo docker run"), routeBegin);
+    if (routeBegin < 0 || routeEnd < routeBegin) {
+        cleanupTmpFiles();
+        return ErrorCode::InternalError;
+    }
+    script.remove(routeBegin, routeEnd - routeBegin + 2);
+    script.replace(QStringLiteral("--network container:__VPN_CONTAINER__ --name '__TUNNEL_CONTAINER__'"),
+                   QStringLiteral("--network container:__VPN_CONTAINER__ --label org.amnezia.client-logs.route=__CONTAINER_SCOPE__ --name '__TUNNEL_CONTAINER__'"));
+    const QString routeInstall = QStringLiteral(R"ROUTE(
+if [ '__PUBLISH_TUNNEL__' = '1' ]; then
+sudo install -m 0700 '__ROUTE_TMP_FILE__' '__HOST_DIRECTORY__/collector_route.py' || { echo __ERROR_MARKER__:route_install; exit 0; }
+sudo python3 '__HOST_DIRECTORY__/collector_route.py' '__CONTAINER_SCOPE__' --bind || { echo __ERROR_MARKER__:route_binding; exit 0; }
+sudo tee '/etc/systemd/system/amnezia-client-logs-route-__CONTAINER_SCOPE__.service' >/dev/null <<'UNIT'
+[Unit]
+Description=Reconcile publication-bound Amnezia collector route
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 __HOST_DIRECTORY__/collector_route.py __CONTAINER_SCOPE__
+TimeoutStartSec=60
+UMask=0077
+UNIT
+sudo tee '/etc/systemd/system/amnezia-client-logs-route-__CONTAINER_SCOPE__.timer' >/dev/null <<'UNIT'
+[Unit]
+Description=Check publication-bound Amnezia collector route
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+[Install]
+WantedBy=timers.target
+UNIT
+sudo systemctl daemon-reload && sudo systemctl enable --now 'amnezia-client-logs-route-__CONTAINER_SCOPE__.timer' || { echo __ERROR_MARKER__:route_timer; exit 0; }
+fi
+sudo rm -f '__ROUTE_TMP_FILE__'
+)ROUTE");
+    script += routeInstall;
+
     script.replace("__LEGACY_MAP_REFRESH__", clientLogsLegacyMapRefreshScript());
     script.replace("__HOST_DIRECTORY__", QString::fromLatin1(protocols::clientLogs::hostDirectory));
     script.replace("__SCRIPT_TMP_FILE__", scriptTmpFileName);
+    script.replace("__ROUTE_TMP_FILE__", routeTmpFileName);
     script.replace("__TOKEN_TMP_FILE__", tokenTmpFileName);
     script.replace("__UPSERT_TOKEN__", upsertToken ? QStringLiteral("1") : QStringLiteral("0"));
     script.replace("__BRIDGE_CONTAINER__", QString::fromLatin1(protocols::clientLogs::containerName));

@@ -2,6 +2,7 @@
 #include "../../../common/awgMigration.h"
 #include "../../../common/awgBackendObservation.h"
 #include "../../../common/awgMigrationSecretStore.h"
+#include "../../../common/awgMigrationTransport.h"
 #include <QTemporaryDir>
 #include "core/utils/migrationTeardownContext.h"
 #include "core/models/protocols/awgProtocolConfig.h"
@@ -23,6 +24,49 @@ signals:
 class AwgMigrationTests : public QObject {
     Q_OBJECT
 private slots:
+    void adoptedTunnelMayEnrollButNeverTrialsOrAcknowledges()
+    {
+        for (const auto &state : {"", "enrolling", "enrolled", "expired", "rolled_back"})
+            QVERIFY(passiveMigrationRequestAllowed(QString::fromLatin1(state)));
+        for (const auto &state : {"staged", "trial", "committing", "ack_pending", "committed",
+                                  "recovery_required", "secret_store_unavailable", "unknown"})
+            QVERIFY(!passiveMigrationRequestAllowed(QString::fromLatin1(state)));
+    }
+    void controlResponseRemainsPendingAcrossEveryFragmentBoundary()
+    {
+        const QByteArray body("{\"schema\":1,\"grant\":\"private-placeholder\"}");
+        const QByteArray wire = "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                + QByteArray::number(body.size()) + "\r\n\r\n" + body;
+        for (int size = 0; size < wire.size(); ++size)
+            QCOMPARE(parseControlReply(wire.left(size)).state, ControlReply::Pending);
+        const auto reply = parseControlReply(wire);
+        QCOMPARE(reply.state, ControlReply::Complete);
+        QCOMPARE(reply.httpStatus, 200);
+        QCOMPARE(reply.payload.value("schema").toInt(), 1);
+    }
+    void controlRejectionExposesOnlyStatusAndTypedReason()
+    {
+        const auto reply = parseControlReply("HTTP/1.0 403 Forbidden\r\nContent-Length: 24\r\n\r\nprivate diagnostic text");
+        QCOMPARE(reply.state, ControlReply::Failed);
+        QCOMPARE(reply.httpStatus, 403);
+        QCOMPARE(reply.reason, QString("control_http_rejected"));
+        QVERIFY(reply.payload.isEmpty());
+    }
+    void controlFramingRejectsAmbiguityAndMalformedBodies()
+    {
+        const QList<QByteArray> rejected = {
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}extra",
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n[]",
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nno"
+        };
+        for (const auto &wire : rejected) QCOMPARE(parseControlReply(wire).state, ControlReply::Failed);
+        QCOMPARE(parseControlReply(QByteArray(40961, 'x')).state, ControlReply::Failed);
+        QCOMPARE(parseControlReply("HTTP/1.0 200 OK\r\n" + QByteArray(8200, 'x') + "\r\n\r\n{}").state,
+                 ControlReply::Failed);
+    }
     void nativeSenderSurvivesEmissionAndIsReleasedBeforeFallback()
     {
         bool senderDestroyed = false;

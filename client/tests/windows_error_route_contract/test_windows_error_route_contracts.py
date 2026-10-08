@@ -26,6 +26,18 @@ def function_body(source: str, signature: str) -> str:
 
 
 class WindowsErrorAndRouteContracts(unittest.TestCase):
+    def test_wlan_diagnostics_use_api_return_not_thread_last_error(self) -> None:
+        source = read_source("client/platforms/windows/windowsnetworkwatcher.cpp")
+        body = function_body(source, "void WindowsNetworkWatcher::initialize()")
+        for variable, api in (("openResult", "WlanOpenHandle"),
+                              ("notificationResult", "WlanRegisterNotification")):
+            self.assertIn(f"const DWORD {variable} = {api}(", body)
+            self.assertIn(f"if ({variable} != ERROR_SUCCESS)", body)
+            self.assertIn(f'"errorCode" << {variable}', body)
+            self.assertIn(f"WindowsUtils::getErrorMessage({variable})", body)
+        self.assertNotIn("WindowsUtils::windowsLog(", body)
+        self.assertNotIn("GetLastError(", body)
+
     def test_route_delete_policy_accepts_only_idempotent_results(self) -> None:
         source = read_source("client/platforms/windows/daemon/windowsroutemonitor.cpp")
         helper = function_body(source, "bool isSuccessfulRouteDelete(DWORD result)")

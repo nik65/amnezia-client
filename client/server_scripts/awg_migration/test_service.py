@@ -60,9 +60,12 @@ class MigrationServiceTests(unittest.TestCase):
         self.target = service.MigrationService(str(self.directory), 'target', 'amnezia-awg2')
         self.patch = patch('service.sign', side_effect=signed)
         self.patch.start()
+        self.signer_patch = patch('service.signer_material', return_value=b'private fixture signing material only')
+        self.signer_mock = self.signer_patch.start()
 
     def tearDown(self):
         self.patch.stop()
+        self.signer_patch.stop()
         self.tmp.cleanup()
 
     def request(self, path, body, role=None, ip='10.8.1.2', headers=None, client=CLIENT):
@@ -78,6 +81,88 @@ class MigrationServiceTests(unittest.TestCase):
         return self.request('offer', {'schema': 1, 'peerPublicKey': PEER,
                                      'sourceFingerprint': FP, 'nonce': NONCE},
                             headers={'X-Amnezia-Migration-Grant': grant})
+
+    def bootstrap(self, nonce=NONCE, fingerprint=FP):
+        return self.request('bootstrap', {'schema': 1, 'peerPublicKey': PEER,
+                                         'sourceFingerprint': fingerprint, 'nonce': nonce})
+
+    def grant_rows(self):
+        with closing(sqlite3.connect(self.directory / 'grants.sqlite3')) as db:
+            return db.execute('SELECT digest,expires,challenge,issued FROM grants').fetchall()
+
+    def test_bootstrap_retry_reuses_bound_unproved_grant_and_lifetime(self):
+        first = self.bootstrap().response()
+        rows = self.grant_rows()
+        with patch('service.time.time', return_value=self.now + 5):
+            second = self.bootstrap().response()
+        self.assertEqual(first['grant'], second['grant'])
+        self.assertEqual(first['expiresAt'], second['expiresAt'])
+        self.assertEqual(rows, self.grant_rows())
+        self.assertRegex(first['grant'], r'^[A-Za-z0-9_-]{64}$')
+
+    def test_bootstrap_changed_nonce_or_fingerprint_never_reuses_grant(self):
+        first = self.bootstrap().response()['grant']
+        second = self.bootstrap(nonce='m' * 43).response()['grant']
+        third = self.bootstrap(fingerprint='b' * 64).response()['grant']
+        self.assertEqual(3, len({first, second, third}))
+        self.assertEqual(3, len(self.grant_rows()))
+
+    def test_expired_bootstrap_nonce_creates_new_token_not_resurrected_token(self):
+        first = self.bootstrap().response()['grant']
+        with closing(sqlite3.connect(self.directory / 'grants.sqlite3')) as db:
+            db.execute('UPDATE grants SET expires=?', (self.now - 1,)); db.commit()
+        second = self.bootstrap().response()['grant']
+        self.assertNotEqual(first, second)
+        self.assertEqual(1, len(self.grant_rows()))
+        self.assertEqual(403, self.offer(first).status)
+
+    def test_proved_or_acknowledged_nonce_cannot_bootstrap_again(self):
+        self.enroll()
+        with closing(sqlite3.connect(self.directory / 'grants.sqlite3')) as db:
+            db.execute('UPDATE grants SET proved=1,ack=1'); db.commit()
+        rows = self.grant_rows()
+        self.assertEqual(403, self.bootstrap().status)
+        self.assertEqual(rows, self.grant_rows())
+
+    def test_signer_material_drift_rejects_duplicate_without_another_grant(self):
+        self.enroll()
+        self.signer_mock.return_value = b'changed private signing material only'
+        self.assertEqual(403, self.bootstrap().status)
+        self.assertEqual(1, len(self.grant_rows()))
+
+    def test_legacy_grant_without_nonce_binding_is_not_reused(self):
+        first = self.enroll()
+        with closing(sqlite3.connect(self.directory / 'grants.sqlite3')) as db:
+            db.execute('UPDATE grants SET bootstrapNonceHash=NULL,bootstrapClient=NULL'); db.commit()
+        second = self.enroll()
+        self.assertNotEqual(first, second)
+        self.assertEqual(2, len(self.grant_rows()))
+        self.assertEqual(200, self.offer(first).status)
+
+    def test_full_grant_capacity_allows_existing_retry_but_not_new_nonce(self):
+        first = self.enroll()
+        for n in range(31):
+            self.assertEqual(200, self.bootstrap(nonce=str(n).zfill(43)).status)
+        self.assertEqual(32, len(self.grant_rows()))
+        self.assertEqual(first, self.enroll())
+        self.assertEqual(403, self.bootstrap(nonce='z' * 43).status)
+        self.assertEqual(32, len(self.grant_rows()))
+
+    def test_signer_identity_guard_checks_private_file_and_ed25519_public_key(self):
+        self.signer_patch.stop()
+        key = self.directory / 'signing.pem'
+        key.write_bytes(b'private signing fixture material' * 3)
+        key.chmod(0o600)
+        der = bytes.fromhex('302a300506032b6570032100') + base64.b64decode(SERVER)
+        with patch('service.subprocess.run') as command:
+            command.return_value.stdout = der
+            self.assertEqual(key.read_bytes(), service.signer_material(str(self.directory), SERVER))
+            with self.assertRaises(ValueError):
+                service.signer_material(str(self.directory), PEER)
+        if os.name == 'posix':
+            key.chmod(0o644)
+            with self.assertRaises(ValueError):
+                service.signer_material(str(self.directory), SERVER)
 
     def test_complete_candidate_proof_and_ack(self):
         grant = self.enroll()

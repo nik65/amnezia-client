@@ -1074,6 +1074,8 @@ void ConnectionController::restoreConnection(Vpn::ConnectionState state, int ser
     m_managedRouteIncrementalBlocked = true;
     m_managedRouteFullRebuildAttempted = false;
     prepareManagedRouteConnectionSnapshot(serverId);
+    // Observe/stage offers for the adopted tunnel; a trial waits for a natural open.
+    m_awgMigration->prepare(serverId, vpnConfiguration, false);
     emit restoreConnectionRequested(serverId, serverIndex, container, vpnConfiguration, state);
 }
 #endif

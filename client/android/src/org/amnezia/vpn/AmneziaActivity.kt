@@ -131,6 +131,9 @@ class AmneziaActivity : QtActivity() {
         object : Handler(Looper.getMainLooper()) {
             override fun handleMessage(msg: Message) {
                 val event = msg.extractIpcMessage<ServiceEvent>()
+                msg.data?.getString("remoteLogHealth")?.takeIf { it.length <= 1024 }?.let {
+                    QtAndroidController.onRemoteLogHealth(it)
+                }
                 Log.d(TAG, "Handle event: $event")
                 when (event) {
                     ServiceEvent.STATUS_CHANGED -> {

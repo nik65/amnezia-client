@@ -1,5 +1,6 @@
 #include "awgMigrationController.h"
 #include "../../../common/awgMigration.h"
+#include "../../../common/awgMigrationTransport.h"
 #include "../../../common/awgBackendObservation.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/serverConfigUtils.h"
@@ -93,7 +94,10 @@ AwgMigrationController::AwgMigrationController(SecureServersRepository *servers,
     });
     connect(m_servers, &SecureServersRepository::serverEdited, this, [this](const QString &id) {
         if (id == m_serverId && !m_committingProfile && !m_sourceProfile.isEmpty()
-            && digest(m_servers->serverJson(m_servers->indexOfServerId(id))) != digest(m_sourceProfile)) cancel();
+            && digest(m_servers->serverJson(m_servers->indexOfServerId(id))) != digest(m_sourceProfile)) {
+            recordFailure("profile_changed");
+            cancel();
+        }
     });
 }
 bool AwgMigrationController::persist(const QString &state)
@@ -101,9 +105,35 @@ bool AwgMigrationController::persist(const QString &state)
     m_journal["state"] = state;
     return m_servers->writeMigrationJournal(m_serverId, m_journal);
 }
-QJsonObject AwgMigrationController::prepare(const QString &serverId, const QJsonObject &connection)
+void AwgMigrationController::recordFailure(const QString &reason, int httpStatus)
 {
-    cancel();
+    if (m_serverId.isEmpty() || m_cancelled) return;
+    if (m_journal.value("lastFailureReason").toString() == reason
+        && m_journal.value("lastHttpStatus").toInt() == httpStatus) return;
+    m_journal["lastFailureReason"] = reason;
+    m_journal["lastHttpStatus"] = httpStatus;
+    m_journal["lastFailureAt"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    m_servers->writeMigrationJournal(m_serverId, m_journal);
+}
+void AwgMigrationController::clearFailure()
+{
+    if (!m_journal.contains("lastFailureReason")) return;
+    m_journal.remove("lastFailureReason");
+    m_journal.remove("lastHttpStatus");
+    m_journal.remove("lastFailureAt");
+    m_servers->writeMigrationJournal(m_serverId, m_journal);
+}
+QJsonObject AwgMigrationController::prepare(const QString &serverId, const QJsonObject &connection, bool allowTrial)
+{
+    if (allowTrial) cancel();
+    else {
+        // Adopting a live service tunnel must not rewrite an existing trial.
+        ++m_callbackGeneration;
+        m_busy = false;
+        m_deadline.stop();
+        m_trial = false;
+    }
+    m_allowTrial = allowTrial;
     m_cancelled = false;
     m_serverId = serverId;
     m_originalConnection = connection;
@@ -113,7 +143,7 @@ QJsonObject AwgMigrationController::prepare(const QString &serverId, const QJson
     m_observation = {};
     m_journal = m_servers->migrationJournal(serverId);
     m_sourceProfile = m_servers->serverJson(m_servers->indexOfServerId(serverId));
-    if (client(connection).isEmpty()) return connection;
+    if (client(connection).isEmpty() || !allowTrial) return connection;
     if (m_journal.value("state") == "committing") {
         persist(digest(m_sourceProfile) == m_journal.value("candidateHash").toString()
                     ? "ack_pending" : "rolled_back");
@@ -173,7 +203,7 @@ void AwgMigrationController::failed()
 void AwgMigrationController::observe(const QString &serverId, quint64 epoch, const QJsonObject &observation)
 {
     if (m_cancelled || serverId != m_serverId || client(m_originalConnection).isEmpty()) return;
-    if (m_epoch && m_epoch != epoch) { cancel(); return; }
+    if (m_epoch && m_epoch != epoch) { recordFailure("connection_epoch_changed"); cancel(); return; }
     m_epoch = epoch;
     bool ok = false;
     const auto handshake = observation.value("lastHandshakeMs").toString().toLongLong(&ok);
@@ -219,12 +249,12 @@ void AwgMigrationController::request(const QString &path, const QJsonObject &bod
                                     std::function<void(const QJsonObject &)> callback)
 {
     const auto local = QHostAddress(m_observation.value("deviceIpv4Address").toString().section('/', 0, 0));
-    if (local.isNull() || local.protocol() != QAbstractSocket::IPv4Protocol) return;
+    if (local.isNull() || local.protocol() != QAbstractSocket::IPv4Protocol) { recordFailure("control_source_address_unavailable"); return; }
     const auto generation = m_callbackGeneration;
     const auto id = m_serverId;
     auto socket = new QTcpSocket(this);
     socket->setProxy(QNetworkProxy::NoProxy);
-    if (!socket->bind(local)) { socket->deleteLater(); return; }
+    if (!socket->bind(local)) { recordFailure("control_source_bind_failed"); socket->deleteLater(); return; }
     QNetworkInterface tunnel;
     for (const auto &adapter : QNetworkInterface::allInterfaces()) {
         for (const auto &entry : adapter.addressEntries()) {
@@ -232,19 +262,19 @@ void AwgMigrationController::request(const QString &path, const QJsonObject &bod
         }
     }
     if (!tunnel.isValid() || !tunnel.flags().testFlag(QNetworkInterface::IsUp)) {
-        socket->deleteLater(); return;
+        recordFailure("control_interface_unavailable"); socket->deleteLater(); return;
     }
 #ifdef Q_OS_WIN
     const DWORD interfaceIndex = htonl(static_cast<u_long>(tunnel.index()));
     if (::setsockopt(static_cast<SOCKET>(socket->socketDescriptor()), IPPROTO_IP, IP_UNICAST_IF,
             reinterpret_cast<const char *>(&interfaceIndex), sizeof(interfaceIndex)) != 0) {
-        socket->deleteLater(); return;
+        recordFailure("control_interface_bind_failed"); socket->deleteLater(); return;
     }
 #elif defined(Q_OS_LINUX) || defined(Q_OS_ANDROID)
     const QByteArray interfaceName = tunnel.name().toUtf8();
     if (::setsockopt(static_cast<int>(socket->socketDescriptor()), SOL_SOCKET, SO_BINDTODEVICE,
             interfaceName.constData(), interfaceName.size() + 1) != 0) {
-        socket->deleteLater(); return;
+        recordFailure("control_interface_bind_failed"); socket->deleteLater(); return;
     }
 #else
     socket->deleteLater(); return;
@@ -258,16 +288,24 @@ void AwgMigrationController::request(const QString &path, const QJsonObject &bod
         if (generation == m_callbackGeneration) m_busy = false;
         socket->abort(); socket->deleteLater();
     };
-    connect(timer, &QTimer::timeout, socket, finish);
-    connect(socket, &QTcpSocket::errorOccurred, socket, [finish](QAbstractSocket::SocketError) { finish(); });
+    connect(timer, &QTimer::timeout, socket, [this, generation, finish]() {
+        if (generation == m_callbackGeneration) recordFailure("control_request_timeout");
+        finish();
+    });
+    connect(socket, &QTcpSocket::errorOccurred, socket, [this, generation, finish](QAbstractSocket::SocketError error) {
+        if (generation == m_callbackGeneration && m_busy)
+            recordFailure(error == QAbstractSocket::RemoteHostClosedError ? "control_peer_closed" : "control_socket_failed");
+        finish();
+    });
     const auto bytes = QJsonDocument(body).toJson(QJsonDocument::Compact);
     const auto logs = m_originalConnection.value("clientLogs").toObject();
     const auto clientId = logs.value("clientId").toString();
     auto token = logs.value("token").toString();
     if (token.isEmpty()) token = m_settings->remoteLogToken(m_serverId + ':' + clientId);
     const QByteArray grant = m_journal.value("grant").toString().toUtf8();
+    if (clientId.size() != 64 || token.isEmpty()) { recordFailure("control_auth_unavailable"); finish(); return; }
     if (clientId.contains('\r') || clientId.contains('\n') || token.contains('\r') || token.contains('\n')
-        || grant.contains('\r') || grant.contains('\n')) { finish(); return; }
+        || grant.contains('\r') || grant.contains('\n')) { recordFailure("control_auth_header_invalid"); finish(); return; }
     connect(socket, &QTcpSocket::connected, socket, [socket, path, bytes, clientId, token, grant]() {
         QByteArray request = "POST " + path.toUtf8() + " HTTP/1.1\r\nHost: 172.29.172.251\r\nConnection: close\r\nContent-Type: application/json\r\n";
         request += "X-Amnezia-Client-Id: " + clientId.toUtf8() + "\r\nX-Amnezia-Log-Token: " + token.toUtf8() + "\r\n";
@@ -276,32 +314,25 @@ void AwgMigrationController::request(const QString &path, const QJsonObject &bod
     });
     connect(socket, &QTcpSocket::readyRead, socket, [this, socket, buffer, generation, id, callback, finish]() {
         buffer->append(socket->readAll());
-        if (buffer->size() > MaximumDocumentBytes + 8192) { finish(); return; }
-        const int boundary = buffer->indexOf("\r\n\r\n");
-        if (boundary < 0) return;
-        const auto headers = buffer->left(boundary);
-        if (!headers.startsWith("HTTP/1.0 200 ") && !headers.startsWith("HTTP/1.1 200 ")) { finish(); return; }
-        qint64 length = -1;
-        for (const auto &header : headers.split('\n')) {
-            if (header.toLower().startsWith("transfer-encoding:")) { finish(); return; }
-            if (header.toLower().startsWith("content-length:")) {
-                bool valid = false;
-                const auto parsed = header.mid(15).trimmed().toLongLong(&valid);
-                if (!valid || length >= 0 || parsed <= 0 || parsed > MaximumDocumentBytes) { finish(); return; }
-                length = parsed;
-            }
+        const auto reply = parseControlReply(*buffer, MaximumDocumentBytes);
+        if (reply.state == ControlReply::Pending) return;
+        if (reply.state == ControlReply::Failed) {
+            if (generation == m_callbackGeneration) recordFailure(reply.reason, reply.httpStatus);
+            finish(); return;
         }
-        if (length < 0) { finish(); return; }
-        if (buffer->size() < boundary + 4 + length) return;
-        if (buffer->size() != boundary + 4 + length) { finish(); return; }
-        const auto payload = QJsonDocument::fromJson(buffer->mid(boundary + 4)).object();
         finish();
-        if (generation == m_callbackGeneration && id == m_serverId && !m_cancelled) callback(payload);
+        if (generation == m_callbackGeneration && id == m_serverId && !m_cancelled) {
+            clearFailure();
+            callback(reply.payload);
+        }
     });
+    m_journal["lastRequestAt"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    m_servers->writeMigrationJournal(m_serverId, m_journal);
     socket->connectToHost(QHostAddress("172.29.172.251"), 18082);
 }
 void AwgMigrationController::enrollOrFetch()
 {
+    if (!m_allowTrial && !passiveMigrationRequestAllowed(m_journal.value("state").toString())) return;
     const auto kind = m_servers->serverKind(m_serverId);
     if (kind != serverConfigUtils::ConfigType::SelfHostedAdmin
         && kind != serverConfigUtils::ConfigType::SelfHostedUser) return;
@@ -336,9 +367,9 @@ void AwgMigrationController::enrollOrFetch()
                 || reply.value("containerId") != m_sourceProfile.value("defaultContainer")
                 || reply.value("expiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()
                 || strictBase64(reply.value("signingPublicKey").toString(), 32).isEmpty()
-                || reply.value("grant").toString().isEmpty()) return;
+                || reply.value("grant").toString().isEmpty()) { recordFailure("bootstrap_binding_rejected", 200); return; }
             if (!m_journal.value("signingPublicKey").toString().isEmpty()
-                && m_journal.value("signingPublicKey") != reply.value("signingPublicKey")) return;
+                && m_journal.value("signingPublicKey") != reply.value("signingPublicKey")) { recordFailure("bootstrap_signer_changed", 200); return; }
             for (const auto &key : {"grant", "signingPublicKey", "containerId", "serverPublicKey", "peerPublicKey"}) m_journal[key] = reply.value(key);
             m_journal["grantExpiresAt"] = reply.value("expiresAt");
             if (persist("enrolled")) enrollOrFetch();

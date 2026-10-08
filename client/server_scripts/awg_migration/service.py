@@ -2,12 +2,14 @@
 import base64
 from contextlib import closing, contextmanager
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
 import re
 import secrets
 import sqlite3
+import stat
 import subprocess
 import tempfile
 import time
@@ -32,6 +34,35 @@ def unique_object(pairs):
             raise ValueError('duplicate JSON field')
         result[key] = value
     return result
+
+
+def signer_material(directory, public_key):
+    path = os.path.join(directory, 'signing.pem')
+    if os.path.islink(path):
+        raise ValueError('signer ownership')
+    with open(path, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode)
+                or (os.name == 'posix' and (info.st_uid != os.geteuid() or info.st_mode & 0o077))):
+            raise ValueError('signer ownership')
+        secret = stream.read(8193)
+    if not 32 <= len(secret) <= 8192:
+        raise ValueError('signer material')
+    observed = subprocess.run(['openssl', 'pkey', '-pubout', '-outform', 'DER'],
+                              input=secret, check=True, capture_output=True, timeout=5).stdout
+    if (len(observed) != 44 or observed[:12] != bytes.fromhex('302a300506032b6570032100')
+            or base64.b64encode(observed[-32:]).decode() != public_key):
+        raise ValueError('signer identity')
+    return secret
+
+
+def bootstrap_grant(secret, scope, server, peer, client, fingerprint, generation,
+                    nonce, challenge, issued, expires):
+    binding = canonical({'domain': 'amnezia-awg-migration-bootstrap-grant-v1',
+                         'scope': scope, 'server': server, 'peer': peer, 'client': client,
+                         'fingerprint': fingerprint, 'generation': generation, 'nonce': nonce,
+                         'challenge': challenge, 'issued': issued, 'expires': expires})
+    return base64.urlsafe_b64encode(hmac.new(secret, binding, hashlib.sha384).digest()).decode().rstrip('=')
 
 
 @contextmanager
@@ -111,6 +142,10 @@ class MigrationService:
             if 'proofExpires' not in {value[1] for value in db.execute('PRAGMA table_info(grants)')}:
                 db.execute('ALTER TABLE grants ADD COLUMN proofExpires INTEGER')
                 db.execute('UPDATE grants SET proofExpires=expires')
+            columns = {value[1] for value in db.execute('PRAGMA table_info(grants)')}
+            for column in ('bootstrapNonceHash', 'bootstrapClient'):
+                if column not in columns:
+                    db.execute('ALTER TABLE grants ADD COLUMN ' + column + ' TEXT')
             db.execute('CREATE TABLE IF NOT EXISTS renewalNonces (digest TEXT PRIMARY KEY)')
             if path == '/migration/v1/bootstrap' and self.role == 'source':
                 client = authenticate()
@@ -121,15 +156,33 @@ class MigrationService:
                 nonce, fingerprint = body['nonce'], body['sourceFingerprint']
                 if not NONCE.fullmatch(nonce) or not re.fullmatch('[a-f0-9]{64}', fingerprint):
                     raise ValueError('binding')
-                grant = secrets.token_urlsafe(48)
                 db.execute('DELETE FROM grants WHERE expires < ? AND proved=0', (now,))
-                count = db.execute('SELECT count(*) FROM grants WHERE peer=? AND expires>?', (peer, now)).fetchone()[0]
-                if count >= 32:
-                    raise ValueError('grant limit')
-                expiry = min(now + 86400, state['expiresAt'])
-                db.execute('INSERT INTO grants(digest,peer,fingerprint,generation,expires,challenge,issued,proofExpires) VALUES(?,?,?,?,?,?,?,?)',
-                           (hashlib.sha256(grant.encode()).hexdigest(), peer, fingerprint,
-                            state['generation'], expiry, secrets.token_urlsafe(32), now, expiry))
+                nonce_hash = hashlib.sha256(nonce.encode()).hexdigest()
+                rows = db.execute('SELECT digest,expires,proved,ack,challenge,issued FROM grants '
+                                  'WHERE peer=? AND fingerprint=? AND generation=? AND bootstrapNonceHash=? AND bootstrapClient=?',
+                                  (peer, fingerprint, state['generation'], nonce_hash, client)).fetchall()
+                if len(rows) > 1:
+                    raise ValueError('bootstrap conflict')
+                secret = signer_material(self.directory, state['signingPublicKey'])
+                if rows:
+                    digest, expiry, proved, ack, challenge, issued = rows[0]
+                    if proved or ack or expiry <= now:
+                        raise ValueError('bootstrap replay')
+                else:
+                    count = db.execute('SELECT count(*) FROM grants WHERE peer=? AND expires>?', (peer, now)).fetchone()[0]
+                    if count >= 32:
+                        raise ValueError('grant limit')
+                    expiry, issued, challenge = min(now + 86400, state['expiresAt']), now, secrets.token_urlsafe(32)
+                grant = bootstrap_grant(secret, self.scope, state['serverPublicKey'], peer, client,
+                                        fingerprint, state['generation'], nonce, challenge, issued, expiry)
+                observed_digest = hashlib.sha256(grant.encode()).hexdigest()
+                if rows:
+                    if not secrets.compare_digest(observed_digest, digest):
+                        raise ValueError('bootstrap signer drift')
+                else:
+                    db.execute('INSERT INTO grants(digest,peer,fingerprint,generation,expires,challenge,issued,proofExpires,bootstrapNonceHash,bootstrapClient) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                               (observed_digest, peer, fingerprint, state['generation'], expiry,
+                                challenge, issued, expiry, nonce_hash, client))
                 response = {'schema': 1, 'serverPublicKey': state['serverPublicKey'],
                             'containerId': self.scope, 'peerPublicKey': peer,
                             'sourceFingerprint': fingerprint, 'nonce': nonce,

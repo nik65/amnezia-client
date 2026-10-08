@@ -17,6 +17,17 @@ def source(path):
 
 
 class ActiveMigrationPaths(unittest.TestCase):
+    def test_adopted_android_tunnel_initializes_observer_without_trial(self):
+        controller = source("core/controllers/connectionController.cpp")
+        restore = controller.split("void ConnectionController::restoreConnection(", 1)[1].split("#endif", 1)[0]
+        observer = restore.index("m_awgMigration->prepare(serverId, vpnConfiguration, false)")
+        self.assertLess(observer, restore.index("emit restoreConnectionRequested"))
+        migration = source("core/controllers/awgMigrationController.cpp")
+        prepare = migration.split("QJsonObject AwgMigrationController::prepare(", 1)[1].split("void AwgMigrationController::cancel", 1)[0]
+        self.assertIn("if (allowTrial) cancel();", prepare)
+        self.assertLess(prepare.index("if (client(connection).isEmpty() || !allowTrial) return connection;"), prepare.index('persist("trial")'))
+        self.assertIn('!m_allowTrial && !passiveMigrationRequestAllowed', migration)
+
     def test_android_bound_status_and_periodic_observation_are_active(self):
         service = source("android/src/org/amnezia/vpn/AmneziaVpnService.kt")
         status = service.split("Action.REQUEST_STATUS ->", 1)[1].split("Action.NOTIFICATION_PERMISSION_GRANTED", 1)[0]

@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include <QObject>
 #include <QPointer>
+#include <QJsonObject>
 
 #include "core/controllers/remoteLogUploader.h"
 
@@ -24,6 +25,7 @@ class RemoteLogHealthUiController final : public QObject
     Q_PROPERTY(QString lastErrorLabel READ lastErrorLabel NOTIFY lastErrorCategoryChanged)
     Q_PROPERTY(QDateTime nextRetryAt READ nextRetryAt NOTIFY nextRetryAtChanged)
     Q_PROPERTY(bool retryAvailable READ retryAvailable NOTIFY stateChanged)
+    Q_PROPERTY(int lastHttpStatus READ lastHttpStatus NOTIFY healthChanged)
 
 public:
     enum class State {
@@ -60,8 +62,10 @@ public:
     QString lastErrorLabel() const;
     QDateTime nextRetryAt() const;
     bool retryAvailable() const;
+    int lastHttpStatus() const;
 
 public slots:
+    void observeServiceHealth(const QJsonObject &snapshot);
     void retryNow();
     void onTranslationsUpdated();
 
@@ -77,6 +81,7 @@ signals:
 
 private:
     QPointer<RemoteLogUploader> m_uploader;
+    QJsonObject m_serviceHealth;
 };
 
 #endif // REMOTELOGHEALTHUICONTROLLER_H

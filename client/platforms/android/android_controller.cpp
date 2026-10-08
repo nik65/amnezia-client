@@ -99,6 +99,7 @@ bool AndroidController::initialize()
         {"onVpnStateChanged", "(I)V", reinterpret_cast<void *>(onVpnStateChanged)},
         {"onStatisticsUpdate", "(JJ)V", reinterpret_cast<void *>(onStatisticsUpdate)},
         {"onMigrationObservation", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onMigrationObservation)},
+        {"onRemoteLogHealth", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onRemoteLogHealth)},
         {"onFileOpened", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onFileOpened)},
         {"authorizeApkInstallerLaunch", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Z", reinterpret_cast<void *>(authorizeApkInstallerLaunch)},
         {"onApkInstallerStarted", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onApkInstallerStarted)},
@@ -591,6 +592,18 @@ void AndroidController::onMigrationObservation(JNIEnv *env, jobject thiz, jstrin
     const auto object = QJsonDocument::fromJson(bytes).object();
     QMetaObject::invokeMethod(AndroidController::instance(), [object]() {
         emit AndroidController::instance()->migrationPeerObservation(object);
+    }, Qt::QueuedConnection);
+}
+
+void AndroidController::onRemoteLogHealth(JNIEnv *env, jobject thiz, jstring snapshot)
+{
+    Q_UNUSED(env);
+    Q_UNUSED(thiz);
+    const auto bytes = QJniObject(snapshot).toString().toUtf8();
+    if (bytes.size() > 1024) return;
+    const auto object = QJsonDocument::fromJson(bytes).object();
+    QMetaObject::invokeMethod(AndroidController::instance(), [object]() {
+        emit AndroidController::instance()->remoteLogHealthObserved(object);
     }, Qt::QueuedConnection);
 }
 

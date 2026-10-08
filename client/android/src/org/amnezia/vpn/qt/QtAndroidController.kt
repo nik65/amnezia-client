@@ -21,6 +21,7 @@ object QtAndroidController {
     external fun onVpnStateChanged(stateCode: Int)
     external fun onStatisticsUpdate(rxBytes: Long, txBytes: Long)
     external fun onMigrationObservation(observation: String)
+    external fun onRemoteLogHealth(snapshot: String)
 
     external fun onFileOpened(uri: String)
 
