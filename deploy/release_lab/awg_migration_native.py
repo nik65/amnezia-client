@@ -15,14 +15,32 @@ from .lab import LabController, LabError, QgaClient, QmpClient, require_qmp_retu
 
 PROFILE = 'linux-headless-x64'
 ROLES = frozenset(('amneziad', 'amnezia-cli', 'amneziawg-go', 'awg', 'awg-quick', 'service.py', 'guest.py'))
+LEGACY_ROLES = frozenset(('legacy-amneziawg-go', 'legacy-awg', 'legacy-musl'))
+LEGACY_RECEIPT = {
+    'imageManifestSha256': '3c78eb57ef5cb44f63aed185e79c104593c854a5ebde3e1075470301bcc77c44',
+    'engineSha256': '92b11676a3e8ed57997de72144048cf8f76a3145b6d114b9c3d89e58e68f110a',
+    'toolsSha256': '062c9d022edc8993127942d1e07333ba7cb8aa04e4a280413501ed6e7c7d0d0a',
+    'loaderSha256': '4e5f9d95fbf01b1375090a257faf28d5f00436e20a4f054d1ee80ff5750f166c',
+    'socketDirectory': '/run/amneziawg', 'officialTag': '0.2.19',
+    'protocol21Attribution': 'unproven'}
 
 
 def validate_bundle(directory):
     directory = Path(directory).resolve()
     plan = json.loads((directory / 'bundle.json').read_text())
-    if set(plan) != {'schema', 'sourceCommit', 'files', 'goReceipt', 'toolsReceipt'} or plan['schema'] != 1:
+    schema = plan.get('schema')
+    fields = {'schema', 'sourceCommit', 'files', 'goReceipt', 'toolsReceipt'}
+    roles = ROLES
+    if schema == 2:
+        fields.add('legacyReceipt'); roles = ROLES | LEGACY_ROLES
+        if (plan.get('legacyReceipt') != LEGACY_RECEIPT
+                or plan.get('files', {}).get('legacy-amneziawg-go') != LEGACY_RECEIPT['engineSha256']
+                or plan.get('files', {}).get('legacy-awg') != LEGACY_RECEIPT['toolsSha256']
+                or plan.get('files', {}).get('legacy-musl') != LEGACY_RECEIPT['loaderSha256']):
+            raise LabError('migration legacy official provenance pin')
+    if set(plan) != fields or schema not in (1, 2):
         raise LabError('migration bundle schema')
-    if not re.fullmatch(r'[0-9a-f]{40}', plan['sourceCommit']) or set(plan['files']) != ROLES:
+    if not re.fullmatch(r'[0-9a-f]{40}', plan['sourceCommit']) or set(plan['files']) != roles:
         raise LabError('migration bundle roles/source')
     for name, expected in plan['files'].items():
         path = directory / name
@@ -111,7 +129,7 @@ os.mkdir(p,0o700); assert p.stat().st_uid==0
             raise LabError('migration private root creation failed')
         plan = {**contract, 'runId': run_id, 'profile': PROFILE, 'marker': marker,
                 'uuid': uuid, 'root': root, 'goldenSha256': golden}
-        for name in sorted(ROLES):
+        for name in sorted(contract['files']):
             # owned_vm is revalidated before every guest write and execution.
             controller.owned_vm(run_id, PROFILE)
             qga.write_file(root + '/' + name, (Path(bundle) / name).read_bytes())

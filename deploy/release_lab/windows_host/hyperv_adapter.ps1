@@ -602,13 +602,30 @@ if ($Action -eq 'probe') {
             $root="C:\ProgramData\AmneziaLab\runs\$runId\windows-x64\$caseId"; $marker=Join-Path $root 'run-marker.txt'; New-Item -ItemType Directory -Force -Path $root | Out-Null
             $expectedMarker = "amnezia-release-lab:${runId}:windows-x64`r`nbackend=hyperv`r`ncase_id=$caseId`r`nvm_id=$vmId`r`n"
             if(Test-Path -LiteralPath $marker -PathType Leaf){ if([IO.File]::ReadAllText($marker) -ne $expectedMarker){throw 'existing guest case marker does not match this run/case/VM'} } else { [IO.File]::WriteAllText($marker,$expectedMarker,(New-Object Text.ASCIIEncoding)) }
-            [ordered]@{ readiness=[IO.File]::ReadAllText($p); guest_marker=[IO.File]::ReadAllText($marker) }
+            $savedProfileValues=0; $checkedHives=0
+            $loadedHives=@([Microsoft.Win32.Registry]::Users.GetSubKeyNames())
+            $launchSids=@('S-1-5-18',[string](Get-LocalUser -Name 'labadmin' -ErrorAction Stop).SID.Value)
+            foreach($sid in $launchSids){if($loadedHives -notcontains $sid){throw 'guest app launch account hive is not loaded for privacy inspection'}}
+            foreach($hiveName in $loadedHives) {
+                $key=[Microsoft.Win32.Registry]::Users.OpenSubKey("$hiveName\Software\AmneziaVPN.ORG\AmneziaVPN\Servers")
+                $checkedHives++
+                if($null -ne $key){try{if(@($key.GetValueNames()) -contains 'serversList'){$savedProfileValues++}}finally{$key.Dispose()}}
+            }
+            $settingsFiles=0
+            foreach($profile in @(Get-CimInstance Win32_UserProfile)) {
+                foreach($suffix in @('AppData\Local\AmneziaVPN.ORG','AppData\Roaming\AmneziaVPN.ORG','AppData\Local\AmneziaVPN','AppData\Roaming\AmneziaVPN')) {
+                    $dir=Join-Path $profile.LocalPath $suffix
+                    if(Test-Path -LiteralPath $dir -PathType Container){$settingsFiles+=@(Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction Stop | Where-Object {$_.Extension -in @('.conf','.ini')}).Count}
+                }
+            }
+            if($savedProfileValues -ne 0 -or $settingsFiles -ne 0){throw 'guest saved server profile privacy precondition failed'}
+            [ordered]@{ readiness=[IO.File]::ReadAllText($p); guest_marker=[IO.File]::ReadAllText($marker); privacy=[ordered]@{checked_loaded_hives=$checkedHives;checked_launch_accounts=$launchSids.Count;saved_profile_values=$savedProfileValues;settings_files=$settingsFiles;eligible_admin_count=0;endpoint_scope='no saved profiles';passed=$true} }
         } -ArgumentList $RunId,$CaseId,$childVmId
     } finally { Remove-PSSession $session }
     if ($probe.guest_marker -notmatch "(?m)^amnezia-release-lab:$([regex]::Escape($RunId)):windows-x64\s*$" -or $probe.guest_marker -notmatch "(?m)^case_id=$([regex]::Escape($CaseId))\s*$" -or $probe.guest_marker -notmatch "(?m)^vm_id=$([regex]::Escape($childVmId))\s*$") { Fail 'guest case marker readback is not bound to this run/case/VM' }
     $readiness=$probe.readiness
     if ($readiness -notmatch '(?m)^profile=windows-x64\s*$' -or $readiness -notmatch '(?m)^phase=ready\s*$' -or $readiness -notmatch '(?m)^candidate_credentials=absent\s*$') { Fail 'guest readiness marker is invalid' }
-    Emit ([ordered]@{ action='probe'; transport='hyperv-powershell-direct'; origin='guest'; injected=$false; vm_id=[string]$child.vm.Id; parent_sha256=$child.parent.sha256; guest_marker=$probe.guest_marker; readiness_marker=$readiness }); exit 0
+    Emit ([ordered]@{ action='probe'; transport='hyperv-powershell-direct'; origin='guest'; injected=$false; vm_id=[string]$child.vm.Id; parent_sha256=$child.parent.sha256; guest_marker=$probe.guest_marker; readiness_marker=$readiness; privacy=$probe.privacy }); exit 0
 }
 if ($Action -eq 'precondition') {
     if ([string]$child.vm.State -ne 'Running') { Fail 'child VM must be Running for precondition' }

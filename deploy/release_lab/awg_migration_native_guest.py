@@ -15,6 +15,7 @@ from pathlib import Path
 import secrets
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import threading
@@ -67,6 +68,10 @@ def guard(plan):
     return root
 
 
+def awg_command(root, legacy=False):
+    return [root / 'legacy-musl', root / 'legacy-awg'] if legacy else [root / 'awg']
+
+
 def server(root, namespace, interface, role):
     """Production dispatcher with actual native handshake observation."""
     spec = importlib.util.spec_from_file_location('migration_service', root / 'service.py')
@@ -75,7 +80,7 @@ def server(root, namespace, interface, role):
     state_dir = root / 'control'
     token = (root / 'token').read_text()
     ready = json.loads((state_dir / 'ready.json').read_text())
-    native = root / 'awg'
+    native = awg_command(root, role == 'source' and (root / 'legacy-awg').is_file())
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -84,7 +89,7 @@ def server(root, namespace, interface, role):
         def do_POST(self):
             # This server is already inside the network namespace; every feed
             # update comes from the real target device, never a test timestamp.
-            probe = command([native, 'show', interface, 'latest-handshakes'])
+            probe = command(native + ['show', interface, 'latest-handshakes'])
             write(state_dir / ('handshakes-' + role + '.tsv'), probe.stdout)
             # Service reads the target feed for target-only proof. Source never
             # uses handshake authorization and must not overwrite that feed.
@@ -106,7 +111,8 @@ def server(root, namespace, interface, role):
 
 def scenario(plan):
     root = guard(plan)
-    for name in ('amneziad', 'amnezia-cli', 'amneziawg-go', 'awg'):
+    legacy_names = ['legacy-amneziawg-go', 'legacy-awg', 'legacy-musl'] if plan.get('schema') == 2 else []
+    for name in ['amneziad', 'amnezia-cli', 'amneziawg-go', 'awg', *legacy_names]:
         elf = (root / name).read_bytes()
         if elf[:5] != b'\x7fELF\x02' or elf[18:20] != b'\x3e\x00':
             raise RuntimeError('native fixture requires Linux x86_64 ELF')
@@ -122,7 +128,7 @@ def scenario(plan):
             raise RuntimeError('private native runtime already owned')
     else:
         runtime.mkdir(mode=0o700, parents=True)
-    for name in ['amneziad', 'amnezia-cli', 'amneziawg-go', 'awg', 'awg-quick']:
+    for name in ['amneziad', 'amnezia-cli', 'amneziawg-go', 'awg', 'awg-quick', *legacy_names]:
         (root / name).chmod(0o700)
     if command(['ip', 'link', 'show', 'amn0'], check=False).returncode == 0:
         raise RuntimeError('candidate interface already exists')
@@ -136,6 +142,15 @@ def scenario(plan):
     installed = []
     receipt = {'sourceMode': 'Go3 legacy-compatible AWG params; old2.1 binary not tested',
                'productionDockerProvisioning': 'not tested', 'checks': {}}
+    legacy_runtime = None
+    if legacy_names:
+        legacy_runtime = Path('/run/amneziawg')
+        if os.path.lexists(legacy_runtime):
+            raise RuntimeError('legacy socket directory already exists; never reuse foreign state')
+        legacy_runtime.mkdir(mode=0o700)
+        legacy_runtime_identity = (legacy_runtime.stat().st_dev, legacy_runtime.stat().st_ino)
+        receipt['sourceMode'] = 'real official 0.2.19 engine and tools; protocol2.1 attribution unproven'
+        receipt['legacyProvenance'] = plan['legacyReceipt']
     env = os.environ.copy()
     env.update(PATH=str(root) + ':/usr/sbin:/usr/bin:/sbin:/bin', WG_QUICK_USERSPACE_IMPLEMENTATION=str(root / 'amneziawg-go'))
     for name in ['NOTIFY_SOCKET', 'WATCHDOG_PID', 'WATCHDOG_USEC', 'WG_TUN_FD', 'WG_UAPI_FD']:
@@ -182,6 +197,11 @@ def scenario(plan):
 
     legacy = {'Jc': '0', 'Jmin': '0', 'Jmax': '0', 'S1': '0', 'S2': '0', 'S3': '0', 'S4': '0',
               'H1': '1', 'H2': '2', 'H3': '3', 'H4': '4'}
+    if legacy_names:
+        # Exact legacy shape already accepted by the real official 0.2.19
+        # Docker source fixture; do not infer its engine's Go3-zero defaults.
+        legacy = {'Jc': '4', 'Jmin': '10', 'Jmax': '50', 'S1': '16', 'S2': '16',
+                  'H1': '1', 'H2': '2', 'H3': '3', 'H4': '4'}
     target = {**legacy, 'S1': '16', 'S2': '16', 'S3': '16', 'S4': '16',
               'HeaderProtectionKey': base64.b64encode(secrets.token_bytes(32)).decode()}
     server_key, server_pub = genkey()
@@ -248,14 +268,16 @@ def scenario(plan):
             command(['ip', 'link', 'set', 'lo', 'up'], ns=ns)
             command(['ip', 'addr', 'add', '172.29.172.251/32', 'dev', 'lo'], ns=ns)
             command(['ip', 'addr', 'add', '172.29.172.252/32', 'dev', 'lo'], ns=ns)
-            spawn([root / 'amneziawg-go', '-f', device], ns=ns)
+            backend = root / ('legacy-amneziawg-go' if i == 1 and legacy_names else 'amneziawg-go')
+            native_tool = awg_command(root, i == 1 and bool(legacy_names))
+            spawn([backend, '-f', device], ns=ns)
             wait(lambda: command(['ip', 'link', 'show', device], ns=ns, check=False).returncode == 0, 'native server creation', 10)
             params = legacy if i == 1 else target
             server_config = '[Interface]\nPrivateKey = ' + server_key + f'\nListenPort = {51820+i}\n'
             server_config += ''.join(k + ' = ' + v + '\n' for k, v in params.items())
             server_config += '[Peer]\nPublicKey = ' + peer_pub + '\nPresharedKey = ' + psk + '\nAllowedIPs = 10.244.0.2/32\n'
             write(root / (device + '.conf'), server_config)
-            command([root / 'awg', 'setconf', device, root / (device + '.conf')], ns=ns)
+            command(native_tool + ['setconf', device, root / (device + '.conf')], ns=ns)
             command(['ip', 'addr', 'add', '10.244.0.1/32', 'dev', device], ns=ns)
             command(['ip', 'link', 'set', device, 'mtu', '1420', 'up'], ns=ns)
             command(['ip', 'route', 'add', '10.244.0.2/32', 'dev', device], ns=ns)
@@ -306,7 +328,7 @@ def scenario(plan):
         fail_key, fail_pub = genkey()
         fail_id = hashlib.sha256(('amnezia-awg2\t' + fail_pub).encode()).hexdigest()
         fail_psk = command([root / 'awg', 'genpsk']).stdout.strip().decode()
-        command([root / 'awg', 'set', 'amsrc', 'peer', fail_pub, 'preshared-key', '/dev/stdin',
+        command(awg_command(root, bool(legacy_names)) + ['set', 'amsrc', 'peer', fail_pub, 'preshared-key', '/dev/stdin',
                  'allowed-ips', '10.244.0.3/32'], data=fail_psk.encode(), ns=namespaces[0])
         command(['ip', 'route', 'add', '10.244.0.3/32', 'dev', 'amsrc'], ns=namespaces[0])
         ready['peers'][fail_pub] = {'sourceIp': '10.244.0.3', 'targetIp': '10.244.0.3',
@@ -369,6 +391,17 @@ def scenario(plan):
             if target.is_symlink() or st.st_uid or (st.st_dev, st.st_ino) != (device, inode) or sha(target) != expected:
                 raise RuntimeError('guest helper cleanup ownership changed')
             target.unlink()
+        if legacy_runtime is not None:
+            observed = legacy_runtime.lstat()
+            if not stat.S_ISDIR(observed.st_mode) or (observed.st_dev, observed.st_ino) != legacy_runtime_identity:
+                raise RuntimeError('legacy socket directory identity changed')
+            remaining = list(legacy_runtime.iterdir())
+            for entry in remaining:
+                st = entry.lstat()
+                if entry.name != 'amsrc.sock' or st.st_uid or not stat.S_ISSOCK(st.st_mode):
+                    raise RuntimeError('legacy socket cleanup ownership changed')
+                entry.unlink()
+            legacy_runtime.rmdir()
 
 
 if __name__ == '__main__':

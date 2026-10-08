@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from .awg_migration_native import ROLES, validate_bundle, run
+from .awg_migration_native import ROLES, LEGACY_RECEIPT, validate_bundle, run
 from .lab import LabError
 
 
@@ -54,6 +54,22 @@ class MigrationNativeContractTest(unittest.TestCase):
             test_mode = False
         with self.assertRaises(LabError):
             run(Dry(), 'fixture-test', self.root, self.root / 'out.json')
+
+    def test_legacy_schema_requires_both_exact_official_pins(self):
+        self.plan.update(schema=2, legacyReceipt=dict(LEGACY_RECEIPT))
+        self.plan['files'].update({'legacy-amneziawg-go': LEGACY_RECEIPT['engineSha256'],
+                                   'legacy-awg': '0' * 64})
+        self.save()
+        with self.assertRaisesRegex(LabError, 'legacy official provenance'):
+            validate_bundle(self.root)
+
+    def test_legacy_receipt_cannot_claim_unproven_protocol21(self):
+        self.plan.update(schema=2, legacyReceipt={**LEGACY_RECEIPT, 'protocol21Attribution': 'verified'})
+        self.plan['files'].update({'legacy-amneziawg-go': LEGACY_RECEIPT['engineSha256'],
+                                   'legacy-awg': LEGACY_RECEIPT['toolsSha256']})
+        self.save()
+        with self.assertRaisesRegex(LabError, 'legacy official provenance'):
+            validate_bundle(self.root)
 
 
 if __name__ == '__main__':

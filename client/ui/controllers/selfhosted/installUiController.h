@@ -1,5 +1,8 @@
 #ifndef INSTALLUICONTROLLER_H
 #define INSTALLUICONTROLLER_H
+#include <QSet>
+#include <QFuture>
+#include "core/utils/automaticAwgRetry.h"
 
 #include <QObject>
 #include <QProcess>
@@ -60,9 +63,8 @@ public:
     ~InstallUiController();
 
 public slots:
-    void prepareAwgMigration(const QString &serverId, int containerIndex,
-                             const QString &endpointHost, int targetPort,
-                             const QString &immutableImage, qint64 generation);
+    void ensureAutomaticAwgMigration(const QString &serverId, int containerIndex);
+    QString automaticAwgMigrationStatus(const QString &serverId, int containerIndex) const;
     void install(DockerContainer container, int port, TransportProto transportProto, const QString &serverId);
     void setProcessedServerCredentials(const QString &hostName, const QString &userName, const QString &secretData,
                                        const QString &sshHostKeyFingerprint);
@@ -108,6 +110,7 @@ public slots:
     bool defaultTransportProtoChangeable(int protocolIndex);
 
 signals:
+    void automaticAwgMigrationStatusChanged(const QString &serverId, int containerIndex);
     void installContainerFinished(const QString &finishMessage, bool isServiceInstall);
     void installServerFinished(const QString &finishMessage);
 
@@ -142,6 +145,14 @@ signals:
     void configValidated(bool isValid);
 
 private:
+    QSet<QString> m_automaticAwgAttempts;
+    QMap<QString, AutomaticAwgRetry *> m_automaticAwgRetries;
+    QMap<QString, QString> m_automaticAwgStatus;
+    struct AutomaticAwgRequest { QString serverId; int containerIndex; QString binding; };
+    QList<AutomaticAwgRequest> m_automaticAwgQueue;
+    bool m_automaticAwgRunning = false;
+    QFuture<QPair<ErrorCode, QJsonObject>> m_automaticAwgFuture;
+    void runNextAutomaticAwgMigration();
 
     InstallController* m_installController;
     ServersController* m_serversController;

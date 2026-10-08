@@ -8,6 +8,9 @@
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QFutureWatcher>
+#include <QTimer>
+#include <QCryptographicHash>
+#include <QJsonDocument>
 #include <QtConcurrent>
 #include <utility>
 
@@ -35,6 +38,20 @@
 #include "core/models/protocols/wireGuardProtocolConfig.h"
 #include "core/models/protocols/openVpnProtocolConfig.h"
 #include "core/models/protocols/xrayProtocolConfig.h"
+
+namespace {
+QString automaticAwgBinding(const SelfHostedAdminServerConfig &admin, DockerContainer container)
+{
+    // Relevant credentials/source-profile changes invalidate queued retries.
+    // The digest stays private in memory; no credential values enter UI/logs.
+    const auto credentials = admin.credentials();
+    const QJsonObject value{{"host", credentials.hostName}, {"user", credentials.userName},
+        {"secret", credentials.secretData}, {"fingerprint", credentials.sshHostKeyFingerprint},
+        {"port", credentials.port}, {"container", admin.containers.value(container).toJson()}};
+    return QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(value).toJson(QJsonDocument::Compact),
+            QCryptographicHash::Sha256).toHex());
+}
+}
 
 InstallUiController::InstallUiController(InstallController *installController,
                                          ServersController *serversController,
@@ -79,10 +96,20 @@ InstallUiController::InstallUiController(InstallController *installController,
 {
     connect(m_installController, &InstallController::configValidated, this, &InstallUiController::configValidated);
     connect(m_installController, &InstallController::validationErrorOccurred, this, &InstallUiController::installationErrorOccurred);
+    QTimer::singleShot(0, this, [this]() {
+        for (int index = 0; index < m_serversController->getServersCount(); ++index) {
+            const QString id = m_serversController->getServerId(index);
+            ensureAutomaticAwgMigration(id, static_cast<int>(DockerContainer::Awg));
+            ensureAutomaticAwgMigration(id, static_cast<int>(DockerContainer::Awg2));
+        }
+    });
 }
 
 InstallUiController::~InstallUiController()
 {
+    // Worker owns immutable credentials and uses stateless transport; QObject-context
+    // callbacks disappear with this controller without touching destroyed Core.
+    m_automaticAwgFuture.cancel();
 }
 
 void InstallUiController::install(DockerContainer container, int port, TransportProto transportProto, const QString &serverId)
@@ -213,6 +240,8 @@ void InstallUiController::scanServerForInstalledContainers(const QString &server
 
         bool isInstalledContainerAdded = containersCountAfter > containersCountBefore;
         emit scanServerFinished(isInstalledContainerAdded);
+        ensureAutomaticAwgMigration(serverId, static_cast<int>(DockerContainer::Awg));
+        ensureAutomaticAwgMigration(serverId, static_cast<int>(DockerContainer::Awg2));
         return;
     }
 
@@ -303,32 +332,109 @@ void InstallUiController::updateClientConfig(const QString &serverId, int contai
     emit installationErrorOccurred(errorCode);
 }
 
-void InstallUiController::prepareAwgMigration(const QString &serverId, int containerIndex,
-        const QString &endpointHost, int targetPort, const QString &immutableImage, qint64 generation)
+QString InstallUiController::automaticAwgMigrationStatus(const QString &serverId, int containerIndex) const
 {
+    return m_automaticAwgStatus.value(serverId + QLatin1Char(':') + QString::number(containerIndex),
+            QStringLiteral("Автоматический переход на AWG 3.1 включён."));
+}
+
+void InstallUiController::ensureAutomaticAwgMigration(const QString &serverId, int containerIndex)
+{
+    const auto container = static_cast<DockerContainer>(containerIndex);
+    if (container != DockerContainer::Awg && container != DockerContainer::Awg2) return;
     const auto admin = m_serversController->selfHostedAdminConfig(serverId);
-    if (!admin.has_value()) { emit installationErrorOccurred(ErrorCode::InternalError); return; }
-    const auto credentials = m_serversController->getServerCredentials(serverId);
+    if (!admin || !admin->hasCredentials() || admin->isReadOnly()
+            || admin->sshHostKeyFingerprint.isEmpty() || !admin->containers.contains(container)) return;
+    const QString key = serverId + QLatin1Char(':') + QString::number(containerIndex);
+    const QString attempt = key + QLatin1Char(':') + automaticAwgBinding(*admin, container);
+    // A queued/in-flight/successful binding is deduplicated. Typed transient
+    // failures release this entry only when their guarded backoff timer fires.
+    if (m_automaticAwgAttempts.contains(attempt)) return;
+    m_automaticAwgAttempts.insert(attempt);
+    m_automaticAwgStatus.insert(key, QStringLiteral("Автоматический переход на AWG 3.1: ожидается проверка сервера."));
+    emit automaticAwgMigrationStatusChanged(serverId, containerIndex);
+    m_automaticAwgQueue.append({serverId, containerIndex, automaticAwgBinding(*admin, container)});
+    runNextAutomaticAwgMigration();
+}
+
+void InstallUiController::runNextAutomaticAwgMigration()
+{
+    if (m_automaticAwgRunning || m_automaticAwgQueue.isEmpty()) return;
+    const auto request = m_automaticAwgQueue.takeFirst();
+    const QString serverId = request.serverId;
+    const int containerIndex = request.containerIndex;
+    const auto container = static_cast<DockerContainer>(containerIndex);
+    const auto admin = m_serversController->selfHostedAdminConfig(serverId);
+    if (!admin || !admin->hasCredentials() || admin->isReadOnly()
+            || admin->sshHostKeyFingerprint.isEmpty() || !admin->containers.contains(container)
+            || automaticAwgBinding(*admin, container) != request.binding) {
+        QTimer::singleShot(0, this, &InstallUiController::runNextAutomaticAwgMigration);
+        return;
+    }
+    const ServerCredentials credentials = admin->credentials();
+    const auto config = admin->containers.value(container);
+    const auto awg = config.getAwgProtocolConfig();
+    const QString endpointHost = awg && awg->clientConfig && !awg->clientConfig->hostName.isEmpty()
+            ? awg->clientConfig->hostName : admin->hostName;
+    const QString key = serverId + QLatin1Char(':') + QString::number(containerIndex);
+    const QString binding = automaticAwgBinding(*admin, container);
+    const QString attempt = key + QLatin1Char(':') + binding;
+    m_automaticAwgRunning = true;
+    m_automaticAwgStatus.insert(key, QStringLiteral("Автоматический переход на AWG 3.1: проверка и подготовка сервера…"));
+    emit automaticAwgMigrationStatusChanged(serverId, containerIndex);
     auto watcher = new QFutureWatcher<QPair<ErrorCode, QJsonObject>>(this);
-    emit serverIsBusy(true);
-    connect(watcher, &QFutureWatcher<QPair<ErrorCode, QJsonObject>>::finished, this, [this, watcher]() {
+    connect(watcher, &QFutureWatcher<QPair<ErrorCode, QJsonObject>>::finished, this,
+            [this, watcher, key, serverId, containerIndex, container, binding, attempt]() {
         const auto result = watcher->result();
         watcher->deleteLater();
-        emit serverIsBusy(false);
-        if (result.first != ErrorCode::NoError || !result.second.value("prepared").toBool()) {
-            emit installationErrorOccurred(result.first == ErrorCode::NoError ? ErrorCode::InternalError : result.first);
-            return;
+        m_automaticAwgRunning = false;
+        QString message;
+        auto retry = m_automaticAwgRetries.value(attempt);
+        if (!retry) {
+            retry = new AutomaticAwgRetry(this);
+            m_automaticAwgRetries.insert(attempt, retry);
         }
-        emit updateContainerFinished(tr("AWG 3.1 migration prepared. Eligible clients will switch on their next connection. Legacy connections remain available."), false);
+        if (result.first == ErrorCode::NoError && result.second.value("prepared").toBool()) {
+            retry->cancel();
+            message = QStringLiteral("AWG 3.1 готов. Совместимые клиенты перейдут при следующем подключении. Текущие подключения сохранены.");
+        } else {
+            const QString reason = result.second.value("reason").toString();
+            if (reason == "unsupported_server_architecture")
+                message = QStringLiteral("Автоматический переход ожидает поддержки архитектуры сервера. Доступен Linux x64.");
+            else if (reason == "trusted_image_unavailable")
+                message = QStringLiteral("Проверка целостности официального образа AWG 3.1 не пройдена. Автоматический переход приостановлен.");
+            else if (reason == "migration_endpoint_unsupported")
+                message = QStringLiteral("Адрес сервера не поддерживается для автоматического перехода. Требуется hostname или IPv4.");
+            else if (reason == "migration_ready_drift" || reason == "migration_journal_conflict")
+                message = QStringLiteral("Автоматический переход приостановлен: существующая миграция отличается от настроек сервера.");
+            else if (reason == "migration_udp_port_unavailable" || reason == "udp_inventory_unavailable")
+                message = QStringLiteral("Не удалось безопасно выбрать свободный UDP-порт.");
+            else
+                message = QStringLiteral("Автоматический переход приостановлен: проверка доступа или совместимости сервера не завершена.");
+            if (retry->schedule(result.first, reason,
+                    [this, serverId, container, binding]() {
+                const auto current = m_serversController->selfHostedAdminConfig(serverId);
+                return current && current->hasCredentials() && !current->isReadOnly()
+                        && !current->sshHostKeyFingerprint.isEmpty() && current->containers.contains(container)
+                        && automaticAwgBinding(*current, container) == binding;
+            }, [this, serverId, containerIndex, attempt]() {
+                m_automaticAwgAttempts.remove(attempt);
+                ensureAutomaticAwgMigration(serverId, containerIndex);
+            })) {
+                message = QStringLiteral("Временный сбой связи или подготовки. Повторная попытка автоматически через %1 с.")
+                        .arg(retry->delayMs() / 1000);
+            }
+        }
+        m_automaticAwgStatus.insert(key, message);
+        emit automaticAwgMigrationStatusChanged(serverId, containerIndex);
+        QTimer::singleShot(0, this, &InstallUiController::runNextAutomaticAwgMigration);
     });
-    auto installer = m_installController;
-    watcher->setFuture(QtConcurrent::run([installer, credentials, containerIndex, endpointHost,
-                                        targetPort, immutableImage, generation]() {
+    m_automaticAwgFuture = QtConcurrent::run([credentials, container, endpointHost]() {
         QJsonObject result;
-        const auto error = installer->prepareAwgMigration(credentials, static_cast<DockerContainer>(containerIndex),
-                endpointHost, targetPort, immutableImage, generation, result);
+        const auto error = InstallController::prepareAwgMigration(credentials, container, endpointHost, 0, {}, 0, result, true);
         return qMakePair(error, result);
-    }));
+    });
+    watcher->setFuture(m_automaticAwgFuture);
 }
 
 void InstallUiController::updateServerConfig(const QString &serverId, int containerIndex, int protocolIndex, bool closePage)
@@ -699,6 +805,7 @@ void InstallUiController::updateProtocols(const QString &serverId, int container
 void InstallUiController::openServerSettings(const QString &serverId, int containerIndex, int protocolIndex)
 {
     updateProtocolConfigModel(serverId, containerIndex, protocolIndex);
+    ensureAutomaticAwgMigration(serverId, containerIndex);
 }
 
 void InstallUiController::openClientSettings(const QString &serverId, int containerIndex, int protocolIndex)

@@ -3,6 +3,7 @@ import base64
 import importlib
 import sys
 import types
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -27,6 +28,32 @@ def config(peer=PUBLIC, address='10.8.1.2/32'):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_native_uapi_config_preserves_identity_and_fresh_parameters(self):
+        interface, peers = prepare.parse_config(config())
+        interface.pop('PostUp')
+        interface.update(MTU='1420', HeaderProtectionKey=PSK, S1='16', S2='17', S3='18', S4='19',
+                         RandomTrailers='false', DisableCookies='true')
+        text = prepare.native_config(interface, peers)
+        self.assertNotIn('Address =', text)
+        self.assertNotIn('MTU =', text)
+        for field, value in [('PrivateKey', PRIVATE), ('PublicKey', PUBLIC), ('PresharedKey', PSK),
+                             ('HeaderProtectionKey', PSK), ('S1', '16'), ('S2', '17'), ('S3', '18'), ('S4', '19')]:
+            self.assertIn(field + ' = ' + value + '\n', text)
+        self.assertIn('AllowedIPs = 10.8.1.2/32\n', text)
+        self.assertIn('RandomTrailers = 0\n', text)
+        self.assertIn('DisableCookies = 1\n', text)
+        self.assertEqual('false', interface['RandomTrailers'])
+
+    def test_only_dependency_fetch_and_owned_lock_contention_are_retryable(self):
+        for command in (['docker', 'pull', 'pinned'], ['docker', 'build', 'private-context']):
+            error = subprocess.CalledProcessError(1, command, output=b'private', stderr=b'secret')
+            self.assertEqual('migration_dependency_unavailable', prepare.transient_failure_reason(error))
+            self.assertEqual('migration_dependency_unavailable', prepare.transient_failure_reason(subprocess.TimeoutExpired(command, 180)))
+        for command in (['docker', 'run', 'pinned'], ['docker', 'exec', 'source'], ['openssl', 'pkey'], 'docker build'):
+            self.assertIsNone(prepare.transient_failure_reason(subprocess.CalledProcessError(1, command)))
+        self.assertIsNone(prepare.transient_failure_reason(ValueError('trusted_image_unavailable')))
+        self.assertEqual('migration_busy', prepare.transient_failure_reason(BlockingIOError()))
+
     def test_identity_and_psk_preserved(self):
         interface, peers = prepare.parse_config(config())
         self.assertEqual(PRIVATE, interface['PrivateKey'])

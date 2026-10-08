@@ -1,6 +1,8 @@
 <RCC>
     <qresource prefix="/server_scripts">
         <file>awg_migration/prepare.py</file>
+        <file>awg_migration/trusted_image.py</file>
+        <file>awg_migration/automatic.py</file>
         <file>awg_migration/service.py</file>
         <file>awg_migration/target.py</file>
         <file>awg_migration/policy.py</file>

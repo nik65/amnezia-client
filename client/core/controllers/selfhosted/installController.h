@@ -112,9 +112,9 @@ public:
     void cancelInstallation();
 
     // Administrator action only. Creates a parallel endpoint, retains the old Device.
-    ErrorCode prepareAwgMigration(const ServerCredentials &credentials, DockerContainer source,
+    static ErrorCode prepareAwgMigration(const ServerCredentials &credentials, DockerContainer source,
             const QString &endpointHost, int targetPort, const QString &immutableAwgImage,
-            qint64 generation, QJsonObject &result);
+            qint64 generation, QJsonObject &result, bool automatic = false);
 
     void clearCachedProfile(const QString &serverId, DockerContainer container);
 

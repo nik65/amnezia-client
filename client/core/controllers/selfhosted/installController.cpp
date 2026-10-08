@@ -1,6 +1,7 @@
 #include "installController.h"
 #include "exportController.h"
 #include <QFile>
+#include <QTcpSocket>
 
 #include "core/models/protocolConfig.h"
 
@@ -862,7 +863,7 @@ ErrorCode InstallController::publishServerRoutingRules(const ServerCredentials &
 
 ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &credentials, DockerContainer source,
         const QString &endpointHost, int targetPort, const QString &immutableAwgImage,
-        qint64 generation, QJsonObject &result)
+        qint64 generation, QJsonObject &result, bool automatic)
 {
     result = {};
     const QRegularExpression hostPattern(QStringLiteral("^[A-Za-z0-9.-]{1,253}$"));
@@ -870,10 +871,28 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
     if (!credentials.isValid() || credentials.sshHostKeyFingerprint.isEmpty()
             || (source != DockerContainer::Awg && source != DockerContainer::Awg2)
             || !hostPattern.match(endpointHost).hasMatch()
-            || !imagePattern.match(immutableAwgImage).hasMatch()
+            || (!automatic && (!imagePattern.match(immutableAwgImage).hasMatch()
             || targetPort < 1024 || targetPort > 65535 || generation < 1
-            || generation > 9007199254740991LL) {
+            || generation > 9007199254740991LL))) {
+        result.insert(QStringLiteral("reason"), QStringLiteral("migration_endpoint_unsupported"));
         return ErrorCode::ServerCheckFailed;
+    }
+    if (automatic) {
+        // Classify only observed transport failures; libssh's generic internal
+        // error also represents programming/crypto failures and must not loop.
+        QTcpSocket probe;
+        probe.connectToHost(credentials.hostName, credentials.port);
+        if (!probe.waitForConnected(10000)) {
+            if (probe.error() == QAbstractSocket::ConnectionRefusedError
+                    || probe.error() == QAbstractSocket::NetworkError
+                    || probe.error() == QAbstractSocket::HostNotFoundError
+                    || probe.error() == QAbstractSocket::SocketTimeoutError) {
+                result.insert(QStringLiteral("reason"), QStringLiteral("ssh_transport_unavailable"));
+                return ErrorCode::SshTimeoutError;
+            }
+            return ErrorCode::SshInternalError;
+        }
+        probe.abort();
     }
     SshSession session;
     const QString directory = QStringLiteral("/tmp/amnezia-migration-%1").arg(Utils::getRandomString(24));
@@ -882,16 +901,18 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
     if (error != ErrorCode::NoError) return error;
     auto cleanup = [&]() {
         // Random, fixed-prefix directory created by this invocation only.
-        session.runScript(credentials, QStringLiteral("rm -f '%1/prepare.py' '%1/service.py' '%1/target.py' '%1/policy.py' '%1/journal.py' '%1/feeds.py'; rmdir '%1'").arg(directory));
+        session.runScript(credentials, QStringLiteral("rm -f '%1/prepare.py' '%1/automatic.py' '%1/trusted_image.py' '%1/service.py' '%1/target.py' '%1/policy.py' '%1/journal.py' '%1/feeds.py'; rmdir '%1'").arg(directory));
     };
-    for (const QString &name : {QStringLiteral("prepare.py"), QStringLiteral("service.py"), QStringLiteral("target.py"), QStringLiteral("policy.py"), QStringLiteral("journal.py"), QStringLiteral("feeds.py")}) {
+    for (const QString &name : {QStringLiteral("prepare.py"), QStringLiteral("automatic.py"), QStringLiteral("trusted_image.py"), QStringLiteral("service.py"), QStringLiteral("target.py"), QStringLiteral("policy.py"), QStringLiteral("journal.py"), QStringLiteral("feeds.py")}) {
         QFile resource(QStringLiteral(":/server_scripts/awg_migration/%1").arg(name));
         if (!resource.open(QIODevice::ReadOnly)) { cleanup(); return ErrorCode::InternalError; }
         error = session.uploadFileToHost(credentials, resource.readAll(), directory + QLatin1Char('/') + name);
         if (error != ErrorCode::NoError) { cleanup(); return error; }
     }
     QByteArray output;
-    const QString script = QStringLiteral(
+    const QString script = automatic ? QStringLiteral(
+            "sudo python3 -B '%1/prepare.py' --source '%2' --host '%3' --automatic")
+            .arg(directory, ContainerUtils::containerToString(source), endpointHost) : QStringLiteral(
             "sudo python3 -B '%1/prepare.py' --source '%2' --host '%3' --port %4 --image '%5' --generation %6")
             .arg(directory, ContainerUtils::containerToString(source), endpointHost)
             .arg(targetPort).arg(immutableAwgImage).arg(generation);
@@ -902,7 +923,7 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
             }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
     if (error != ErrorCode::NoError || !QJsonDocument::fromJson(output.trimmed()).object().value(QStringLiteral("eligible")).toBool()) {
         result = QJsonDocument::fromJson(output.trimmed()).object();
-        cleanup(); return ErrorCode::ServerCheckFailed;
+        cleanup(); return error != ErrorCode::NoError ? error : ErrorCode::ServerCheckFailed;
     }
     const ErrorCode collectorError = ExportController::prepareMigrationSourceCollector(credentials, source);
     if (collectorError != ErrorCode::NoError) { cleanup(); return collectorError; }
@@ -913,8 +934,8 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
                 output += data.toUtf8(); return ErrorCode::NoError;
             }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; }, 10 * 60 * 1000);
     cleanup();
-    if (error != ErrorCode::NoError) return error;
     result = QJsonDocument::fromJson(output.trimmed()).object();
+    if (error != ErrorCode::NoError) return error;
     return result.value(QStringLiteral("prepared")).toBool(false)
             ? ErrorCode::NoError : ErrorCode::ServerCheckFailed;
 }

@@ -38,6 +38,11 @@ from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import unquote, urlparse
 
 try:
+    from automatic_migration_fixture_network import bind as bind_migration_wan, validate as validate_migration_wan, NETWORK as MIGRATION_WAN_NETWORK
+except ImportError:
+    from .automatic_migration_fixture_network import bind as bind_migration_wan, validate as validate_migration_wan, NETWORK as MIGRATION_WAN_NETWORK
+
+try:
     from relay_smoke_controller import RelaySmokeError
 except ImportError:  # pragma: no cover - package import path
     from .relay_smoke_controller import RelaySmokeError
@@ -1583,9 +1588,11 @@ class LabController:
         return {"schema": SCHEMA_VERSION, "ready": ready, "dry_run": self.dry_run, "checks": checks, "release_passed": False}
 
     @mutation_operation
-    def create(self, lane: str, artifacts: Mapping[str, Path], outer_artifact: Path | None = None, run_id: str | None = None, manifest: Path | None = None, baseline_artifacts: Mapping[str, Path] | None = None, baseline_version: str | None = None, candidate_version: str | None = None, manifest_public_key: Path | None = None, baseline_manifest: Path | None = None, headless_baseline_receipt: Path | None = None, headless_candidate_receipt: Path | None = None, baseline_outer_artifact: Path | None = None) -> dict[str, Any]:
+    def create(self, lane: str, artifacts: Mapping[str, Path], outer_artifact: Path | None = None, run_id: str | None = None, manifest: Path | None = None, baseline_artifacts: Mapping[str, Path] | None = None, baseline_version: str | None = None, candidate_version: str | None = None, manifest_public_key: Path | None = None, baseline_manifest: Path | None = None, headless_baseline_receipt: Path | None = None, headless_candidate_receipt: Path | None = None, baseline_outer_artifact: Path | None = None, *, automatic_migration_wan: bool = False) -> dict[str, Any]:
         self.assert_mutation_context()
         profiles = load_profiles()
+        if type(automatic_migration_wan) is not bool or (automatic_migration_wan and lane != 'publisher-diagnostic'):
+            raise LabError('automatic migration WAN is diagnostic-only')
         if lane not in ("candidate", "release", "publisher-diagnostic"):
             raise LabError("lane must be candidate, release, or publisher-diagnostic")
         if self.windows_backend not in ("qemu", "hyperv"):
@@ -1704,6 +1711,11 @@ class LabController:
             "expected_profiles": list(dict.fromkeys(expected_profiles)),
             "profiles": {profile_id: {"status": "created", "evidence": None, "vm": None} for profile_id in profiles},
         }
+        if automatic_migration_wan:
+            policy_path = repo_root() / 'deploy/release_lab/fixtures/automatic-migration-wan-contract.json'
+            ready = json.loads((self.root / profiles['server-router']['golden_readiness']).read_text())
+            state['runs'][run_id]['automatic_migration_wan'] = bind_migration_wan(
+                run_id, lane, policy_path, profile_records['server-router'], ready['base_sha256'])
         self.save_state(state)
         return state["runs"][run_id]
 
@@ -1837,6 +1849,8 @@ class LabController:
             vm = {key: intent[key] for key in ("pid", "proc_start_time", "uid", "vm_uuid", "qmp_socket", "qga_socket", "vnc_socket", "argv", "started_at") if key in intent}
             vm["uuid"] = vm.pop("vm_uuid")
             vm["backend"] = intent.get("backend")
+            if intent.get('automatic_migration_wan') is not None:
+                vm['automatic_migration_wan'] = intent['automatic_migration_wan']
             if intent.get("consumer_fixture") is True:
                 vm.update({key: intent[key] for key in ("consumer_fixture", "fixture_host_port", "fixture_guest_port", "fixture_bind") if key in intent})
             if "tpm_pid" in intent:
@@ -1895,6 +1909,14 @@ class LabController:
         if self.dry_run or run.get("dry_run"):
             raise LabError("dry-run cannot start a VM")
         profile = profiles[profile_id]
+        try:
+            migration_wan = validate_migration_wan(run, profile_id,
+                repo_root() / 'deploy/release_lab/fixtures/automatic-migration-wan-contract.json',
+                profiles_root() / 'server-router.json',
+                self.root / profiles['server-router']['golden_readiness'],
+                self.root / 'runs' / run_id / profile_id / '.owned-overlay.json')
+        except (ValueError, OSError, KeyError) as error:
+            raise LabError('automatic migration WAN binding rejected') from error
         if profile.get("backend") == "android-adapter":
             return self._run_android_adapter(run_id, profile_id, "start")
         if self.uses_hyperv(run, profile_id):
@@ -1948,7 +1970,9 @@ class LabController:
         # so Xorg/modesetting can expose a real desktop over VNC.
         video_args = ("-vga", "virtio") if profile_id == "linux-x64-gui" else ()
         fixture_host_port = None
-        if profile_id == "server-router" and profile.get("consumer_fixture") is True:
+        if migration_wan:
+            network_args = MIGRATION_WAN_NETWORK
+        elif profile_id == "server-router" and profile.get("consumer_fixture") is True:
             if os.environ.get("AMNEZIA_LAB_RELAY_FIXED_ENDPOINTS") == "1":
                 fixture_host_port = CONSUMER_FIXTURE_GUEST_PORT
                 network_args = ("-netdev", f"user,id=labnet,restrict=on,hostfwd=tcp:127.0.0.1:22222-:22,hostfwd=tcp:127.0.0.1:{CONSUMER_FIXTURE_GUEST_PORT}-:{CONSUMER_FIXTURE_GUEST_PORT}", "-device", "e1000,netdev=labnet,id=labnet-device")
@@ -1969,6 +1993,8 @@ class LabController:
             "argv": list(argv), "uid": os.getuid() if hasattr(os, "getuid") else None,
             "started_at": utc_now(),
         }
+        if migration_wan:
+            intent['automatic_migration_wan'] = run['automatic_migration_wan']
         if fixture_host_port is not None:
             intent.update({"consumer_fixture": True, "fixture_host_port": fixture_host_port, "fixture_guest_port": CONSUMER_FIXTURE_GUEST_PORT, "fixture_bind": "127.0.0.1"})
         if private_link_root_port:
@@ -2050,6 +2076,8 @@ class LabController:
             raise
         log.close()
         vm = {"pid": proc.pid, "proc_start_time": proc_start_time(proc.pid), "uuid": vm_uuid, "uid": os.getuid() if hasattr(os, "getuid") else None, "qmp_socket": str(qmp), "qga_socket": str(qga), "vnc_socket": str(vnc) if profile.get("display") == "vnc-unix" else None, "argv": list(argv), "started_at": utc_now()}
+        if migration_wan:
+            vm['automatic_migration_wan'] = run['automatic_migration_wan']
         if fixture_host_port is not None:
             vm.update({"consumer_fixture": True, "fixture_host_port": fixture_host_port, "fixture_guest_port": CONSUMER_FIXTURE_GUEST_PORT, "fixture_bind": "127.0.0.1"})
         if tpm is not None:
@@ -2276,7 +2304,21 @@ class LabController:
             raise LabError("QEMU process owner changed")
         cmdline = cmdline_path.read_bytes().decode(errors="replace").replace("\x00", " ")
         required_tokens = [f"-uuid {vm['uuid']}", str(Path(vm["qmp_socket"]).resolve()), str(Path(vm["qga_socket"]).resolve()), "-accel kvm", "-cpu host"]
-        if vm.get("consumer_fixture") is True:
+        if vm.get('automatic_migration_wan') is not None:
+            run = self.get_run(run_id)
+            profiles = load_profiles()
+            try:
+                if vm['automatic_migration_wan'] != run.get('automatic_migration_wan') or not validate_migration_wan(
+                        run, profile_id, repo_root() / 'deploy/release_lab/fixtures/automatic-migration-wan-contract.json',
+                        profiles_root() / 'server-router.json', self.root / profiles['server-router']['golden_readiness'],
+                        self.root / 'runs' / run_id / profile_id / '.owned-overlay.json'):
+                    raise ValueError('WAN VM binding changed')
+            except (ValueError, OSError, KeyError) as error:
+                raise LabError('automatic migration WAN ownership rejected') from error
+            required_tokens.extend(('-netdev user,id=labnet,restrict=off', '-device e1000,netdev=labnet,id=labnet-device'))
+            if 'hostfwd=' in cmdline or 'restrict=on' in cmdline:
+                raise LabError('automatic migration WAN forbids host forwarding')
+        elif vm.get("consumer_fixture") is True:
             required_tokens.extend(("-netdev user,id=labnet,restrict=on", f"hostfwd=tcp:127.0.0.1:{int(vm['fixture_host_port'])}-:{CONSUMER_FIXTURE_GUEST_PORT}", "-device e1000,netdev=labnet,id=labnet-device"))
         else:
             required_tokens.append("-nic none")
@@ -4111,6 +4153,8 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
     def gate(self, run_id: str, lane: str, artifact_dir: Path | None = None, outer_artifact: Path | None = None) -> dict[str, Any]:
         self.assert_mutation_context()
         run = self.get_run(run_id)
+        if run.get('automatic_migration_wan') is not None:
+            raise LabError('automatic migration WAN diagnostics cannot pass a release gate')
         if lane not in ("candidate", "release"):
             raise LabError("lane must be candidate or release")
         if run.get("lane") != lane:

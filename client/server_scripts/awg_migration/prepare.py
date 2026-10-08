@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from journal import Journal, inspect as inspect_container
+from journal import Journal, inspect as inspect_container, CONTROL_LISTENER_PROBE
 from policy import namespace_snapshot, firewall_script, client_policy_epoch, mtu
 from feeds import feed_mounts
 
@@ -32,6 +32,15 @@ KEY = re.compile(r'^[A-Za-z0-9+/]{43}=$')
 
 def run(*args, input=None):
     return subprocess.run(args, input=input, check=True, capture_output=True, timeout=180).stdout
+
+
+def transient_failure_reason(error):
+    if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired)):
+        if isinstance(error.cmd, (list, tuple)) and list(error.cmd[:2]) in (['docker', 'pull'], ['docker', 'build']):
+            return 'migration_dependency_unavailable'
+    elif isinstance(error, BlockingIOError):
+        return 'migration_busy'
+    return None
 
 
 def parse_config(raw):
@@ -89,9 +98,36 @@ def atomic(path, value):
     os.replace(tmp, path)
 
 
+def native_config(interface, peers):
+    """Serialize only the native UAPI fields, keeping identity and peer keys."""
+    # The official awg tools accept on/off or 0/1, unlike Go's UAPI booleans.
+    interface = dict(interface)
+    for key in ('RandomTrailers', 'DisableCookies'):
+        if interface.get(key) in ('false', 'true'):
+            interface[key] = '1' if interface[key] == 'true' else '0'
+    text = '[Interface]\n' + ''.join(f'{key} = {value}\n' for key, value in interface.items()
+                                      if key not in ('Address', 'MTU'))
+    for peer in peers:
+        text += '\n[Peer]\n' + ''.join(f'{key} = {value}\n' for key, value in peer.items())
+    return text
+
+
 def prepare(args):
     if os.geteuid() != 0 or args.source not in ('amnezia-awg', 'amnezia-awg2'):
         raise ValueError('administrator/source required')
+    if getattr(args, 'automatic', False):
+        from automatic import occupied_udp_ports, plan
+        from trusted_image import resolve_image
+        config_path = '/opt/amnezia/awg/' + ('wg0.conf' if args.source == 'amnezia-awg' else 'awg0.conf')
+        raw = run('docker', 'exec', args.source, 'cat', config_path)
+        interface, _ = parse_config(raw)
+        comments = [json.loads(path.read_text())['owner']
+                    for path in (ROOT / args.source).glob('*/transaction.json')]
+        namespace_snapshot(run, args.source, interface, 'wg0' if args.source == 'amnezia-awg' else 'awg0', comments)
+        client_policy_epoch()
+        image = resolve_image(run)
+        request = plan(ROOT, args.source, args.host, image, raw, int(interface['ListenPort']), occupied_udp_ports(run))
+        args.image, args.port, args.generation = request['image'], request['port'], request['generation']
     if not re.fullmatch(r'[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}', args.image):
         raise ValueError('AWG3 immutable image required')
     if not re.fullmatch(r'[A-Za-z0-9.-]{1,253}', args.host) or not 1024 <= args.port <= 65535 or not 1 <= args.generation <= 9007199254740991:
@@ -179,7 +215,7 @@ def prepare(args):
                       'HeaderProtectionKey': base64.b64encode(secrets.token_bytes(32)).decode(),
                       'ContentPaddingAddition': '0', 'RekeyAfterTime': '120', 'RekeyTimeout': '5',
                       'RejectAfterTime': '180', 'KeepaliveTimeout': '10',
-                      'MaxHandshakeAttempts': '20', 'RandomTrailers': 'false', 'DisableCookies': 'false'}
+                      'MaxHandshakeAttempts': '20', 'RandomTrailers': '0', 'DisableCookies': '0'}
         # Only explicit fields: discard original shell PostUp/PostDown hooks.
         target_interface = {'PrivateKey': interface['PrivateKey'], 'Address': interface['Address'],
                             'ListenPort': str(args.port), 'MTU': str(snapshot['mtu']), **parameters}
@@ -188,19 +224,46 @@ def prepare(args):
             text += '\n[Peer]\n' + ''.join(f'{key} = {value}\n' for key, value in peer.items())
         (directory / 'awg0.conf').write_text(text)
         os.chmod(directory / 'awg0.conf', 0o600)
+        if getattr(args, 'automatic', False):
+            # Native setconf accepts no quick-only Address/MTU fields. Preserve
+            # every identity/parameter/peer byte without invoking kernel-first quick.
+            (directory / 'awg0.native.conf').write_text(native_config(target_interface, peers))
+            os.chmod(directory / 'awg0.native.conf', 0o600)
         shutil.copyfile(Path(__file__).with_name('service.py'), directory / 'service.py')
         shutil.copyfile(Path(__file__).with_name('target.py'), directory / 'target.py')
         shutil.copyfile(Path(__file__).with_name('policy.py'), directory / 'policy.py')
         shutil.copyfile(Path(__file__).with_name('feeds.py'), directory / 'feeds.py')
         # Reproduce the validated source namespace rules, not arbitrary shell hooks.
-        (directory / 'start.sh').write_text('#!/bin/sh\nset -eu\nawg-quick up /migration/awg0.conf\n' + firewall_script(snapshot) +
+        startup = 'awg-quick up /migration/awg0.conf\n'
+        if getattr(args, 'automatic', False):
+            from trusted_image import BINARY_SHA256
+            address = str(ipaddress.IPv4Interface(interface['Address']))
+            startup = (
+                f'test "$(sha256sum /usr/bin/amneziawg-go | cut -d " " -f 1)" = {BINARY_SHA256}\n'
+                '/usr/bin/amneziawg-go -f awg0 >/dev/null 2>&1 &\n'
+                'engine=$!\nprintf "%s\\n" "$engine" > /migration/engine.pid\n'
+                'trap "kill $engine 2>/dev/null || true" EXIT INT TERM\n'
+                'attempt=0\nwhile ! awg show awg0 >/dev/null 2>&1; do\n'
+                '  kill -0 "$engine"\n  attempt=$((attempt + 1))\n  test "$attempt" -lt 20\n  sleep 1\ndone\n'
+                'awg setconf awg0 /migration/awg0.native.conf\n'
+                f'ip address add {address} dev awg0\n'
+                f'ip link set dev awg0 mtu {snapshot["mtu"]} up\n')
+        (directory / 'start.sh').write_text('#!/bin/sh\nset -eu\n' + startup + firewall_script(snapshot) +
                 f'iptables -I INPUT 1 -p tcp --dport 18082 -m comment --comment {ownership} -j REJECT\n' +
                 f'iptables -I INPUT 1 -i awg0 -p tcp --dport 18082 -m comment --comment {ownership} -j ACCEPT\n' +
                 f'iptables -t nat -A PREROUTING -i awg0 -d 172.29.172.251/32 -p tcp --dport 18082 -m comment --comment {ownership} -j REDIRECT --to-ports 18082\n' +
-                'while :; do awg show awg0 latest-handshakes > /migration/handshakes.tsv.tmp; mv /migration/handshakes.tsv.tmp /migration/handshakes.tsv; sleep 2; done\n')
-        run('docker', 'pull', args.image)
+                ('while :; do kill -0 "$engine"; awg show awg0 latest-handshakes > /migration/handshakes.tsv.tmp; mv /migration/handshakes.tsv.tmp /migration/handshakes.tsv; sleep 2; done\n'
+                 if getattr(args, 'automatic', False) else
+                 'while :; do awg show awg0 latest-handshakes > /migration/handshakes.tsv.tmp; mv /migration/handshakes.tsv.tmp /migration/handshakes.tsv; sleep 2; done\n'))
+        if not getattr(args, 'automatic', False):
+            run('docker', 'pull', args.image)
         target_image_id = run('docker', 'image', 'inspect', '--format', '{{.Id}}', args.image).decode().strip()
         journal.plan(target, target_image_id)
+        if getattr(args, 'automatic', False):
+            from automatic import occupied_udp_ports, verify_port_available
+            if args.port in occupied_udp_ports(run):
+                raise ValueError('migration_udp_port_unavailable')
+            verify_port_available(args.port)
         run('docker', 'run', '-d', '--name', target, '--label', 'amnezia.migration.scope=' + scope,
             '--label', 'amnezia.migration.owner=' + ownership,
             '--label', 'amnezia.migration.generation=' + str(args.generation), '--cap-add', 'NET_ADMIN',
@@ -221,6 +284,15 @@ def prepare(args):
             time.sleep(1)
         else:
             raise ValueError('AWG3 readiness failed')
+        if getattr(args, 'automatic', False):
+            # Verify the live executable, not just the file in the image. The
+            # foreground engine remains the supervised child of target PID1.
+            live = run('docker', 'exec', target, 'sh', '-c',
+                       'set -eu; engine=$(cat /migration/engine.pid); '
+                       'case "$engine" in ""|*[!0-9]*) exit 1;; esac; '
+                       'kill -0 "$engine"; sha256sum "/proc/$engine/exe"').decode().split()
+            if len(live) != 2 or live[0] != BINARY_SHA256:
+                raise ValueError('AWG3 live engine identity not observed')
         accepted = {}
         for line in run('docker', 'exec', target, 'awg', 'showconf', 'awg0').decode().splitlines():
             if '=' in line:
@@ -293,7 +365,10 @@ def prepare(args):
             '-v', str(directory) + ':/migration:rw', '-v', str(COLLECTOR_ROOT) + ':/logs:ro',
             '--entrypoint', 'python', target + '-control-image', '/migration/target.py')
         journal.record(collector)
-        probe = 'import socket; s=socket.create_connection(("127.0.0.1",18082),timeout=2);s.close()'
+        # INPUT deliberately permits only VPN peers, so a loopback connection
+        # would be rejected. Require the actual PID1 control listener's socket,
+        # rather than weakening the namespace firewall for a health probe.
+        probe = CONTROL_LISTENER_PROBE
         for attempt in range(10):
             try:
                 run('docker', 'exec', collector, 'python', '-c', probe)
@@ -350,10 +425,11 @@ def prepare(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--source', required=True)
-    parser.add_argument('--image', required=True)
+    parser.add_argument('--image', default='')
     parser.add_argument('--host', required=True)
-    parser.add_argument('--port', type=int, required=True)
-    parser.add_argument('--generation', type=int, required=True)
+    parser.add_argument('--port', type=int, default=0)
+    parser.add_argument('--generation', type=int, default=0)
+    parser.add_argument('--automatic', action='store_true')
     parser.add_argument('--preflight', action='store_true')
     try:
         args = parser.parse_args()
@@ -380,7 +456,12 @@ if __name__ == '__main__':
             'unsupported_namespace_ip_rule', 'unsupported_namespace_default_policy',
             'unsupported_namespace_egress', 'unsupported_mtu', 'source_mtu_drift',
             'unsupported_namespace_route',
-            'managed_client_policy_not_ready', 'managed_client_policy_not_versioned'}
+            'managed_client_policy_not_ready', 'managed_client_policy_not_versioned',
+            'trusted_image_unavailable', 'image_fetch_unavailable', 'unsupported_server_architecture',
+            'migration_endpoint_unsupported', 'migration_udp_port_unavailable',
+            'udp_inventory_unavailable', 'migration_journal_conflict', 'migration_ready_drift'}
         reason = str(error) if isinstance(error, ValueError) and str(error) in eligibility_reasons else 'migration_preparation_failed'
+        # Unknown tool, policy, identity and Docker run failures do not retry.
+        reason = transient_failure_reason(error) or reason
         print(json.dumps({'prepared': False, 'eligible': False, 'reason': reason}))
         raise SystemExit(1)

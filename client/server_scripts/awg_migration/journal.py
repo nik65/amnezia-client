@@ -6,6 +6,16 @@ import re
 import subprocess
 import time
 
+# Verify the actual control PID1 owns the listening socket. Namespace INPUT
+# permits VPN peers only, so loopback TCP health connections are rejected.
+CONTROL_LISTENER_PROBE = ('import os,pathlib; '
+    'cmd=pathlib.Path("/proc/1/cmdline").read_bytes().split(bytes([0])); '
+    'assert b"/migration/target.py" in cmd; '
+    'owned={os.readlink(p) for p in pathlib.Path("/proc/1/fd").iterdir()}; '
+    'rows=[line.split() for line in pathlib.Path("/proc/net/tcp").read_text().splitlines()[1:]]; '
+    'assert any(row[1]=="00000000:46A2" and row[3]=="0A" and '
+    '"socket:["+row[9]+"]" in owned for row in rows)')
+
 
 def atomic(path, value):
     tmp = path.with_suffix('.tmp')
@@ -100,7 +110,7 @@ class Journal:
             elif name != parent and not name.endswith('-source-control') and target_epoch != self.value.get('targetEpoch'):
                 self.run('docker', 'restart', observed['Id'])
             if name.endswith('-source-control'):
-                probe = 'import socket; s=socket.create_connection(("127.0.0.1",18082),timeout=2);s.close()'
+                probe = CONTROL_LISTENER_PROBE
                 for attempt in range(10):
                     try:
                         self.run('docker', 'exec', observed['Id'], 'python', '-c', probe)

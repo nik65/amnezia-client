@@ -56,6 +56,39 @@ def validate_hooks(interface, iface):
                 raise ValueError('unsupported_namespace_hook')
 
 
+def docker_dns_rules(lines):
+    """Recognize the complete Docker-owned IPv4 embedded resolver NAT group.
+
+    Listener ports belong to each Docker namespace and must not be replayed in
+    another namespace. Everything outside the complete typed group remains
+    subject to the ordinary operator policy allowlist.
+    """
+    chains = {'DOCKER_OUTPUT', 'DOCKER_POSTROUTING'}
+    group = [line for line in lines if chains.intersection(shlex.split(line))]
+    if not group:
+        return lines, False
+    fixed = {'-N DOCKER_OUTPUT', '-N DOCKER_POSTROUTING',
+             '-A OUTPUT -d 127.0.0.11/32 -j DOCKER_OUTPUT',
+             '-A POSTROUTING -d 127.0.0.11/32 -j DOCKER_POSTROUTING'}
+    if len(group) != 8 or len(set(group)) != 8 or not fixed.issubset(group):
+        raise ValueError('unsupported_namespace_firewall')
+    destinations, sources = {}, {}
+    for line in group:
+        if line in fixed:
+            continue
+        destination = re.fullmatch(
+            r'-A DOCKER_OUTPUT -d 127\.0\.0\.11/32 -p (tcp|udp) -m \1 --dport 53 -j DNAT --to-destination 127\.0\.0\.11:([0-9]+)', line)
+        source = re.fullmatch(
+            r'-A DOCKER_POSTROUTING -s 127\.0\.0\.11/32 -p (tcp|udp) -m \1 --sport ([0-9]+) -j SNAT --to-source :53', line)
+        match, ports = (destination, destinations) if destination else (source, sources)
+        if not match or match.group(1) in ports or not 1024 <= int(match.group(2)) <= 65535:
+            raise ValueError('unsupported_namespace_firewall')
+        ports[match.group(1)] = int(match.group(2))
+    if set(destinations) != {'tcp', 'udp'} or sources != destinations:
+        raise ValueError('unsupported_namespace_firewall')
+    return [line for line in lines if line not in group], True
+
+
 def namespace_snapshot(run, container, interface, iface, owned_comments=()):
     validate_hooks(interface, iface)
     network = str(ipaddress.ip_interface(interface['Address']).network)
@@ -81,13 +114,15 @@ def namespace_snapshot(run, container, interface, iface, owned_comments=()):
     allowed_nat |= {normalize(f'-A POSTROUTING -o {eth} -j MASQUERADE', iface) for eth in ('eth0', 'eth1')}
     for port, host in ((17864, '172.29.172.253'), (17865, '172.29.172.252'), (17866, '172.29.172.251')):
         allowed_nat.add(normalize(f'-A PREROUTING -d {host}/32 -i {iface} -p tcp -m tcp --dport {port} -j REDIRECT --to-ports {port}', iface))
-    snapshot = {'mtu': effective_mtu, 'filter': [], 'nat': [], 'egress': {}}
+    snapshot = {'mtu': effective_mtu, 'filter': [], 'nat': [], 'egress': {}, 'dockerDns': False}
     for table in ('raw', 'mangle'):
         for line in run('docker', 'exec', container, 'iptables', '-t', table, '-S').decode().splitlines():
             if not line.startswith('-P ') or line.split()[-1] != 'ACCEPT':
                 raise ValueError('unsupported_namespace_firewall')
     for table, allowed in (('filter', allowed_filter), ('nat', allowed_nat)):
         raw = run('docker', 'exec', container, 'iptables', '-t', table, '-S').decode().splitlines()
+        if table == 'nat':
+            raw, snapshot['dockerDns'] = docker_dns_rules(raw)
         for line in raw:
             if line.startswith('-P '):
                 if line.split()[-1] != 'ACCEPT':
@@ -105,9 +140,9 @@ def namespace_snapshot(run, container, interface, iface, owned_comments=()):
     routes = []
     for line in run('docker', 'exec', container, 'ip', 'route', 'show', 'table', 'main').decode().splitlines():
         tokens = shlex.split(line)
-        if len(tokens) == 5 and tokens[:2] == ['default', 'via'] and tokens[3:] == ['dev', 'eth0']:
+        if len(tokens) == 5 and tokens[:2] == ['default', 'via'] and tokens[3] == 'dev' and tokens[4] in ('eth0', 'eth1'):
             gateway = str(ipaddress.IPv4Address(tokens[2]))
-            routes.append('default via ' + gateway + ' dev eth0')
+            routes.append('default via ' + gateway + ' dev ' + tokens[4])
         elif len(tokens) == 9 and tokens[1] == 'dev' and tokens[3:7] == ['proto', 'kernel', 'scope', 'link'] and tokens[7] == 'src':
             route_network = str(ipaddress.IPv4Network(tokens[0]))
             ipaddress.IPv4Address(tokens[8])
