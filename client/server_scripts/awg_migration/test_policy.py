@@ -1,6 +1,6 @@
 """Typed namespace policy and MTU fixtures; never invokes networking tools."""
 import unittest
-from policy import mtu, validate_hooks, namespace_snapshot, standard_filter, docker_dns_rules, firewall_script
+from policy import mtu, validate_hooks, namespace_snapshot, standard_filter, docker_dns_rules, server_dns_proxy_rules, firewall_script
 
 INTERFACE = {'Address': '10.8.1.1/24', 'MTU': '1280'}
 DNS = ['-N DOCKER_OUTPUT', '-N DOCKER_POSTROUTING',
@@ -13,6 +13,66 @@ DNS = ['-N DOCKER_OUTPUT', '-N DOCKER_POSTROUTING',
 
 
 class PolicyTests(unittest.TestCase):
+    def proxy_group(self, proxy='172.29.172.254'):
+        return ['-N SERVERX_DNS_PROXY_POST', '-N SERVERX_DNS_PROXY_PRE'] + [
+            f'-A PREROUTING -d {address}/32 -p {protocol} -m {protocol} --dport 53 -j SERVERX_DNS_PROXY_PRE'
+            for address in ('10.8.1.1', '1.0.0.1', proxy) for protocol in ('udp', 'tcp')
+        ] + [f'-A POSTROUTING -p {protocol} -m {protocol} --dport 53 -j SERVERX_DNS_PROXY_POST'
+             for protocol in ('udp', 'tcp')] + [
+            f'-A SERVERX_DNS_PROXY_POST -d {proxy}/32 -j MASQUERADE'] + [
+            f'-A SERVERX_DNS_PROXY_PRE -p {protocol} -j DNAT --to-destination {proxy}:53'
+            for protocol in ('udp', 'tcp')]
+
+    def test_dns_proxy_complete_group_preserves_destinations_and_rule_order(self):
+        def fixture(group):
+            def run(*args):
+                data = self.run_fixture(*args)
+                if 'iptables' in args and args[args.index('-t') + 1] == 'nat':
+                    data = data.rstrip(b'\n') + b'\n' + '\n'.join(group).encode() + b'\n-A PREROUTING -d 172.29.172.251/32 -i wg0 -p tcp -m tcp --dport 17866 -j REDIRECT --to-ports 17866\n'
+                return data
+            return run
+        original = self.proxy_group()
+        self.assertEqual(original, server_dns_proxy_rules(original, INTERFACE['Address']))
+        source = namespace_snapshot(fixture(original), 'source', INTERFACE, 'wg0')
+        target = namespace_snapshot(fixture(original), 'target', INTERFACE, 'wg0')
+        self.assertEqual(source, target)
+        replay = firewall_script(source)
+        self.assertLess(replay.index('-N SERVERX_DNS_PROXY_PRE'), replay.index('-A PREROUTING'))
+        self.assertIn('--to-destination 172.29.172.254:53', replay)
+        self.assertIn('-d 172.29.172.254/32 -j MASQUERADE', replay)
+        self.assertIn('--dport 17866 -j REDIRECT --to-ports 17866', replay)
+        self.assertEqual(original, [rule for rule in source['nat'] if 'SERVERX_DNS_PROXY' in rule])
+        with self.assertRaisesRegex(ValueError, 'unsupported_namespace_firewall'):
+            namespace_snapshot(fixture(self.proxy_group('192.0.2.4')), 'source', INTERFACE, 'wg0')
+        reordered = original[:2] + list(reversed(original[2:]))
+        self.assertNotEqual(source, namespace_snapshot(fixture(reordered), 'source', INTERFACE, 'wg0'))
+        # Docker's ephemeral resolver group remains excluded from replay.
+        both = namespace_snapshot(fixture(original + DNS), 'source', INTERFACE, 'wg0')
+        self.assertTrue(both['dockerDns'])
+        self.assertNotIn('DOCKER_', firewall_script(both))
+        for extra in ('-N UNAPPROVED_CHAIN', '-A PREROUTING -j UNAPPROVED_CHAIN'):
+            with self.assertRaisesRegex(ValueError, 'unsupported_namespace_firewall'):
+                namespace_snapshot(fixture(original + [extra]), 'source', INTERFACE, 'wg0')
+
+    def test_dns_proxy_unknown_partial_duplicate_or_retargeted_group_rejected(self):
+        group = self.proxy_group()
+        invalid = [group[:-1], group + [group[-1]], group + ['-A SERVERX_DNS_PROXY_PRE -j ACCEPT'],
+                   [line.replace('--dport 53', '--dport 54') for line in group],
+                   [line.replace('/32', '/24') for line in group],
+                   [line.replace('-p udp -m udp', '-p udp -m tcp') for line in group],
+                   [line.replace('-A PREROUTING ', '-A PREROUTING -i eth2 ') for line in group],
+                   [line.replace('172.29.172.254:53', '192.0.2.4:53') for line in group],
+                   [line.replace('-d 172.29.172.254/32 -j MASQUERADE', '-d 192.0.2.4/32 -j MASQUERADE') for line in group],
+                   [line.replace('172.29.172.254', '127.0.0.1') for line in group],
+                   [line.replace('172.29.172.254', '999.0.0.1') for line in group],
+                   group + self.proxy_group('192.0.2.4'),
+                   [line.replace('1.0.0.1', '1.1.1.1') for line in group],
+                   [line.replace('10.8.1.1', '10.8.1.2') for line in group]]
+        for rules in invalid:
+            with self.subTest(rules=rules), self.assertRaisesRegex(ValueError, 'unsupported_namespace_firewall'):
+                server_dns_proxy_rules(rules, INTERFACE['Address'])
+        self.assertEqual([], server_dns_proxy_rules(['-N UNAPPROVED_CHAIN'], INTERFACE['Address']))
+
     def test_no_docker_dns_keeps_every_operator_rule_and_rejects_unknown_nat(self):
         ordinary = ['-P PREROUTING ACCEPT', '-A POSTROUTING -o eth0 -j MASQUERADE']
         self.assertEqual((ordinary, False), docker_dns_rules(ordinary))

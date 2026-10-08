@@ -89,6 +89,66 @@ def docker_dns_rules(lines):
     return [line for line in lines if line not in group], True
 
 
+def server_dns_proxy_rules(lines, source_address):
+    """Validate the complete existing ServerX DNS proxy group, without retargeting.
+
+    Exactly the source interface, Cloudflare secondary resolver, and known DNS
+    bridge selectors dispatch both transports to that DNS bridge. No extra match
+    may be introduced. The original rule order and destinations remain evidence.
+    """
+    chains = {'SERVERX_DNS_PROXY_PRE', 'SERVERX_DNS_PROXY_POST'}
+    group = [line for line in lines if chains.intersection(shlex.split(line))]
+    if not group:
+        return []
+    declarations = {'-N ' + chain for chain in chains}
+    if len(group) != 13 or len(set(group)) != 13 or not declarations.issubset(group):
+        raise ValueError('unsupported_namespace_firewall')
+    selectors, post, destinations, masquerade = {}, set(), {}, None
+    for line in group:
+        if line in declarations:
+            continue
+        pre = re.fullmatch(r'-A PREROUTING -d ([0-9.]+)/32 -p (udp|tcp) -m \2 --dport 53 -j SERVERX_DNS_PROXY_PRE', line)
+        dispatch = re.fullmatch(r'-A POSTROUTING -p (udp|tcp) -m \1 --dport 53 -j SERVERX_DNS_PROXY_POST', line)
+        dnat = re.fullmatch(r'-A SERVERX_DNS_PROXY_PRE -p (udp|tcp) -j DNAT --to-destination ([0-9.]+):53', line)
+        masq = re.fullmatch(r'-A SERVERX_DNS_PROXY_POST -d ([0-9.]+)/32 -j MASQUERADE', line)
+        if pre:
+            address, protocol = pre.groups()
+            protocols = selectors.setdefault(address, set())
+            if protocol in protocols:
+                raise ValueError('unsupported_namespace_firewall')
+            protocols.add(protocol)
+        elif dispatch:
+            if dispatch.group(1) in post:
+                raise ValueError('unsupported_namespace_firewall')
+            post.add(dispatch.group(1))
+        elif dnat:
+            if dnat.group(1) in destinations:
+                raise ValueError('unsupported_namespace_firewall')
+            destinations[dnat.group(1)] = dnat.group(2)
+        elif masq and masquerade is None:
+            masquerade = masq.group(1)
+        else:
+            raise ValueError('unsupported_namespace_firewall')
+    addresses = set(selectors) | set(destinations.values()) | {masquerade}
+    try:
+        if any(not address or str(ipaddress.IPv4Address(address)) != address
+               or ipaddress.IPv4Address(address).is_multicast
+               or ipaddress.IPv4Address(address).is_unspecified
+               or ipaddress.IPv4Address(address).is_loopback
+               or address == '255.255.255.255' for address in addresses):
+            raise ValueError()
+    except ValueError:
+        raise ValueError('unsupported_namespace_firewall') from None
+    expected_selectors = {str(ipaddress.ip_interface(source_address).ip), '1.0.0.1', '172.29.172.254'}
+    if (len(expected_selectors) != 3 or set(selectors) != expected_selectors
+            or any(value != {'tcp', 'udp'} for value in selectors.values())
+            or post != {'tcp', 'udp'} or set(destinations) != {'tcp', 'udp'}
+            or len(set(destinations.values())) != 1
+            or masquerade != '172.29.172.254' or set(destinations.values()) != {masquerade}):
+        raise ValueError('unsupported_namespace_firewall')
+    return group
+
+
 def namespace_snapshot(run, container, interface, iface, owned_comments=()):
     validate_hooks(interface, iface)
     network = str(ipaddress.ip_interface(interface['Address']).network)
@@ -121,8 +181,11 @@ def namespace_snapshot(run, container, interface, iface, owned_comments=()):
                 raise ValueError('unsupported_namespace_firewall')
     for table, allowed in (('filter', allowed_filter), ('nat', allowed_nat)):
         raw = run('docker', 'exec', container, 'iptables', '-t', table, '-S').decode().splitlines()
+        proxy = []
         if table == 'nat':
             raw, snapshot['dockerDns'] = docker_dns_rules(raw)
+            proxy = server_dns_proxy_rules(raw, interface['Address'])
+            allowed = allowed | {normalize(line, iface) for line in proxy}
         for line in raw:
             if line.startswith('-P '):
                 if line.split()[-1] != 'ACCEPT':
@@ -136,7 +199,10 @@ def namespace_snapshot(run, container, interface, iface, owned_comments=()):
             if normalized not in allowed:
                 raise ValueError('unsupported_namespace_firewall')
             snapshot[table].append(normalized)
-        snapshot[table].sort()
+        if not proxy:
+            snapshot[table].sort()
+        else:
+            snapshot[table] = [rule for rule in snapshot[table] if rule.startswith('-N ')] + [rule for rule in snapshot[table] if not rule.startswith('-N ')]
     routes = []
     for line in run('docker', 'exec', container, 'ip', 'route', 'show', 'table', 'main').decode().splitlines():
         tokens = shlex.split(line)
@@ -164,7 +230,11 @@ def namespace_snapshot(run, container, interface, iface, owned_comments=()):
 def firewall_script(snapshot):
     commands = []
     for table in ('filter', 'nat'):
-        commands += ['iptables -t ' + table + ' ' + rule for rule in snapshot[table]]
+        # Custom chains must exist before any dispatch. Preserve rule order,
+        # including interleaving with standard collector and masquerade rules.
+        rules = snapshot[table]
+        ordered = [rule for rule in rules if rule.startswith('-N ')] + [rule for rule in rules if not rule.startswith('-N ')]
+        commands += ['iptables -t ' + table + ' ' + rule for rule in ordered]
     return '\n'.join(commands) + '\n'
 
 

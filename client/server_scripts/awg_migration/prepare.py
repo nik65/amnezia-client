@@ -34,6 +34,103 @@ def run(*args, input=None):
     return subprocess.run(args, input=input, check=True, capture_output=True, timeout=180).stdout
 
 
+def source_network_options(run, source, binding=None):
+    """Clone only observed bridge endpoint roles; never rename the source."""
+    version = run('docker', 'version', '--format', '{{.Server.Version}}').decode().strip()
+    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9_.-]+)?', version) or int(version.split('.')[0]) < 28:
+        raise ValueError('unsupported_source_network_topology')
+    containers = json.loads(run('docker', 'inspect', source))
+    if len(containers) != 1:
+        raise ValueError('unsupported_source_network_topology')
+    endpoints = containers[0].get('NetworkSettings', {}).get('Networks', {})
+    if set(endpoints) not in ({'bridge'}, {'bridge', 'amnezia-dns-net'}):
+        raise ValueError('unsupported_source_network_topology')
+    addresses = json.loads(run('docker', 'exec', source, 'ip', '-j', '-4', 'address', 'show'))
+    routes = json.loads(run('docker', 'exec', source, 'ip', '-j', '-4', 'route', 'show', 'default'))
+    if len(routes) != 1 or routes[0].get('dst') != 'default' or routes[0].get('dev') not in ('eth0', 'eth1'):
+        raise ValueError('unsupported_source_network_topology')
+    options, interfaces, network_ids, default_count = [], set(), set(), 0
+    for name in sorted(endpoints):
+        endpoint = endpoints[name]
+        network = json.loads(run('docker', 'network', 'inspect', name))
+        if len(network) != 1:
+            raise ValueError('unsupported_source_network_topology')
+        network = network[0]
+        configs = network.get('IPAM', {}).get('Config', [])
+        if (network.get('Name') != name or network.get('Driver') != 'bridge'
+                or network.get('Scope') != 'local' or network.get('Internal')
+                or network.get('EnableIPv6') or len(configs) != 1
+                or not endpoint.get('NetworkID') or endpoint['NetworkID'] != network.get('Id')
+                or endpoint['NetworkID'] in network_ids):
+            raise ValueError('unsupported_source_network_topology')
+        network_ids.add(endpoint['NetworkID'])
+        subnet = ipaddress.IPv4Network(configs[0]['Subnet'])
+        address = ipaddress.IPv4Address(endpoint['IPAddress'])
+        gateway = ipaddress.IPv4Address(endpoint['Gateway'])
+        if (address not in subnet or gateway not in subnet or address == gateway
+                or str(gateway) != configs[0].get('Gateway')
+                or endpoint.get('IPPrefixLen') != subnet.prefixlen):
+            raise ValueError('unsupported_source_network_topology')
+        matches = [row['ifname'] for row in addresses
+                   if any(item.get('family') == 'inet' and item.get('local') == str(address)
+                          and item.get('prefixlen') == subnet.prefixlen for item in row.get('addr_info', []))]
+        if len(matches) != 1 or matches[0] not in ('eth0', 'eth1') or matches[0] in interfaces:
+            raise ValueError('unsupported_source_network_topology')
+        iface = matches[0]
+        interfaces.add(iface)
+        default = routes[0].get('dev') == iface
+        if default and routes[0].get('gateway') != str(gateway):
+            raise ValueError('unsupported_source_network_topology')
+        default_count += int(default)
+        if binding is not None:
+            binding[name] = {'networkId': endpoint['NetworkID'], 'interface': iface, 'default': default}
+        options.extend(['--network', f'name={name},driver-opt=com.docker.network.endpoint.ifname={iface},gw-priority={int(default)}'])
+    expected_interfaces = {'eth0'} if len(endpoints) == 1 else {'eth0', 'eth1'}
+    if interfaces != expected_interfaces or default_count != 1:
+        raise ValueError('unsupported_source_network_topology')
+    return options
+
+
+def start_target_networks(run, journal, target, source, binding):
+    # The mixed default/user-defined bridge combination cannot be passed to
+    # docker create together. Attach while stopped, after recording owned ID.
+    journal.record(target)
+    identity = journal.value['containers'][target]['id']
+    if 'amnezia-dns-net' in binding:
+        role = binding['amnezia-dns-net']
+        run('docker', 'network', 'connect', '--driver-opt',
+            'com.docker.network.endpoint.ifname=' + role['interface'],
+            '--gw-priority', str(int(role['default'])), 'amnezia-dns-net', identity)
+    current_binding = {}
+    source_network_options(run, source, current_binding)
+    observed = json.loads(run('docker', 'inspect', identity))
+    endpoints = observed[0].get('NetworkSettings', {}).get('Networks', {}) if len(observed) == 1 else {}
+    state = observed[0].get('State', {}) if len(observed) == 1 else {}
+    if (current_binding != binding or set(endpoints) != set(binding)
+            or observed[0].get('Id') != identity or state.get('Status') != 'created'
+            or state.get('Pid') != 0 or state.get('Running')
+            or state.get('StartedAt') != '0001-01-01T00:00:00Z'
+            or observed[0].get('HostConfig', {}).get('NetworkMode') != 'bridge'):
+        raise ValueError('unsupported_source_network_topology')
+    for name, role in binding.items():
+        endpoint = endpoints[name]
+        global_network = json.loads(run('docker', 'network', 'inspect', name))
+        if (len(global_network) != 1 or global_network[0].get('Id') != role['networkId']
+                or endpoint.get('DriverOpts') != {'com.docker.network.endpoint.ifname': role['interface']}
+                or endpoint.get('GwPriority') != int(role['default'])
+                or endpoint.get('NetworkID') not in ('', role['networkId'])
+                or any(endpoint.get(field) for field in ('EndpointID', 'IPAddress', 'Gateway', 'GlobalIPv6Address', 'IPv6Gateway'))):
+            raise ValueError('unsupported_source_network_topology')
+    run('docker', 'start', identity)
+    # start.sh waits for an owned approval file: no engine/config/firewall yet.
+    current_binding, live_binding = {}, {}
+    source_network_options(run, source, current_binding)
+    source_network_options(run, identity, live_binding)
+    if current_binding != binding or live_binding != binding:
+        raise ValueError('unsupported_source_network_topology')
+
+
+
 def transient_failure_reason(error):
     if isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired)):
         if isinstance(error.cmd, (list, tuple)) and list(error.cmd[:2]) in (['docker', 'pull'], ['docker', 'build']):
@@ -148,6 +245,8 @@ def prepare(args):
             else:
                 owned_comments.append(journal.value['owner'])
     snapshot = namespace_snapshot(run, args.source, interface, source_iface, owned_comments)
+    network_binding = {}
+    network_options = source_network_options(run, args.source, network_binding)
     epoch = client_policy_epoch()
     if args.preflight:
         return {'eligible': True, 'mtu': snapshot['mtu'], 'namespacePolicy': 'validated_standard_awg', 'clientPolicyEpoch': epoch}
@@ -161,8 +260,33 @@ def prepare(args):
             request = {'image': args.image, 'host': args.host, 'port': args.port, 'generation': args.generation}
             if journal.value['request'] != request or journal.value['sourceDigest'] != hashlib.sha256(raw).hexdigest():
                 raise ValueError('same generation request drift')
-            journal.recover_ready()
             state = json.loads((directory / 'ready.json').read_text())
+            target_identity = journal.value['containers'][state['targetContainer']]['id']
+            observed = inspect_container(run, target_identity)
+            endpoints = observed.get('NetworkSettings', {}).get('Networks', {}) if observed else {}
+            if (state.get('networkBinding') != network_binding or set(endpoints) != set(network_binding)
+                    or any(endpoints[name].get('NetworkID') != role['networkId'] for name, role in network_binding.items())):
+                raise ValueError('unsupported_source_network_topology')
+            if not observed['State']['Running']:
+                approval = directory / 'network-approved'
+                approval.unlink(missing_ok=True)
+                run('docker', 'start', target_identity)
+                resumed_binding, current_source_binding = {}, {}
+                source_network_options(run, target_identity, resumed_binding)
+                source_network_options(run, args.source, current_source_binding)
+                if resumed_binding != network_binding or current_source_binding != network_binding:
+                    raise ValueError('unsupported_source_network_topology')
+                atomic(approval, {'approved': True})
+            else:
+                running_binding = {}
+                source_network_options(run, target_identity, running_binding)
+                if running_binding != network_binding:
+                    raise ValueError('unsupported_source_network_topology')
+            journal.recover_ready()
+            target_binding = {}
+            source_network_options(run, state['targetContainer'], target_binding)
+            if state.get('networkBinding') != network_binding or target_binding != network_binding:
+                raise ValueError('unsupported_source_network_topology')
             target_interface, target_peers = parse_config((directory / 'awg0.conf').read_bytes())
             if namespace_snapshot(run, state['targetContainer'], target_interface, 'awg0', [journal.value['owner']]) != snapshot:
                 raise ValueError('ready_namespace_policy_or_mtu_changed')
@@ -248,7 +372,10 @@ def prepare(args):
                 'awg setconf awg0 /migration/awg0.native.conf\n'
                 f'ip address add {address} dev awg0\n'
                 f'ip link set dev awg0 mtu {snapshot["mtu"]} up\n')
-        (directory / 'start.sh').write_text('#!/bin/sh\nset -eu\n' + startup + firewall_script(snapshot) +
+        approval = directory / 'network-approved'
+        approval.unlink(missing_ok=True)
+        network_barrier = 'attempt=0\nwhile ! test -f /migration/network-approved; do\n  attempt=$((attempt + 1))\n  test "$attempt" -lt 60\n  sleep 1\ndone\n'
+        (directory / 'start.sh').write_text('#!/bin/sh\nset -eu\n' + network_barrier + startup + firewall_script(snapshot) +
                 f'iptables -I INPUT 1 -p tcp --dport 18082 -m comment --comment {ownership} -j REJECT\n' +
                 f'iptables -I INPUT 1 -i awg0 -p tcp --dport 18082 -m comment --comment {ownership} -j ACCEPT\n' +
                 f'iptables -t nat -A PREROUTING -i awg0 -d 172.29.172.251/32 -p tcp --dport 18082 -m comment --comment {ownership} -j REDIRECT --to-ports 18082\n' +
@@ -264,15 +391,16 @@ def prepare(args):
             if args.port in occupied_udp_ports(run):
                 raise ValueError('migration_udp_port_unavailable')
             verify_port_available(args.port)
-        run('docker', 'run', '-d', '--name', target, '--label', 'amnezia.migration.scope=' + scope,
+        run('docker', 'create', '--name', target, '--label', 'amnezia.migration.scope=' + scope,
             '--label', 'amnezia.migration.owner=' + ownership,
             '--label', 'amnezia.migration.generation=' + str(args.generation), '--cap-add', 'NET_ADMIN',
             '--device', '/dev/net/tun', '--sysctl', 'net.ipv4.ip_forward=1', '--restart', 'unless-stopped',
             '--log-driver', 'none', '-p', f'{args.port}:{args.port}/udp', '-v', str(directory) + ':/migration:rw',
+            '--network', next(network_options[n + 1] for n in range(0, len(network_options), 2)
+                              if network_options[n + 1].startswith('name=bridge,')),
             '--entrypoint', 'sh', args.image, '/migration/start.sh')
-        journal.record(target)
-        # Preserve the existing private DNS/routing-policy bridge reachability.
-        run('docker', 'network', 'connect', 'amnezia-dns-net', target)
+        start_target_networks(run, journal, target, args.source, network_binding)
+        atomic(approval, {'approved': True})
         for attempt in range(20):
             try:
                 result = run('docker', 'exec', target, 'awg', 'show', 'awg0', 'dump').decode()
@@ -301,6 +429,11 @@ def prepare(args):
                     accepted[key] = value
         if any(accepted.get(key) != parameters[key] for key in ('HeaderProtectionKey', 'S1', 'S2', 'S3', 'S4')):
             raise ValueError('AWG3 header protection capability not observed')
+        current_binding, target_binding = {}, {}
+        source_network_options(run, args.source, current_binding)
+        source_network_options(run, target, target_binding)
+        if current_binding != network_binding or target_binding != network_binding:
+            raise ValueError('unsupported_source_network_topology')
         target_snapshot = namespace_snapshot(run, target, target_interface, 'awg0', [ownership])
         if target_snapshot != snapshot:
             raise ValueError('effective_namespace_policy_or_mtu_changed')
@@ -313,7 +446,7 @@ def prepare(args):
         mapping = {peer['PublicKey']: {'sourceIp': str(ipaddress.ip_interface(peer['AllowedIPs']).ip),
                    'targetIp': str(ipaddress.ip_interface(peer['AllowedIPs']).ip), 'clientAddress': peer['AllowedIPs'],
                    'clientId': hashlib.sha256((scope + '\t' + peer['PublicKey']).encode()).hexdigest()} for peer in peers}
-        state = {'schema': 1, 'serverPublicKey': server_key, 'containerId': scope, 'generation': args.generation,
+        state = {'networkBinding': network_binding, 'schema': 1, 'serverPublicKey': server_key, 'containerId': scope, 'generation': args.generation,
                  'expiresAt': int(time.time()) + 30 * 86400, 'signingPublicKey': public,
                  'endpoint': f'{args.host}:{args.port}', 'parameters': parameters, 'peers': mapping,
                  'challengeAddress': '172.29.172.251', 'challengePort': 18082, 'targetContainer': target}
@@ -444,6 +577,7 @@ if __name__ == '__main__':
             for path in (ROOT / args.source).glob('*/transaction.json'):
                 comments.append(json.loads(path.read_text())['owner'])
             snapshot = namespace_snapshot(run, args.source, interface, 'wg0' if args.source == 'amnezia-awg' else 'awg0', comments)
+            source_network_options(run, args.source)
             print(json.dumps({'eligible': True, 'mtu': snapshot['mtu'], 'clientPolicyEpoch': client_policy_epoch()}))
             raise SystemExit(0)
         ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -455,7 +589,7 @@ if __name__ == '__main__':
         eligibility_reasons = {'unsupported_namespace_hook', 'unsupported_namespace_firewall',
             'unsupported_namespace_ip_rule', 'unsupported_namespace_default_policy',
             'unsupported_namespace_egress', 'unsupported_mtu', 'source_mtu_drift',
-            'unsupported_namespace_route',
+            'unsupported_namespace_route', 'unsupported_source_network_topology',
             'managed_client_policy_not_ready', 'managed_client_policy_not_versioned',
             'trusted_image_unavailable', 'image_fetch_unavailable', 'unsupported_server_architecture',
             'migration_endpoint_unsupported', 'migration_udp_port_unavailable',

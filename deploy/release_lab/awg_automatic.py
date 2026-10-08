@@ -49,7 +49,9 @@ pathlib.Path(sys.argv[3]).mkdir(mode=0o700)
         for before,after in replacements.items(): collector=collector.replace(before,after)
         files['collector.py']=collector.encode()
         plan={'runId':run_id,'profile':PROFILE,'uuid':vm['uuid'],'marker':marker,'root':root,
-              'sourceCommit':'dee6efbc429cbe9094af50df34f096220a5ad5dc+owned-patch-diagnostic',
+              'dnsProxyFixture':run_id in ('dns-proxy-awg-20261008','dns-proxy-topology-20261008','dns-proxy-topology-r2-20261008'),
+              'sourceDnsFirstFixture':run_id in ('dns-proxy-topology-20261008','dns-proxy-topology-r2-20261008'),
+              'sourceCommit':'e2e4b2bce4cdf2621bd202388ec78702ac7d749b+owned-DNS-topology-patch',
               'legacyImage':'amneziavpn/amneziawg-go@sha256:3c78eb57ef5cb44f63aed185e79c104593c854a5ebde3e1075470301bcc77c44',
               'files':{name:hashlib.sha256(data).hexdigest() for name,data in files.items()}}
         for name,data in files.items():

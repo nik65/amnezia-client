@@ -57,14 +57,52 @@ def scenario(plan):
         config='[Interface]\nPrivateKey = '+private+'\nAddress = 10.88.0.1/24\nListenPort = 51820\nMTU = 1420\nJc = 4\nJmin = 10\nJmax = 50\nS1 = 16\nS2 = 16\nH1 = 1\nH2 = 2\nH3 = 3\nH4 = 4\n\n[Peer]\nPublicKey = '+public+'\nPresharedKey = '+psk+'\nAllowedIPs = 10.88.0.2/32\n'
         (source/'awg0.conf').write_text(config);(source/'awg0.conf').chmod(0o600)
         (source/'start.sh').write_text('#!/bin/sh\nset -eu\nawg-quick up /opt/amnezia/awg/awg0.conf\nwhile :; do sleep 60; done\n')
-        command('docker','run','-d','--name','amnezia-awg2','--cap-add','NET_ADMIN','--device','/dev/net/tun','--sysctl','net.ipv4.ip_forward=1','--log-driver','none','-p','51820:51820/udp','-v',str(source)+':/opt/amnezia/awg:ro','--entrypoint','sh',legacy,'/opt/amnezia/awg/start.sh')
-        command('docker','network','connect','amnezia-dns-net','amnezia-awg2')
+        source_network=[]
+        source_action=['run','-d']
+        if plan.get('sourceDnsFirstFixture'):
+            if plan['runId'] not in ('dns-proxy-topology-20261008','dns-proxy-topology-r2-20261008'): raise ValueError('topology fixture run binding')
+            source_action=['create']
+            source_network=['--network','name=bridge,driver-opt=com.docker.network.endpoint.ifname=eth1,gw-priority=0']
+        created=command('docker',*source_action,'--name','amnezia-awg2',*source_network,'--cap-add','NET_ADMIN','--device','/dev/net/tun','--sysctl','net.ipv4.ip_forward=1','--log-driver','none','-p','51820:51820/udp','-v',str(source)+':/opt/amnezia/awg:ro','--entrypoint','sh',legacy,'/opt/amnezia/awg/start.sh')
+        if plan.get('sourceDnsFirstFixture'):
+            identity=created.stdout.decode().strip()
+            command('docker','network','connect','--driver-opt','com.docker.network.endpoint.ifname=eth0','--gw-priority','1','amnezia-dns-net',identity)
+            command('docker','start',identity)
+        else:
+            command('docker','network','connect','amnezia-dns-net','amnezia-awg2')
         for _ in range(25):
             if command('docker','exec','amnezia-awg2','awg','show','awg0','dump',check=False).returncode==0: break
             time.sleep(1)
         else: raise ValueError('legacy source readiness')
+    if plan.get('dnsProxyFixture'):
+        if plan['runId'] not in ('dns-proxy-awg-20261008','dns-proxy-topology-20261008','dns-proxy-topology-r2-20261008'): raise ValueError('DNS fixture run binding')
+        dns_rules=['-N SERVERX_DNS_PROXY_POST','-N SERVERX_DNS_PROXY_PRE']
+        for address in ('10.88.0.1','1.0.0.1','172.29.172.254'):
+            for protocol in ('udp','tcp'):
+                dns_rules.append('-A PREROUTING -d '+address+'/32 -p '+protocol+' -m '+protocol+' --dport 53 -j SERVERX_DNS_PROXY_PRE')
+        for protocol in ('udp','tcp'):
+            dns_rules.append('-A POSTROUTING -p '+protocol+' -m '+protocol+' --dport 53 -j SERVERX_DNS_PROXY_POST')
+        dns_rules+=['-A SERVERX_DNS_PROXY_POST -d 172.29.172.254/32 -j MASQUERADE','-A SERVERX_DNS_PROXY_PRE -p udp -j DNAT --to-destination 172.29.172.254:53','-A SERVERX_DNS_PROXY_PRE -p tcp -j DNAT --to-destination 172.29.172.254:53','-A PREROUTING -i awg0 -d 172.29.172.251/32 -p tcp --dport 17866 -j REDIRECT --to-ports 17866']
+        existing_nat=command('docker','exec','amnezia-awg2','iptables','-t','nat','-S').stdout.decode().splitlines()
+        if any('SERVERX_DNS_PROXY_' in line for line in existing_nat):
+            from policy import server_dns_proxy_rules
+            if len(server_dns_proxy_rules(existing_nat,'10.88.0.1'))!=13 or sum('17866' in line for line in existing_nat)!=1: raise ValueError('existing fixture DNS policy drift')
+        else:
+            for rule in dns_rules:
+                command('docker','exec','amnezia-awg2','iptables','-t','nat',*rule.split())
     legacy_version=command('docker','exec','amnezia-awg2','amneziawg-go','--version').stdout.decode().strip()
     initial_source=json.loads(command('docker','inspect','amnezia-awg2').stdout)[0]
+    if plan.get('sourceDnsFirstFixture'):
+        links=json.loads(command('docker','exec','amnezia-awg2','ip','-j','addr','show').stdout)
+        defaults=json.loads(command('docker','exec','amnezia-awg2','ip','-j','route','show','default').stdout)
+        networks=initial_source['NetworkSettings']['Networks']
+        if set(networks)!={'bridge','amnezia-dns-net'} or len(defaults)!=1: raise ValueError('fixture topology scope')
+        for name,device in (('amnezia-dns-net','eth0'),('bridge','eth1')):
+            network=networks[name]
+            matched=[link['ifname'] for link in links if any(addr.get('local')==network['IPAddress'] for addr in link.get('addr_info',[]))]
+            if matched!=[device]: raise ValueError('fixture topology device')
+        if defaults[0].get('dev')!='eth0' or defaults[0].get('gateway')!=networks['amnezia-dns-net']['Gateway']: raise ValueError('fixture topology default')
+        checks['sourceDnsFirstTopologyActuallyObserved']=True
     initial_dump=hashlib.sha256(command('docker','exec','amnezia-awg2','awg','showconf','awg0').stdout).hexdigest()
     Path('/opt/amnezia/client-logs').mkdir(parents=True,mode=0o700,exist_ok=True)
     Path('/opt/amnezia/client-logs/collector.py').write_bytes((root/'collector.py').read_bytes())
@@ -87,6 +125,12 @@ def scenario(plan):
         actual=command('docker','exec',ready['targetContainer'],'awg','showconf','awg0').stdout.decode()
         fields=dict(line.strip().split(' = ',1) for line in actual.splitlines() if ' = ' in line)
         checks['actualHeaderProtectionAndS1S4']=all(fields.get(k)==ready['parameters'][k] for k in ('HeaderProtectionKey','S1','S2','S3','S4'))
+        if plan.get('dnsProxyFixture'):
+            source_nat=command('docker','exec','amnezia-awg2','iptables','-t','nat','-S').stdout.decode().splitlines()
+            target_nat=command('docker','exec',ready['targetContainer'],'iptables','-t','nat','-S').stdout.decode().splitlines()
+            checks['dnsProxyThirteenRulesExactlyMirrored']=sorted(l for l in source_nat if 'SERVERX_DNS_PROXY_' in l)==sorted(l for l in target_nat if 'SERVERX_DNS_PROXY_' in l) and sum('SERVERX_DNS_PROXY_' in l for l in target_nat)==13
+            source_redirect=[l for l in source_nat if '17866' in l];target_redirect=[l for l in target_nat if '17866' in l]
+            checks['collector17866RedirectMirrored']=len(source_redirect)==len(target_redirect)==1 and source_redirect==target_redirect
         repeated=json.loads(command(*argv,timeout=600).stdout)
         checks['repeatGenerationSigningIdentityStable']=receipt==repeated and json.loads((state/'ready.json').read_text())['signingPublicKey']==ready['signingPublicKey']
         checks['repeatNoExtraGeneration']=sorted(p.name for p in state.parent.iterdir() if p.is_dir())==['1']
