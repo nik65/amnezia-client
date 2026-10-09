@@ -1205,6 +1205,11 @@ open class AmneziaVpnService : VpnService() {
             if (requiredInitialAttempt != null && attempt != requiredInitialAttempt) {
                 return RemoteLogUploadOutcome(RemoteLogUploadResult.IDLE)
             }
+            if (!remoteLogSanitizerContractVerified) {
+                recordRemoteLogHealth(attempt, 5, error = 7)
+                Log.w(TAG, "Remote log sanitizer self-check failed; upload remains blocked")
+                return RemoteLogUploadOutcome(RemoteLogUploadResult.RETRY)
+            }
             var target = attempt.target
             if (target.token.isEmpty()) {
                 val bootstrapOutcome = bootstrapRemoteLogTarget(attempt)
@@ -1983,7 +1988,12 @@ open class AmneziaVpnService : VpnService() {
             RemoteLogSanitizerState(secretMode = CLIENT_LOGS_SECRET_MODE_FAIL_CLOSED)
         }
         val budget = RemoteLogSanitizerBudget()
-        val source = payload.toString(Charsets.UTF_8)
+        // Redact URL credentials before the structural key scanner can consume
+        // a password-like substring and remove the URL's identifying '@'.
+        val source = CLIENT_LOGS_URL_USER_INFO_PATTERN.replace(payload.toString(Charsets.UTF_8)) { match ->
+            consumeRemoteLogSanitizerBudget(budget)
+            match.groupValues[1] + CLIENT_LOGS_REDACTED + "@"
+        }
         val structured = sanitizeRemoteLogStructuredText(
             source,
             safeInitialState,

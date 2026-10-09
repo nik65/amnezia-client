@@ -168,6 +168,33 @@ PageType {
         return root.remoteLogHealthController ? qsTr("No successful delivery reported yet") : qsTr("Open logging settings for local log controls");
     }
 
+    readonly property string remoteLogDiagnosticDetails: {
+        var revision = root.optionalDataRevision;
+        var controller = root.remoteLogHealthController;
+        if (!controller || Number(controller.state) === 100) {
+            return qsTr("Sender status is unavailable. Delivery and retry state cannot be confirmed.");
+        }
+        var delivered = root.formatDateTime(controller.lastSuccess);
+        var retry = root.formatDateTime(controller.nextRetryAt);
+        var error = String(controller.lastErrorLabel || "");
+        var http = Number(controller.lastHttpStatus || 0);
+        var details = [qsTr("Sender status: %1").arg(root.remoteLogStatus),
+            delivered !== "" ? qsTr("Last confirmed delivery: %1").arg(delivered)
+                             : qsTr("Last confirmed delivery: none reported"),
+            qsTr("Pending data reported: %1").arg(root.formatByteCount(controller.pendingBytes)),
+            error !== "" ? qsTr("Reported error: %1").arg(error)
+                          : delivered === "" ? qsTr("Reported error: none; the reason for missing delivery is unknown")
+                                             : qsTr("Reported error: none"),
+            http >= 100 && http <= 599 ? qsTr("Collector response: HTTP %1").arg(http)
+                                     : qsTr("Collector response: no HTTP result reported"),
+            retry !== "" ? qsTr("Next retry: %1").arg(retry)
+                         : qsTr("Next retry: no retry time reported")];
+        if (delivered === "" && Number(controller.state) === 4) {
+            details.push(qsTr("No delivery has been confirmed. This status alone does not establish a network failure or whether an upload has been attempted."));
+        }
+        return details.join("\n\n");
+    }
+
     readonly property bool remoteLogsHealthy: {
         var revision = root.optionalDataRevision;
         return root.remoteLogHealthController ? root.remoteLogHealthController.healthy : false;
@@ -829,7 +856,7 @@ PageType {
                 rightImageSource: "qrc:/images/controls/chevron-right.svg"
 
                 clickedFunction: function () {
-                    PageController.goToPage(PageEnum.PageSettingsLogging);
+                    remoteLogDetailsDrawer.openTriggered();
                 }
 
                 Accessible.role: Accessible.Button
@@ -937,6 +964,58 @@ PageType {
 
             Item {
                 Layout.preferredHeight: 16
+            }
+        }
+    }
+
+    DrawerType2 {
+        id: remoteLogDetailsDrawer
+        objectName: "remoteLogDetailsDrawer"
+
+        parent: root
+        anchors.fill: parent
+        expandedHeight: Math.min(root.height, Math.max(320, root.height * 0.86))
+
+        expandedStateContent: Item {
+            implicitHeight: remoteLogDetailsDrawer.expandedHeight
+
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
+
+                BackButtonType {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 16
+                    backButtonFunction: function () {
+                        remoteLogDetailsDrawer.closeTriggered();
+                    }
+                }
+
+                Header2Type {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 16
+                    Layout.rightMargin: 16
+                    Layout.topMargin: 8
+                    Layout.bottomMargin: 16
+                    headerText: qsTr("Diagnostics delivery")
+                    descriptionText: qsTr("Reported sender state from this device.")
+                }
+
+                TextAreaType {
+                    objectName: "remoteLogDeliveryDetails"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 160
+                    Layout.leftMargin: 16
+                    Layout.rightMargin: 16
+                    Layout.bottomMargin: 16 + PageController.safeAreaBottomMargin
+                    text: root.remoteLogDiagnosticDetails
+                    textArea.readOnly: true
+                    textArea.selectByMouse: true
+                    textArea.wrapMode: Text.Wrap
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: qsTr("Diagnostics delivery details")
+                }
             }
         }
     }
