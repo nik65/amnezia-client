@@ -3797,9 +3797,8 @@ bool UpdateController::runInstaller()
             }
 
     #if defined(Q_OS_WINDOWS)
-            if (runWindowsInstaller(installerPath, installerSha256, installerSize) == 0) {
-                scheduleDesktopQuitAfterInstallerStart();
-            }
+            // The installer closes the GUI only after its protected preflight.
+            runWindowsInstaller(installerPath, installerSha256, installerSize);
     #elif defined(Q_OS_MACOS) && !defined(MACOS_NE)
             if (runMacInstaller(installerPath, installerSha256, installerSize) == 0) {
                 scheduleDesktopQuitAfterInstallerStart();
@@ -4017,9 +4016,8 @@ UpdateController::InstallerHandoffResult UpdateController::launchDownloadedArtif
 #if defined(Q_OS_WINDOWS)
     const bool launched = runWindowsInstaller(
             localPath, m_selectedArtifact.sha256, m_selectedArtifact.size) == 0;
-    if (launched) {
-        scheduleDesktopQuitAfterInstallerStart();
-    }
+    // Process creation is not a successful service-upgrade preflight. The
+    // Windows installer owns the verified preparation and bounded GUI shutdown.
     return launched ? InstallerHandoffResult::Started : InstallerHandoffResult::Failed;
 #elif defined(Q_OS_MACOS) && !defined(MACOS_NE)
     const bool launched = runMacInstaller(

@@ -836,7 +836,16 @@ function persistWindowsServiceUpgradeJournal(snapshot)
     var result = installer.execute("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
                                    ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
                                      "-Command", script]);
-    return result.length >= 2 && Number(result[1]) === 0;
+    var journalExitCode = result.length >= 2 ? Number(result[1]) : -1;
+    if (journalExitCode !== 0) {
+        // Emit only a bounded native exit code, never the PowerShell output or
+        // service snapshot. Distinguish ACL/atomic-write gates from launch failure.
+        var safeJournalExit = isFinite(journalExitCode) && journalExitCode >= 0
+                && journalExitCode <= 65535 ? String(journalExitCode) : "unknown";
+        windowsUpgradePrepareFailureReason = "service-journal-persist-failed-" + safeJournalExit;
+        console.log("Windows service journal persistence failed; exit code: " + safeJournalExit);
+    }
+    return journalExitCode === 0;
 }
 
 function readWindowsServiceUpgradeJournal()
@@ -1226,7 +1235,9 @@ function prepareWindowsMainServiceForUpgrade()
         return false;
     }
     if (!persistWindowsServiceUpgradeJournal(windowsMainServiceConfigSnapshot)) {
-        windowsUpgradePrepareFailureReason = "service-journal-persist-failed";
+        if (windowsUpgradePrepareFailureReason.indexOf("service-journal-persist-failed-") !== 0) {
+            windowsUpgradePrepareFailureReason = "service-journal-persist-failed-unknown";
+        }
         console.log("Unable to durably persist the previous AmneziaVPN service configuration before mutation");
         windowsMainServiceConfigSnapshot = null;
         return false;
@@ -1530,6 +1541,11 @@ onNextButtonClicked = function()
 }
 
 function Controller () {
+    // setCanceled() during controller construction does not prevent IFW from
+    // later creating component operations. Keep extraction independently gated.
+    if (runningOnWindows() && installer.isInstaller()) {
+        installer.setValue("WindowsUpgradePreflight", "pending");
+    }
     console.log("OS: %1, architecture: %2".arg(systemInfo.prettyProductName).arg(systemInfo.currentCpuArchitecture));
 
     if (runningOnWindows()) {
@@ -1624,16 +1640,10 @@ function Controller () {
                                              automaticReplacement ? "automatic" : "accepted");
                 }
 
-                // The user has consented to replace the existing installation.
-                // Only now may Windows disconnect and close the running client.
-                isDesktopAppProcessRunningMessageLoop();
-                if (requestToQuitFromApp === true) {
-                    requestToQuit(installer, gui);
-                    return;
-                }
-
-                if (appInstalled()) {
-                    if (runningOnWindows() && !prepareWindowsMainServiceForUpgrade()) {
+                // Persist and validate rollback before asking the GUI to exit.
+                // A failed journal must leave the running client available.
+                if (runningOnWindows() && appInstalled()) {
+                    if (!prepareWindowsMainServiceForUpgrade()) {
                         writeWindowsInstallerLog("service-preflight", windowsUpgradePrepareFailureReason + "-" + windowsServiceConfigSnapshotFailureDetail() + (windowsMainServiceConfigSnapshotFailureOutput ? "-" + windowsMainServiceConfigSnapshotFailureOutput : ""));
                         releaseWindowsUpgradeAdminRights();
                         QMessageBox.critical(
@@ -1643,9 +1653,27 @@ function Controller () {
                         installer.setCanceled();
                         return;
                     }
-                    if (runningOnWindows()) {
-                        writeWindowsInstallerLog("service-preflight", "complete");
+                    writeWindowsInstallerLog("service-preflight", "complete");
+                }
+
+                isDesktopAppProcessRunningMessageLoop();
+                if (requestToQuitFromApp === true
+                        || (runningOnWindows() && desktopAppProcessRunning)) {
+                    if (windowsMainServicePrepared) {
+                        var exitRefusedRestored = restoreWindowsMainServiceAfterAbortedUpgrade();
+                        writeWindowsInstallerLog("service-preflight-restore",
+                                                 exitRefusedRestored ? "complete" : "failed");
+                        if (!exitRefusedRestored) {
+                            QMessageBox.critical("windows.service.upgrade.restore.failed", appName(),
+                                qsTr("The upgrade was cancelled because the application could not be closed. Its previous service configuration could not be fully restored. Resolve the protected recovery state before upgrading again."));
+                        }
                     }
+                    releaseWindowsUpgradeAdminRights();
+                    installer.setCanceled();
+                    return;
+                }
+
+                if (appInstalled()) {
                     var installedUninstallers = [
                         appInstalledUninstallerPath_x86,
                         appInstalledUninstallerPath
@@ -1796,6 +1824,9 @@ function Controller () {
             }
         }
 
+        if (runningOnWindows()) {
+            installer.setValue("WindowsUpgradePreflight", "ready");
+        }
     } else if (installer.isUninstaller()) {
         // Qt IFW 4.7 exposes Retry and Ignore for a failed UNDOEXECUTE
         // operation; it cannot honor Cancel for this dialog. post_uninstall.cmd

@@ -59,20 +59,22 @@ void WindowsNetworkWatcher::initialize() {
   if (openResult != ERROR_SUCCESS) {
     logger.error() << "Failed to open the WLAN handle" << "errorCode" << openResult
                    << WindowsUtils::getErrorMessage(openResult);
-    return;
-  }
-
-  DWORD prefNotifSource;
-  const DWORD notificationResult = WlanRegisterNotification(m_wlanHandle, WLAN_NOTIFICATION_SOURCE_MSM,
+  } else {
+    DWORD prefNotifSource;
+    const DWORD notificationResult = WlanRegisterNotification(m_wlanHandle, WLAN_NOTIFICATION_SOURCE_MSM,
                                true /* ignore duplicates */,
                                (WLAN_NOTIFICATION_CALLBACK)wlanCallback, this,
                                nullptr, &prefNotifSource);
-  if (notificationResult != ERROR_SUCCESS) {
-    logger.error() << "Failed to register a wlan callback" << "errorCode" << notificationResult
+    if (notificationResult == ERROR_ACCESS_DENIED) {
+      logger.warning() << "WLAN notifications unavailable: Windows denied Wi-Fi access; continuing power monitor initialization"
+                       << "errorCode" << notificationResult;
+    } else if (notificationResult != ERROR_SUCCESS) {
+      logger.error() << "Failed to register a wlan callback" << "errorCode" << notificationResult
                    << WindowsUtils::getErrorMessage(notificationResult);
-    return;
+    }
   }
 
+  // Power notifications are independent of optional WLAN permissions.
   const wchar_t* className = L"PowerMonitorClass";
   WNDCLASS wc = { 0 };
   wc.lpfnWndProc = &WindowsNetworkWatcher::PowerWndProcCallback;

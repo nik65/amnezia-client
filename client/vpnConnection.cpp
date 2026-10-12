@@ -1,5 +1,6 @@
 #include "vpnConnection.h"
 #include "core/utils/migrationTeardownContext.h"
+#include "core/utils/managedRouteMismatchDiagnostic.h"
 #include <QPointer>
 #include <QUuid>
 
@@ -1625,6 +1626,30 @@ void VpnConnection::reconcileManagedSplitTunnelRoutes(
     ManagedRouteUpdateResult updateResult = ManagedRouteUpdateResult::ReconnectRequired;
     if (!baseMatches) {
         qWarning() << "VpnConnection: rejected managed-route delta because the expected base no longer matches";
+        const auto diagnostic = managedRouteMismatchDiagnostic::describe(
+                {{expectedOldValid, desiredNewValid, m_hasAuthoritativeManagedRouteBase,
+                  expectedBaseRevision == m_authoritativeManagedRouteBaseRevision,
+                  expectedConnectionEpoch == m_authoritativeManagedRouteConnectionEpoch,
+                  expectedServerId == m_authoritativeManagedRouteServerId,
+                  requestedMode == m_authoritativeManagedRouteMode,
+                  normalizedExpectedOld == m_authoritativeManagedRoutes,
+                  expectedPolicyRevision == m_authoritativeManagedRoutePolicyRevision,
+                  expectedPolicyContentHash == m_authoritativeManagedRoutePolicyContentHash}},
+                normalizedExpectedOld.size(), normalizedDesiredNew.size(),
+                m_authoritativeManagedRoutes.size(),
+                desiredNewValid && m_hasAuthoritativeManagedRouteBase
+                        && expectedConnectionEpoch == m_authoritativeManagedRouteConnectionEpoch
+                        && expectedServerId == m_authoritativeManagedRouteServerId
+                        && requestedMode == m_authoritativeManagedRouteMode,
+                normalizedDesiredNew == m_authoritativeManagedRoutes);
+        qWarning() << "VpnConnection: managed-route base mismatch diagnostic schema=1"
+                   << "mask=" << diagnostic.mismatchMask
+                   << "fields=" << QString::fromStdString(diagnostic.mismatchNames)
+                   << "oldCount=" << diagnostic.counts[0]
+                   << "newCount=" << diagnostic.counts[1]
+                   << "appliedCount=" << diagnostic.counts[2]
+                   << "desiredEqualsApplied=" << diagnostic.desiredEqualsApplied;
+
     } else if (normalizedExpectedOld == normalizedDesiredNew) {
         // A content revision may change while the effective route set does
         // not. The authoritative base comparison itself is the receipt.

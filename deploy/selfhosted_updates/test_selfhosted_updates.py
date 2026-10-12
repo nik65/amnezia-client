@@ -3178,7 +3178,7 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        version_fixture = json.loads((REPO_ROOT / "deploy/selfhosted_updates/fixtures/release_version_5.0.3.8.json").read_text(encoding="utf-8"))
+        version_fixture = json.loads((REPO_ROOT / "deploy/selfhosted_updates/fixtures/release_version_5.0.3.9.json").read_text(encoding="utf-8"))
         version = re.search(r"set\(AMNEZIAVPN_VERSION\s+([0-9.]+)", cmake).group(1)
         android_code = int(re.search(r"set\(APP_ANDROID_VERSION_CODE\s+(\d+)\)", cmake).group(1))
         self.assertEqual(version, version_fixture["candidateVersion"])
@@ -8706,7 +8706,8 @@ class WindowsFirewallSourceContractTests(unittest.TestCase):
         prepare_service = controller.find("prepareWindowsMainServiceForUpgrade()")
         launch_uninstaller = controller.find("installer.execute(uninstallerPath,")
         self.assertGreaterEqual(close_client, 0)
-        self.assertGreater(prepare_service, close_client)
+        self.assertGreaterEqual(prepare_service, 0)
+        self.assertLess(prepare_service, close_client)
         self.assertGreater(launch_uninstaller, prepare_service)
         prepare_failure = controller[
             prepare_service : controller.find("var installedUninstallers", prepare_service)
@@ -9515,6 +9516,86 @@ process.stdout.write(JSON.stringify(outcome));
         self.assertIn("exitCode === 1060", service_check)
         self.assertIn("exitCode !== 0 && exitCode !== 1072", service_check)
         self.assertIn("sleep(100)", service_check)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required")
+    def test_qif_preflight_failure_blocks_extract_even_if_cancel_is_ignored(self) -> None:
+        # Reproduce IFW continuing operation creation after controller cancel.
+        # Execute the actual component hook; no installer/service is launched.
+        harness = r"""
+const fs = require('fs'), vm = require('vm'), assert = require('assert');
+const source = fs.readFileSync(process.argv[1], 'utf8');
+for (const state of [undefined, 'pending', 'ready']) {
+    let extracts = 0, privileged = 0, cancelled = 0;
+    const context = {
+        console: {log() {}}, systemInfo: {kernelType: 'winnt'},
+        installer: {
+            value(key, fallback) { return key === 'WindowsUpgradePreflight' ? state : fallback; },
+            isUpdater() { return false; }, isInstaller() { return true; },
+            setCanceled() { cancelled++; } // deliberately does not stop IFW
+        },
+        component: {
+            updateRequested() { return false; },
+            createOperations() { extracts++; throw new Error('extract sentinel'); },
+            addElevatedOperation() { privileged++; }
+        }
+    };
+    vm.createContext(context); vm.runInContext(source, context);
+    context.stopWindowsDesktopClientBeforeUnpack = () => true;
+    let message = '';
+    try { vm.runInContext('Component.prototype.createOperations()', context); }
+    catch (error) { message = error.message; }
+    assert.strictEqual(extracts, state === 'ready' ? 1 : 0);
+    assert.strictEqual(privileged, 0);
+    assert.strictEqual(cancelled, state === 'ready' ? 0 : 1);
+    assert.match(message, state === 'ready' ? /extract sentinel/ : /preparation did not complete/);
+}
+"""
+        subprocess.run(
+            [shutil.which("node"), "-e", harness,
+             str(REPO_ROOT / "deploy/installer/qif/componentscript.js")],
+            check=True, capture_output=True, text=True,
+        )
+        controller = self.function_body("function Controller ()", self.qif_control_script)
+        self.assertLess(controller.index('"WindowsUpgradePreflight", "pending"'),
+                        controller.index("prepareWindowsMainServiceForUpgrade()"))
+        self.assertGreater(controller.index('"WindowsUpgradePreflight", "ready"'),
+                           controller.index("windowsUpgradeCleanupIsComplete()"))
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required")
+    def test_qif_preflight_before_gui_exit_and_refusal_restores_service(self) -> None:
+        harness = r"""
+const fs=require('fs'), vm=require('vm'), assert=require('assert');
+const source=fs.readFileSync(process.argv[1],'utf8');
+for(const preparation of [undefined,false,true]) {
+ let closes=0, restores=0, cancelled=0, extracts=0; const values={Name:'AmneziaVPN',os:'win'};
+ const signal={connect(){}};
+ const context={console:{log(){}},systemInfo:{kernelType:'winnt',prettyProductName:'Windows',currentCpuArchitecture:'x64'},
+  QMessageBox:{critical(){},question(){return 1;},Ok:1,Cancel:0},QInstaller:{},qsTr:s=>s,
+  installer:{value:(k,d)=>k in values?values[k]:d,setValue:(k,v)=>values[k]=v,
+   isInstaller:()=>true,isUpdater:()=>false,isUninstaller:()=>false,
+   setCanceled(){cancelled++;},setDefaultPageVisible(){},
+   installationStarted:signal,installationFinished:signal,installationInterrupted:signal}};
+ vm.createContext(context);vm.runInContext('String.prototype.arg=function(){return String(this);}',context);
+ vm.runInContext(source,context);
+ Object.assign(context,{writeWindowsInstallerLog(){},appInstalled:()=>preparation!==undefined,windowsUpgradeCleanupIsComplete:()=>true,clearWindowsServiceUpgradeJournal:()=>true,
+  recoverWindowsServiceUpgradeJournalIfPresent:()=>true,isSelfHostedAutomaticUpdate:()=>true,
+  prepareWindowsMainServiceForUpgrade(){context.windowsMainServicePrepared=preparation;return preparation;},
+  windowsServiceConfigSnapshotFailureDetail:()=>'',windowsUpgradePrepareFailureMessage:()=>'',
+  releaseWindowsUpgradeAdminRights(){},
+  isDesktopAppProcessRunningMessageLoop(){closes++;context.desktopAppProcessRunning=true;},
+  restoreWindowsMainServiceAfterAbortedUpgrade(){restores++;return true;}});
+ vm.runInContext('new Controller()',context);
+ assert.strictEqual(closes,preparation?1:0);assert.strictEqual(restores,preparation?1:0);
+ assert.strictEqual(cancelled,preparation===undefined?0:1);assert.strictEqual(values.WindowsUpgradePreflight,preparation===undefined?'ready':'pending');
+}
+"""
+        subprocess.run([shutil.which("node"), "-e", harness,
+                        str(REPO_ROOT / "deploy/installer/qif/controlscript.js")],
+                       check=True, capture_output=True, text=True)
+        # Windows process creation must not quit the GUI; other platforms retain it.
+        launch = self.function_body("UpdateController::InstallerHandoffResult UpdateController::launchDownloadedArtifact", self.update_controller)
+        windows = launch.split("#if defined(Q_OS_WINDOWS)", 1)[1].split("#elif", 1)[0]
+        self.assertNotIn("scheduleDesktopQuitAfterInstallerStart", windows)
 
     def test_qif_cli_install_starts_service_before_reporting_success(self) -> None:
         create_body = self.function_body(

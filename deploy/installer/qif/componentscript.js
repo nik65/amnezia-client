@@ -176,6 +176,12 @@ Component.prototype.createOperations = function()
         throw new Error("Windows split-tunnel driver updates require the full offline AmneziaVPN installer.");
     }
 
+    if (runningOnWindows() && installer.isInstaller()
+            && installer.value("WindowsUpgradePreflight", "") !== "ready") {
+        installer.setCanceled();
+        throw new Error("Windows upgrade preparation did not complete. No files will be unpacked; resolve the reported preparation error before running the installer again.");
+    }
+
     // Close a running desktop client before the Unpack group replaces the
     // installed binaries: the framework runs this hook before any operation is
     // performed.  A non-running client is not an error; a client that cannot be
