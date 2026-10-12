@@ -60,6 +60,7 @@ private:
     void removeClient();
     void processFrames(QLocalSocket *client);
     QByteArray handleRequest(const Request &request, QLocalSocket *client);
+    QByteArray dispatchRequest(const Request &request, QLocalSocket *client);
     QByteArray statusResponse(const QString &requestId);
     QByteArray profileListResponse(const Request &request) const;
     QByteArray importProfileResponse(const Request &request);

@@ -3,6 +3,9 @@
 #endif
 
 #include "daemon.h"
+#include "diagnosticEvent.h"
+#include <QCoreApplication>
+#include <QJsonDocument>
 
 #include <QDir>
 #include <QDateTime>
@@ -153,6 +156,7 @@ bool Daemon::start(QString *error)
     }
     m_startPhase = StartPhase::LockOwned;
     const auto failStart = [this, error](const QString &message) {
+        diagnostics::failure("configuration", "StartupRejected", QStringLiteral("recovery_required"));
         m_instanceLock->unlock();
         m_instanceLock.reset();
         m_startPhase = StartPhase::NotStarted;
@@ -165,6 +169,7 @@ bool Daemon::start(QString *error)
         return failStart(QStringLiteral("managed routing state requires manual recovery"));
     }
     if (!m_profileStore.load()) {
+        diagnostics::failure("configuration", "ProfileStoreRejected", QStringLiteral("invalid_profile"));
         setError(error, m_profileStore.lastError());
         m_instanceLock->unlock();
         m_instanceLock.reset();
@@ -278,6 +283,11 @@ bool Daemon::start(QString *error)
 
     setError(error, {});
     m_startPhase = StartPhase::Listening;
+    diagnostics::emitEvent({{"source_kind", "service"}, {"event", "Started"},
+        {"result", "ok"}, {"version", QStringLiteral(AMNEZIA_HEADLESS_VERSION)},
+        {"protocol_schema", WireProtocolVersion}, {"profile_count", m_profileStore.profiles().size()},
+        {"state", diagnostics::safeState(m_state)},
+        {"sender_state", diagnostics::safeState(m_remoteLogUploader.status().value(QStringLiteral("state")).toString())}});
     m_updateTimer.start();
     m_healthTimer.start();
     m_migrationTimer.start();
@@ -458,6 +468,23 @@ void Daemon::processFrames(QLocalSocket *client)
 }
 
 QByteArray Daemon::handleRequest(const Request &request, QLocalSocket *client)
+{
+    const QByteArray response = dispatchRequest(request, client);
+    const QJsonObject object = QJsonDocument::fromJson(response).object();
+    const bool ok = object.value(QStringLiteral("ok")).toBool();
+    if (isMutatingCommand(request.command) || !ok) {
+        const QString code = ok ? QStringLiteral("None") : diagnostics::safeCode(
+                object.value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString());
+        diagnostics::emitEvent({{"source_kind", request.command == Command::UpdateRollback ? "updater" :
+                                request.command == Command::Import || request.command == Command::ImportRemoteLogs ? "configuration" : "service"},
+            {"event", "RpcResult"}, {"command", commandName(request.command)},
+            {"result", ok ? "ok" : "error"}, {"code", code},
+            {"state", diagnostics::safeState(m_state)}}, !ok);
+    }
+    return response;
+}
+
+QByteArray Daemon::dispatchRequest(const Request &request, QLocalSocket *client)
 {
     if (!authorizePrivilegedCommand(client, request)) {
         return encodeError(request.requestId, QStringLiteral("permission_denied"),

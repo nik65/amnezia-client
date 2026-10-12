@@ -1,4 +1,5 @@
 #include "vpnConnection.h"
+#include "logger.h"
 #include "core/utils/migrationTeardownContext.h"
 #include "core/utils/managedRouteMismatchDiagnostic.h"
 #include <QPointer>
@@ -1660,6 +1661,14 @@ void VpnConnection::reconcileManagedSplitTunnelRoutes(
     }
 
     const bool updated = updateResult == ManagedRouteUpdateResult::Updated;
+    Logger::configurationDiagnostic(
+            updated ? Logger::ConfigurationEvent::Applied
+                    : updateResult == ManagedRouteUpdateResult::ReconnectDeferred
+                              ? Logger::ConfigurationEvent::Deferred
+                              : Logger::ConfigurationEvent::Rejected,
+            static_cast<int>(ContainerUtils::defaultProtocol(m_container)), modeValue, normalizedDesiredNew.size(),
+            true); // Immutable snapshot validation is enabled; no private config is serialized.
+
     bool reconnectScheduled = updateResult == ManagedRouteUpdateResult::ReconnectDeferred;
     if (updated) {
         ++m_authoritativeManagedRouteBaseRevision;

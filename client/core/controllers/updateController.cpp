@@ -1,4 +1,5 @@
 #include "updateController.h"
+#include "core/utils/installerDiagnosticProjection.h"
 
 #include <QCryptographicHash>
 #include <QDate>
@@ -12,6 +13,7 @@
 #include <QProcessEnvironment>
 #include <QSaveFile>
 #include <QSet>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QSysInfo>
 #include <QVersionNumber>
@@ -22,6 +24,7 @@
 #include <QTimer>
 #include <QUuid>
 #include <QVector>
+#include <memory>
 
 #if defined(Q_OS_WINDOWS)
     #include <aclapi.h>
@@ -616,6 +619,31 @@ UpdateController::UpdateController(SecureAppSettingsRepository* appSettingsRepos
         refreshPendingUpdateHealth();
     }
     startBackgroundUpdateChecks();
+#if defined(Q_OS_WINDOWS)
+    // Import only the public projection, never the raw IFW journal. No installer
+    // or service action is performed by this diagnostic producer.
+    const auto journalStateFailed = std::make_shared<bool>(false);
+    auto importInstallerDiagnostics = [journalStateFailed]() {
+        QSettings settings;
+        const QString root = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+                + QStringLiteral("/AmneziaVPN-InstallerLogs");
+        const int imported = installerDiagnosticProjection::importDirectory(root, settings, QDateTime::currentDateTimeUtc(),
+            [](const QJsonObject &record) {
+                const QString safeEvent = QStringLiteral("AmneziaDiagnostics ")
+                        + QString::fromUtf8(QJsonDocument(record).toJson(QJsonDocument::Compact));
+                if (record.value("result").toString() == QStringLiteral("failure"))
+                    logger.warning() << safeEvent;
+                else logger.info() << safeEvent;
+            });
+        if (installerDiagnosticProjection::importFailureTransition(imported, *journalStateFailed))
+            logger.warning() << "AmneziaDiagnostics schema=1 source_kind=updater event=JournalDedupStateWriteFailed";
+    };
+    auto *installerDiagnosticTimer = new QTimer(this);
+    installerDiagnosticTimer->setInterval(60000);
+    connect(installerDiagnosticTimer, &QTimer::timeout, this, importInstallerDiagnostics);
+    installerDiagnosticTimer->start();
+    QTimer::singleShot(0, this, importInstallerDiagnostics);
+#endif
 }
 
 QString UpdateController::getRawChangelogText() const

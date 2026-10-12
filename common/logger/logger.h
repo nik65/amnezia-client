@@ -20,6 +20,13 @@ public:
     static void deInit();
     static bool isInitialized();
 
+    enum class ConfigurationEvent { Applied, Deferred, Rejected };
+    // No string/config arguments: callers can emit only bounded public metadata.
+    static void configurationDiagnostic(ConfigurationEvent event, int protocol,
+                                        int splitMode, qint64 ruleCount,
+                                        bool snapshotGuardEnabled);
+
+
     static bool setServiceLogsEnabled(bool enabled);
 
     static bool openLogsFolder(bool isServiceLogger);

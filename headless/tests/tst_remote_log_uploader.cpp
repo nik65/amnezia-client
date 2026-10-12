@@ -1,4 +1,5 @@
 #include "../remoteLogUploader.h"
+#include "../diagnosticEvent.h"
 
 #include <QDir>
 #include <QFile>
@@ -18,6 +19,17 @@ using amnezia::headless::HeadlessRemoteLogUploader;
 
 namespace
 {
+QStringList diagnosticMessages;
+void captureDiagnostics(QtMsgType, const QMessageLogContext &, const QString &message)
+{
+    if (message.startsWith(QStringLiteral("AmneziaDiagnostics"))) diagnosticMessages.append(message);
+}
+struct DiagnosticCapture {
+    QtMessageHandler previous;
+    DiagnosticCapture() : previous(qInstallMessageHandler(captureDiagnostics)) { diagnosticMessages.clear(); }
+    ~DiagnosticCapture() { qInstallMessageHandler(previous); }
+};
+
 class MockCollector final : public QTcpServer
 {
 public:
@@ -138,6 +150,7 @@ class RemoteLogUploaderTest final : public QObject
     Q_OBJECT
 
 private slots:
+    void errorTransitionIsPrivateAndDeduplicated();
     void receiptDoesNotAdvanceWhenStateCommitFails();
     void streamStateSurvivesRestartAndRedactsSecretSplitAcrossBatches();
     void replacementWithSamePrefixIsQuarantined();
@@ -147,6 +160,31 @@ private slots:
     void symlinkSourceIsRejected();
     void executableStateModeIsRejected();
 };
+
+void RemoteLogUploaderTest::errorTransitionIsPrivateAndDeduplicated()
+{
+    QTemporaryDir directory;
+    const QString path = directory.filePath("SECRET_CONFIG.json");
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("SECRET_INVALID_CONFIG");
+    file.close();
+    DiagnosticCapture capture;
+    amnezia::headless::diagnostics::failure("service", "RemoteLogError", "SECRET_TOKEN=https://SECRET_HOST");
+    QVERIFY(diagnosticMessages.last().contains("Other"));
+    QVERIFY(!diagnosticMessages.last().contains("SECRET"));
+    diagnosticMessages.clear();
+    HeadlessRemoteLogUploader uploader(path);
+    QString error;
+    QVERIFY(!uploader.load(&error));
+    QVERIFY(!uploader.load(&error));
+    QCOMPARE(diagnosticMessages.size(), 1); // Same error does not generate new source bytes.
+    QVERIFY(!diagnosticMessages.join(' ').contains("SECRET"));
+    const int count = diagnosticMessages.size();
+    uploader.poll();
+    uploader.poll();
+    QCOMPARE(diagnosticMessages.size(), count);
+}
 
 void RemoteLogUploaderTest::receiptDoesNotAdvanceWhenStateCommitFails()
 {

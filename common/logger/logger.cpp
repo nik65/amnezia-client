@@ -9,7 +9,6 @@
 #include <QStandardPaths>
 #include <QUrl>
 
-#include "core/utils/utilities.h"
 #include "version.h"
 
 #ifdef AMNEZIA_DESKTOP
@@ -31,23 +30,28 @@ void messageHandler(QtMsgType type, const QMessageLogContext &context, const QSt
         return;
     }
 
-    // Skip annoying messages from Qt
-    if (msg.contains("OpenType support missing for")) {
-        return;
-    }
-
-    if (msg.startsWith("Unknown property") || msg.startsWith("Could not create pixmap")
-        || msg.startsWith("Populating font") || msg.startsWith("stale focus object")) {
+    // Do not silently discard actionable QML/UI failures. These formerly
+    // suppressed families may contain private user paths or values, so persist
+    // only a stable category and severity rather than the original text.
+    const bool actionable = type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg;
+    QString safeMessage = msg;
+    if (actionable && msg.startsWith("Unknown property")) {
+        safeMessage = QStringLiteral("AmneziaDiagnostics schema=1 source_kind=application event=QmlUnknownProperty severity=%1").arg(type == QtWarningMsg ? "warning" : type == QtCriticalMsg ? "error" : "fatal");
+    } else if (actionable && msg.startsWith("Could not create pixmap")) {
+        safeMessage = QStringLiteral("AmneziaDiagnostics schema=1 source_kind=application event=QmlPixmapLoad severity=%1").arg(type == QtWarningMsg ? "warning" : type == QtCriticalMsg ? "error" : "fatal");
+    } else if (!actionable && (msg.contains("OpenType support missing for")
+               || msg.startsWith("Unknown property") || msg.startsWith("Could not create pixmap")
+               || msg.startsWith("Populating font") || msg.startsWith("stale focus object"))) {
         return;
     }
 
     switch (type) {
-    case QtDebugMsg: Logger::Instance().debug() << msg; break;
-    case QtInfoMsg: Logger::Instance().info() << msg; break;
-    case QtWarningMsg: Logger::Instance().warning() << msg; break;
-    case QtCriticalMsg: Logger::Instance().error() << msg; break;
+    case QtDebugMsg: Logger::Instance().debug() << safeMessage; break;
+    case QtInfoMsg: Logger::Instance().info() << safeMessage; break;
+    case QtWarningMsg: Logger::Instance().warning() << safeMessage; break;
+    case QtCriticalMsg: Logger::Instance().error() << safeMessage; break;
     case QtFatalMsg: {
-        Logger::Instance().error() << msg;
+        Logger::Instance().error() << safeMessage;
     } // Brackets are needed to ensure the destructor of LogStreamer is called before abort()
         abort();
     }
@@ -69,12 +73,13 @@ bool Logger::init(bool isServiceLogger)
     QString logFileName = isServiceLogger ? m_serviceLogFileName : m_logFileName;
     QDir appDir(path);
     if (!appDir.mkpath(path)) {
+        qWarning() << "AmneziaDiagnostics schema=1 source_kind=application event=LogSourceDirectoryFailed severity=warning writable=false";
         return false;
     }
 
     m_file.setFileName(appDir.filePath(logFileName));
     if (!m_file.open(QIODevice::Append)) {
-        qWarning() << "Cannot open log file:" << logFileName;
+        qWarning() << "AmneziaDiagnostics schema=1 source_kind=application event=LogSourceOpenFailed severity=warning writable=false";
         return false;
     }
 
@@ -82,6 +87,8 @@ bool Logger::init(bool isServiceLogger)
     m_textStream.setDevice(&m_file);
 
     qInstallMessageHandler(messageHandler);
+    qInfo().noquote() << QStringLiteral("AmneziaDiagnostics schema=1 source_kind=%1 event=LogSourceReady severity=info writable=true")
+            .arg(isServiceLogger ? QStringLiteral("service") : QStringLiteral("application"));
 
     return true;
 }
@@ -95,6 +102,24 @@ void Logger::deInit()
 bool Logger::isInitialized()
 {
     return m_file.isOpen();
+}
+
+void Logger::configurationDiagnostic(ConfigurationEvent event, int protocol,
+                                     int splitMode, qint64 ruleCount, bool snapshotGuardEnabled)
+{
+    const char *eventName = "ConfigurationUnknown";
+    switch (event) {
+    case ConfigurationEvent::Applied: eventName = "ConfigurationApplied"; break;
+    case ConfigurationEvent::Deferred: eventName = "ConfigurationDeferred"; break;
+    case ConfigurationEvent::Rejected: eventName = "ConfigurationRejected"; break;
+    }
+    // -1 is explicitly unknown, never wrap/truncate an out-of-range value.
+    const int safeProtocol = protocol >= 0 && protocol <= 255 ? protocol : -1;
+    const int safeMode = splitMode >= 0 && splitMode <= 2 ? splitMode : -1;
+    const qint64 safeCount = ruleCount >= 0 && ruleCount <= 1000000 ? ruleCount : -1;
+    qInfo().noquote() << QStringLiteral("AmneziaDiagnostics schema=1 source_kind=configuration event=%1 severity=info protocolCode=%2 splitMode=%3 ruleCount=%4 snapshotGuardEnabled=%5")
+            .arg(eventName).arg(safeProtocol).arg(safeMode).arg(safeCount)
+            .arg(snapshotGuardEnabled ? QStringLiteral("true") : QStringLiteral("false"));
 }
 
 bool Logger::setServiceLogsEnabled(bool enabled)

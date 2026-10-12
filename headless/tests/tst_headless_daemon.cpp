@@ -20,6 +20,17 @@ using namespace amnezia::headless;
 namespace
 {
 
+QStringList diagnosticMessages;
+void captureDiagnostics(QtMsgType, const QMessageLogContext &, const QString &message)
+{
+    if (message.startsWith(QStringLiteral("AmneziaDiagnostics"))) diagnosticMessages.append(message);
+}
+struct DiagnosticCapture {
+    QtMessageHandler previous;
+    DiagnosticCapture() : previous(qInstallMessageHandler(captureDiagnostics)) { diagnosticMessages.clear(); }
+    ~DiagnosticCapture() { qInstallMessageHandler(previous); }
+};
+
 class FakeCommandRunner final : public CommandRunner
 {
 public:
@@ -166,6 +177,29 @@ class HeadlessDaemonTest : public QObject
     Q_OBJECT
 
 private slots:
+    void invalidImportIsJournaledWithoutPrivateRequest()
+    {
+        QTemporaryDir directory;
+        auto runner = std::make_shared<FakeCommandRunner>();
+        Daemon daemon(directory.filePath("daemon.sock"), directory.filePath("profiles.json"), runner);
+        QVERIFY(daemon.start());
+        DiagnosticCapture capture;
+        QLocalSocket client;
+        client.connectToServer(daemon.socketPath());
+        QVERIFY(client.waitForConnected(1000));
+        sendRequest(client, {Command::Import, QStringLiteral("SECRET_REQUEST_ID"),
+                     {{QStringLiteral("privateKey"), QStringLiteral("SECRET_KEY")}}});
+        QTRY_COMPARE_WITH_TIMEOUT(daemon.processedRequestCount(), 1, 1000);
+        QVERIFY(!readResponse(client).object().value("ok").toBool());
+        QCOMPARE(diagnosticMessages.size(), 1);
+        QVERIFY(diagnosticMessages.first().contains("\"event\":\"RpcResult\""));
+        QVERIFY(diagnosticMessages.first().contains("\"result\":\"error\""));
+        QVERIFY(!diagnosticMessages.join(' ').contains("SECRET"));
+        sendRequest(client, {Command::Status, QStringLiteral("status"), {}});
+        QTRY_COMPARE_WITH_TIMEOUT(daemon.processedRequestCount(), 2, 1000);
+        readResponse(client);
+        QCOMPARE(diagnosticMessages.size(), 1); // Successful polling creates no source feedback.
+    }
     void statusRequestIsServedOverLocalSocket()
     {
         QTemporaryDir temporaryDirectory;

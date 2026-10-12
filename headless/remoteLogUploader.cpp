@@ -1,4 +1,5 @@
 #include "remoteLogUploader.h"
+#include "diagnosticEvent.h"
 
 #include <QCryptographicHash>
 #include <QCoreApplication>
@@ -135,6 +136,8 @@ QJsonObject HeadlessRemoteLogUploader::status() const
 
 void HeadlessRemoteLogUploader::setError(const QString &reason)
 {
+    if (m_state != State::Error || m_lastReason != reason)
+        diagnostics::failure("service", "RemoteLogError", reason);
     m_state = State::Error;
     m_lastReason = reason;
 }
