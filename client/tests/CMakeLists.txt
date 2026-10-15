@@ -23,6 +23,7 @@ endforeach()
 if(WIN32)
     add_subdirectory(windows_privileged_pipe_reuse)
     add_subdirectory(windows_split_tunnel_policy)
+    add_subdirectory(windows_tunnel_service_lifecycle)
 endif()
 
 add_subdirectory(bounded_queued_snapshot)
