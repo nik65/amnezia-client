@@ -26,7 +26,7 @@ METHOD = '''    def observe_windows_payload(self, run_id, case_id, stage_name, a
         installed_payload.validate(value, run_id=run_id, case_id=case_id, vm_id=vm_id,
             parent_sha256=parent_sha256, artifact=artifact, role=role, version=version, nonce=nonce,
             files=self._installed_payload_plan["artifacts"][artifact["sha256"]]["files"])
-        export = self.root / "exports" / run_id / "windows-x64" / case_id / (stage_name + "-installed-payload.json")
+        export = self.root / "exports" / run_id / "windows-x64" / case_id / (stage_name + "-" + nonce + "-installed-payload.json")
         if export.exists():
             raise LabError("installed payload observation already archived; use fresh case/run")
         immutable_json_dump(export, value)
@@ -178,7 +178,7 @@ def prepare(source, output, input_manifest, input_manifest_sha256):
         data = paths[key].read_bytes()
         if dict(sha256=hashlib.sha256(data).hexdigest(), size=len(data)) != records[key]:
             raise ValueError('input drift while transforming: ' + key)
-        return data.decode('utf-8-sig')
+        return data.decode('utf-8-sig').replace('\r\n', '\n').replace('\r', '\n')
     generated = {
         'deploy/release_lab/lab.py': patch_controller(verified_text('source:deploy/release_lab/lab.py')).encode('utf-8'),
         'deploy/release_lab/windows_host/hyperv_adapter.ps1': patch_adapter(

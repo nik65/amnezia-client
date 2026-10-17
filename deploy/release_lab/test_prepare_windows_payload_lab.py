@@ -109,3 +109,68 @@ def test_malformed_manifest_refused_before_output(inputs, mutation):
     sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
     with pytest.raises(ValueError): generator.prepare(source, output, manifest, sha)
     assert not output.exists()
+
+
+
+def test_repeated_stage_archives_distinct_nonces_and_refuses_same_identity(tmp_path):
+    from types import SimpleNamespace
+    nonces = iter(['a' * 48, 'b' * 48, 'a' * 48])
+    def immutable_json_dump(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('x') as stream:
+            json.dump(value, stream)
+    namespace = dict(secrets=SimpleNamespace(token_hex=lambda count: next(nonces)),
+        installed_payload=SimpleNamespace(validate=lambda *args, **kwargs: None),
+        immutable_json_dump=immutable_json_dump, LabError=ValueError)
+    exec('class Observer:\n' + generator.METHOD, namespace)
+    observer = namespace['Observer']()
+    observer.root = tmp_path
+    observer._installed_payload_plan = {'artifacts': {'c' * 64: {'files': {}}}}
+    observer._installed_payload_plan_sha256 = 'd' * 64
+    checkpoint = {'profiles': {'windows-x64': {}}}
+    observer.hyperv_call = lambda *args, **kwargs: {'nonce': kwargs['AttemptNonce']}
+    observer.get_run = lambda run: checkpoint
+    observer.load_state = lambda: {'runs': {}}
+    observer.save_state = lambda state: None
+    args = ('run', 'thin-reinstall', 'candidate-thin', {'sha256': 'c' * 64, 'size': 10},
+            'candidate', '5.0.3.11', 'vm', 'e' * 64)
+    observer.observe_windows_payload(*args)
+    observer.observe_windows_payload(*args)
+    observations = checkpoint['profiles']['windows-x64']['installed_payload_observations']
+    assert len(observations) == 2
+    archives = [Path(item['archive']) for item in observations]
+    assert archives[0] != archives[1]
+    before = {path: path.read_bytes() for path in archives}
+    for path, nonce in zip(archives, ['a' * 48, 'b' * 48]):
+        assert path.name == 'candidate-thin-' + nonce + '-installed-payload.json'
+        assert json.loads(path.read_text())['nonce'] == nonce
+    with pytest.raises(ValueError, match='already archived'):
+        observer.observe_windows_payload(*args)
+    assert {path: path.read_bytes() for path in archives} == before
+    assert len(observations) == 2
+
+
+
+def test_crlf_inputs_verified_as_raw_bytes_then_normalized_for_transform(inputs, monkeypatch):
+    source, files, manifest, sha, output = inputs
+    keys = ['source:deploy/release_lab/lab.py',
+            'source:deploy/release_lab/windows_host/hyperv_adapter.ps1',
+            'overlay:windows_host/installed_payload_action.ps1']
+    for key in keys:
+        files[key].write_bytes(b'first\r\nsecond\r\n')
+    value = json.loads(manifest.read_text())
+    value['files'] = {key: generator.file_record(path) for key, path in files.items()}
+    manifest.write_text(json.dumps(value))
+    sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    monkeypatch.setattr(generator, 'BASE_CONTROLLER_SHA', value['files'][keys[0]]['sha256'])
+    monkeypatch.setattr(generator, 'BASE_ADAPTER_SHA', value['files'][keys[1]]['sha256'])
+    def transform(text):
+        assert text == 'first\nsecond\n'
+        return text
+    monkeypatch.setattr(generator, 'patch_controller', transform)
+    monkeypatch.setattr(generator, 'patch_adapter', lambda text, action: transform(text) + transform(action))
+    result, _ = generator.prepare(source, output, manifest, sha)
+    assert result.exists()
+    for key in keys:
+        assert files[key].read_bytes() == b'first\r\nsecond\r\n'
+    assert (output / 'deploy/release_lab/lab.py').read_bytes() == b'first\nsecond\n'
