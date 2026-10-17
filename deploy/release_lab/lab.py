@@ -295,6 +295,49 @@ def validate_publication_evidence(
         raise LabError("publication evidence archive does not bind the controller evidence")
 
 
+def probe_kvm_readiness() -> dict[str, Any]:
+    """Check this caller's KVM API access without creating a VM."""
+    result: dict[str, Any] = {"ready": False, "path": "/dev/kvm", "stage": "platform"}
+    if fcntl is None:
+        result["reason"] = "kvm_ioctl_unavailable"
+        return result
+    if not all(isinstance(getattr(os, name, None), int) and getattr(os, name) != 0
+               for name in ("O_CLOEXEC", "O_NOFOLLOW")):
+        result["reason"] = "kvm_required_open_flags_unavailable"
+        return result
+    result.update(uid=getattr(os, "geteuid", lambda: None)(),
+                  gid=getattr(os, "getegid", lambda: None)(), open_mode="O_RDWR")
+    fd = None
+    try:
+        result["stage"] = "open"
+        flags = os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW
+        fd = os.open("/dev/kvm", flags)
+        result["stage"] = "fstat"
+        if not stat.S_ISCHR(os.fstat(fd).st_mode):
+            result["reason"] = "kvm_not_character_device"
+        else:
+            result["stage"] = "ioctl"
+            api = fcntl.ioctl(fd, 0xAE00, 0)  # KVM_GET_API_VERSION only.
+            result["api_version"] = api if type(api) is int else None
+            result["ready"] = type(api) is int and api == 12
+            result["reason"] = "kvm_api_access_ready" if result["ready"] else "kvm_api_version_mismatch"
+    except OSError as exc:
+        result.update(ready=False, reason="kvm_api_access_failed", errno=exc.errno)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError as exc:
+                result.update(ready=False, stage="close", reason="kvm_close_failed", errno=exc.errno)
+    return result
+
+
+def require_kvm_readiness() -> None:
+    readiness = probe_kvm_readiness()
+    if not readiness.get("ready"):
+        raise LabError("KVM API access unavailable: " + json.dumps(readiness, sort_keys=True))
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -878,6 +921,34 @@ def artifact_record(path: Path) -> dict[str, Any]:
     return {"path": str(path), "sha256": digest, "size": size}
 
 
+def _safe_failure_metadata(value: Any) -> str:
+    """Return bounded metadata for a process/QGA value without its contents."""
+    if isinstance(value, bytes):
+        return str(len(value))
+    if isinstance(value, str):
+        return str(len(value.encode("utf-8", errors="replace")))
+    return "0"
+
+
+def _safe_qga_response_metadata(response: Any) -> str:
+    """Describe a QGA response without copying guest payloads into errors."""
+    if not isinstance(response, Mapping):
+        return "response_type=invalid"
+    return (
+        f"response_has_return={'return' in response};"
+        f"response_has_error={'error' in response}"
+    )
+
+
+def _safe_process_metadata(result: Any) -> str:
+    """Describe a completed process without copying stdout/stderr."""
+    return (
+        f"exit_code={getattr(result, 'returncode', 'unknown')};"
+        f"stdout_bytes={_safe_failure_metadata(getattr(result, 'stdout', None))};"
+        f"stderr_bytes={_safe_failure_metadata(getattr(result, 'stderr', None))}"
+    )
+
+
 def validate_signed_manifest(path: Path, public_key: Path, *, version: str, artifacts: Mapping[str, Mapping[str, Any]]) -> None:
     if not path.is_file() or path.is_symlink() or not public_key.is_file() or public_key.is_symlink():
         raise LabError("signed manifest/public key must be regular files")
@@ -910,7 +981,11 @@ def validate_signed_manifest(path: Path, public_key: Path, *, version: str, arti
         payload_file.write_bytes(payload_bytes); sig_file.write_bytes(signature)
         result = subprocess.run([resolve_host_executable("openssl"), "pkeyutl", "-verify", "-rawin", "-pubin", "-inkey", str(public_key), "-in", str(payload_file), "-sigfile", str(sig_file)], shell=False, text=True, capture_output=True)
         if result.returncode != 0:
-            raise LabError(f"signed manifest Ed25519 verification failed: {result.stderr[-500:]}")
+            raise LabError(
+                "signed manifest Ed25519 verification failed "
+                f"(exit_code={result.returncode}; "
+                f"stderr_bytes={_safe_failure_metadata(result.stderr)})"
+            )
 
 
 def headless_runner_inputs(manifest_path: Path, public_key_path: Path, receipt_path: Path, artifact: Mapping[str, Any], expected_version: str) -> dict[str, str]:
@@ -1085,7 +1160,7 @@ def wait_owned_process_exit(pid: int, expected_start_time: str, label: str, time
 
 def require_qmp_return(result: Mapping[str, Any], operation: str) -> Mapping[str, Any]:
     if "return" not in result:
-        raise LabError(f"QMP {operation} failed: {result}")
+        raise LabError(f"QMP {operation} failed ({_safe_qga_response_metadata(result)})")
     return result
 
 
@@ -1188,7 +1263,10 @@ class QgaClient:
     def guest_exec(self, executable: str, args: Sequence[str]) -> dict[str, Any]:
         result = self.request("guest-exec", {"path": executable, "arg": list(args), "capture-output": True})
         if "return" not in result or not isinstance(result["return"], dict):
-            raise LabError(f"guest-exec failed for {executable}: {result}")
+            raise LabError(
+                f"guest-exec failed for {executable} "
+                f"({_safe_qga_response_metadata(result)})"
+            )
         return result["return"]
 
     def guest_exec_wait(self, executable: str, args: Sequence[str], timeout: float = 120.0) -> dict[str, Any]:
@@ -1203,7 +1281,12 @@ class QgaClient:
             payload = result.get("return", {})
             if payload.get("exited") is True:
                 if payload.get("exitcode") != 0:
-                    raise LabError(f"guest step exited with {payload.get('exitcode')}: {payload}")
+                    raise LabError(
+                        "guest step exited "
+                        f"(exit_code={payload.get('exitcode')}; "
+                        f"stdout_bytes={_safe_failure_metadata(payload.get('out-data'))}; "
+                        f"stderr_bytes={_safe_failure_metadata(payload.get('err-data'))})"
+                    )
                 output = ""
                 if payload.get("out-data"):
                     output = base64.b64decode(payload["out-data"]).decode("utf-8", errors="replace")
@@ -1215,7 +1298,7 @@ class QgaClient:
         opened = self.request("guest-file-open", {"path": path, "mode": "r"})
         handle = opened.get("return")
         if not isinstance(handle, int):
-            raise LabError(f"guest-file-open failed: {opened}")
+            raise LabError(f"guest-file-open failed ({_safe_qga_response_metadata(opened)})")
         try:
             chunks: list[bytes] = []
             while True:
@@ -1240,7 +1323,7 @@ class QgaClient:
             opened = self._request_on_connection(conn, "guest-file-open", {"path": path, "mode": "w"})
             handle = opened.get("return")
             if not isinstance(handle, int) or isinstance(handle, bool):
-                raise LabError(f"guest-file-open for write failed: {opened}")
+                raise LabError(f"guest-file-open for write failed ({_safe_qga_response_metadata(opened)})")
             try:
                 # Keep the base64-expanded QGA JSON request below the proven
                 # guest-agent frame limit. Reusing one connection avoids a
@@ -1253,14 +1336,18 @@ class QgaClient:
                     )
                     written = result.get("return", {}).get("count") if isinstance(result.get("return"), Mapping) else None
                     if not isinstance(written, int) or isinstance(written, bool) or written != len(chunk):
-                        raise LabError(f"guest-file-write returned a short or invalid count: {result}")
+                        raise LabError(
+                            "guest-file-write returned a short or invalid count "
+                            f"(expected_bytes={len(chunk)}; written={written}; "
+                            f"{_safe_qga_response_metadata(result)})"
+                        )
                 flushed = self._request_on_connection(conn, "guest-file-flush", {"handle": handle})
                 if "return" not in flushed:
-                    raise LabError(f"guest-file-flush failed: {flushed}")
+                    raise LabError(f"guest-file-flush failed ({_safe_qga_response_metadata(flushed)})")
             finally:
                 closed = self._request_on_connection(conn, "guest-file-close", {"handle": handle})
                 if "return" not in closed:
-                    raise LabError(f"guest-file-close failed: {closed}")
+                    raise LabError(f"guest-file-close failed ({_safe_qga_response_metadata(closed)})")
 
     def write_file_from_path(self, path: str, source: Path, expected_sha256: str, expected_size: int,
                              *, deadline: float, max_size: int) -> None:
@@ -1276,7 +1363,7 @@ class QgaClient:
         with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as conn:
             conn.settimeout(remaining());conn.connect(str(self.socket_path));self._sync_connection(conn);conn.settimeout(remaining())
             opened=self._request_on_connection(conn,"guest-file-open",{"path":path,"mode":"w"});handle=opened.get("return")
-            if not isinstance(handle,int) or isinstance(handle,bool):raise LabError(f"guest-file-open for streaming failed: {opened}")
+            if not isinstance(handle,int) or isinstance(handle,bool):raise LabError(f"guest-file-open for streaming failed ({_safe_qga_response_metadata(opened)})")
             primary=None
             try:
                 with source.open("rb") as stream:
@@ -1289,13 +1376,13 @@ class QgaClient:
                         if isinstance(written,bool) or written!=len(chunk):raise LabError("guest streaming write returned a short count")
                 if total!=expected_size or digest.hexdigest()!=expected_sha256:raise LabError("local fixture bytes changed during streaming")
                 conn.settimeout(remaining());flushed=self._request_on_connection(conn,"guest-file-flush",{"handle":handle})
-                if "return" not in flushed:raise LabError(f"guest-file-flush failed: {flushed}")
+                if "return" not in flushed:raise LabError(f"guest-file-flush failed ({_safe_qga_response_metadata(flushed)})")
             except BaseException as exc:primary=exc;raise
             finally:
                 try:
                     conn.settimeout(max(.1,min(5.0,max(0.1,deadline-time.monotonic()))))
                     closed=self._request_on_connection(conn,"guest-file-close",{"handle":handle})
-                    if "return" not in closed:raise LabError(f"guest-file-close failed: {closed}")
+                    if "return" not in closed:raise LabError(f"guest-file-close failed ({_safe_qga_response_metadata(closed)})")
                 except BaseException as close_error:
                     if primary is None:raise
                     if hasattr(primary,"add_note"):primary.add_note(f"guest-file-close also failed: {close_error!r}")
@@ -1463,8 +1550,7 @@ class LabController:
         stdout = result.stdout.decode("utf-8-sig", errors="replace")
         stderr = result.stderr.decode("utf-8-sig", errors="replace")
         if result.returncode != 0:
-            detail = (stderr or stdout)[-1500:]
-            raise LabError(f"Hyper-V adapter {action} failed: {detail}")
+            raise LabError(f"Hyper-V adapter {action} failed ({_safe_process_metadata(result)})")
         try:
             value = json.loads(stdout)
         except json.JSONDecodeError as exc:
@@ -1520,7 +1606,7 @@ class LabController:
             except LabError as exc:
                 qemu_checks[executable] = {"ready": False, "reason": str(exc)}
         checks["host_executables"] = qemu_checks
-        checks["kvm"] = {"ready": Path("/dev/kvm").exists(), "path": "/dev/kvm"}
+        checks["kvm"] = probe_kvm_readiness()
         checks["state_root"] = {"ready": self.root.is_dir() or not self.dry_run, "path": str(self.root)}
         pending_intents: list[str] = []
         runs_root = self.root / "runs"
@@ -1573,7 +1659,7 @@ class LabController:
         checks["guest_runners"] = runner_checks
         server_profile = profiles_root() / "server-router.env"
         checks["lab_server_profile"] = {"ready": server_profile.is_file(), "path": str(server_profile), "role": "isolated-test-server-router"}
-        qemu_required = any(profile_id != "windows-x64" for profile_id in selected)
+        qemu_required = any(profile_id != "windows-x64" or self.windows_backend != "hyperv" for profile_id in selected)
         ready = (
             checks["identity"].get("ready", False)
             and checks["profiles"].get("ready", False)
@@ -1670,6 +1756,17 @@ class LabController:
             "baseline": artifact_record(headless_baseline_receipt),
             "candidate": artifact_record(headless_candidate_receipt),
         } if headless_baseline_receipt and headless_candidate_receipt else None
+        expected_profiles = []
+        for artifact_id in records:
+            mapped = "linux-x64-gui" if artifact_id == "linux-x64" else artifact_id
+            if mapped in profiles and mapped in AUTOMATED_PROFILE_IDS:
+                expected_profiles.append(mapped)
+        if lane == "release":
+            expected_profiles = list(AUTOMATED_PROFILE_IDS)
+        elif lane == "publisher-diagnostic":
+            expected_profiles = ["windows-x64"]
+        # Admission records immutable metadata only. Capability is checked by
+        # preflight and again before start creates any QEMU resources.
         run_id = run_id or f"run-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
         run_dir = ensure_owned_child(self.root, self.root / "runs" / run_id, "run directory")
         if run_dir.exists():
@@ -1683,15 +1780,6 @@ class LabController:
                 (profile_dir / ".owned-overlay.json").write_text(json.dumps({"run_id": run_id, "profile": profile_id, "overlay": str(overlay)}, sort_keys=True) + "\n", encoding="utf-8")
         state = self.load_state()
         state["lab_id"] = state.get("lab_id") or f"lab-{uuid.uuid4().hex}"
-        expected_profiles = []
-        for artifact_id in records:
-            mapped = "linux-x64-gui" if artifact_id == "linux-x64" else artifact_id
-            if mapped in profiles and mapped in AUTOMATED_PROFILE_IDS:
-                expected_profiles.append(mapped)
-        if lane == "release":
-            expected_profiles = list(AUTOMATED_PROFILE_IDS)
-        elif lane == "publisher-diagnostic":
-            expected_profiles = ["windows-x64"]
         state.setdefault("runs", {})[run_id] = {
             "run_id": run_id, "lane": lane, "dry_run": self.dry_run, "test_mode": self.test_mode,
             "created_at": utc_now(), "artifacts": records, "baseline_artifacts": baseline_records, "outer_artifact": outer, "baseline_outer_artifact": baseline_outer_record,
@@ -1940,6 +2028,7 @@ class LabController:
             run["profiles"][profile_id].update(status="started", vm=vm)
             state = self.load_state(); state["runs"][run_id] = run; self.save_state(state)
             return vm
+        require_kvm_readiness()
         # Resolve an interrupted prior launch before inspecting/reusing its
         # overlay.  This either adopts the exact live QEMU or removes only
         # marker-owned stale resources.
@@ -1961,7 +2050,7 @@ class LabController:
             raise LabError(f"owned overlay already exists; reset run before retry: {overlay}")
         img = run_host(("qemu-img", "create", "-f", "qcow2", "-F", "qcow2", "-b", str(base), str(overlay)))
         if img.returncode != 0:
-            raise LabError(f"qemu-img failed: {img.stderr[-1000:]}")
+            raise LabError(f"qemu-img failed ({_safe_process_metadata(img)})")
         vm_uuid = str(uuid.uuid4())
         disk_args = ("-drive", f"file={overlay},if=ide,format=qcow2") if profile.get("backend") == "qemu-windows" else ("-drive", f"file={overlay},if=virtio,format=qcow2")
         display_args = ("-vnc", f"unix:{vnc}") if profile.get("display") == "vnc-unix" else ("-nographic",)
@@ -2180,7 +2269,7 @@ class LabController:
         if command == "start":
             create_result = subprocess.run(base_command + ["create"], cwd=str(repo_root()), env=env, shell=False, text=False, capture_output=True, timeout=900, start_new_session=True)
             if create_result.returncode != 0:
-                raise LabError(f"Android adapter create failed: {create_result.stderr.decode('utf-8-sig', errors='replace')[-1500:]}")
+                raise LabError(f"Android adapter create failed ({_safe_process_metadata(create_result)})")
             command_outputs.append(create_result.stdout.decode('utf-8-sig', errors='replace'))
         if native_windows and command == "start":
             adapter_work = adapter_root / "work"
@@ -2203,8 +2292,8 @@ class LabController:
                             native_result = candidate
                             break
                     if process.poll() is not None and process.returncode != 0:
-                        error_text = start_stderr_path.read_text(encoding="utf-8", errors="replace")[-1500:]
-                        raise LabError(f"Android adapter start failed: {error_text}")
+                        error_size = start_stderr_path.stat().st_size if start_stderr_path.is_file() else 0
+                        raise LabError(f"Android adapter start failed (exit_code={process.returncode}; stderr_bytes={error_size})")
                     time.sleep(1)
                 if native_result is None:
                     raise LabError("Android adapter start timed out waiting for the owned native run marker; preserving owned state")
@@ -2214,7 +2303,7 @@ class LabController:
             native_command = [command, "-Arguments", *action_args] if native_windows and action_args else [command, *action_args]
             result = subprocess.run(base_command + native_command, cwd=str(repo_root()), env=env, shell=False, text=False, capture_output=True, timeout=900, start_new_session=True)
             if result.returncode != 0:
-                raise LabError(f"Android adapter {command} failed: {result.stderr.decode('utf-8-sig', errors='replace')[-1500:]}")
+                raise LabError(f"Android adapter {command} failed ({_safe_process_metadata(result)})")
         run = self.get_run(run_id)
         if not native_windows or command != "start":
             result_stdout = result.stdout.decode('utf-8-sig', errors='replace')
@@ -3198,6 +3287,33 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                 return {"run_id": run_id, "profile": profile_id, "case_id": case_id, "diagnostic": diagnostic, "release_passed": False}
             case_id = (run.get("profiles", {}).get(profile_id, {}).get("last_case_id") or (run.get("profiles", {}).get(profile_id, {}).get("vm") or {}).get("case_id") or "control")
             archived = next((item for item in (run.get("profiles", {}).get(profile_id, {}).get("case_receipts") or []) if item.get("case_id") == case_id), None)
+            if case_id == "outer-interactive":
+                profile_state = run["profiles"][profile_id]
+                interactive = profile_state.get("interactive_receipt")
+                if not isinstance(interactive, dict):
+                    raise LabError("Hyper-V collect has no archived interactive guest receipt")
+                receipt = copy.deepcopy(interactive)
+                validate_receipt(receipt, run_id=run_id, profile_id=profile_id, artifact=run.get("outer_artifact"), case_id=case_id, baseline_version=str(run["baseline_version"]), candidate_version=str(run["candidate_version"]), expected_role="candidate")
+                app_window = receipt.get("installed_app_window")
+                vm_id, parent_sha256 = _hyperv_guest_binding(app_window if isinstance(app_window, Mapping) else {}, label="interactive app window")
+                case_state = (profile_state.get("hyperv_cases") or {}).get(case_id) or {}
+                reset = case_state.get("reset_result") or {}
+                if (case_state.get("state") != "reset" or case_state.get("vm_id") != vm_id
+                        or case_state.get("parent_sha256") != parent_sha256
+                        or reset.get("run_id") != run_id or reset.get("removed_child") is not True
+                        or reset.get("parent_sha256_before") != parent_sha256
+                        or reset.get("parent_sha256_after") != parent_sha256):
+                    raise LabError("Hyper-V collect interactive guest binding lacks matching cleanup proof")
+                matrix = build_hyperv_matrix_aggregation(run, profile_state, self.root)
+                profile_state.update(
+                    status="evidence-collected", evidence=receipt, matrix_aggregation=matrix,
+                    controller_evidence={
+                        "hyperv_binding": {"vm_id": vm_id, "case_id": case_id, "parent_sha256": parent_sha256, "transport": HYPERV_TRANSPORT, "archived": True},
+                        "interactive_verified": True, "interactive_receipt": copy.deepcopy(interactive),
+                    },
+                )
+                state = self.load_state(); state["runs"][run_id] = run; self.save_state(state)
+                return receipt
             if not isinstance(archived, dict) or not isinstance(archived.get("service_health"), dict):
                 raise LabError("Hyper-V collect has no archived guest receipt for the final case")
             receipt = copy.deepcopy(archived["service_health"])
@@ -4738,6 +4854,18 @@ def build_parser() -> argparse.ArgumentParser:
     fixture.add_argument("--artifact", required=True)
     fixture_stop = sub.add_parser("fixture-stop")
     fixture_stop.add_argument("--run-id", required=True)
+    gui_compose = sub.add_parser("awg-gui-compose")
+    gui_compose.add_argument("--seed-bundle", required=True)
+    gui_compose.add_argument("--destination", required=True)
+    gui_compose.add_argument("--service-source", required=True)
+    gui_migration = sub.add_parser("awg-gui-run")
+    gui_migration.add_argument("--run-id", required=True)
+    gui_migration.add_argument("--bundle", required=True)
+    gui_migration.add_argument("--output", required=True)
+    gui_migration.add_argument("--ifw-devtool", required=True)
+    gui_migration.add_argument("--ifw-devtool-sha256", required=True)
+    gui_migration.add_argument("--seven-zip", required=True)
+    gui_migration.add_argument("--seven-zip-sha256", required=True)
     relay_plan = sub.add_parser("relay-smoke-plan")
     relay_plan.add_argument("--run-id", required=True)
     relay_plan.add_argument("--case-id", required=True)
@@ -4757,7 +4885,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     controller = LabController(state_root_from(args.state_root), dry_run=args.dry_run, windows_backend=args.windows_backend, android_backend=args.android_backend)
-    mutating_commands = {"plan", "create", "start", "guest-probe", "run", "collect", "nested-android-probe", "run-suite", "reset", "gate", "server-observe", "fixture-start", "fixture-stop", "publish-validation"}
+    mutating_commands = {"plan", "create", "start", "guest-probe", "run", "collect", "nested-android-probe", "run-suite", "reset", "gate", "server-observe", "fixture-start", "fixture-stop", "publish-validation", "awg-gui-run"}
     mutation_lock_held = False
     try:
         if args.command in mutating_commands:
@@ -4779,6 +4907,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "server-observe": result = controller.observe_server(args.run_id, args.ssh_host_key_pin)
         elif args.command == "fixture-start": result = controller.start_consumer_fixture(args.run_id, Path(args.manifest).resolve(), Path(args.artifact).resolve())
         elif args.command == "fixture-stop": result = controller.stop_consumer_fixture(args.run_id)
+        elif args.command == "awg-gui-compose":
+            if args.dry_run:
+                raise LabError("GUI fixture composition needs a fresh concrete output; dry-run writes nothing")
+            try:
+                from . import awg_migration_gui as gui_scenario
+            except ImportError:
+                sys.path.insert(0, str(repo_root()))
+                from deploy.release_lab import awg_migration_gui as gui_scenario
+            try:
+                result = gui_scenario.compose_bundle(Path(args.seed_bundle), Path(args.destination), Path(args.service_source))
+            except gui_scenario.LabError as exc:
+                raise LabError(str(exc)) from exc
+        elif args.command == "awg-gui-run":
+            try:
+                from . import awg_migration_gui as gui_scenario
+            except ImportError:
+                sys.path.insert(0, str(repo_root()))
+                from deploy.release_lab import awg_migration_gui as gui_scenario
+            try:
+                result = gui_scenario.run(controller, args.run_id, Path(args.bundle), Path(args.output),
+                    devtool=Path(args.ifw_devtool), devtool_sha256=args.ifw_devtool_sha256,
+                    seven_zip=Path(args.seven_zip), seven_zip_sha256=args.seven_zip_sha256)
+            except gui_scenario.LabError as exc:
+                raise LabError(str(exc)) from exc
         elif args.command == "relay-smoke-plan":
             try:
                 from relay_smoke_controller import build_plan

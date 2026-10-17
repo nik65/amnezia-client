@@ -1,3 +1,4 @@
+import base64
 import json
 import ast
 import os
@@ -11,9 +12,9 @@ from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 try:
-    from .lab import ANDROID_SANDBOX_DISABLED_REASON, AUTOMATED_PROFILE_IDS, SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, build_hyperv_matrix_aggregation, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
+    from .lab import ANDROID_SANDBOX_DISABLED_REASON, AUTOMATED_PROFILE_IDS, SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, build_hyperv_matrix_aggregation, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, validate_signed_manifest, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
 except ImportError:  # direct invocation from this directory
-    from lab import ANDROID_SANDBOX_DISABLED_REASON, AUTOMATED_PROFILE_IDS, SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, build_hyperv_matrix_aggregation, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
+    from lab import ANDROID_SANDBOX_DISABLED_REASON, AUTOMATED_PROFILE_IDS, SEMANTIC_HELPER_RELATIVES, LabController, LabError, QgaClient, QmpClient, android_attempt_matches_fixture, artifact_record, artifact_role_for_stage, build_hyperv_matrix_aggregation, ensure_owned_child, golden_readiness, headless_runner_inputs, load_profiles, proc_start_time, proc_start_time_from_stat, proc_state_from_stat, require_qmp_return, sha256_file, sha256_tree, state_root_from, validate_linux_receipt_incarnation, validate_publication_evidence, validate_receipt, validate_semantic_helper_records, validate_android_vulkan_records, validate_signed_manifest, wait_owned_process_exit, windows_case_specs, wsl_path_for_windows_host
 
 
 try:
@@ -82,6 +83,88 @@ class ReleaseLabContractTests(unittest.TestCase):
              patch.object(QgaClient, "_request_on_connection", side_effect=short):
             with self.assertRaisesRegex(LabError, "short or invalid count"):
                 client.write_file("/tmp/value", b"data")
+
+    def test_failure_diagnostics_hide_process_and_guest_payloads(self):
+        secret_stderr = "password=fixture-secret token=fixture-token"
+        secret_guest_stdout = "PRIVATE_KEY=fixture-private-key"
+        secret_guest_stderr = "Authorization: Bearer fixture-bearer"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "candidate.exe"
+            artifact.write_bytes(b"candidate")
+            manifest, public_key = write_signed_manifest(
+                root, artifact, "5.0.3.5", "windows-x64"
+            )
+            failed_openssl = type(
+                "FailedOpenSSL", (), {"returncode": 2, "stderr": secret_stderr}
+            )()
+            with patch("release_lab.lab.subprocess.run", return_value=failed_openssl):
+                with self.assertRaises(LabError) as openssl_error:
+                    validate_signed_manifest(
+                        manifest,
+                        public_key,
+                        version="5.0.3.5",
+                        artifacts={"windows-x64": artifact_record(artifact)},
+                    )
+            openssl_message = str(openssl_error.exception)
+            self.assertIn("signed manifest Ed25519 verification failed", openssl_message)
+            self.assertIn("exit_code=2", openssl_message)
+            self.assertIn(f"stderr_bytes={len(secret_stderr.encode('utf-8'))}", openssl_message)
+            self.assertNotIn(secret_stderr, openssl_message)
+
+        client = QgaClient(Path("/owned/qga.sock"))
+        with patch.object(
+            client,
+            "request",
+            return_value={"error": {"message": secret_stderr}},
+        ):
+            with self.assertRaises(LabError) as guest_start_error:
+                client.guest_exec("/bin/fixture", [secret_guest_stdout])
+        guest_start_message = str(guest_start_error.exception)
+        self.assertIn("guest-exec failed for /bin/fixture", guest_start_message)
+        self.assertIn("response_has_error=True", guest_start_message)
+        self.assertNotIn(secret_stderr, guest_start_message)
+        self.assertNotIn(secret_guest_stdout, guest_start_message)
+
+        with patch.object(
+            client,
+            "request",
+            return_value={"error": {"message": secret_guest_stderr}},
+        ):
+            with self.assertRaises(LabError) as guest_file_error:
+                client.read_file("/guest/private")
+        guest_file_message = str(guest_file_error.exception)
+        self.assertIn("guest-file-open failed", guest_file_message)
+        self.assertIn("response_has_error=True", guest_file_message)
+        self.assertNotIn(secret_guest_stderr, guest_file_message)
+
+        encoded_stdout = base64.b64encode(secret_guest_stdout.encode()).decode()
+        encoded_stderr = base64.b64encode(secret_guest_stderr.encode()).decode()
+        with patch.object(client, "guest_exec", return_value={"pid": 17}), \
+             patch.object(
+                 client,
+                 "request",
+                 return_value={
+                     "return": {
+                         "exited": True,
+                         "exitcode": 23,
+                         "out-data": encoded_stdout,
+                         "err-data": encoded_stderr,
+                     }
+                 },
+             ), \
+             patch("release_lab.lab.time.monotonic", return_value=0):
+            with self.assertRaises(LabError) as guest_exit_error:
+                client.guest_exec_wait("/bin/fixture", [], timeout=1)
+        guest_exit_message = str(guest_exit_error.exception)
+        self.assertIn("guest step exited", guest_exit_message)
+        self.assertIn("exit_code=23", guest_exit_message)
+        self.assertIn(f"stdout_bytes={len(encoded_stdout)}", guest_exit_message)
+        self.assertIn(f"stderr_bytes={len(encoded_stderr)}", guest_exit_message)
+        self.assertNotIn(secret_guest_stdout, guest_exit_message)
+        self.assertNotIn(secret_guest_stderr, guest_exit_message)
+        self.assertNotIn(encoded_stdout, guest_exit_message)
+        self.assertNotIn(encoded_stderr, guest_exit_message)
 
     def test_mutation_lock_is_exclusive_and_releases_after_owner_exit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -994,6 +1077,74 @@ class ReleaseLabContractTests(unittest.TestCase):
         archived = json.loads(Path(record["receipt"]["archive_path"]).read_text(encoding="utf-8"))
         self.assertEqual(archived, original_guest)
         self.assertIn("controller_evidence", record)
+
+    def _interactive_collect_fixture(self, root):
+        run, profile = self._valid_hyperv_matrix_fixture()
+        profile["last_case_id"] = "outer-interactive"
+        receipt = profile["interactive_receipt"]
+        app = receipt["installed_app_window"]
+        app.update(transport="hyperv-powershell-direct", origin="guest", injected=False, parent_sha256="e" * 64)
+        profile["hyperv_cases"]["outer-interactive"]["reset_result"] = {
+            "run_id": run["run_id"], "removed_child": True,
+            "parent_sha256_before": "e" * 64, "parent_sha256_after": "e" * 64,
+        }
+        for kind in ("uac", "app-window"):
+            path = root / (kind + ".png"); path.write_bytes(kind.encode())
+            digest, size = sha256_file(path)
+            record = {"path": str(path), "sha256": digest, "size": size, "kind": kind,
+                      "vm_id": app["vm_id"], "case_id": "outer-interactive", "attempt_nonce": "attempt"}
+            if kind == "uac":
+                receipt["hyperv_ui"]["screenshot_archive"] = record
+            else:
+                app["screenshot"]["archive"] = record
+        run["profiles"] = {"windows-x64": profile}
+        return run, profile
+
+    def test_hyperv_collect_final_interactive_preserves_exact_receipt_and_matrix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); controller = LabController(root, test_mode=True)
+            run, profile = self._interactive_collect_fixture(root)
+            original = json.loads(json.dumps(profile))
+            controller.save_state({"schema": 1, "lab_id": "lab", "runs": {run["run_id"]: run}})
+            with patch.object(controller, "hyperv_call", side_effect=AssertionError("no guest operation")):
+                collected = controller.collect(run["run_id"], "windows-x64")
+            saved = controller.get_run(run["run_id"])["profiles"]["windows-x64"]
+            self.assertEqual(collected, original["interactive_receipt"])
+            for key in ("last_case_id", "interactive_receipt", "case_receipts", "hyperv_cases", "steps"):
+                self.assertEqual(saved[key], original[key])
+            self.assertEqual(len(saved["matrix_aggregation"]["case_receipts"]), 6)
+            self.assertTrue(saved["controller_evidence"]["interactive_verified"])
+
+    def test_hyperv_collect_final_interactive_rejects_unbound_or_changed_evidence(self):
+        mutations = [
+            lambda p: p.pop("interactive_receipt"),
+            *[lambda p, k=k, v=v: p["interactive_receipt"].__setitem__(k, v) for k, v in (
+                ("run_id", "foreign"), ("profile", "linux-x64-gui"), ("case_id", "outer-clean"),
+                ("artifact_sha256", "f" * 64), ("artifact_size", 999), ("artifact_role", "baseline"),
+                ("injected", True), ("candidate_version", "9.0.0.0"), ("interactive_verified", False),
+            )],
+            lambda p: p["interactive_receipt"]["installed_app_window"].__setitem__("vm_id", "foreign"),
+            lambda p: p["interactive_receipt"]["installed_app_window"].__setitem__("parent_sha256", "f" * 64),
+            lambda p: p["interactive_receipt"].pop("installed_app_window"),
+            lambda p: p["interactive_receipt"]["installed_app_window"].__setitem__("injected", True),
+            lambda p: p["hyperv_cases"]["outer-interactive"].pop("reset_result"),
+            lambda p: p["hyperv_cases"]["outer-interactive"]["reset_result"].__setitem__("removed_child", False),
+            lambda p: p["hyperv_cases"]["outer-interactive"]["reset_result"].__setitem__("parent_sha256_after", "f" * 64),
+            lambda p: Path(p["interactive_receipt"]["hyperv_ui"]["screenshot_archive"]["path"]).write_bytes(b"bad"),
+            lambda p: Path(p["interactive_receipt"]["installed_app_window"]["screenshot"]["archive"]["path"]).unlink(),
+            lambda p: p["case_receipts"].pop(),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); controller = LabController(root, test_mode=True)
+                run, profile = self._interactive_collect_fixture(root)
+                mutate(profile)
+                controller.save_state({"schema": 1, "lab_id": "lab", "runs": {run["run_id"]: run}})
+                before = controller.state_path.read_bytes()
+                with patch.object(controller, "hyperv_call", side_effect=AssertionError("no guest operation")):
+                    with self.assertRaises(LabError):
+                        controller.collect(run["run_id"], "windows-x64")
+                self.assertEqual(controller.state_path.read_bytes(), before)
 
     def test_hyperv_adapter_forwards_expected_artifact_role(self):
         source = (Path(__file__).parent / "windows_host" / "hyperv_adapter.ps1").read_text(encoding="utf-8")
