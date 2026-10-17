@@ -1,6 +1,7 @@
 package org.amnezia.vpn.protocol.wireguard
 
 import android.net.VpnService.Builder
+import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -9,8 +10,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.amnezia.awg.GoBackend
 import org.amnezia.vpn.protocol.Protocol
+import org.amnezia.vpn.protocol.ProtocolState
 import org.amnezia.vpn.protocol.ProtocolState.CONNECTED
 import org.amnezia.vpn.protocol.ProtocolState.DISCONNECTED
+import org.amnezia.vpn.protocol.ProtocolState.UNKNOWN
 import org.amnezia.vpn.protocol.Statistics
 import org.amnezia.vpn.protocol.VpnException
 import org.amnezia.vpn.protocol.VpnStartException
@@ -24,10 +27,35 @@ import org.amnezia.vpn.util.optStringOrNull
 import org.json.JSONObject
 
 private const val TAG = "Wireguard"
+private const val MAX_UNREADABLE_HANDSHAKE_READS = 5
+
+/**
+ * Parses the UAPI handshake field without allowing malformed native output to
+ * escape as a coroutine failure. A missing or malformed value is unknown;
+ * callers must not treat that as proof that the tunnel is connected.
+ */
+internal fun parseLastHandshakeTime(config: String?): Long? {
+    if (config == null) return null
+    for (line in config.lineSequence()) {
+        if (!line.startsWith("last_handshake_time_sec=")) continue
+        line.substringAfter('=').trim().toLongOrNull()?.let { return it }
+    }
+    return null
+}
+
+internal fun wireguardStateForHandshake(lastHandshake: Long): ProtocolState? = when {
+    lastHandshake > 0L -> CONNECTED
+    lastHandshake == 0L -> null
+    lastHandshake == -1L -> DISCONNECTED
+    else -> UNKNOWN
+}
+
+internal fun shouldRetryHandshakeRead(lastHandshake: Long, unreadableReads: Int): Boolean =
+    lastHandshake == -2L && unreadableReads in 1 until MAX_UNREADABLE_HANDSHAKE_READS
 
 open class Wireguard : Protocol() {
 
-    private var tunnelHandle: Int = -1
+    @Volatile private var tunnelHandle: Int = -1
     private var config: WireguardConfig? = null // save config for reconnect
     protected open val ifName: String = "amn0"
     private lateinit var scope: CoroutineScope
@@ -222,6 +250,12 @@ open class Wireguard : Protocol() {
             return
         }
 
+        val unionCallbacks = if (config.useIncludedUnion)
+            UnionVpnCallbacks.create(context, config.includedApplications, protect) else null
+        val settings = config.toWgUserspaceString()
+        val unionPolicy = if (unionCallbacks == null) "" else
+            JSONObject().put("sites", org.json.JSONArray(config.includedAddresses.map { it.toString() }))
+                .put("dns", org.json.JSONArray(config.dnsServers.map { it.hostAddress })).toString()
         buildVpnInterface(config, vpnBuilder)
 
         vpnBuilder.establish().use { tunFd ->
@@ -232,7 +266,15 @@ open class Wireguard : Protocol() {
                 throw VpnStartException("Create VPN interface: permission not granted or revoked")
             }
             Log.i(TAG, "awg-go backend ${GoBackend.awgVersion()}")
-            tunnelHandle = GoBackend.awgTurnOn(ifName, tunFd.detachFd(), config.toWgUserspaceString())
+            val fd = tunFd.detachFd()
+            tunnelHandle = try {
+                if (unionCallbacks == null) GoBackend.awgTurnOn(ifName, fd, settings)
+                else GoBackend.awgTurnOnUnion(ifName, fd, settings, unionCallbacks, unionPolicy)
+            } catch (error: UnsatisfiedLinkError) {
+                // The JNI entry was never called; ownership stayed with Kotlin.
+                ParcelFileDescriptor.adoptFd(fd).close()
+                throw VpnStartException("Wireguard backend does not support the requested routing policy")
+            }
         }
 
         if (tunnelHandle < 0) {
@@ -240,7 +282,8 @@ open class Wireguard : Protocol() {
             throw VpnStartException("Wireguard tunnel creation error")
         }
 
-        if (!protect(GoBackend.awgGetSocketV4(tunnelHandle)) || !protect(GoBackend.awgGetSocketV6(tunnelHandle))) {
+        val sockets = listOf(GoBackend.awgGetSocketV4(tunnelHandle), GoBackend.awgGetSocketV6(tunnelHandle)).filter { it >= 0 }
+        if (sockets.isEmpty() || sockets.any { !protect(it) }) {
             GoBackend.awgTurnOff(tunnelHandle)
             tunnelHandle = -1
             throw VpnStartException("Protect VPN interface: permission not granted or revoked")
@@ -251,17 +294,31 @@ open class Wireguard : Protocol() {
     private fun launchStatusJob() {
         Log.d(TAG, "Launch status job")
         statusJob = scope.launch {
+            var unreadableHandshakeReads = 0
             while (true) {
                 val lastHandshake = getLastHandshake()
                 Log.v(TAG, "lastHandshake=$lastHandshake")
-                if (lastHandshake == 0L) {
-                    delay(1000)
-                    continue
+                if (lastHandshake == -2L) {
+                    unreadableHandshakeReads++
+                    state.value = UNKNOWN
+                    if (shouldRetryHandshakeRead(lastHandshake, unreadableHandshakeReads)) {
+                        delay(1000)
+                        continue
+                    }
+                } else {
+                    unreadableHandshakeReads = 0
                 }
-                if (lastHandshake == -2L || lastHandshake > 0L) state.value = CONNECTED
-                else if (lastHandshake == -1L) state.value = DISCONNECTED
-                statusJob = null
-                break
+                when (val nextState = wireguardStateForHandshake(lastHandshake)) {
+                    null -> delay(1000)
+                    else -> {
+                        if (nextState == UNKNOWN) {
+                            Log.w(TAG, "Unable to determine WireGuard handshake state")
+                        }
+                        state.value = nextState
+                        statusJob = null
+                        break
+                    }
+                }
             }
         }
     }
@@ -276,7 +333,7 @@ open class Wireguard : Protocol() {
             Log.e(TAG, "Failed to get tunnel config")
             return -2
         }
-        val lastHandshake = config.lines().find { it.startsWith("last_handshake_time_sec=") }?.substring(24)?.toLong()
+        val lastHandshake = parseLastHandshakeTime(config)
         if (lastHandshake == null) {
             Log.e(TAG, "Failed to get last_handshake_time_sec")
             return -2

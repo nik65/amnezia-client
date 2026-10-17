@@ -1,6 +1,18 @@
 #include <QtTest>
 
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QSharedPointer>
+#include <QSettings>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QTemporaryDir>
+#include <QUrl>
+
 #include "core/utils/remoteLogBatchHealth.h"
+#include "core/utils/remoteLogCursor.h"
+#include "core/utils/remoteLogReceipt.h"
 
 class RemoteLogRetryPrivacyTest : public QObject
 {
@@ -292,6 +304,149 @@ private slots:
                 false, true, false, false, false, true, false));
         QVERIFY(!amnezia::remoteLogBatchCanBecomeHealthy(
                 false, true, false, false, false, false, true));
+    }
+
+    void httpReceiptRequiresTheExactBatchId()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        QNetworkAccessManager manager;
+
+        struct HttpExerciseResult {
+            bool transportOk = false;
+            bool receiptAccepted = false;
+        };
+
+        const auto exercise = [&](const QByteArray &accepted,
+                                  const QByteArray &received,
+                                  const QByteArray &expected) {
+            const QMetaObject::Connection connection = connect(
+                    &server, &QTcpServer::newConnection, &server, [&]() {
+                        QTcpSocket *socket = server.nextPendingConnection();
+                        if (!socket) {
+                            return;
+                        }
+                        const auto responseSent = QSharedPointer<bool>::create(false);
+                        const auto sendResponse = [socket, responseSent, accepted, received]() {
+                            if (*responseSent || socket->state() == QAbstractSocket::UnconnectedState) {
+                                return;
+                            }
+                            *responseSent = true;
+                            const QByteArray response = QByteArrayLiteral(
+                                    "HTTP/1.1 204 No Content\r\n"
+                                    "Connection: close\r\n"
+                                    "Content-Length: 0\r\n"
+                                    "X-Amnezia-Batch-Accepted: ")
+                                    + accepted
+                                    + QByteArrayLiteral("\r\nX-Amnezia-Batch-Id: ")
+                                    + received + QByteArrayLiteral("\r\n\r\n");
+                            socket->write(response);
+                            socket->flush();
+                            QObject::connect(socket, &QTcpSocket::bytesWritten, socket,
+                                             [socket](qint64) {
+                                                 if (socket->bytesToWrite() == 0) {
+                                                     socket->disconnectFromHost();
+                                                 }
+                                             });
+                            if (socket->bytesToWrite() == 0) {
+                                socket->disconnectFromHost();
+                            }
+                        };
+                        connect(socket, &QTcpSocket::readyRead, socket,
+                                [socket, sendResponse]() {
+                                    socket->readAll();
+                                    sendResponse();
+                                });
+                        QTimer::singleShot(0, socket, [socket, sendResponse]() {
+                            if (socket->bytesAvailable() > 0) {
+                                socket->readAll();
+                                sendResponse();
+                            }
+                        });
+                        connect(socket, &QTcpSocket::disconnected,
+                                socket, &QObject::deleteLater);
+                    });
+            QNetworkRequest request(QUrl(QStringLiteral(
+                    "http://127.0.0.1:%1/logs").arg(server.serverPort())));
+            request.setHeader(QNetworkRequest::ContentTypeHeader,
+                              QStringLiteral("text/plain"));
+            QNetworkReply *reply = manager.post(request, QByteArrayLiteral("log\n"));
+            QSignalSpy finished(reply, &QNetworkReply::finished);
+            const bool completed = finished.wait(5000);
+            const int statusCode = reply->attribute(
+                    QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            const bool transportOk = completed && reply->error() == QNetworkReply::NoError
+                    && statusCode == 204;
+            const bool receiptAccepted = amnezia::remoteLogBatchReceiptAccepted(
+                    reply->rawHeader("X-Amnezia-Batch-Accepted"),
+                    reply->rawHeader("X-Amnezia-Batch-Id"), expected);
+            reply->deleteLater();
+            disconnect(connection);
+            return HttpExerciseResult { transportOk, receiptAccepted };
+        };
+
+        const auto matching = exercise(QByteArrayLiteral("1"), QByteArrayLiteral("batch-1"),
+                                       QByteArrayLiteral("batch-1"));
+        QVERIFY(matching.transportOk);
+        QVERIFY(matching.receiptAccepted);
+
+        const auto stale = exercise(QByteArrayLiteral("1"), QByteArrayLiteral("batch-old"),
+                                    QByteArrayLiteral("batch-1"));
+        QVERIFY(stale.transportOk);
+        QVERIFY(!stale.receiptAccepted);
+
+        const auto missingAccepted = exercise(QByteArrayLiteral(""), QByteArrayLiteral("batch-1"),
+                                              QByteArrayLiteral("batch-1"));
+        QVERIFY(missingAccepted.transportOk);
+        QVERIFY(!missingAccepted.receiptAccepted);
+
+        const auto emptyExpected = exercise(QByteArrayLiteral("1"), QByteArrayLiteral("batch-1"),
+                                            QByteArray());
+        QVERIFY(emptyExpected.transportOk);
+        QVERIFY(!emptyExpected.receiptAccepted);
+    }
+
+    void malformedPersistedCursorIsDetected()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("settings.ini"));
+        const QString prefix = QStringLiteral("Runtime/remoteLogUploader/cursors/test/");
+        {
+            QSettings settings(path, QSettings::IniFormat);
+            settings.setValue(prefix + QStringLiteral("offset"),
+                              QStringLiteral("not-a-number"));
+            settings.setValue(prefix + QStringLiteral("fingerprintBytes"),
+                              QStringLiteral("not-a-number"));
+            settings.sync();
+            QCOMPARE(settings.status(), QSettings::NoError);
+        }
+        QSettings reloaded(path, QSettings::IniFormat);
+        QVERIFY(amnezia::remoteLogCursorMetadataPresent(reloaded, prefix));
+        bool offsetConversionOk = true;
+        QCOMPARE(amnezia::remoteLogCursorInt64(
+                         reloaded.value(prefix + QStringLiteral("offset")),
+                         -1, &offsetConversionOk), qint64(0));
+        QVERIFY(!offsetConversionOk);
+        bool conversionOk = true;
+        QCOMPARE(amnezia::remoteLogCursorInt64(
+                         reloaded.value(prefix + QStringLiteral("fingerprintBytes")),
+                         0, &conversionOk), qint64(0));
+        QVERIFY(!conversionOk);
+    }
+
+    void fingerprintBytesOnlyMetadataIsNotTreatedAsFreshCursor()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("settings.ini"));
+        const QString prefix = QStringLiteral("Runtime/remoteLogUploader/cursors/test/");
+        QSettings settings(path, QSettings::IniFormat);
+        settings.setValue(prefix + QStringLiteral("fingerprintBytes"), 64);
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+        QSettings reloaded(path, QSettings::IniFormat);
+        QVERIFY(amnezia::remoteLogCursorMetadataPresent(reloaded, prefix));
     }
 };
 

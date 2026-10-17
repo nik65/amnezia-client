@@ -42,6 +42,9 @@ param(
     [int] $BuildJobs = 0,
     [switch] $SkipBuild,
     [switch] $NoBundleUpdatesInWindowsClient,
+    [switch] $VerifyWindowsThinPayloadOnly,
+    [string] $ThinWindowsArtifactPath = "",
+    [string] $ThinWindowsGuardReceiptPath = "",
     [switch] $Preflight,
     [ValidateSet("off", "candidate", "release")]
     [string] $LabLane = "release",
@@ -250,6 +253,10 @@ function Assert-ReleaseInputs {
     if ($SyncHost -match "://|/") {
         throw "SELFHOSTED_UPDATE_SYNC_HOST must be a host or IP without scheme/path/CIDR: $SyncHost"
     }
+    if (($BuildPlatform -contains "windows") -and (-not $NoBundleUpdatesInWindowsClient) -and
+        $BaseUrl -cne "http://${SyncHost}:17865") {
+        throw "Bundled Windows self-hosted client requires SELFHOSTED_UPDATE_BASE_URL to equal http://${SyncHost}:17865"
+    }
     Assert-SshHostKeyPinPair
     Assert-SafeFleetPolicy
     Assert-SelfHostedUpdateKey
@@ -290,6 +297,7 @@ print(hashlib.sha256(public.public_bytes(Encoding.Raw, PublicFormat.Raw)).hexdig
             throw "SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 must decode to the matching 113-byte Ed25519 public key"
         }
         $fingerprint = $fingerprint.Trim()
+        $script:SelfHostedUpdatePublicKeySha256 = $fingerprint
     } finally {
         Remove-Item -LiteralPath $validatorPath -Force -ErrorAction SilentlyContinue
         $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $previousPublicKey
@@ -559,7 +567,20 @@ function Quote-Sh([string] $Value) {
 }
 
 function Invoke-External([string] $FilePath, [string[]] $Arguments, [string] $WorkingDirectory = $RepoRoot) {
-    Write-Host ("+ {0} {1}" -f $FilePath, ($Arguments -join " "))
+    $displayArguments = @()
+    for ($index = 0; $index -lt $Arguments.Count; $index++) {
+        $argument = [string] $Arguments[$index]
+        if ($argument -in @("--public-key-base64", "-PublicKeyBase64")) {
+            $displayArguments += $argument
+            if ($index + 1 -lt $Arguments.Count) {
+                $displayArguments += "<redacted>"
+                $index++
+            }
+        } else {
+            $displayArguments += $argument
+        }
+    }
+    Write-Host ("+ {0} {1}" -f $FilePath, ($displayArguments -join " "))
     Push-Location $WorkingDirectory
     try {
         & $FilePath @Arguments
@@ -635,7 +656,9 @@ function Build-WindowsInstaller([string] $BundleDir) {
     $buildJobs = Resolve-BuildJobs
     $previousConanNoRemote = $env:CONAN_NO_REMOTE
     $previousPublicKeyBase64 = $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64
+    $previousPublicKeySha256 = $env:SELFHOSTED_UPDATE_PUBLIC_KEY_SHA256
     $previousSyncHost = $env:SELFHOSTED_UPDATE_SYNC_HOST
+    $previousBaseUrl = $env:SELFHOSTED_UPDATE_BASE_URL
     $previousSshTrustedHost = $env:SELFHOSTED_SSH_TRUSTED_HOST
     $previousSshTrustedHostKeySha256 = $env:SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256
     $previousBundleDir = $env:SELFHOSTED_UPDATE_BUNDLE_DIR
@@ -645,7 +668,9 @@ function Build-WindowsInstaller([string] $BundleDir) {
     $env:AMNEZIA_BUILD_JOBS = [string] $buildJobs
     $env:CMAKE_BUILD_PARALLEL_LEVEL = [string] $buildJobs
     $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $PublicKeyBase64
+    $env:SELFHOSTED_UPDATE_PUBLIC_KEY_SHA256 = $script:SelfHostedUpdatePublicKeySha256
     $env:SELFHOSTED_UPDATE_SYNC_HOST = $SyncHost
+    $env:SELFHOSTED_UPDATE_BASE_URL = $BaseUrl
     $env:SELFHOSTED_SSH_TRUSTED_HOST = $SshTrustedHost
     $env:SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256 = $SshTrustedHostKeySha256
     if ([string]::IsNullOrWhiteSpace($BundleDir)) {
@@ -658,10 +683,20 @@ function Build-WindowsInstaller([string] $BundleDir) {
     } finally {
         $env:CONAN_NO_REMOTE = $previousConanNoRemote
         $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $previousPublicKeyBase64
+        if ($null -eq $previousPublicKeySha256) {
+            Remove-Item Env:\SELFHOSTED_UPDATE_PUBLIC_KEY_SHA256 -ErrorAction SilentlyContinue
+        } else {
+            $env:SELFHOSTED_UPDATE_PUBLIC_KEY_SHA256 = $previousPublicKeySha256
+        }
         if ($null -eq $previousSyncHost) {
             Remove-Item Env:\SELFHOSTED_UPDATE_SYNC_HOST -ErrorAction SilentlyContinue
         } else {
             $env:SELFHOSTED_UPDATE_SYNC_HOST = $previousSyncHost
+        }
+        if ($null -eq $previousBaseUrl) {
+            Remove-Item Env:\SELFHOSTED_UPDATE_BASE_URL -ErrorAction SilentlyContinue
+        } else {
+            $env:SELFHOSTED_UPDATE_BASE_URL = $previousBaseUrl
         }
         if ($null -eq $previousSshTrustedHost) {
             Remove-Item Env:\SELFHOSTED_SSH_TRUSTED_HOST -ErrorAction SilentlyContinue
@@ -880,11 +915,12 @@ function New-WindowsOuterBinaryCreator() {
     if ([string]::IsNullOrWhiteSpace($qifRoot)) { throw "Qt IFW root is required to build the bundled Windows client." }
     $sourceBase = Join-Path $qifRoot "bin\installerbase.exe"
     Assert-ExistingFile $sourceBase "Qt IFW Windows installer base"
-    $versionOutput = @(& $sourceBase --version 2>&1 | ForEach-Object { [string]$_ }) -join "`n"
-    if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch '(?m)^IFW Version:\s*([0-9]+\.[0-9]+\.[0-9]+)\b') {
-        throw "Could not derive the Qt IFW version from the unmodified installerbase."
+    # Read build-tool metadata; never execute an installer template, even for --version.
+    $creatorVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $qifRoot "bin\binarycreator.exe"))
+    if ($creatorVersion.FileMajorPart -lt 1 -or $creatorVersion.FileMinorPart -lt 0 -or $creatorVersion.FileBuildPart -lt 0) {
+        throw "Could not derive the Qt IFW version from binarycreator PE metadata."
     }
-    $env:AMNEZIA_IFW_FRAMEWORK_VERSION = $Matches[1]
+    $env:AMNEZIA_IFW_FRAMEWORK_VERSION = "{0}.{1}.{2}" -f $creatorVersion.FileMajorPart, $creatorVersion.FileMinorPart, $creatorVersion.FileBuildPart
     $workDir = Join-Path $RepoRoot "dist\.build-tools\ifw-admin\bin"
     New-Item -ItemType Directory -Force -Path $workDir | Out-Null
     $customBase = Join-Path $workDir "installerbase.exe"
@@ -946,6 +982,212 @@ function Assert-WindowsOuterIfwMetadata([string] $ArtifactPath) {
             (Get-FileHash -LiteralPath $sourceControl -Algorithm SHA256).Hash) {
             throw "Bundled outer IFW control script differs from the reviewed source."
         }
+    } finally {
+        Remove-Item -LiteralPath $inspectionRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Assert-WindowsClientTrust([string] $ArtifactPath, [string] $ReceiptPath = "") {
+    if ([string]::IsNullOrWhiteSpace($ReceiptPath)) {
+        $ReceiptPath = Join-Path (Split-Path -Parent $ArtifactPath) "windows-thin-payload-guard.json"
+    }
+    $inspectionRoot = Join-Path $RepoRoot "dist\.build-tools\ifw-client-trust-inspection"
+    $receipt = [ordered]@{
+        schema = "amnezia-windows-thin-payload-guard-v1"
+        status = "REJECTED"
+        artifactPath = $ArtifactPath
+        artifactBytes = 0
+        artifactSha256 = ""
+        syncHost = $SyncHost
+        publicKeySha256 = [string]$script:SelfHostedUpdatePublicKeySha256
+        payloadPath = ""
+        payloadBytes = 0
+        payloadSha256 = ""
+        publicKeyMarkerOccurrences = 0
+        syncHostOccurrences = 0
+        failure = ""
+    }
+    try {
+        Assert-ExistingFile $ArtifactPath "Windows self-hosted release client"
+        if ([string]::IsNullOrWhiteSpace($PublicKeyBase64) -or
+            [string]::IsNullOrWhiteSpace($SyncHost)) {
+            throw "Windows self-hosted client trust proof requires nonempty public key and sync host"
+        }
+        $artifactItem = Get-Item -LiteralPath $ArtifactPath -Force
+        $receipt.artifactBytes = [int64]$artifactItem.Length
+        $receipt.artifactSha256 = (Get-FileHash -LiteralPath $ArtifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $qifRoot = Resolve-QifRootPath
+        if ([string]::IsNullOrWhiteSpace($qifRoot)) { throw "Qt IFW root is required to inspect the Windows self-hosted client." }
+        $devtool = Join-Path $qifRoot "bin\devtool.exe"
+        Assert-ExistingFile $devtool "Qt IFW metadata inspection tool"
+        $sevenZipCommand = Get-Command "7z.exe" -ErrorAction SilentlyContinue
+        if ($null -eq $sevenZipCommand) {
+            $sevenZipPath = Join-Path ${env:ProgramFiles} "7-Zip\7z.exe"
+            Assert-ExistingFile $sevenZipPath "trusted 7-Zip extraction tool"
+        } else {
+            $sevenZipPath = $sevenZipCommand.Source
+        }
+        if (Test-Path -LiteralPath $inspectionRoot) {
+            $resolvedInspection = [IO.Path]::GetFullPath($inspectionRoot)
+            $ownedRoot = [IO.Path]::GetFullPath((Join-Path $RepoRoot "dist\.build-tools")) + [IO.Path]::DirectorySeparatorChar
+            if (-not $resolvedInspection.StartsWith($ownedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "IFW client trust inspection directory escaped the owned build-tools root."
+            }
+            Remove-Item -LiteralPath $resolvedInspection -Recurse -Force
+        }
+        New-Item -ItemType Directory -Force -Path $inspectionRoot | Out-Null
+        Invoke-External $devtool @("dump", $ArtifactPath, $inspectionRoot) | Out-Null
+        $archiveRoot = Join-Path $inspectionRoot "extracted-components"
+        New-Item -ItemType Directory -Force -Path $archiveRoot | Out-Null
+        $componentArchives = @(Get-ChildItem -LiteralPath $inspectionRoot -Recurse -File -Filter "*.7z" |
+            Where-Object { $_.FullName -match "metadata[\\/]AmneziaVPN[\\/]" })
+        if ($componentArchives.Count -eq 0) {
+            throw "Windows thin IFW artifact did not contain component archives under metadata/AmneziaVPN"
+        }
+        foreach ($archive in $componentArchives) {
+            $componentRoot = Join-Path $archiveRoot $archive.BaseName
+            New-Item -ItemType Directory -Force -Path $componentRoot | Out-Null
+            Invoke-External $sevenZipPath @("x", "-y", "-o$componentRoot", $archive.FullName) | Out-Null
+        }
+        $payloadCandidates = @(Get-ChildItem -LiteralPath $archiveRoot -Recurse -File -Filter "AmneziaVPN.exe")
+        if ($payloadCandidates.Count -ne 1) {
+            throw "Windows thin IFW artifact must contain exactly one AmneziaVPN.exe"
+        }
+        $payloadBytes = [IO.File]::ReadAllBytes($payloadCandidates[0].FullName)
+        $payloadText = [Text.Encoding]::ASCII.GetString($payloadBytes)
+        $keyFirstIndex = $payloadText.IndexOf($PublicKeyBase64, [StringComparison]::Ordinal)
+        $keySecondIndex = if ($keyFirstIndex -ge 0) {
+            $payloadText.IndexOf($PublicKeyBase64, $keyFirstIndex + $PublicKeyBase64.Length, [StringComparison]::Ordinal)
+        } else { -1 }
+        $syncFirstIndex = $payloadText.IndexOf($SyncHost, [StringComparison]::Ordinal)
+        $receipt.payloadPath = "AmneziaVPN.exe"
+        $receipt.payloadBytes = [int64]$payloadBytes.Length
+        $receipt.payloadSha256 = (Get-FileHash -LiteralPath $payloadCandidates[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $receipt.publicKeyMarkerOccurrences = if ($keyFirstIndex -lt 0) { 0 } elseif ($keySecondIndex -ge 0) { 2 } else { 1 }
+        $receipt.syncHostOccurrences = if ($syncFirstIndex -lt 0) { 0 } else { 1 }
+        if ($keyFirstIndex -lt 0 -or $keySecondIndex -ge 0) {
+            throw "Windows thin payload does not contain exactly one intended self-hosted public-key marker"
+        }
+        if ($syncFirstIndex -lt 0) {
+            throw "Windows thin payload does not contain the intended self-hosted sync-host marker"
+        }
+        $receipt.status = "PASS"
+        return [pscustomobject]@{
+            artifactSha256 = $receipt.artifactSha256
+            payloadSha256 = $receipt.payloadSha256
+            publicKeySha256 = [string]$script:SelfHostedUpdatePublicKeySha256
+            syncHost = $SyncHost
+        }
+    } catch {
+        $receipt.failure = $_.Exception.Message
+        throw
+    } finally {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ReceiptPath) | Out-Null
+        $receipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ReceiptPath -Encoding utf8
+        Remove-Item -LiteralPath $inspectionRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+function Assert-BundledWindowsPayload([string] $ArtifactPath, [string] $ManifestPath) {
+    Assert-ExistingFile $ArtifactPath "Bundled Windows release client"
+    Assert-ExistingFile $ManifestPath "Bundled self-hosted manifest"
+    if ([string]::IsNullOrWhiteSpace($PublicKeyBase64) -or
+        [string]::IsNullOrWhiteSpace($SyncHost) -or
+        [string]::IsNullOrWhiteSpace($BaseUrl)) {
+        throw "Bundled Windows payload proof requires nonempty public key, sync host, and base URL"
+    }
+    $qifRoot = Resolve-QifRootPath
+    if ([string]::IsNullOrWhiteSpace($qifRoot)) { throw "Qt IFW root is required to inspect the bundled Windows payload." }
+    $devtool = Join-Path $qifRoot "bin\devtool.exe"
+    Assert-ExistingFile $devtool "Qt IFW metadata inspection tool"
+    $sevenZipCommand = Get-Command "7z.exe" -ErrorAction SilentlyContinue
+    if ($null -eq $sevenZipCommand) {
+        $sevenZipPath = Join-Path ${env:ProgramFiles} "7-Zip\7z.exe"
+        Assert-ExistingFile $sevenZipPath "trusted 7-Zip extraction tool"
+    } else {
+        $sevenZipPath = $sevenZipCommand.Source
+    }
+    $buildRoot = Join-Path $RepoRoot "deploy\build"
+    $contractCandidates = @()
+    if (Test-Path -LiteralPath $buildRoot -PathType Container) {
+        $contractCandidates = @(Get-ChildItem -LiteralPath $buildRoot -Filter "selfhosted-build-contract.json" -Recurse -File)
+    }
+    if ($contractCandidates.Count -ne 1) {
+        throw "Bundled Windows client must have exactly one generated selfhosted-build-contract.json under deploy/build"
+    }
+    $contract = Get-Content -LiteralPath $contractCandidates[0].FullName -Raw | ConvertFrom-Json
+    if ($contract.schema -ne 1 -or $contract.selfHostedBuild -ne $true -or $contract.publicKeyConfigured -ne $true) {
+        throw "Generated self-hosted build contract does not prove a bundled self-hosted Windows build"
+    }
+    if ([string]$contract.publicKeySha256 -ne [string]$script:SelfHostedUpdatePublicKeySha256) {
+        throw "Generated self-hosted build contract public-key fingerprint does not match the intended key"
+    }
+    if ([string]$contract.syncHost -ne [string]$SyncHost -or
+        [string]$contract.baseUrl -ne [string]$BaseUrl -or
+        [int]$contract.syncPort -ne 17865) {
+        throw "Generated self-hosted build contract endpoint binding does not match the intended release inputs"
+    }
+    $manifestSha256 = (Get-FileHash -LiteralPath $ManifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ([string]$contract.manifestSha256 -ne $manifestSha256) {
+        throw "Generated self-hosted build contract is not bound to the intended manifest"
+    }
+
+    $inspectionRoot = Join-Path $RepoRoot "dist\.build-tools\ifw-payload-inspection"
+    if (Test-Path -LiteralPath $inspectionRoot) {
+        Remove-Item -LiteralPath $inspectionRoot -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $inspectionRoot | Out-Null
+    try {
+        Invoke-External $devtool @("dump", $ArtifactPath, $inspectionRoot)
+        $archiveRoot = Join-Path $inspectionRoot "extracted-components"
+        New-Item -ItemType Directory -Force -Path $archiveRoot | Out-Null
+        $componentArchives = @(Get-ChildItem -LiteralPath $inspectionRoot -Recurse -File -Filter "*.7z" |
+            Where-Object { $_.FullName -match "metadata[\\/]AmneziaVPN[\\/]" })
+        if ($componentArchives.Count -eq 0) {
+            throw "Bundled IFW dump did not contain component archives under metadata/AmneziaVPN"
+        }
+        foreach ($archive in $componentArchives) {
+            $componentRoot = Join-Path $archiveRoot $archive.BaseName
+            New-Item -ItemType Directory -Force -Path $componentRoot | Out-Null
+            Invoke-External $sevenZipPath @("x", "-y", "-o$componentRoot", $archive.FullName)
+        }
+        $payloadCandidates = @(Get-ChildItem -LiteralPath $archiveRoot -Recurse -File -Filter "AmneziaVPN.exe")
+        if ($payloadCandidates.Count -ne 1) {
+            throw "Bundled IFW payload must contain exactly one AmneziaVPN.exe"
+        }
+        $payloadBytes = [IO.File]::ReadAllBytes($payloadCandidates[0].FullName)
+        $payloadText = [Text.Encoding]::ASCII.GetString($payloadBytes)
+        if ($payloadText.IndexOf($PublicKeyBase64, [StringComparison]::Ordinal) -lt 0) {
+            throw "Bundled Windows client executable does not contain the intended self-hosted public-key marker"
+        }
+        if ($payloadText.IndexOf($SyncHost, [StringComparison]::Ordinal) -lt 0) {
+            throw "Bundled Windows client executable does not contain the intended self-hosted sync-host marker"
+        }
+        $embeddedManifest = @(Get-ChildItem -LiteralPath $inspectionRoot -Recurse -File -Filter "manifest.json" |
+            Where-Object { $_.FullName -match "selfhosted_updates" })
+        if ($embeddedManifest.Count -ne 1) {
+            throw "Bundled IFW payload must contain exactly one selfhosted_updates/manifest.json"
+        }
+        $embeddedManifestSha256 = (Get-FileHash -LiteralPath $embeddedManifest[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($embeddedManifestSha256 -ne $manifestSha256) {
+            throw "Bundled selfhosted_updates/manifest.json does not match the intended manifest"
+        }
+        $ownerRoot = Split-Path -Parent $RepoRoot
+        $receiptRoot = Join-Path $ownerRoot "logs"
+        New-Item -ItemType Directory -Force -Path $receiptRoot | Out-Null
+        $receipt = [ordered]@{
+            schema = "amnezia-bundled-windows-payload-proof-v1"
+            artifactSha256 = (Get-FileHash -LiteralPath $ArtifactPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            payloadSha256 = (Get-FileHash -LiteralPath $payloadCandidates[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            manifestSha256 = $manifestSha256
+            embeddedManifestSha256 = $embeddedManifestSha256
+            publicKeySha256 = [string]$script:SelfHostedUpdatePublicKeySha256
+            syncHost = $SyncHost
+            baseUrl = $BaseUrl
+            selfHostedBuild = $true
+            contractPath = $contractCandidates[0].FullName
+        }
+        $receiptPath = Join-Path $receiptRoot "bundled-windows-payload-proof.json"
+        $receipt | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $receiptPath -Encoding utf8
     } finally {
         Remove-Item -LiteralPath $inspectionRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -1061,6 +1303,47 @@ New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
 if ($Preflight) {
     Assert-LocalReleasePrerequisites
     Write-Step "Preflight OK"
+    return
+}
+
+$thinPayloadGuardRequested = $VerifyWindowsThinPayloadOnly
+if ($thinPayloadGuardRequested) {
+    if ([string]::IsNullOrWhiteSpace($ThinWindowsArtifactPath)) {
+        throw "-ThinWindowsArtifactPath is required with -VerifyWindowsThinPayloadOnly"
+    }
+    if ([string]::IsNullOrWhiteSpace($PublicKeyBase64) -or [string]::IsNullOrWhiteSpace($SyncHost)) {
+        throw "-PublicKeyBase64 and -SyncHost are required with -VerifyWindowsThinPayloadOnly"
+    }
+    $fingerprintScript = @'
+import base64, hashlib, os
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_public_key
+try:
+    pem = base64.b64decode(os.environ["SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64"], validate=True)
+    public = load_pem_public_key(pem)
+    print(hashlib.sha256(public.public_bytes(Encoding.Raw, PublicFormat.Raw)).hexdigest())
+except Exception as error:
+    raise SystemExit("public key cannot be parsed") from error
+'@
+    $fingerprintPath = [IO.Path]::GetTempFileName()
+    $previousGuardPublicKey = $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64
+    try {
+        [IO.File]::WriteAllText($fingerprintPath, $fingerprintScript, [Text.UTF8Encoding]::new($false))
+        $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $PublicKeyBase64
+        $fingerprint = [string](& python $fingerprintPath 2>$null | Select-Object -Last 1)
+        if ($LASTEXITCODE -ne 0 -or $fingerprint.Trim() -notmatch '^[0-9a-f]{64}$') {
+            throw "-PublicKeyBase64 must decode to a valid Ed25519 public key"
+        }
+        $script:SelfHostedUpdatePublicKeySha256 = $fingerprint.Trim()
+    } finally {
+        Remove-Item -LiteralPath $fingerprintPath -Force -ErrorAction SilentlyContinue
+        if ($null -eq $previousGuardPublicKey) {
+            Remove-Item Env:\SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 -ErrorAction SilentlyContinue
+        } else {
+            $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $previousGuardPublicKey
+        }
+    }
+    Assert-WindowsClientTrust $ThinWindowsArtifactPath $ThinWindowsGuardReceiptPath | Out-Null
+    Write-Host "Windows thin payload guard passed: $ThinWindowsArtifactPath"
     return
 }
 
@@ -1226,6 +1509,10 @@ $headlessRequested = ($BuildPlatform -contains "headless") -or ($RequirePlatform
 if ($headlessRequested -and ($RequirePlatform -notcontains "linux-headless-x64")) {
     $RequirePlatform += "linux-headless-x64"
 }
+$thinWindowsArtifactPath = Join-Path $ArtifactDir "AmneziaVPN_${Version}_windows_x64.exe"
+if ($bundlesUpdatesInWindowsClient) {
+    Assert-WindowsClientTrust $thinWindowsArtifactPath (Join-Path $ArtifactDir "windows-thin-payload-guard.json") | Out-Null
+}
 $manifestArgs = @(
     "deploy/selfhosted_updates/make_manifest.py",
     "--version", $Version,
@@ -1311,6 +1598,7 @@ if (-not $NoBundleUpdatesInWindowsClient -and ($BuildPlatform -contains "windows
     $adminInstallerSource = Join-Path $RepoRoot "deploy\build\AmneziaVPN_${Version}_windows_x64.exe"
     Assert-ExistingFile $adminInstallerSource "Bundled Windows release client"
     Assert-WindowsOuterIfwMetadata $adminInstallerSource
+    Assert-BundledWindowsPayload $adminInstallerSource (Join-Path $OutDir "manifest.json")
     $adminInstallerTarget = Join-Path $adminInstallerDir "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
     Copy-Item -LiteralPath $adminInstallerSource -Destination $adminInstallerTarget -Force
     Write-Host "Bundled Windows release client: $adminInstallerTarget"

@@ -302,6 +302,10 @@ void LocalSocketController::activate(const QJsonObject &rawConfig) {
   }
 
   json.insert("excludedAddresses", jsExcludedAddresses);
+  if (splitTunnelType == 2 && hasDefaultIpv4Route && rawConfig.contains("managedSplitTunnelRoutes")) {
+    json.insert("managedExcludedAddresses", rawConfig.value("managedSplitTunnelRoutes"));
+    json.insert("routeConnectionNonce", rawConfig.value("routeConnectionNonce"));
+  }
 
   json.insert("vpnDisabledApps", splitTunnelApps);
 

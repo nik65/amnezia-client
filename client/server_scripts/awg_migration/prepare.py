@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from journal import Journal, inspect as inspect_container, CONTROL_LISTENER_PROBE
+from journal import Journal, inspect as inspect_container, CONTROL_LISTENER_PROBE, CONTROL_FILES, digest
 from policy import namespace_snapshot, firewall_script, client_policy_epoch, mtu
 from feeds import feed_mounts
 
@@ -179,7 +179,7 @@ def parse_config(raw):
         address = ipaddress.ip_interface(peer['AllowedIPs'])
         if address.version != 4 or address.network.prefixlen != 32 or address.ip not in network.network or address.ip == network.ip:
             raise ValueError('ambiguous peer route')
-    ips = [peer['AllowedIPs'] for peer in peers]
+    ips = [ipaddress.ip_interface(peer['AllowedIPs']).ip for peer in peers]
     if len(set(ips)) != len(ips):
         raise ValueError('duplicate peer address')
     return interface, peers
@@ -207,6 +207,50 @@ def native_config(interface, peers):
     for peer in peers:
         text += '\n[Peer]\n' + ''.join(f'{key} = {value}\n' for key, value in peer.items())
     return text
+
+
+def validate_ready_target(run, state, source_interface, source_peers, target_interface, target_peers, automatic):
+    """Ready reuse must still observe the actual configured endpoint and peers."""
+    if (target_interface['PrivateKey'] != source_interface['PrivateKey']
+            or target_interface['Address'] != source_interface['Address']
+            or target_peers != source_peers
+            or any(target_interface.get(key) != value for key, value in state['parameters'].items())):
+        raise ValueError('migration_ready_drift')
+    target = state['targetContainer']
+    rows = run('docker', 'exec', target, 'awg', 'show', 'awg0', 'dump').decode().strip().splitlines()
+    if (len(rows) != len(source_peers) + 1 or len(rows[0].split('\t')) < 3
+            or rows[0].split('\t')[1] != state['serverPublicKey']
+            or rows[0].split('\t')[2] != target_interface['ListenPort']):
+        raise ValueError('migration_ready_drift')
+    observed = {row.split('\t')[0]: row.split('\t') for row in rows[1:]}
+    if set(observed) != {peer['PublicKey'] for peer in source_peers}:
+        raise ValueError('migration_ready_drift')
+    for peer in source_peers:
+        row = observed[peer['PublicKey']]
+        if len(row) < 4 or row[1] != peer.get('PresharedKey', '(none)') or row[3] != peer['AllowedIPs']:
+            raise ValueError('migration_ready_drift')
+    accepted = {}
+    for line in run('docker', 'exec', target, 'awg', 'showconf', 'awg0').decode().splitlines():
+        if '=' in line:
+            key, value = (part.strip() for part in line.split('=', 1))
+            if key in state['parameters']:
+                if key in ('RandomTrailers', 'DisableCookies'):
+                    value = {'false': '0', 'true': '1', 'off': '0', 'on': '1'}.get(value, value)
+                accepted[key] = value
+    # Official tools omit ContentPaddingAddition when its native default is 0.
+    # Do not supply defaults for any capability/identity or nonzero setting.
+    if state['parameters'].get('ContentPaddingAddition') == '0':
+        accepted.setdefault('ContentPaddingAddition', '0')
+    if accepted != state['parameters']:
+        raise ValueError('migration_ready_drift')
+    if automatic:
+        from trusted_image import BINARY_SHA256
+        live = run('docker', 'exec', target, 'sh', '-c',
+                   'set -eu; engine=$(cat /migration/engine.pid); '
+                   'case "$engine" in ""|*[!0-9]*) exit 1;; esac; '
+                   'kill -0 "$engine"; sha256sum "/proc/$engine/exe"').decode().split()
+        if len(live) != 2 or live[0] != BINARY_SHA256:
+            raise ValueError('migration_ready_drift')
 
 
 def prepare(args):
@@ -260,6 +304,9 @@ def prepare(args):
             request = {'image': args.image, 'host': args.host, 'port': args.port, 'generation': args.generation}
             if journal.value['request'] != request or journal.value['sourceDigest'] != hashlib.sha256(raw).hexdigest():
                 raise ValueError('same generation request drift')
+            # An interrupted control refresh remains a ready VPN generation;
+            # rollback its code before ordinary reuse, never generic cleanup.
+            journal.recover_control_maintenance()
             state = json.loads((directory / 'ready.json').read_text())
             target_identity = journal.value['containers'][state['targetContainer']]['id']
             observed = inspect_container(run, target_identity)
@@ -290,6 +337,9 @@ def prepare(args):
             target_interface, target_peers = parse_config((directory / 'awg0.conf').read_bytes())
             if namespace_snapshot(run, state['targetContainer'], target_interface, 'awg0', [journal.value['owner']]) != snapshot:
                 raise ValueError('ready_namespace_policy_or_mtu_changed')
+            validate_ready_target(run, state, interface, peers, target_interface, target_peers,
+                                  getattr(args, 'automatic', False))
+            journal.maintain_controls(Path(__file__).parent)
             if state['expiresAt'] < int(time.time()) + 86400:
                 state['expiresAt'] = int(time.time()) + 30 * 86400
                 atomic(directory / 'ready.json', state)
@@ -547,6 +597,8 @@ def prepare(args):
                 'serverPublicKey': server_key, 'signingPublicKey': public, 'legacyRetained': True}
         journal.value['receipt'] = receipt
         journal.value['targetEpoch'] = journal.owned(target)['State'].get('StartedAt')
+        journal.value['controlRecipe'] = {name: digest((directory / name).read_bytes()) for name in CONTROL_FILES}
+        journal.value['controlLoadedReceipt'] = True
         journal.save('ready')
         committed = True
         return receipt

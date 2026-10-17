@@ -14,5 +14,6 @@ android {
 dependencies {
     compileOnly(project(":utils"))
     compileOnly(project(":protocolApi"))
+    compileOnly(libs.androidx.annotation)
     implementation(libs.kotlinx.coroutines)
 }

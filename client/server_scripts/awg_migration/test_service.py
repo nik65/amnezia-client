@@ -252,6 +252,94 @@ class MigrationServiceTests(unittest.TestCase):
             old = db.execute('SELECT proved FROM grants WHERE digest=?', (hashlib.sha256(grant.encode()).hexdigest(),)).fetchone()
             self.assertEqual(1, old[0])
 
+    def test_renewed_grant_challenge_preserves_acknowledgeable_original_proof(self):
+        grant = self.enroll()
+        offer = json.loads(base64.b64decode(self.offer(grant).response()['payload']))
+        challenge = {'schema': 1, 'peerPublicKey': PEER, 'generation': 1,
+                     'grant': grant, 'nonce': offer['challenge']['nonce']}
+        original = self.request('challenge', challenge, role=self.target).response()
+        renew = dict(challenge, nonce='r' * 43, challengeReceipt=original)
+        renewed = self.request('renew', renew, role=self.target)
+        self.assertEqual(200, renewed.status)
+        payload = json.loads(base64.b64decode(renewed.response()['payload']))
+        challenge['grant'] = payload['grant']
+        repeated = self.request('challenge', challenge, role=self.target)
+        self.assertEqual(200, repeated.status)
+        self.assertEqual(original, repeated.response())
+        ack = {'schema': 1, 'peerPublicKey': PEER, 'generation': 1,
+               'grant': payload['grant'], 'challengeReceipt': repeated.response()}
+        self.assertEqual(200, self.request('ack', ack, role=self.target).status)
+        self.assertEqual(200, self.request('ack', dict(ack, challengeReceipt=original), role=self.target).status)
+
+    def test_fresh_same_generation_attempt_after_expiry_rejects_old_grant_and_proof(self):
+        self.state['expiresAt'] = self.now + 3 * 86400
+        (self.directory / 'ready.json').write_text(json.dumps(self.state))
+        old_grant = self.enroll()
+        old_offer = json.loads(base64.b64decode(self.offer(old_grant).response()['payload']))
+        old_challenge = {'schema': 1, 'peerPublicKey': PEER, 'generation': 1,
+                         'grant': old_grant, 'nonce': old_offer['challenge']['nonce']}
+        old_receipt = self.request('challenge', old_challenge, role=self.target).response()
+        later = self.now + 86401
+        (self.directory / 'handshakes.tsv').write_text(PEER + '\t' + str(later))
+        with patch('service.time.time', return_value=later):
+            fresh = self.bootstrap(nonce='f' * 43)
+            self.assertEqual(200, fresh.status)
+            fresh_grant = fresh.response()['grant']
+            self.assertNotEqual(old_grant, fresh_grant)
+            offer_body = {'schema': 1, 'peerPublicKey': PEER,
+                          'sourceFingerprint': FP, 'nonce': 'f' * 43}
+            offered = self.request('offer', offer_body,
+                                   headers={'X-Amnezia-Migration-Grant': fresh_grant})
+            self.assertEqual(200, offered.status)
+            offer = json.loads(base64.b64decode(offered.response()['payload']))
+            self.assertEqual('f' * 43, offer['nonce'])
+            self.assertEqual(1, offer['generation'])
+            self.assertEqual(FP, offer['sourceFingerprint'])
+            self.assertGreater(offer['expiresAt'], later)
+            self.assertNotEqual(old_offer['challenge']['nonce'], offer['challenge']['nonce'])
+            self.assertEqual(403, self.offer(old_grant).status)
+            self.assertEqual(403, self.request('challenge', old_challenge, role=self.target).status)
+            challenge = dict(old_challenge, grant=fresh_grant)
+            self.assertEqual(403, self.request('challenge', challenge, role=self.target).status)
+            challenge['nonce'] = offer['challenge']['nonce']
+            fresh_receipt = self.request('challenge', challenge, role=self.target)
+            self.assertEqual(200, fresh_receipt.status)
+            ack = {'schema': 1, 'peerPublicKey': PEER, 'generation': 1,
+                   'grant': fresh_grant, 'challengeReceipt': old_receipt}
+            self.assertEqual(403, self.request('ack', ack, role=self.target).status)
+            self.assertEqual(200, self.request('ack', dict(ack, challengeReceipt=fresh_receipt.response()),
+                                              role=self.target).status)
+
+    def test_grant_expiry_exact_boundary_rejects_offer_challenge_and_ack(self):
+        grant = self.enroll()
+        offer = json.loads(base64.b64decode(self.offer(grant).response()['payload']))
+        challenge = {'schema': 1, 'peerPublicKey': PEER, 'generation': 1,
+                     'grant': grant, 'nonce': offer['challenge']['nonce']}
+        receipt = self.request('challenge', challenge, role=self.target).response()
+        with closing(sqlite3.connect(self.directory / 'grants.sqlite3')) as db:
+            db.execute('UPDATE grants SET expires=?', (self.now,))
+            db.commit()
+        ack = {'schema': 1, 'peerPublicKey': PEER, 'generation': 1,
+               'grant': grant, 'challengeReceipt': receipt}
+        with patch('service.time.time', return_value=self.now):
+            self.assertEqual(403, self.offer(grant).status)
+            self.assertEqual(403, self.request('challenge', challenge, role=self.target).status)
+            self.assertEqual(403, self.request('ack', ack, role=self.target).status)
+
+    def test_peer_cannot_use_another_peers_grant_or_handshake(self):
+        grant = self.enroll()
+        offer = json.loads(base64.b64decode(self.offer(grant).response()['payload']))
+        other_peer = base64.b64encode(b'other peer identity'.ljust(32, b'x')).decode()
+        self.state['peers'][other_peer] = {'sourceIp': '10.8.1.3', 'targetIp': '10.8.1.3',
+                                         'clientAddress': '10.8.1.3/32', 'clientId': 'b' * 64}
+        (self.directory / 'ready.json').write_text(json.dumps(self.state))
+        request = {'schema': 1, 'peerPublicKey': other_peer, 'generation': 1,
+                   'grant': grant, 'nonce': offer['challenge']['nonce']}
+        self.assertEqual(403, self.request('challenge', request, role=self.target, ip='10.8.1.3').status)
+        request['peerPublicKey'] = PEER
+        (self.directory / 'handshakes.tsv').write_text(other_peer + '\t' + str(self.now))
+        self.assertEqual(403, self.request('challenge', request, role=self.target).status)
+
     def test_repeated_dispatch_closes_real_database_handles_on_success_and_failure(self):
         real_connect = sqlite3.connect
         connections = []

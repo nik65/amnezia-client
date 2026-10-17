@@ -8,6 +8,7 @@
 #include <QFile>
 #include <QObject>
 #include <QTimer>
+#include <functional>
 
 class WindowsTunnelLogger final : public QObject {
   Q_OBJECT
@@ -15,6 +16,7 @@ class WindowsTunnelLogger final : public QObject {
 
  public:
   WindowsTunnelLogger(const QString& filename, QObject* parent = nullptr);
+  WindowsTunnelLogger(std::function<QString()> pathProvider, QObject* parent = nullptr);
   ~WindowsTunnelLogger();
 
  private slots:
@@ -24,6 +26,8 @@ class WindowsTunnelLogger final : public QObject {
   bool openLogData();
   void process(int index);
   int nextIndex();
+  bool unavailable(const QString& reason);
+  void closeLogData();
 
  private:
   QTimer m_timer;
@@ -31,6 +35,10 @@ class WindowsTunnelLogger final : public QObject {
   uchar* m_logdata = nullptr;
   int m_logindex = -1;
   quint64 m_startTime = 0;
+  std::function<QString()> m_pathProvider;
+  QString m_mappedPath;
+  QString m_failureReason;
+  int m_retryDelayMs = 1000;
 };
 
 #endif  // WINDOWSTUNNELLOGGER_H

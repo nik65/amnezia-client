@@ -139,7 +139,7 @@ class ThreadingSourceContracts(unittest.TestCase):
         self.assertIn("m_reconnectAfterClientRouteResolution = true", pending)
         self.assertIn("m_deferredManagedRouteReconnectTimer.start()", pending)
         self.assertIn(
-            "return ManagedRouteUpdateResult::ReconnectDeferred", pending
+            "return finish(ManagedRouteUpdateResult::ReconnectDeferred, Reason::DnsPending)", pending
         )
         self.assertNotIn("reconnectToVpn", pending)
 
@@ -158,7 +158,7 @@ class ThreadingSourceContracts(unittest.TestCase):
             "invalidateAuthoritativeManagedRouteBase()", update_result
         )
         immediate_reconnect = reconcile.index(
-            "if (updateResult == ManagedRouteUpdateResult::ReconnectRequired)",
+            "if (updateResult == ManagedRouteUpdateResult::ReconnectRequired",
             base_invalidation,
         )
         reconnect_marked = reconcile.index(
@@ -185,7 +185,16 @@ class ThreadingSourceContracts(unittest.TestCase):
         self.assertLess(reconnect_marked, acknowledgement_emit)
         self.assertLess(acknowledgement_emit, queued_reconnect)
         self.assertLess(epoch_guard, server_guard)
-        self.assertNotIn("reconnectToVpn()", reconcile)
+        recovery = reconcile[reconcile.index(
+            "if (updateResult == ManagedRouteUpdateResult::RuntimeUncertain)",
+            acknowledgement_emit,
+        ):queued_reconnect]
+        self.assertIn("expectedConnectionEpoch == m_connectionEpoch", recovery)
+        self.assertIn("expectedServerId == m_serverId", recovery)
+        self.assertIn("recordReconnectFloor()", recovery)
+        self.assertIn("reconnectToVpn()", recovery)
+        self.assertIn("else if (updateResult == ManagedRouteUpdateResult::ReconnectRequired)", recovery)
+        self.assertEqual(reconcile.count("reconnectToVpn()"), 1)
         self.assertIn("m_managedRouteReconnectGate.request", reconnect_schedule)
         self.assertIn(
             "generation, expectedConnectionEpoch, expectedServerId,\n"

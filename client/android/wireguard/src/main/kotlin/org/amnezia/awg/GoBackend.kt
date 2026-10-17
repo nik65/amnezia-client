@@ -6,5 +6,7 @@ object GoBackend {
     external fun awgGetSocketV6(handle: Int): Int
     external fun awgTurnOff(handle: Int)
     external fun awgTurnOn(ifName: String, tunFd: Int, settings: String): Int
+    external fun awgTurnOnUnion(ifName: String, tunFd: Int, settings: String,
+                                callbacks: org.amnezia.vpn.protocol.wireguard.UnionVpnCallbacks, policy: String): Int
     external fun awgVersion(): String
 }

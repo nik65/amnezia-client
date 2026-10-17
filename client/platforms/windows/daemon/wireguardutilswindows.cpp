@@ -18,6 +18,7 @@
 
 #include "leakdetector.h"
 #include "logger.h"
+#include "uapiresult.h"
 #include "windowsfirewall.h"
 
 #pragma comment(lib, "iphlpapi.lib")
@@ -59,6 +60,11 @@ WireguardUtilsWindows::~WireguardUtilsWindows() {
 
 QList<WireguardUtils::PeerStatus> WireguardUtilsWindows::getPeerStatus() {
   QString reply = m_tunnel.uapiCommand("get=1");
+  const int err = amnezia::uapi::errnoFromReply(reply);
+  if (err != 0) {
+    logger.error() << "Peer status query failed with UAPI errno:" << err;
+    return {};
+  }
   PeerStatus status;
   QList<PeerStatus> peerList;
   for (const QString& line : reply.split('\n')) {
@@ -94,12 +100,32 @@ QList<WireguardUtils::PeerStatus> WireguardUtilsWindows::getPeerStatus() {
     peerList.append(status);
   }
 
-  const auto keyLine = reply.split('\n').filter(QRegularExpression("^header_protection_key="));
+  // Capability and key evidence belong to the device section. Do not accept
+  // partial hex decoding or peer-section lookalikes as native confirmation.
+  QMap<QString, QString> deviceFields;
+  QSet<QString> duplicateFields;
+  for (const auto &line : reply.split('\n')) {
+    const int separator = line.indexOf('=');
+    const auto name = line.left(separator);
+    if (name == "public_key") break;
+    if (deviceFields.contains(name)) duplicateFields.insert(name);
+    deviceFields.insert(name, line.mid(separator + 1));
+  }
+  const auto validFlag = [&](const QString &name) {
+    const auto value = deviceFields.value(name);
+    return !duplicateFields.contains(name) &&
+           (value == "true" || value == "false" || value == "0" || value == "1");
+  };
+  const bool awg3Capable = validFlag("random_trailers") && validFlag("disable_cookies");
+  const auto key = deviceFields.value("header_protection_key");
+  const bool validKey = !duplicateFields.contains("header_protection_key") &&
+      QRegularExpression(QStringLiteral("^[0-9a-fA-F]{64}$")).match(key).hasMatch();
+  const auto parameterDigests = amnezia::awgBackendObservation::parameterDigests(reply);
   for (auto &peer : peerList) {
-    peer.m_parameterDigests = amnezia::awgBackendObservation::parameterDigests(reply);
-    peer.m_awg3Capable = reply.contains("\nrandom_trailers=") && reply.contains("\ndisable_cookies=");
-    if (!keyLine.isEmpty()) peer.m_headerProtectionKeyHash = QString::fromLatin1(QCryptographicHash::hash(
-            QByteArray::fromHex(keyLine.first().section('=', 1).toUtf8()), QCryptographicHash::Sha256).toHex());
+    peer.m_parameterDigests = parameterDigests;
+    peer.m_awg3Capable = awg3Capable;
+    if (validKey) peer.m_headerProtectionKeyHash = QString::fromLatin1(QCryptographicHash::hash(
+            QByteArray::fromHex(key.toUtf8()), QCryptographicHash::Sha256).toHex());
   }
   return peerList;
 }
@@ -231,17 +257,30 @@ bool WireguardUtilsWindows::updatePeer(const InterfaceConfig& config) {
   }
 
   // Exclude the server address, except for multihop exit servers.
+  bool endpointRoutesReady = true;
   if (m_routeMonitor && config.m_hopType != InterfaceConfig::MultiHopExit) {
     if (!config.m_serverIpv4AddrIn.isEmpty()) {
-      m_routeMonitor->addExclusionRoute(IPAddress(config.m_serverIpv4AddrIn));
+      endpointRoutesReady =
+          m_routeMonitor->addExclusionRoute(
+              IPAddress(config.m_serverIpv4AddrIn)) && endpointRoutesReady;
     }
     if (!config.m_serverIpv6AddrIn.isEmpty()) {
-      m_routeMonitor->addExclusionRoute(IPAddress(config.m_serverIpv6AddrIn));
+      endpointRoutesReady =
+          m_routeMonitor->addExclusionRoute(
+              IPAddress(config.m_serverIpv6AddrIn)) && endpointRoutesReady;
     }
+  }
+  if (!endpointRoutesReady) {
+    logger.error() << "Failed to install peer endpoint exclusion route";
+    return false;
   }
 
   QString reply = m_tunnel.uapiCommand(message);
-  logger.debug() << "DATA:" << reply;
+  const int err = amnezia::uapi::errnoFromReply(reply);
+  if (err != 0) {
+    logger.error() << "Peer configuration failed with UAPI errno:" << err;
+    return false;
+  }
   m_configuredPeers.insert(config.m_serverPublicKey);
   return true;
 }
@@ -256,16 +295,6 @@ bool WireguardUtilsWindows::deletePeer(const InterfaceConfig& config) {
   // peer generation can be removed after its UAPI removal succeeds.
   const bool deferFirewallRemoval = m_configuredPeers.size() <= 1;
 
-  // Clear exclusion routes for this peer.
-  if (m_routeMonitor && config.m_hopType != InterfaceConfig::MultiHopExit) {
-    if (!config.m_serverIpv4AddrIn.isEmpty()) {
-      m_routeMonitor->deleteExclusionRoute(IPAddress(config.m_serverIpv4AddrIn));
-    }
-    if (!config.m_serverIpv6AddrIn.isEmpty()) {
-      m_routeMonitor->deleteExclusionRoute(IPAddress(config.m_serverIpv6AddrIn));
-    }
-  }
-
   QString message;
   QTextStream out(&message);
   out << "set=1\n";
@@ -273,8 +302,31 @@ bool WireguardUtilsWindows::deletePeer(const InterfaceConfig& config) {
   out << "remove=true\n";
 
   QString reply = m_tunnel.uapiCommand(message);
-  logger.debug() << "DATA:" << reply;
-  m_configuredPeers.remove(config.m_serverPublicKey);
+  const int err = amnezia::uapi::errnoFromReply(reply);
+  if (err != 0) {
+    logger.error() << "Peer deletion failed with UAPI errno:" << err;
+    return false;
+  }
+
+  // Clear exclusion routes only after native peer removal succeeds. If UAPI
+  // fails, the route monitor retains ownership for a later cleanup.
+  bool endpointRoutesClean = true;
+  if (m_routeMonitor && config.m_hopType != InterfaceConfig::MultiHopExit) {
+    if (!config.m_serverIpv4AddrIn.isEmpty()) {
+      endpointRoutesClean =
+          m_routeMonitor->deleteExclusionRoute(
+              IPAddress(config.m_serverIpv4AddrIn)) && endpointRoutesClean;
+    }
+    if (!config.m_serverIpv6AddrIn.isEmpty()) {
+      endpointRoutesClean =
+          m_routeMonitor->deleteExclusionRoute(
+              IPAddress(config.m_serverIpv6AddrIn)) && endpointRoutesClean;
+    }
+  }
+  if (!endpointRoutesClean) {
+    logger.error() << "Failed to remove peer endpoint exclusion route";
+    return false;
+  }
 
   if (!deferFirewallRemoval &&
       (m_firewall == nullptr ||
@@ -282,6 +334,7 @@ bool WireguardUtilsWindows::deletePeer(const InterfaceConfig& config) {
     logger.error() << "Failed to disable Windows firewall peer policy";
     return false;
   }
+  m_configuredPeers.remove(config.m_serverPublicKey);
   return true;
 }
 
@@ -349,9 +402,10 @@ bool WireguardUtilsWindows::updateRoutePrefix(const IPAddress& prefix) {
 }
 
 bool WireguardUtilsWindows::deleteRoutePrefix(const IPAddress& prefix) {
+  bool capturedRoutesClean = true;
   if (m_routeMonitor && (prefix.prefixLength() == 0)) {
     // Deactivate the route capture feature.
-    m_routeMonitor->setDetaultRouteCapture(false);
+    capturedRoutesClean = m_routeMonitor->setDetaultRouteCapture(false);
   }
   // Build the route
   
@@ -365,7 +419,7 @@ bool WireguardUtilsWindows::deleteRoutePrefix(const IPAddress& prefix) {
                    << prefix.toString()
                    << "result:" << result;
   }
-  return isSuccessfulRouteDelete(result);
+  return capturedRoutesClean && isSuccessfulRouteDelete(result);
 }
 
 bool WireguardUtilsWindows::addExclusionRoute(const IPAddress& prefix) {
@@ -374,6 +428,41 @@ bool WireguardUtilsWindows::addExclusionRoute(const IPAddress& prefix) {
 
 bool WireguardUtilsWindows::deleteExclusionRoute(const IPAddress& prefix) {
   return m_routeMonitor->deleteExclusionRoute(prefix);
+}
+
+amnezia::exclusionPolicy::Result WireguardUtilsWindows::replaceExclusionPolicy(
+    const InterfaceConfig& before, const InterfaceConfig& after) {
+  if (!m_routeMonitor || !m_tunnel.isRunning() ||
+      m_configuredPeers.size() != 1 ||
+      !m_configuredPeers.contains(before.m_serverPublicKey) ||
+      before.m_serverPublicKey != after.m_serverPublicKey ||
+      before.m_killSwitchEnabled != after.m_killSwitchEnabled) {
+    return amnezia::exclusionPolicy::Unsupported;
+  }
+  const auto addRoute = [&](const QString& route) {
+    return m_routeMonitor->addExclusionRoute(IPAddress(route));
+  };
+  const auto removeRoute = [&](const QString& route) {
+    return m_routeMonitor->deleteExclusionRoute(IPAddress(route));
+  };
+  if (!before.m_killSwitchEnabled) {
+    // KillSwitch-off has no deny fence. Keep this transition route-only and
+    // preserve old bypasses until every new route has native readback.
+    return amnezia::exclusionPolicy::replaceRoutes(
+        before.m_excludedAddresses, after.m_excludedAddresses, addRoute,
+        removeRoute);
+  }
+  if (!m_firewall) {
+    return amnezia::exclusionPolicy::Unsupported;
+  }
+  return amnezia::exclusionPolicy::replace(
+      before.m_excludedAddresses, after.m_excludedAddresses,
+      [&](const QStringList& exclusions) {
+        InterfaceConfig guarded = before;
+        guarded.m_excludedAddresses = exclusions;
+        return m_firewall->enablePeerTraffic(guarded);
+      },
+      addRoute, removeRoute);
 }
 
 bool WireguardUtilsWindows::excludeLocalNetworks(

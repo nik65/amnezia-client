@@ -973,6 +973,21 @@ private slots:
                              [](const FakeCommandRunner::Call &call) {
             return call.arguments.contains(QStringLiteral("del"));
         }));
+
+        // These commands are in-memory: a 30s systemd watchdog must not be
+        // exhausted just proving ownership before submitting cleanup batches.
+        // The former nested rule scan took over 40s for this selector count.
+        QElapsedTimer cleanupTimer;
+        cleanupTimer.start();
+        const RouteReconcileResult cleared = reconciler.clear();
+        const qint64 cleanupMs = cleanupTimer.elapsed();
+        QVERIFY2(cleared.ok, qPrintable(cleared.message));
+        QVERIFY2(cleanupMs < 10'000,
+                 qPrintable(QStringLiteral("in-memory cleanup starved the event loop for %1ms")
+                                    .arg(cleanupMs)));
+        QVERIFY(runner->managedBypassRoutes.isEmpty());
+        QVERIFY(!runner->fullTunnelInstalled);
+        QCOMPARE(runner->batchCalls, 2 * ((routes.size() + 15) / 16));
     }
 
     void bypassHostAndExplicitHostPrefixCompareIdentically()

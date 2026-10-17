@@ -39,6 +39,9 @@ class InterfaceConfig {
   QString m_persistentKeepalive;
   QList<IPAddress> m_allowedIPAddressRanges;
   QStringList m_excludedAddresses;
+  QStringList m_managedExcludedAddresses;
+  bool m_managedExclusionsKnown = false;
+  QString m_routeConnectionNonce;
   QStringList m_vpnDisabledApps;
   QStringList m_allowedDnsServers;
   bool m_killSwitchEnabled;

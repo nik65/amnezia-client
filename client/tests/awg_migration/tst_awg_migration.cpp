@@ -1,5 +1,6 @@
 #include <QtTest>
 #include "../../../common/awgMigration.h"
+#include "../../../common/awgMigrationRecovery.h"
 #include "../../../common/awgBackendObservation.h"
 #include "../../../common/awgMigrationSecretStore.h"
 #include "../../../common/awgMigrationTransport.h"
@@ -24,6 +25,176 @@ signals:
 class AwgMigrationTests : public QObject {
     Q_OBJECT
 private slots:
+    void persistedRecoveryCanAuthorizeFreshOfferAfterAdoption()
+    {
+        // Reconstruct an interrupted journal without any in-memory trial flag.
+        // Native cleanup receipt provenance is supplied by the controller;
+        // these helpers verify its persisted identity and offer authorization.
+        const QJsonObject target{{"endpoint", "example.test:51822"}};
+        const QJsonObject oldOffer{{"generation", 7}, {"nonce", "retired-nonce"}, {"target", target}};
+        const QJsonObject persisted{{"state", "recovery_required"}, {"sourceHash", "source"},
+            {"signingPublicKey", "signer"}, {"highestGeneration", 7}, {"stagedGeneration", 7},
+            {"stagedTargetHash", digest(target)}, {"nonce", "retired-nonce"},
+            {"grant", "retired-grant"}, {"offer", oldOffer}};
+        auto restored = QJsonDocument::fromJson(QJsonDocument(persisted).toJson()).object();
+        QVERIFY(rollbackRecoveryAllowed(restored.value("state").toString(), "source", "source", {}));
+        QVERIFY(cleanupAuthorizationAllowed("server", "server", "adopted-activation", "adopted-activation", 42, {}));
+        const auto cleanup = recoveryJournalAfterCleanup(restored, "adopted-activation", 42);
+        const auto beforeCleanup = restored;
+        QString attemptedState;
+        QVERIFY(!storeRecoveryJournal(restored, cleanup, [&](const QJsonObject &attempt) {
+            attemptedState = attempt.value("state").toString();
+            return false;
+        }));
+        QCOMPARE(attemptedState, QString("rolled_back"));
+        QCOMPARE(restored, beforeCleanup);
+        QJsonObject durable;
+        QVERIFY(storeRecoveryJournal(restored, cleanup, [&](const QJsonObject &attempt) {
+            durable = QJsonDocument::fromJson(QJsonDocument(attempt).toJson()).object();
+            return true;
+        }));
+        QCOMPARE(restored, durable);
+        QVERIFY(!restored.value("recoveryAuthorization").toObject().isEmpty());
+        for (const auto &key : {"grant", "nonce", "offer", "challengeReceipt", "candidateHash"})
+            QVERIFY(!restored.contains(key));
+        QCOMPARE(restored.value("sourceHash").toString(), QString("source"));
+        QCOMPARE(restored.value("signingPublicKey").toString(), QString("signer"));
+        // This is the same persisted authorization after a process restart.
+        restored = QJsonDocument::fromJson(QJsonDocument(restored).toJson()).object();
+        QVERIFY(!cleanupAuthorizationAllowed("server", "server", "adopted-activation", "adopted-activation", 42,
+                                            restored.value("lastRecoveryCleanupToken").toString()));
+        auto freshOffer = oldOffer; freshOffer["nonce"] = "fresh-nonce";
+        restored["nonce"] = "fresh-nonce";
+        restored["grant"] = "fresh-grant";
+        restored["offer"] = freshOffer;
+        restored["state"] = "staged";
+        QVERIFY(sameGenerationRecoveryAllowed(restored, freshOffer, "source"));
+        const auto beforeTrial = restored;
+        const auto trial = recoveryJournalForTrial(restored, freshOffer.value("generation"));
+        QVERIFY(!storeRecoveryJournal(restored, trial, [](const QJsonObject &) { return false; }));
+        QCOMPARE(restored, beforeTrial);
+        QVERIFY(sameGenerationRecoveryAllowed(restored, freshOffer, "source"));
+        QVERIFY(storeRecoveryJournal(restored, trial, [&](const QJsonObject &attempt) {
+            durable = QJsonDocument::fromJson(QJsonDocument(attempt).toJson()).object();
+            return true;
+        }));
+        QCOMPARE(restored, durable);
+        QCOMPARE(restored.value("state").toString(), QString("trial"));
+        restored = QJsonDocument::fromJson(QJsonDocument(restored).toJson()).object();
+        QVERIFY(!sameGenerationRecoveryAllowed(restored, freshOffer, "source"));
+        QCOMPARE(restored.value("highestGeneration").toInt(), 7);
+    }
+    void cleanupAuthorizationRejectsReplayAndForeignActivation()
+    {
+        QVERIFY(cleanupAuthorizationAllowed("server", "server", "activation-B", "activation-B", 42, "activation-A"));
+        QVERIFY(!cleanupAuthorizationAllowed("server", "server", "activation-A", "activation-A", 43, "activation-A"));
+        QVERIFY(!cleanupAuthorizationAllowed("foreign", "server", "activation-B", "activation-B", 42, "activation-A"));
+        QVERIFY(!cleanupAuthorizationAllowed("server", "server", "activation-A", "activation-B", 42, "activation-A"));
+        QVERIFY(!cleanupAuthorizationAllowed("server", "server", "activation-B", "activation-B", 0, "activation-A"));
+        QVERIFY(!cleanupAuthorizationAllowed("", "", "activation-B", "activation-B", 42, "activation-A"));
+        QVERIFY(!cleanupAuthorizationAllowed("server", "server", "", "", 42, "activation-A"));
+    }
+    void recoveryAuthorizationPinsAttemptAndRequiresFreshCredentials()
+    {
+        const QJsonObject target{{"endpoint", "example.test:51822"}};
+        QJsonObject oldOffer{{"generation", 7}, {"nonce", "old-nonce"}, {"target", target}};
+        QJsonObject journal{{"sourceHash", "source"}, {"signingPublicKey", "signer"},
+                            {"highestGeneration", 7}, {"nonce", "old-nonce"},
+                            {"grant", "old-grant"}, {"offer", oldOffer},
+                            {"stagedGeneration", 7}, {"stagedTargetHash", digest(target)},
+                            {"lastRecoveryCleanupToken", "activation-A"}, {"lastRecoveryCleanupEpoch", "42"}};
+        const auto authorization = createRecoveryAuthorization(journal);
+        QVERIFY(!authorization.isEmpty());
+        QVERIFY(!QJsonDocument(authorization).toJson().contains("old-grant"));
+        QVERIFY(!QJsonDocument(authorization).toJson().contains("old-nonce"));
+        journal["recoveryAuthorization"] = authorization;
+        auto offer = oldOffer;
+        QVERIFY(!sameGenerationRecoveryAllowed(journal, offer, "source"));
+        journal["nonce"] = "fresh-nonce";
+        offer["nonce"] = "fresh-nonce";
+        QVERIFY(!sameGenerationRecoveryAllowed(journal, offer, "source")); // grant still stale
+        journal["grant"] = "fresh-grant";
+        QVERIFY(sameGenerationRecoveryAllowed(journal, offer, "source"));
+        auto staleNonceJournal = journal; staleNonceJournal["nonce"] = "old-nonce";
+        QVERIFY(!sameGenerationRecoveryAllowed(staleNonceJournal, oldOffer, "source"));
+        for (const auto &field : {"sourceHash", "generation", "targetHash", "signingPublicKey", "previousNonceHash", "previousGrantHash", "cleanupToken", "cleanupEpoch"}) {
+            auto incompleteAuthorization = authorization; incompleteAuthorization.remove(field);
+            auto incompleteJournal = journal; incompleteJournal["recoveryAuthorization"] = incompleteAuthorization;
+            QVERIFY2(!sameGenerationRecoveryAllowed(incompleteJournal, offer, "source"), field);
+        }
+        for (const auto &field : {"sourceHash", "signingPublicKey", "highestGeneration", "stagedGeneration", "stagedTargetHash", "nonce", "grant"}) {
+            auto changed = journal;
+            changed.remove(field);
+            QVERIFY2(!sameGenerationRecoveryAllowed(changed, offer, "source"), field);
+        }
+        QVERIFY(!sameGenerationRecoveryAllowed(journal, offer, "edited-source"));
+        auto changed = journal; changed["signingPublicKey"] = "foreign-signer";
+        QVERIFY(!sameGenerationRecoveryAllowed(changed, offer, "source"));
+        changed = journal; changed["lastRecoveryCleanupToken"] = "foreign-cleanup";
+        QVERIFY(!sameGenerationRecoveryAllowed(changed, offer, "source"));
+        changed = journal; changed["lastRecoveryCleanupEpoch"] = "43";
+        QVERIFY(!sameGenerationRecoveryAllowed(changed, offer, "source"));
+        auto changedOffer = offer; changedOffer["target"] = QJsonObject{{"endpoint", "other.test:51822"}};
+        QVERIFY(!sameGenerationRecoveryAllowed(journal, changedOffer, "source"));
+        changedOffer = offer; changedOffer["nonce"] = "old-nonce";
+        QVERIFY(!sameGenerationRecoveryAllowed(journal, changedOffer, "source"));
+        for (const auto generation : {6.0, 7.5, 8.0}) {
+            changedOffer = offer; changedOffer["generation"] = generation;
+            QVERIFY(!sameGenerationRecoveryAllowed(journal, changedOffer, "source"));
+        }
+        // Production consumes this persisted field before a trial; reconstruct
+        // from serialized state to verify it cannot authorize a second attempt.
+        auto consumed = journal;
+        consumed.remove("recoveryAuthorization");
+        const auto restored = QJsonDocument::fromJson(QJsonDocument(consumed).toJson()).object();
+        QCOMPARE(restored.value("highestGeneration").toInt(), 7);
+        QVERIFY(!sameGenerationRecoveryAllowed(restored, offer, "source"));
+    }
+    void recoveryAuthorizationRejectsIncompleteOriginalEvidence()
+    {
+        const QJsonObject offer{{"generation", 7}, {"target", QJsonObject{{"endpoint", "example.test:51822"}}}};
+        const QJsonObject journal{{"sourceHash", "source"}, {"signingPublicKey", "signer"},
+                                 {"highestGeneration", 7}, {"nonce", "nonce"}, {"grant", "grant"}, {"offer", offer},
+                                 {"stagedGeneration", 7}, {"stagedTargetHash", digest(offer.value("target").toObject())},
+                                 {"lastRecoveryCleanupToken", "activation-A"}, {"lastRecoveryCleanupEpoch", "42"}};
+        QVERIFY(!createRecoveryAuthorization(journal).isEmpty());
+        for (const auto &field : {"sourceHash", "signingPublicKey", "highestGeneration", "stagedGeneration", "stagedTargetHash", "nonce", "grant", "offer", "lastRecoveryCleanupToken", "lastRecoveryCleanupEpoch"}) {
+            auto incomplete = journal; incomplete.remove(field);
+            QVERIFY2(createRecoveryAuthorization(incomplete).isEmpty(), field);
+        }
+        auto invalid = journal; invalid["highestGeneration"] = 8;
+        QVERIFY(createRecoveryAuthorization(invalid).isEmpty());
+        auto fractionalOffer = offer; fractionalOffer["generation"] = 7.5;
+        invalid["offer"] = fractionalOffer; invalid["highestGeneration"] = 7.5;
+        QVERIFY(createRecoveryAuthorization(invalid).isEmpty());
+    }
+    void recoveryRollbackRequiresUnambiguousStoredSource_data()
+    {
+        QTest::addColumn<QString>("state");
+        QTest::addColumn<QString>("currentHash");
+        QTest::addColumn<QString>("sourceHash");
+        QTest::addColumn<QString>("candidateHash");
+        QTest::addColumn<bool>("allowed");
+        QTest::newRow("source-before-candidate") << QString("recovery_required") << QString("source") << QString("source") << QString() << true;
+        QTest::newRow("source-with-candidate") << QString("recovery_required") << QString("source") << QString("source") << QString("candidate") << true;
+        QTest::newRow("candidate-needs-separate-ack-proof") << QString("recovery_required") << QString("candidate") << QString("source") << QString("candidate") << false;
+        QTest::newRow("foreign-profile") << QString("recovery_required") << QString("edited") << QString("source") << QString("candidate") << false;
+        QTest::newRow("ambiguous-profile") << QString("recovery_required") << QString("same") << QString("same") << QString("same") << false;
+        QTest::newRow("missing-current") << QString("recovery_required") << QString() << QString("source") << QString("candidate") << false;
+        QTest::newRow("missing-source") << QString("recovery_required") << QString("candidate") << QString() << QString("candidate") << false;
+        QTest::newRow("empty-journal") << QString("recovery_required") << QString() << QString() << QString() << false;
+        for (const auto &state : {"", "trial", "committing", "ack_pending", "staged", "rolled_back", "committed", "unknown"})
+            QTest::newRow(qPrintable(QString("wrong-state-%1").arg(state))) << QString(state) << QString("source") << QString("source") << QString("candidate") << false;
+    }
+    void recoveryRollbackRequiresUnambiguousStoredSource()
+    {
+        QFETCH(QString, state);
+        QFETCH(QString, currentHash);
+        QFETCH(QString, sourceHash);
+        QFETCH(QString, candidateHash);
+        QFETCH(bool, allowed);
+        QCOMPARE(rollbackRecoveryAllowed(state, currentHash, sourceHash, candidateHash), allowed);
+    }
     void adoptedTunnelMayEnrollButNeverTrialsOrAcknowledges()
     {
         for (const auto &state : {"", "enrolling", "enrolled", "expired", "rolled_back"})

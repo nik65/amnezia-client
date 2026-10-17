@@ -79,6 +79,11 @@ LinuxNetworkWatcherWorker::~LinuxNetworkWatcherWorker() {
 }
 
 void LinuxNetworkWatcherWorker::initialize() {
+  if (m_initialized) {
+    logger.debug() << "initialize ignored: already initialized";
+    return;
+  }
+
   logger.debug() << "initialize";
 
   logger.debug()
@@ -97,6 +102,12 @@ void LinuxNetworkWatcherWorker::initialize() {
   }
 
   QDBusMessage msg = nm.call("GetDevices");
+  if (msg.type() == QDBusMessage::ErrorMessage || msg.arguments().isEmpty()) {
+    logger.error() << "NetworkManager GetDevices failed"
+                   << "errorName:" << msg.errorName()
+                   << "errorMessage:" << msg.errorMessage();
+    return;
+  }
   QDBusArgument arg = msg.arguments().at(0).value<QDBusArgument>();
   if (arg.currentType() != QDBusArgument::ArrayType) {
     logger.error() << "Expected an array of devices";
@@ -128,6 +139,7 @@ void LinuxNetworkWatcherWorker::initialize() {
                                        DBUS_NETWORKMANAGER,
                                        "StateChanged",
                                        this, SLOT(NMStateChanged(quint32)));
+  m_initialized = true;
 
   if (m_devicePaths.isEmpty()) {
     logger.warning() << "No wifi devices found";

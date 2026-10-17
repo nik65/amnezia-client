@@ -16,6 +16,7 @@
 #include <QJsonObject>
 
 #include "interfaceconfig.h"
+#include "exclusionpolicytransaction.h"
 
 constexpr const char* WG_INTERFACE = "amn0";
 
@@ -52,6 +53,11 @@ class WireguardUtils : public QObject {
   
   virtual bool addExclusionRoute(const IPAddress& prefix) = 0;
   virtual bool deleteExclusionRoute(const IPAddress& prefix) = 0;
+
+  virtual amnezia::exclusionPolicy::Result replaceExclusionPolicy(
+      const InterfaceConfig&, const InterfaceConfig&) {
+    return amnezia::exclusionPolicy::Unsupported;
+  }
 
   virtual bool excludeLocalNetworks(const QList<IPAddress>& addresses) = 0;
 };

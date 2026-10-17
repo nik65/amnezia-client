@@ -41,6 +41,7 @@ public:
         Updated,
         ReconnectRequired,
         ReconnectDeferred,
+        RuntimeUncertain,
     };
 
     struct ManagedRouteRuntimeSnapshot {
@@ -92,6 +93,7 @@ public slots:
                       DockerContainer container, const QJsonObject &vpnConfiguration);
     void reconnectToVpn();
     void disconnectFromVpn();
+    void requestMigrationTeardown(quint64 token, const QString &expectedServerId, quint64 expectedEpoch);
     void prepareManagedRouteConnectionSnapshot(quint64 generation,
                                                const QString &serverId,
                                                int mode,
@@ -124,6 +126,8 @@ signals:
     void migrationPeerObservation(const QString &serverId, quint64 connectionEpoch,
                                   const QJsonObject &observation);
     void migrationTeardownObserved(const QString &serverId, quint64 connectionEpoch, bool confirmed);
+    void migrationTeardownReceipt(const QString &serverId, quint64 token, quint64 retiringEpoch,
+                                  quint64 disconnectEpoch, bool confirmed);
     void bytesChanged(quint64 receivedBytes, quint64 sentBytes);
     void connectionStateChanged(Vpn::ConnectionState state);
     void connectionContextChanged(const QString &serverId,
@@ -168,6 +172,7 @@ private:
     quint64 m_connectionEpoch = 0;
     QPointer<MigrationTeardownContext> m_migrationTeardownContext;
     bool m_migrationTeardownRecoveryRequired = false;
+    quint64 m_migrationTeardownRequestToken = 0;
     quint64 m_latestManagedRouteReconcileGeneration = 0;
     quint64 m_latestPreparedManagedRouteSnapshotGeneration = 0;
     bool m_connectionRestoredWithoutStartup = false;
@@ -180,6 +185,8 @@ private:
     QString m_authoritativeManagedRouteServerId;
     QString m_authoritativeManagedRoutePolicyRevision;
     QString m_authoritativeManagedRoutePolicyContentHash;
+    QVariantMap m_authoritativeManagedRouteLocalSites;
+    QStringList m_authoritativeManagedRouteProtectedHosts;
     QString m_preparedManagedRouteServerId;
     RouteMode m_preparedManagedRouteMode = RouteMode::VpnAllSites;
     QStringList m_preparedManagedRoutes;

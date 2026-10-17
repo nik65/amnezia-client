@@ -29,6 +29,7 @@ public:
 
     virtual int routeAddList(const QString &gw, const QStringList &ips) override;
     virtual int routeAddTrustedList(const QString &gw, const QStringList &ips) override;
+    int replaceManagedExclusions(const QString &connectionNonce, const QStringList &before, const QStringList &after) override;
     virtual bool clearSavedRoutes() override;
     virtual bool routeDeleteList(const QString &gw, const QStringList &ips) override;
     virtual bool flushDns() override;

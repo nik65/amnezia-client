@@ -899,9 +899,13 @@ open class AmneziaVpnService : VpnService() {
     }
 
     @MainThread
-    private fun reconnect() {
-        if (!isConnected) return
+    private fun reconnect(decisionEpoch: Long) {
+        if (!isConnected) {
+            Log.d(TAG, "ReconnectDecision cause=validated_new_network epoch=$decisionEpoch outcome=coalesced_not_connected")
+            return
+        }
 
+        Log.d(TAG, "ReconnectDecision cause=validated_new_network epoch=$decisionEpoch outcome=accepted")
         Log.d(TAG, "Reconnect VPN")
 
         protocolState.value = RECONNECTING

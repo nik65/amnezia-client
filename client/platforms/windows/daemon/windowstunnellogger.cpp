@@ -5,6 +5,7 @@
 #include "windowstunnellogger.h"
 
 #include <QDateTime>
+#include <QFileInfo>
 
 #include "leakdetector.h"
 #include "logger.h"
@@ -39,7 +40,12 @@ Logger logger("tunnel.dll");
 
 WindowsTunnelLogger::WindowsTunnelLogger(const QString& filename,
                                          QObject* parent)
-    : QObject(parent), m_timer(this), m_logfile(filename, this) {
+    : WindowsTunnelLogger([filename] { return filename; }, parent) {}
+
+WindowsTunnelLogger::WindowsTunnelLogger(std::function<QString()> pathProvider,
+                                         QObject* parent)
+    : QObject(parent), m_timer(this), m_logfile(this),
+      m_pathProvider(std::move(pathProvider)) {
   MZ_COUNT_CTOR(WindowsTunnelLogger);
 
   m_startTime = QDateTime::currentMSecsSinceEpoch() * 1000000;
@@ -51,45 +57,71 @@ WindowsTunnelLogger::WindowsTunnelLogger(const QString& filename,
 
 WindowsTunnelLogger::~WindowsTunnelLogger() {
   MZ_COUNT_DTOR(WindowsTunnelLogger);
-  if (m_logdata) {
-    timeout();
+  m_timer.stop();
+  if (m_logdata) timeout();
+  closeLogData();
+}
 
-    m_logfile.unmap(m_logdata);
-    m_logdata = nullptr;
+void WindowsTunnelLogger::closeLogData() {
+  if (m_logdata) m_logfile.unmap(m_logdata);
+  m_logdata = nullptr;
+  m_logfile.close();
+  m_mappedPath.clear();
+  m_logindex = -1;
+}
+
+bool WindowsTunnelLogger::unavailable(const QString& reason) {
+  closeLogData();
+  if (m_failureReason != reason) {
+    logger.warning() << "Tunnel log unavailable" << "reason" << reason;
+    m_failureReason = reason;
   }
+  m_timer.setInterval(m_retryDelayMs);
+  m_retryDelayMs = qMin(m_retryDelayMs * 2, 30000);
+  return false;
 }
 
 bool WindowsTunnelLogger::openLogData() {
+  const QString filename = m_pathProvider ? m_pathProvider() : QString();
   if (m_logdata) {
-    return true;
+    if (filename.isEmpty()) return unavailable(QStringLiteral("path_not_ready"));
+    if (filename != m_mappedPath) closeLogData();
   }
+  if (m_logdata) {
+    if (m_logfile.size() < RINGLOG_FILE_SIZE)
+      return unavailable(QStringLiteral("incomplete_ring"));
+    if (QFileInfo::exists(m_logfile.fileName())) return true;
+    closeLogData();
+  }
+  if (filename.isEmpty()) return unavailable(QStringLiteral("path_not_ready"));
+  m_logfile.setFileName(filename);
   if (!m_logfile.open(QIODevice::ReadOnly)) {
-    return false;
+    return unavailable(QStringLiteral("open_failed_%1").arg(static_cast<int>(m_logfile.error())));
   }
+  if (m_logfile.size() < RINGLOG_FILE_SIZE)
+    return unavailable(QStringLiteral("incomplete_ring"));
 
   m_logdata = m_logfile.map(0, RINGLOG_FILE_SIZE);
   if (!m_logdata) {
-    m_logfile.close();
-    return false;
+    return unavailable(QStringLiteral("map_failed"));
   }
 
   // Check for a valid magic header
   uint32_t magic;
   memcpy(&magic, m_logdata, 4);
-  logger.debug() << "Opening tunnel log file" << m_logfile.fileName();
   if (magic != RINGLOG_MAGIC_HEADER) {
-    logger.error() << "Unexpected magic header:" << QString::number(magic, 16);
-    m_logfile.unmap(m_logdata);
-    m_logfile.close();
-    m_logdata = nullptr;
-    return false;
+    return unavailable(QStringLiteral("invalid_ring_header"));
   }
-
+  m_mappedPath = filename;
+  logger.debug() << "Tunnel log ready";
+  m_failureReason.clear();
+  m_retryDelayMs = 1000;
+  m_timer.setInterval(RINGLOG_POLL_MSEC);
   return true;
 }
 
 int WindowsTunnelLogger::nextIndex() {
-  qint32 value;
+  quint32 value;
   memcpy(&value, m_logdata + RINGLOG_INDEX_OFFSET, 4);
   return value % RINGLOG_MAX_ENTRIES;
 }
@@ -128,7 +160,8 @@ void WindowsTunnelLogger::timeout() {
   }
 
   /* Report new messages. */
-  while (m_logindex != nextIndex()) {
+  const int endIndex = nextIndex();
+  for (uint32_t count = 0; m_logindex != endIndex && count < RINGLOG_MAX_ENTRIES; ++count) {
     process(m_logindex);
     m_logindex = (m_logindex + 1) % RINGLOG_MAX_ENTRIES;
   }

@@ -11,6 +11,23 @@ add_executable(awg_migration_tests tst_awg_migration.cpp
 target_include_directories(awg_migration_tests PRIVATE ../..)
 target_link_libraries(awg_migration_tests PRIVATE Qt6::Core Qt6::Test OpenSSL::Crypto)
 add_test(NAME awg_migration COMMAND awg_migration_tests)
+add_executable(migration_teardown_lifecycle_tests tst_migration_teardown_lifecycle.cpp
+    ../../core/utils/migrationTeardownContext.h)
+target_include_directories(migration_teardown_lifecycle_tests PRIVATE ../..)
+target_link_libraries(migration_teardown_lifecycle_tests PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME migration_teardown_lifecycle COMMAND migration_teardown_lifecycle_tests)
+find_package(Qt6 REQUIRED COMPONENTS Network)
+add_executable(awg_migration_controller_tests tst_awg_migration_controller.cpp
+    ../../core/controllers/awgMigrationController.cpp
+    controller_stubs/core/repositories/secureServersRepository.h)
+target_compile_definitions(awg_migration_controller_tests PRIVATE AMNEZIA_AWG_MIGRATION_CONTROLLER_TESTING)
+target_include_directories(awg_migration_controller_tests BEFORE PRIVATE controller_stubs ../..)
+target_link_libraries(awg_migration_controller_tests PRIVATE Qt6::Core Qt6::Test Qt6::Network OpenSSL::Crypto)
+if(WIN32)
+    target_link_libraries(awg_migration_controller_tests PRIVATE ws2_32)
+endif()
+add_test(NAME awg_migration_controller COMMAND awg_migration_controller_tests)
+set_tests_properties(awg_migration_controller PROPERTIES TIMEOUT 30)
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME awg_migration_active_paths COMMAND ${Python3_EXECUTABLE}

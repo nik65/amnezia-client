@@ -2443,18 +2443,12 @@ RouteReconcileResult LinuxRouteReconciler::clearFullTunnel()
         return restored;
     };
     QList<QStringList> bypassDeletes;
+    // persistedPriorityExact() already proved that this priority contains
+    // exactly the receipt's complete bypass set, without duplicates or
+    // foreign selectors. Re-scanning every rule for every route repeats that
+    // proof quadratically and can starve the daemon's event-loop watchdog on
+    // large allow-lists before the first asynchronous batch is submitted.
     for (const QString &route : m_bypassRoutes) {
-        bool owned = false;
-        for (const QString &line : snapshot.linesV4) {
-            if (ruleLineMatches(line, m_bypassRulePriority,
-                                QStringLiteral("to %1 ").arg(route))) {
-                owned = true;
-                break;
-            }
-        }
-        if (!owned) {
-            continue;
-        }
         bypassDeletes.append(bypassRuleArguments(QStringLiteral("del"),
                                                   m_bypassRulePriority, route));
         removedBypassRoutes.append(route);

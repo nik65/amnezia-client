@@ -2,6 +2,7 @@
 #include "../../../common/awgMigration.h"
 #include "../../../common/awgMigrationTransport.h"
 #include "../../../common/awgBackendObservation.h"
+#include "../../../common/awgMigrationRecovery.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/serverConfigUtils.h"
 #include <QTcpSocket>
@@ -10,6 +11,7 @@
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QNetworkInterface>
+#include <QUuid>
 #ifdef Q_OS_WIN
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -102,8 +104,12 @@ AwgMigrationController::AwgMigrationController(SecureServersRepository *servers,
 }
 bool AwgMigrationController::persist(const QString &state)
 {
+    const auto previousState = m_journal.value("state");
     m_journal["state"] = state;
-    return m_servers->writeMigrationJournal(m_serverId, m_journal);
+    if (m_servers->writeMigrationJournal(m_serverId, m_journal)) return true;
+    if (previousState.isUndefined()) m_journal.remove("state");
+    else m_journal["state"] = previousState;
+    return false;
 }
 void AwgMigrationController::recordFailure(const QString &reason, int httpStatus)
 {
@@ -123,6 +129,67 @@ void AwgMigrationController::clearFailure()
     m_journal.remove("lastFailureAt");
     m_servers->writeMigrationJournal(m_serverId, m_journal);
 }
+void AwgMigrationController::clearTrialEvidence()
+{
+    // Keep the signer and generation/target watermarks across retries.
+    for (const auto &key : {"grant", "grantExpiresAt", "nonce", "offer", "challengeReceipt", "candidateHash"})
+        m_journal.remove(key);
+}
+bool AwgMigrationController::validChallengeReceipt(const QJsonObject &envelope) const
+{
+    const auto offer = m_journal.value("offer").toObject();
+    QJsonObject receipt;
+    return verifyEnvelope(envelope, strictBase64(m_journal.value("signingPublicKey").toString(), 32), receipt)
+        && hasExactKeys(receipt, {"schema", "serverPublicKey", "containerId", "peerPublicKey", "generation", "expiresAt", "nonce", "targetAddress"})
+        && receipt.value("schema").toInt() == Schema
+        && receipt.value("nonce") == offer.value("challenge").toObject().value("nonce")
+        && receipt.value("generation") == offer.value("generation")
+        && receipt.value("peerPublicKey") == offer.value("peerPublicKey")
+        && receipt.value("serverPublicKey") == offer.value("serverPublicKey")
+        && receipt.value("containerId") == offer.value("containerId")
+        && receipt.value("targetAddress").toString() == offer.value("target").toObject().value("clientAddress").toString().section('/', 0, 0)
+        && receipt.value("expiresAt").toDouble() > QDateTime::currentSecsSinceEpoch();
+}
+void AwgMigrationController::cleanupFailed()
+{
+    ++m_callbackGeneration;
+    m_cancelled = true;
+    m_busy = false;
+    m_trial = false;
+    m_deadline.stop();
+    persist("recovery_required");
+}
+bool AwgMigrationController::cleanupCompleted(const QString &serverId, const QString &activationToken, quint64 teardownEpoch)
+{
+    if (serverId.isEmpty() || serverId != m_serverId) return false;
+    const auto durableJournal = m_servers->migrationJournal(serverId);
+    if (!cleanupAuthorizationAllowed(serverId, m_serverId, activationToken, m_activationToken,
+            teardownEpoch, durableJournal.value("lastRecoveryCleanupToken").toString())) return false;
+    const auto state = durableJournal.value("state").toString();
+    if (state != "recovery_required" && state != "rolled_back") return false;
+    const int index = m_servers->indexOfServerId(serverId);
+    if (index < 0) return false;
+    const auto currentHash = digest(m_servers->serverJson(index));
+    const auto sourceHash = durableJournal.value("sourceHash").toString();
+    // Never discard signed ACK evidence for an already committed candidate,
+    // or authorize recovery over an edited/unknown profile.
+    if (!rollbackRecoveryAllowed(QStringLiteral("recovery_required"), currentHash,
+            sourceHash, durableJournal.value("candidateHash").toString())) return false;
+    const auto recovered = recoveryJournalAfterCleanup(durableJournal, activationToken, teardownEpoch);
+    if (!storeRecoveryJournal(m_journal, recovered, [this](const QJsonObject &journal) {
+            return m_servers->writeMigrationJournal(m_serverId, journal);
+        })) return false;
+    m_pollAfter = 0;
+    return true;
+}
+void AwgMigrationController::beginActivation(const QString &serverId)
+{
+    m_pendingActivationServerId = serverId;
+    m_pendingActivationToken = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    // Reject any observation from the previous activation even before prepare.
+    m_activationToken.clear();
+    ++m_callbackGeneration;
+}
 QJsonObject AwgMigrationController::prepare(const QString &serverId, const QJsonObject &connection, bool allowTrial)
 {
     if (allowTrial) cancel();
@@ -134,49 +201,61 @@ QJsonObject AwgMigrationController::prepare(const QString &serverId, const QJson
         m_trial = false;
     }
     m_allowTrial = allowTrial;
+    m_activationToken = m_pendingActivationServerId == serverId ? m_pendingActivationToken : QString();
+    m_pendingActivationToken.clear();
+    m_pendingActivationServerId.clear();
+    auto activeConnection = connection;
+    activeConnection["migrationActivationToken"] = m_activationToken;
     m_cancelled = false;
     m_serverId = serverId;
-    m_originalConnection = connection;
+    m_originalConnection = activeConnection;
     m_startedAt = QDateTime::currentMSecsSinceEpoch();
     m_pollAfter = 0;
     m_epoch = 0;
     m_observation = {};
     m_journal = m_servers->migrationJournal(serverId);
     m_sourceProfile = m_servers->serverJson(m_servers->indexOfServerId(serverId));
-    if (client(connection).isEmpty() || !allowTrial) return connection;
+    if (client(connection).isEmpty() || !allowTrial) return activeConnection;
     if (m_journal.value("state") == "committing") {
         persist(digest(m_sourceProfile) == m_journal.value("candidateHash").toString()
                     ? "ack_pending" : "rolled_back");
-        return connection;
+        return activeConnection;
     }
     if (m_journal.value("state") == "trial") {
         // The original stored profile was never overwritten during the trial.
         persist("rolled_back");
-        return connection;
+        return activeConnection;
     }
     if (m_journal.value("state") == "staged"
+        && !m_journal.contains("recoveryAuthorization")
         && m_journal.value("sourceHash").toString() != digest(m_sourceProfile)
         && m_journal.value("sourceFingerprint").toString() == sourceFingerprint(client(connection))) {
         // Rebase a still-valid wire offer over current user DNS/routes/labels.
         // The new complete profile is the CAS source; no stale snapshot wins.
         m_journal["sourceHash"] = digest(m_sourceProfile);
-        if (!persist("staged")) return connection;
+        if (!persist("staged")) return activeConnection;
     }
     if (m_journal.value("state") != "staged" || m_journal.value("sourceHash").toString() != digest(m_sourceProfile))
-        return connection;
-    if (!m_journal.value("capabilityConfirmed").toBool()) return connection;
+        return activeConnection;
+    if (!m_journal.value("capabilityConfirmed").toBool()) return activeConnection;
     const auto offer = m_journal.value("offer").toObject();
-    if (offer.value("expiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()) {
-        m_journal.remove("grant");
-        m_journal.remove("nonce");
-        m_journal.remove("offer");
-        persist("expired");
-        return connection;
+    if (offer.value("expiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()
+        || m_journal.value("grantExpiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()) {
+        const auto stagedJournal = m_journal;
+        clearTrialEvidence();
+        if (!persist("expired")) m_journal = stagedJournal;
+        return activeConnection;
     }
     const auto patched = patchClient(client(connection), offer);
-    m_journal["highestGeneration"] = offer.value("generation");
-    if (patched.isEmpty() || !persist("trial")) return connection;
-    QJsonObject candidate = connection;
+    const auto generation = offer.value("generation").toDouble(-1);
+    const auto highestGeneration = m_journal.value("highestGeneration").toDouble(0);
+    if (generation <= highestGeneration
+        && !sameGenerationRecoveryAllowed(m_journal, offer, digest(m_sourceProfile))) return activeConnection;
+    const auto trialJournal = recoveryJournalForTrial(m_journal, offer.value("generation"));
+    if (patched.isEmpty() || !storeRecoveryJournal(m_journal, trialJournal, [this](const QJsonObject &journal) {
+            return m_servers->writeMigrationJournal(m_serverId, journal);
+        })) return activeConnection;
+    QJsonObject candidate = activeConnection;
     candidate["awg_config_data"] = patched;
     candidate["hostName"] = patched.value("hostName");
     m_trial = true;
@@ -190,7 +269,10 @@ void AwgMigrationController::cancel()
     m_cancelled = true;
     m_busy = false;
     m_deadline.stop();
-    if (m_trial) persist("rolled_back");
+    if (m_trial) {
+        // Keep the retiring attempt evidence until native cleanup is proven.
+        persist("rolled_back");
+    }
     m_trial = false;
 }
 void AwgMigrationController::failed()
@@ -202,6 +284,7 @@ void AwgMigrationController::failed()
 }
 void AwgMigrationController::observe(const QString &serverId, quint64 epoch, const QJsonObject &observation)
 {
+    if (m_activationToken.isEmpty() || observation.value("migrationActivationToken").toString() != m_activationToken) return;
     if (m_cancelled || serverId != m_serverId || client(m_originalConnection).isEmpty()) return;
     if (m_epoch && m_epoch != epoch) { recordFailure("connection_epoch_changed"); cancel(); return; }
     m_epoch = epoch;
@@ -230,6 +313,7 @@ void AwgMigrationController::observe(const QString &serverId, quint64 epoch, con
     const auto rx = observation.value("rxBytes").toDouble(-1), tx = observation.value("txBytes").toDouble(-1);
     if (m_initialRx < 0) { m_initialRx = rx; m_initialTx = tx; }
     if (!m_journal.value("challengeReceipt").toObject().isEmpty()) {
+        if (!validChallengeReceipt(m_journal.value("challengeReceipt").toObject())) { failed(); return; }
         if (rx <= m_initialRx || tx <= m_initialTx) return;
         const auto profile = committedProfile(m_sourceProfile, m_journal.value("offer").toObject());
         m_journal["candidateHash"] = digest(profile);
@@ -248,6 +332,11 @@ void AwgMigrationController::observe(const QString &serverId, quint64 epoch, con
 void AwgMigrationController::request(const QString &path, const QJsonObject &body,
                                     std::function<void(const QJsonObject &)> callback)
 {
+#ifdef AMNEZIA_AWG_MIGRATION_CONTROLLER_TESTING
+    Q_ASSERT(testRequest);
+    testRequest(path, body, std::move(callback));
+    return;
+#endif
     const auto local = QHostAddress(m_observation.value("deviceIpv4Address").toString().section('/', 0, 0));
     if (local.isNull() || local.protocol() != QAbstractSocket::IPv4Protocol) { recordFailure("control_source_address_unavailable"); return; }
     const auto generation = m_callbackGeneration;
@@ -332,6 +421,13 @@ void AwgMigrationController::request(const QString &path, const QJsonObject &bod
 }
 void AwgMigrationController::enrollOrFetch()
 {
+    if (m_journal.value("state") == "staged" && !m_trial
+        && (m_journal.value("offer").toObject().value("expiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()
+            || m_journal.value("grantExpiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch())) {
+        const auto stagedJournal = m_journal;
+        clearTrialEvidence();
+        if (!persist("expired")) { m_journal = stagedJournal; return; }
+    }
     if (!m_allowTrial && !passiveMigrationRequestAllowed(m_journal.value("state").toString())) return;
     const auto kind = m_servers->serverKind(m_serverId);
     if (kind != serverConfigUtils::ConfigType::SelfHostedAdmin
@@ -384,15 +480,27 @@ void AwgMigrationController::enrollOrFetch()
             m_journal.value("containerId").toString(), m_journal.value("sourceFingerprint").toString(),
             m_journal.value("nonce").toString(), qMax(static_cast<qint64>(m_journal.value("highestGeneration").toDouble()),
                     static_cast<qint64>(m_journal.value("stagedGeneration").toDouble()) - 1)};
-        if (!validateOffer(offer, binding, QDateTime::currentSecsSinceEpoch())
-            || m_journal.value("sourceHash").toString() != digest(m_servers->serverJson(m_servers->indexOfServerId(m_serverId)))) return;
+        // A proven cleanup permits one fresh signed attempt at the exact
+        // pinned target. The durable watermark itself is never decreased.
+        if (sameGenerationRecoveryAllowed(m_journal, offer, digest(m_sourceProfile)))
+            binding.highestGeneration = static_cast<qint64>(offer.value("generation").toDouble()) - 1;
+        QString reason;
+        if (!validateOffer(offer, binding, QDateTime::currentSecsSinceEpoch(), &reason)) {
+            recordFailure(reason, 200);
+            return;
+        }
+        if (m_journal.value("sourceHash").toString() != digest(m_servers->serverJson(m_servers->indexOfServerId(m_serverId)))) {
+            recordFailure("offer_source_changed", 200);
+            return;
+        }
         if (offer.value("generation") == m_journal.value("stagedGeneration")
             && digest(offer.value("target").toObject()) != m_journal.value("stagedTargetHash").toString()) return;
+        const auto enrolledJournal = m_journal;
         m_journal.remove("challengeReceipt");
         m_journal["offer"] = offer;
         m_journal["stagedGeneration"] = offer.value("generation");
         m_journal["stagedTargetHash"] = digest(offer.value("target").toObject());
-        persist("staged");
+        if (!persist("staged")) m_journal = enrolledJournal;
     });
 }
 void AwgMigrationController::challenge()

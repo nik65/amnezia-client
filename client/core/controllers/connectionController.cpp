@@ -352,29 +352,52 @@ ConnectionController::ConnectionController(SecureServersRepository* serversRepos
     m_awgMigration->reconnectLegacy = [this](const QJsonObject &) {
         const QString id = m_awgMigration->serverId();
         const auto generation = ++m_awgMigrationReconnectGeneration;
+        const auto expectedEpoch = m_cachedConnectionEpoch;
+        const auto activationToken = m_awgMigration->activationToken();
+        if (id.isEmpty() || id != m_cachedConnectionServerId || !expectedEpoch) {
+            m_awgMigration->cleanupFailed();
+            return;
+        }
         auto context = new QObject(this);
         auto timer = new QTimer(context);
         timer->setSingleShot(true);
         timer->start(10000);
-        connect(timer, &QTimer::timeout, context, [this, context, generation]() {
-            if (generation == m_awgMigrationReconnectGeneration) m_awgMigration->cleanupFailed();
+        connect(timer, &QTimer::timeout, context, [this, context, generation, id, activationToken]() {
+            if (generation == m_awgMigrationReconnectGeneration && id == m_awgMigration->serverId()
+                && activationToken == m_awgMigration->activationToken()) m_awgMigration->cleanupFailed();
             context->deleteLater();
         });
-        connect(m_vpnConnection, &VpnConnection::migrationTeardownObserved, context,
-                [this, context, id, generation](const QString &receiptServer, quint64, bool confirmed) {
+        connect(m_vpnConnection, &VpnConnection::migrationTeardownReceipt, context,
+                [this, context, timer, id, generation, expectedEpoch, activationToken](const QString &receiptServer,
+                        quint64 token, quint64 retiringEpoch, quint64 disconnectEpoch, bool confirmed) {
             if (generation != m_awgMigrationReconnectGeneration) { context->deleteLater(); return; }
-            if (receiptServer != id) return;
-            if (!confirmed) { m_awgMigration->cleanupFailed(); context->deleteLater(); return; }
+            if (token != generation || receiptServer != id) return;
+            timer->stop();
+            // A request token alone cannot authorize an unrelated connection's cleanup.
+            if (!confirmed || retiringEpoch != expectedEpoch || disconnectEpoch != expectedEpoch + 1) {
+                m_awgMigration->cleanupFailed(); context->deleteLater(); return;
+            }
+            const auto state = m_serversRepository->migrationJournal(id).value("state").toString();
+            if ((state != "recovery_required" && state != "rolled_back")
+                || !m_awgMigration->cleanupCompleted(id, activationToken, disconnectEpoch)) {
+                context->deleteLater(); return;
+            }
             DockerContainer container;
             QJsonObject legacy;
             const int index = m_serversRepository->indexOfServerId(id);
             if (index >= 0 && prepareConnection(id, legacy, container) == ErrorCode::NoError) {
                 prepareManagedRouteConnectionSnapshot(id);
+                m_awgMigration->beginActivation(id);
+                legacy = m_awgMigration->prepare(id, legacy);
+                legacy["migrationReconnectExpectedEpoch"] = QString::number(disconnectEpoch);
+                legacy["migrationReconnectExpectedServerId"] = id;
                 emit openConnectionRequested(id, index, container, legacy);
             }
             context->deleteLater();
         }, Qt::QueuedConnection);
-        emit closeConnectionRequested();
+        QMetaObject::invokeMethod(m_vpnConnection, [vpn = m_vpnConnection, generation, id, expectedEpoch]() {
+            vpn->requestMigrationTeardown(generation, id, expectedEpoch);
+        }, Qt::QueuedConnection);
     };
     connect(m_vpnConnection, &VpnConnection::connectionStateChanged, this, &ConnectionController::onVpnConnectionStateChanged);
     connect(this, &ConnectionController::openConnectionRequested, m_vpnConnection, &VpnConnection::connectToVpn, Qt::QueuedConnection);
@@ -1032,6 +1055,7 @@ ErrorCode ConnectionController::openConnection(const QString &serverId)
     m_managedRouteFullRebuildAttempted = false;
     m_cachedLastConnectionError = ErrorCode::NoError;
     prepareManagedRouteConnectionSnapshot(serverId);
+    m_awgMigration->beginActivation(serverId);
     vpnConfiguration = m_awgMigration->prepare(serverId, vpnConfiguration);
     emit openConnectionRequested(serverId, serverIndex, container, vpnConfiguration);
     return ErrorCode::NoError;
@@ -1039,11 +1063,44 @@ ErrorCode ConnectionController::openConnection(const QString &serverId)
 
 void ConnectionController::closeConnection()
 {
-    ++m_awgMigrationReconnectGeneration;
+    const auto generation = ++m_awgMigrationReconnectGeneration;
+    const QString id = m_awgMigration->serverId();
+    const auto expectedEpoch = m_cachedConnectionEpoch;
+    const auto activationToken = m_awgMigration->activationToken();
     m_awgMigration->cancel();
-    if (m_vpnConnection) {
+    if (!m_vpnConnection) return;
+    const auto state = m_serversRepository->migrationJournal(id).value("state").toString();
+    if ((state != "recovery_required" && state != "rolled_back")
+        || id.isEmpty() || id != m_cachedConnectionServerId || !expectedEpoch || activationToken.isEmpty()) {
         emit closeConnectionRequested();
+        return;
     }
+    // A natural user disconnect can resolve a persisted hold even when no
+    // migration trial exists in this process. It never reconnects on its own.
+    auto *context = new QObject(this);
+    auto *timer = new QTimer(context);
+    timer->setSingleShot(true);
+    timer->start(10000);
+    connect(timer, &QTimer::timeout, context, [this, context, generation, id, activationToken]() {
+        if (generation == m_awgMigrationReconnectGeneration && id == m_awgMigration->serverId()
+            && activationToken == m_awgMigration->activationToken()) m_awgMigration->cleanupFailed();
+        context->deleteLater();
+    });
+    connect(m_vpnConnection, &VpnConnection::migrationTeardownReceipt, context,
+            [this, context, timer, id, generation, expectedEpoch, activationToken](const QString &receiptServer,
+                    quint64 token, quint64 retiringEpoch, quint64 disconnectEpoch, bool confirmed) {
+        if (generation != m_awgMigrationReconnectGeneration) { context->deleteLater(); return; }
+        if (token != generation || receiptServer != id) return;
+        timer->stop();
+        if (!confirmed || retiringEpoch != expectedEpoch || disconnectEpoch != expectedEpoch + 1)
+            m_awgMigration->cleanupFailed();
+        else
+            m_awgMigration->cleanupCompleted(id, activationToken, disconnectEpoch);
+        context->deleteLater();
+    }, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(m_vpnConnection, [vpn = m_vpnConnection, generation, id, expectedEpoch]() {
+        vpn->requestMigrationTeardown(generation, id, expectedEpoch);
+    }, Qt::QueuedConnection);
 }
 
 #ifdef Q_OS_ANDROID
@@ -1067,6 +1124,7 @@ void ConnectionController::restoreConnection(Vpn::ConnectionState state, int ser
         return;
     }
 
+    ++m_awgMigrationReconnectGeneration;
     ++m_managedRouteReconcileGeneration;
     clearPendingManagedRouteReconciliation();
     m_coalescedManagedRouteDesired = {};
@@ -1075,7 +1133,8 @@ void ConnectionController::restoreConnection(Vpn::ConnectionState state, int ser
     m_managedRouteFullRebuildAttempted = false;
     prepareManagedRouteConnectionSnapshot(serverId);
     // Observe/stage offers for the adopted tunnel; a trial waits for a natural open.
-    m_awgMigration->prepare(serverId, vpnConfiguration, false);
+    m_awgMigration->beginActivation(serverId);
+    vpnConfiguration = m_awgMigration->prepare(serverId, vpnConfiguration, false);
     emit restoreConnectionRequested(serverId, serverIndex, container, vpnConfiguration, state);
 }
 #endif

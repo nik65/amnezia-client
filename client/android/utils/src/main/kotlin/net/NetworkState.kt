@@ -19,11 +19,13 @@ private const val TAG = "NetworkState"
 
 class NetworkState(
     private val context: Context,
-    private val onNetworkChange: () -> Unit
+    private val onNetworkChange: (Long) -> Unit
 ) {
     private var currentNetwork: Network? = null
     private var validated: Boolean = false
     private var isListenerBound = false
+    private var decisionEpoch = 0L
+    private var previousNetworkHandle = 0L
 
     private val handler: Handler by lazy(NONE) {
         Handler(context.mainLooper)
@@ -55,13 +57,28 @@ class NetworkState(
                     currentNetwork = network
                     validated = networkCapabilities.hasCapability(NET_CAPABILITY_VALIDATED)
                 } else {
-                    if (currentNetwork != network) {
+                    val networkChanged = currentNetwork != network
+                    if (networkChanged) {
+                        previousNetworkHandle = currentNetwork!!.networkHandle
+                        decisionEpoch++
                         currentNetwork = network
                         validated = false
                     }
                     if (!validated) {
                         validated = networkCapabilities.hasCapability(NET_CAPABILITY_VALIDATED)
-                        if (validated) onNetworkChange()
+                        if (networkChanged || validated) {
+                            // Persist only bounded metadata: never capabilities.toString(),
+                            // SSID, addresses, subscriptions, or other network identifiers.
+                            val outcome = if (validated) "requested" else "deferred_unvalidated"
+                            Log.d(TAG, "ReconnectDecision cause=validated_new_network epoch=$decisionEpoch " +
+                                "oldHandle=$previousNetworkHandle newHandle=${network.networkHandle} " +
+                                "wifi=${networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)} " +
+                                "cellular=${networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)} " +
+                                "ethernet=${networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)} " +
+                                "vpn=${networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)} " +
+                                "validated=$validated outcome=$outcome")
+                        }
+                        if (validated) onNetworkChange(decisionEpoch)
                     }
                 }
             }

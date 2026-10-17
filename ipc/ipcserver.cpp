@@ -20,6 +20,7 @@
 #include "killswitch.h"
 #include "xray.h"
 #include "core/utils/managedRoutePolicy.h"
+#include "daemon/daemon.h"
 
 #ifdef Q_OS_WIN
     #include "tapcontroller_win.h"
@@ -403,6 +404,13 @@ bool IpcServer::clearSavedRoutes()
         m_trustedManagedRoutes.clear();
     }
     return cleared;
+}
+
+int IpcServer::replaceManagedExclusions(const QString& connectionNonce,
+                                      const QStringList& before, const QStringList& after)
+{
+    if (!Daemon::instance()) return amnezia::exclusionPolicy::Rejected;
+    return Daemon::instance()->replaceManagedExclusions(connectionNonce, before, after);
 }
 
 bool IpcServer::routeDeleteList(const QString &gw, const QStringList &ips)

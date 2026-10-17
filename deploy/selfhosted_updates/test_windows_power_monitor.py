@@ -13,15 +13,16 @@ class WindowsPowerMonitorTests(unittest.TestCase):
     def test_wlan_failures_do_not_disable_power_notifications(self):
         source = (ROOT / "client/platforms/windows/windowsnetworkwatcher.cpp").read_text()
         body = source[source.index("void WindowsNetworkWatcher::initialize()"):
-                      source.index("// static", source.index("void WindowsNetworkWatcher::initialize()"))]
+                      source.index("void WindowsNetworkWatcher::initializeReachabilityFallback()")]
         harness = r'''
 #include <cassert>
 #include <cstddef>
 using DWORD = unsigned long; using LONG_PTR = long long; using HWND = void*;
 using WLAN_NOTIFICATION_CALLBACK = void(*)(); using LPVOID = void*;
-constexpr DWORD ERROR_SUCCESS=0, ERROR_ACCESS_DENIED=5, WLAN_NOTIFICATION_SOURCE_MSM=16;
+constexpr DWORD ERROR_SUCCESS=0, ERROR_ACCESS_DENIED=5, ERROR_CLASS_ALREADY_EXISTS=1410, WLAN_NOTIFICATION_SOURCE_MSM=16;
 constexpr int GWLP_USERDATA=0; HWND HWND_MESSAGE=nullptr;
-int opened=0, registered=0, windows=0, userData=0, warnings=0, errors=0;
+int opened=0, registered=0, windows=0, userData=0, warnings=0, errors=0, fallbacks=0;
+bool classAlreadyExists=false;
 DWORD openCode=0, registrationCode=0; bool windowFails=false;
 struct Stream { template<class T> Stream& operator<<(T const&) { return *this; } };
 struct Logger { Stream debug(){return{};} Stream warning(){warnings++;return{};}
@@ -31,24 +32,29 @@ struct WNDCLASS { void(*lpfnWndProc)(); void* hInstance; const wchar_t* lpszClas
 DWORD WlanOpenHandle(int,void*,DWORD*,void** p){opened++;*p=nullptr;return openCode;}
 DWORD WlanRegisterNotification(void*,DWORD,bool,WLAN_NOTIFICATION_CALLBACK,void*,void*,DWORD*){
     registered++;return registrationCode;}
-void* GetModuleHandle(void*){return nullptr;} bool RegisterClass(WNDCLASS*){return true;}
+void* GetModuleHandle(void*){return nullptr;} bool RegisterClass(WNDCLASS*){return !classAlreadyExists;}
+DWORD GetLastError(){return ERROR_CLASS_ALREADY_EXISTS;}
 HWND CreateWindowEx(int,const wchar_t*,const wchar_t*,int,int,int,int,int,HWND,void*,void*,void*){
     windows++;return windowFails?nullptr:reinterpret_cast<void*>(1);}
 void SetWindowLongPtr(HWND,int,LONG_PTR){userData++;}
-class WindowsNetworkWatcher { public: void* m_wlanHandle=nullptr;
+class WindowsNetworkWatcher { public: void* m_wlanHandle=nullptr; HWND m_powerWindow=nullptr; bool m_initialized=false;
+    void initializeReachabilityFallback(){fallbacks++;}
     static void PowerWndProcCallback(){} static void wlanCallback(){} void initialize(); };
 '''
         harness += body + r'''
 int main(){
-    for (int scenario=0; scenario<5; scenario++) {
-        opened=registered=windows=userData=warnings=errors=0;
+    for (int scenario=0; scenario<6; scenario++) {
+        opened=registered=windows=userData=warnings=errors=fallbacks=0;
         openCode=scenario==0?6:0; registrationCode=scenario==1?5:scenario==2?6:0;
         windowFails=scenario==4;
+        classAlreadyExists=scenario==5;
         WindowsNetworkWatcher watcher; watcher.initialize();
         assert(opened==1); assert(registered==(scenario==0?0:1));
         assert(windows==1); assert(userData==(windowFails?0:1));
-        assert(warnings==(scenario==1?1:0));
-        assert(errors==((scenario==0||scenario==2)?1:0));
+        assert(warnings==((scenario==1||scenario==2)?1:0));
+        assert(errors==(scenario==0?1:0));
+        assert(fallbacks==(scenario<=2?1:0));
+        watcher.initialize(); assert(opened==1 && windows==1);
     }
 }
 '''

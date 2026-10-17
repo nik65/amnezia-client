@@ -22,12 +22,16 @@ class WindowsNetworkWatcher final : public NetworkWatcherImpl {
   static LRESULT PowerWndProcCallback(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
   void processWlan(PWLAN_NOTIFICATION_DATA data);
+  void initializeReachabilityFallback();
 
  private:
   // The handle is set during the initialization. Windows calls processWlan()
   // to inform about network changes.
   HANDLE m_wlanHandle = nullptr;
   QString m_lastBSSID;
+  HWND m_powerWindow = nullptr;
+  bool m_initialized = false;
+  QNetworkInformation::TransportMedium m_lastTransportMedium = QNetworkInformation::TransportMedium::Unknown;
 };
 
 #endif  // WINDOWSNETWORKWATCHER_H

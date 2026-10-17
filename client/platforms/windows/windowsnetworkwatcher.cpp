@@ -28,8 +28,11 @@ WindowsNetworkWatcher::~WindowsNetworkWatcher() {
   MZ_COUNT_DTOR(WindowsNetworkWatcher);
 
   if (m_wlanHandle) {
+    WlanRegisterNotification(m_wlanHandle, WLAN_NOTIFICATION_SOURCE_NONE,
+                             true, nullptr, nullptr, nullptr, nullptr);
     WlanCloseHandle(m_wlanHandle, nullptr);
   }
+  if (m_powerWindow) DestroyWindow(m_powerWindow);
 }
 
 LRESULT WindowsNetworkWatcher::PowerWndProcCallback(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -40,7 +43,7 @@ LRESULT WindowsNetworkWatcher::PowerWndProcCallback(HWND hwnd, UINT uMsg, WPARAM
   }
   switch (uMsg) {
   case WM_POWERBROADCAST:
-    if (wParam == PBT_APMRESUMESUSPEND) {
+    if (wParam == PBT_APMRESUMESUSPEND && obj->isActive()) {
         emit obj->wakeup();
     }
     break;
@@ -51,6 +54,8 @@ LRESULT WindowsNetworkWatcher::PowerWndProcCallback(HWND hwnd, UINT uMsg, WPARAM
 }
 
 void WindowsNetworkWatcher::initialize() {
+  if (m_initialized) return;
+  m_initialized = true;
   logger.debug() << "initialize";
 
 
@@ -59,18 +64,18 @@ void WindowsNetworkWatcher::initialize() {
   if (openResult != ERROR_SUCCESS) {
     logger.error() << "Failed to open the WLAN handle" << "errorCode" << openResult
                    << WindowsUtils::getErrorMessage(openResult);
+    initializeReachabilityFallback();
   } else {
     DWORD prefNotifSource;
     const DWORD notificationResult = WlanRegisterNotification(m_wlanHandle, WLAN_NOTIFICATION_SOURCE_MSM,
                                true /* ignore duplicates */,
                                (WLAN_NOTIFICATION_CALLBACK)wlanCallback, this,
                                nullptr, &prefNotifSource);
-    if (notificationResult == ERROR_ACCESS_DENIED) {
-      logger.warning() << "WLAN notifications unavailable: Windows denied Wi-Fi access; continuing power monitor initialization"
-                       << "errorCode" << notificationResult;
-    } else if (notificationResult != ERROR_SUCCESS) {
-      logger.error() << "Failed to register a wlan callback" << "errorCode" << notificationResult
-                   << WindowsUtils::getErrorMessage(notificationResult);
+    if (notificationResult != ERROR_SUCCESS) {
+      logger.warning() << "WLAN notifications unavailable; enabling network reachability fallback"
+                       << "errorCode" << notificationResult
+                       << WindowsUtils::getErrorMessage(notificationResult);
+      initializeReachabilityFallback();
     }
   }
 
@@ -82,7 +87,7 @@ void WindowsNetworkWatcher::initialize() {
   wc.lpszClassName = className;
   wc.cbWndExtra = sizeof(WindowsNetworkWatcher*);
 
-  if (!RegisterClass(&wc)) {
+  if (!RegisterClass(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
     logger.debug() << "Failed to register window class in createPowerMonitorWindow.";
     return;
   }
@@ -93,8 +98,40 @@ void WindowsNetworkWatcher::initialize() {
     return;
   }
   SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+  m_powerWindow = hwnd;
 
   logger.debug() << "callback registered";
+}
+
+void WindowsNetworkWatcher::initializeReachabilityFallback() {
+  if (!QNetworkInformation::loadDefaultBackend() || !QNetworkInformation::instance()) {
+    logger.error() << "Network reachability fallback unavailable";
+    return;
+  }
+  auto* information = QNetworkInformation::instance();
+  // Global reachability can change because our own VPN was rebuilt. It is
+  // diagnostic evidence, not permission to restart the tunnel in a loop.
+  connect(information, &QNetworkInformation::reachabilityChanged, this,
+          [](QNetworkInformation::Reachability reachability) {
+    logger.debug() << "Network reachability changed" << static_cast<uint64_t>(reachability);
+  });
+  if (information->supports(QNetworkInformation::Feature::TransportMedium)) {
+    m_lastTransportMedium = information->transportMedium();
+    connect(information, &QNetworkInformation::transportMediumChanged, this,
+            [this](QNetworkInformation::TransportMedium medium) {
+      using Medium = QNetworkInformation::TransportMedium;
+      const bool changed = medium != m_lastTransportMedium;
+      const bool knownPrevious = m_lastTransportMedium != Medium::Unknown;
+      m_lastTransportMedium = medium;
+      if (changed && knownPrevious && medium != Medium::Unknown
+          && isActive()) {
+        emit networkChanged(QStringLiteral("transport-medium-changed"));
+      }
+    });
+  } else {
+    logger.warning() << "Network fallback does not support transport change detection; power monitoring remains active";
+  }
+  logger.info() << "Network reachability fallback active";
 }
 
 // static
@@ -105,7 +142,14 @@ void WindowsNetworkWatcher::wlanCallback(PWLAN_NOTIFICATION_DATA data,
   WindowsNetworkWatcher* that = static_cast<WindowsNetworkWatcher*>(context);
   Q_ASSERT(that);
 
-  that->processWlan(data);
+  // The OS invokes this callback outside the QObject thread. Only the public
+  // header fields are needed; pData belongs to the callback and is not retained.
+  WLAN_NOTIFICATION_DATA snapshot = *data;
+  snapshot.pData = nullptr;
+  snapshot.dwDataSize = 0;
+  QMetaObject::invokeMethod(that, [that, snapshot]() mutable {
+    that->processWlan(&snapshot);
+  }, Qt::QueuedConnection);
 }
 
 void WindowsNetworkWatcher::processWlan(PWLAN_NOTIFICATION_DATA data) {
@@ -134,7 +178,8 @@ void WindowsNetworkWatcher::processWlan(PWLAN_NOTIFICATION_DATA data) {
       m_wlanHandle, &data->InterfaceGuid, wlan_intf_opcode_current_connection,
       nullptr, &connectionInfoSize, (PVOID*)&connectionInfo, &opCode);
   if (result != ERROR_SUCCESS) {
-    WindowsUtils::windowsLog("Failed to query the interface");
+    logger.warning() << "Failed to query the WLAN interface" << "errorCode" << result
+                     << WindowsUtils::getErrorMessage(result);
     return;
   }
 

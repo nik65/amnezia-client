@@ -220,7 +220,10 @@ class MigrationService:
                     if path.endswith('/challenge'):
                         if body['nonce'] != row[4]:
                             raise ValueError('challenge')
-                        common.update(nonce=row[4], targetAddress=mapping['targetIp'])
+                        # Renewal extends grant delivery, not the original proof
+                        # lifetime. Keep regenerated receipts identical to the
+                        # proof binding accepted by ack/renew and stored clients.
+                        common.update(nonce=row[4], targetAddress=mapping['targetIp'], expiresAt=row[7])
                         response = sign(common, self.directory)
                         db.execute('UPDATE grants SET proved=1 WHERE digest=?', (digest,))
                     else:

@@ -28,6 +28,7 @@ class LinuxNetworkWatcher final : public NetworkWatcherImpl {
  private:
   LinuxNetworkWatcherWorker* m_worker = nullptr;
   QThread m_thread;
+  bool m_initialized = false;
 };
 
 #endif  // LINUXNETWORKWATCHER_H

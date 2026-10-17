@@ -25,7 +25,7 @@ class ActiveMigrationPaths(unittest.TestCase):
         migration = source("core/controllers/awgMigrationController.cpp")
         prepare = migration.split("QJsonObject AwgMigrationController::prepare(", 1)[1].split("void AwgMigrationController::cancel", 1)[0]
         self.assertIn("if (allowTrial) cancel();", prepare)
-        self.assertLess(prepare.index("if (client(connection).isEmpty() || !allowTrial) return connection;"), prepare.index('persist("trial")'))
+        self.assertLess(prepare.index("if (client(connection).isEmpty() || !allowTrial) return activeConnection;"), prepare.index("recoveryJournalForTrial"))
         self.assertIn('!m_allowTrial && !passiveMigrationRequestAllowed', migration)
 
     def test_android_bound_status_and_periodic_observation_are_active(self):

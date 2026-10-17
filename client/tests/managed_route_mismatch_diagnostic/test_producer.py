@@ -1,6 +1,6 @@
 from pathlib import Path
 s = (Path(__file__).resolve().parents[2] / "vpnConnection.cpp").read_text()
-block = s.split("if (!baseMatches) {", 1)[1].split("} else if (normalizedExpectedOld == normalizedDesiredNew)", 1)[0]
+block = s.split("if (!baseMatches) {", 1)[1].split("} else if (runtimeContextMatches", 1)[0]
 assert block.count("managedRouteMismatchDiagnostic::describe(") == 1
 assert block.count("managed-route base mismatch diagnostic schema=1") == 1
 log = block.split('qWarning() << "VpnConnection: managed-route base mismatch diagnostic schema=1"', 1)[1]

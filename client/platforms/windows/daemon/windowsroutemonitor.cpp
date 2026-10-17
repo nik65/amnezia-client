@@ -17,6 +17,12 @@ bool isSuccessfulRouteDelete(DWORD result) {
          result == ERROR_FILE_NOT_FOUND;
 }
 
+bool isRouteAbsent(const MIB_IPFORWARD_ROW2& row) {
+  MIB_IPFORWARD_ROW2 observed = row;
+  const DWORD result = GetIpForwardEntry2(&observed);
+  return result == ERROR_NOT_FOUND || result == ERROR_FILE_NOT_FOUND;
+}
+
 bool isZeroIpv6Address(const IN6_ADDR& address) {
   const IN6_ADDR zero = {};
   return memcmp(&address, &zero, sizeof(IN6_ADDR)) == 0;
@@ -144,15 +150,19 @@ WindowsRouteMonitor::~WindowsRouteMonitor() {
 
   flushRouteTable(m_exclusionRoutes);
   flushRouteTable(m_clonedRoutes);
+  for (auto data : m_exclusionRoutes) delete data;
+  for (auto data : m_clonedRoutes) delete data;
+  m_exclusionRoutes.clear();
+  m_clonedRoutes.clear();
   logger.debug() << "WindowsRouteMonitor destroyed.";
 }
 
-void WindowsRouteMonitor::updateInterfaceMetrics(int family) {
+bool WindowsRouteMonitor::updateInterfaceMetrics(int family) {
   PMIB_IPINTERFACE_TABLE table;
   DWORD result = GetIpInterfaceTable(family, &table);
   if (result != NO_ERROR) {
     logger.warning() << "Failed to retrive interface table." << result;
-    return;
+    return false;
   }
   auto guard = qScopeGuard([&] { FreeMibTable(table); });
 
@@ -185,9 +195,10 @@ void WindowsRouteMonitor::updateInterfaceMetrics(int family) {
       m_interfaceMetricsIpv6[row->InterfaceLuid.Value] = row->Metric;
     }
   }
+  return true;
 }
 
-void WindowsRouteMonitor::updateExclusionRoute(MIB_IPFORWARD_ROW2* data,
+bool WindowsRouteMonitor::updateExclusionRoute(MIB_IPFORWARD_ROW2* data,
                                                void* ptable) {
   PMIB_IPFORWARD_TABLE2 table = reinterpret_cast<PMIB_IPFORWARD_TABLE2>(ptable);
   SOCKADDR_INET nexthop = {};
@@ -253,10 +264,22 @@ void WindowsRouteMonitor::updateExclusionRoute(MIB_IPFORWARD_ROW2* data,
     }
   }
 
-  // If neither the interface nor next-hop have changed, then do nothing.
+  if (bestMatch < 0) {
+    logger.error() << "No physical route available for exclusion";
+    return false;
+  }
+
+  // A matching cached row is not an OS receipt. Recheck it after failed writes
+  // and after external route changes before acknowledging this bypass.
   if (data->InterfaceLuid.Value == bestLuid &&
       memcmp(&nexthop, &data->NextHop, sizeof(SOCKADDR_INET)) == 0) {
-    return;
+    if (bestLuid == 0) return true; // an existing physical route is authoritative
+    MIB_IPFORWARD_ROW2 observed = *data;
+    if (GetIpForwardEntry2(&observed) == NO_ERROR) return true;
+    const DWORD restored = CreateIpForwardEntry2(data);
+    observed = *data;
+    return (restored == NO_ERROR || restored == ERROR_OBJECT_ALREADY_EXISTS) &&
+           GetIpForwardEntry2(&observed) == NO_ERROR;
   }
 
   // Delete the previous routing table entry, if any.
@@ -264,6 +287,11 @@ void WindowsRouteMonitor::updateExclusionRoute(MIB_IPFORWARD_ROW2* data,
     DWORD result = DeleteIpForwardEntry2(data);
     if (!isSuccessfulRouteDelete(result)) {
       logger.error() << "Failed to delete route:" << result;
+      return false;
+    }
+    if (!isRouteAbsent(*data)) {
+      logger.error() << "Failed to confirm route deletion before update";
+      return false;
     }
   }
 
@@ -275,7 +303,11 @@ void WindowsRouteMonitor::updateExclusionRoute(MIB_IPFORWARD_ROW2* data,
     if (result != NO_ERROR) {
       logger.error() << "Failed to update route:" << result;
     }
+    MIB_IPFORWARD_ROW2 observed = *data;
+    return (result == NO_ERROR || result == ERROR_OBJECT_ALREADY_EXISTS) &&
+           GetIpForwardEntry2(&observed) == NO_ERROR;
   }
+  return true;
 }
 
 // static
@@ -323,26 +355,29 @@ bool WindowsRouteMonitor::isRouteExcluded(const IP_ADDRESS_PREFIX* dest) const {
   return false;
 }
 
-void WindowsRouteMonitor::updateCapturedRoutes(int family) {
+bool WindowsRouteMonitor::updateCapturedRoutes(int family) {
   if (!m_defaultRouteCapture) {
-    return;
+    return true;
   }
 
   PMIB_IPFORWARD_TABLE2 table;
   DWORD error = GetIpForwardTable2(family, &table);
   if (error == NO_ERROR) {
-    updateCapturedRoutes(family, table);
+    const bool updated = updateCapturedRoutes(family, table);
     FreeMibTable(table);
+    return updated;
   } else {
     logger.error() << "Failed to fetch routing table:" << error;
   }
+  return false;
 }
 
-void WindowsRouteMonitor::updateCapturedRoutes(int family, void* ptable) {
+bool WindowsRouteMonitor::updateCapturedRoutes(int family, void* ptable) {
   PMIB_IPFORWARD_TABLE2 table = reinterpret_cast<PMIB_IPFORWARD_TABLE2>(ptable);
   if (!m_defaultRouteCapture) {
-    return;
+    return true;
   }
+  bool updated = true;
 
   for (ULONG i = 0; i < table->NumEntries; i++) {
     MIB_IPFORWARD_ROW2* row = &table->Table[i];
@@ -405,20 +440,31 @@ void WindowsRouteMonitor::updateCapturedRoutes(int family, void* ptable) {
 
     // Route this traffic into the VPN tunnel.
     DWORD result = CreateIpForwardEntry2(data);
-    if (result != NO_ERROR) {
-      if (result == ERROR_OBJECT_ALREADY_EXISTS) {
-        logger.warning() << "Adopting existing captured route for"
-                         << prefix.toString();
-        m_clonedRoutes.insert(prefix, data);
-        data->Age++;
-      } else {
-        logger.error() << "Failed to update route:" << result;
-        delete data;
-      }
-    } else {
-      m_clonedRoutes.insert(prefix, data);
-      data->Age++;
+    if (result != NO_ERROR && result != ERROR_OBJECT_ALREADY_EXISTS) {
+      logger.error() << "Failed to update route:" << result;
+      delete data;
+      updated = false;
+      continue;
     }
+
+    // A successful create (or an already-existing row) is not an OS receipt.
+    // Keep the clone only after the route can be read back, otherwise a later
+    // scan could treat a missing route as installed and never retry it.
+    MIB_IPFORWARD_ROW2 observed = *data;
+    if (GetIpForwardEntry2(&observed) != NO_ERROR) {
+      logger.error() << "Failed to confirm captured route for"
+                     << prefix.toString();
+      delete data;
+      updated = false;
+      continue;
+    }
+
+    if (result == ERROR_OBJECT_ALREADY_EXISTS) {
+      logger.warning() << "Adopting existing captured route for"
+                       << prefix.toString();
+    }
+    m_clonedRoutes.insert(prefix, data);
+    data->Age++;
   }
 
   // Finally scan for any routes which were removed from the table. We do this
@@ -446,10 +492,21 @@ void WindowsRouteMonitor::updateCapturedRoutes(int family, void* ptable) {
     DWORD result = DeleteIpForwardEntry2(data);
     if (!isSuccessfulRouteDelete(result)) {
       logger.error() << "Failed to delete route:" << result;
+      updated = false;
+      ++i;
+      continue;
+    }
+    if (!isRouteAbsent(*data)) {
+      logger.error() << "Failed to confirm captured route deletion for"
+                     << i.key().toString();
+      updated = false;
+      ++i;
+      continue;
     }
     delete data;
     i = m_clonedRoutes.erase(i);
   }
+  return updated;
 }
 
 bool WindowsRouteMonitor::addExclusionRoute(const IPAddress& prefix) {
@@ -464,8 +521,14 @@ bool WindowsRouteMonitor::addExclusionRoute(const IPAddress& prefix) {
   }
 
   if (m_exclusionRoutes.contains(prefix)) {
-    logger.warning() << "Exclusion route already exists";
-    return false;
+    PMIB_IPFORWARD_TABLE2 table;
+    const int family = prefix.type() == QAbstractSocket::IPv6Protocol ? AF_INET6 : AF_INET;
+    if (GetIpForwardTable2(family, &table) != NO_ERROR) return false;
+    if (!updateInterfaceMetrics(family)) { FreeMibTable(table); return false; }
+    const bool captured = updateCapturedRoutes(family, table);
+    const bool routed = updateExclusionRoute(m_exclusionRoutes.value(prefix), table);
+    FreeMibTable(table);
+    return captured && routed;
   }
 
   // Allocate and initialize the MIB routing table row.
@@ -511,13 +574,17 @@ bool WindowsRouteMonitor::addExclusionRoute(const IPAddress& prefix) {
     delete data;
     return false;
   }
+  if (!updateInterfaceMetrics(family)) {
+    FreeMibTable(table);
+    delete data;
+    return false;
+  }
   m_exclusionRoutes[prefix] = data;
-  updateInterfaceMetrics(family);
-  updateCapturedRoutes(family, table);
-  updateExclusionRoute(data, table);
+  const bool captured = updateCapturedRoutes(family, table);
+  const bool routed = updateExclusionRoute(data, table);
   FreeMibTable(table);
 
-  return true;
+  return captured && routed;
 }
 
 bool WindowsRouteMonitor::deleteExclusionRoute(const IPAddress& prefix) {
@@ -528,48 +595,66 @@ bool WindowsRouteMonitor::deleteExclusionRoute(const IPAddress& prefix) {
     return true;
   }
 
-  MIB_IPFORWARD_ROW2* data = m_exclusionRoutes.take(prefix);
+  MIB_IPFORWARD_ROW2* data = m_exclusionRoutes.value(prefix);
   if (data == nullptr) {
-    return true;
+    return updateCapturedRoutes(prefix.type() == QAbstractSocket::IPv6Protocol ? AF_INET6 : AF_INET);
   }
 
-  DWORD result = DeleteIpForwardEntry2(data);
+  DWORD result = data->InterfaceLuid.Value == 0 ? NO_ERROR : DeleteIpForwardEntry2(data);
   if (!isSuccessfulRouteDelete(result)) {
     logger.error() << "Failed to delete route to"
                    << prefix.toString()
                    << "result:" << result;
+    return false;
   }
+  // A successful delete return is not an absence receipt. Keep ownership when
+  // the row is still present or the readback is otherwise ambiguous so a
+  // later cleanup/retry cannot discard a possibly installed route.
+  if (data->InterfaceLuid.Value != 0 && !isRouteAbsent(*data)) {
+    logger.error() << "Route delete was not confirmed for"
+                   << prefix.toString();
+    return false;
+  }
+  m_exclusionRoutes.remove(prefix);
 
   // Captured routes might have changed.
-  updateCapturedRoutes(data->DestinationPrefix.Prefix.si_family);
+  const bool captured = updateCapturedRoutes(data->DestinationPrefix.Prefix.si_family);
 
   delete data;
-  return true;
+  return captured;
 }
 
-void WindowsRouteMonitor::flushRouteTable(
+bool WindowsRouteMonitor::flushRouteTable(
     QHash<IPAddress, MIB_IPFORWARD_ROW2*>& table) {
-  for (auto i = table.begin(); i != table.end(); i++) {
+  bool cleaned = true;
+  for (auto i = table.begin(); i != table.end();) {
     MIB_IPFORWARD_ROW2* data = i.value();
-    DWORD result = DeleteIpForwardEntry2(data);
-    if (!isSuccessfulRouteDelete(result)) {
+    const DWORD result = data->InterfaceLuid.Value == 0
+                             ? NO_ERROR
+                             : DeleteIpForwardEntry2(data);
+    if (!isSuccessfulRouteDelete(result) ||
+        (data->InterfaceLuid.Value != 0 && !isRouteAbsent(*data))) {
       logger.error() << "Failed to delete route to"
                      << i.key().toString()
                      << "result:" << result;
+      cleaned = false;
+      ++i;
+      continue;
     }
     delete data;
+    i = table.erase(i);
   }
-  table.clear();
+  return cleaned;
 }
 
-void WindowsRouteMonitor::setDetaultRouteCapture(bool enable) {
+bool WindowsRouteMonitor::setDetaultRouteCapture(bool enable) {
   m_defaultRouteCapture = enable;
 
   // Flush any captured routes when disabling the feature.
   if (!m_defaultRouteCapture) {
-    flushRouteTable(m_clonedRoutes);
-    return;
+    return flushRouteTable(m_clonedRoutes);
   }
+  return true;
 }
 
 void WindowsRouteMonitor::routeChanged() {
@@ -603,15 +688,20 @@ void WindowsRouteMonitor::processRouteChanges() {
   logger.debug() << "Routes changed, processing" << routeChangeCount
                  << "coalesced notifications";
 
-  updateInterfaceMetrics(AF_UNSPEC);
-  updateCapturedRoutes(AF_UNSPEC, table);
-  for (MIB_IPFORWARD_ROW2* data : m_exclusionRoutes) {
-    updateExclusionRoute(data, table);
+  bool updated = updateInterfaceMetrics(AF_UNSPEC);
+  if (updated) {
+    updated = updateCapturedRoutes(AF_UNSPEC, table) && updated;
+    for (MIB_IPFORWARD_ROW2* data : m_exclusionRoutes) {
+      updated = updateExclusionRoute(data, table) && updated;
+    }
   }
 
   FreeMibTable(table);
 
   m_routeChangeQueued.store(false, std::memory_order_release);
+  if (!updated && !m_routeChangeTimer.isActive()) {
+    m_routeChangeTimer.start();
+  }
   if (m_pendingRouteChanges.load(std::memory_order_acquire) > 0) {
     bool expected = false;
     if (m_routeChangeQueued.compare_exchange_strong(

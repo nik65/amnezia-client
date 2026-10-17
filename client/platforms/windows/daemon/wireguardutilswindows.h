@@ -44,6 +44,8 @@ class WireguardUtilsWindows final : public WireguardUtils {
 
   bool addExclusionRoute(const IPAddress& prefix) override;
   bool deleteExclusionRoute(const IPAddress& prefix) override;
+  amnezia::exclusionPolicy::Result replaceExclusionPolicy(
+      const InterfaceConfig& before, const InterfaceConfig& after) override;
 
   bool WireguardUtilsWindows::excludeLocalNetworks(const QList<IPAddress>& addresses) override;
 

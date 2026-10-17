@@ -1588,7 +1588,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("m_selfHostedInstallInProgress = false;", update_controller)
         self.assertIn("isSelfHostedUpdateChannelConfigured()", update_controller)
         self.assertIn("if (isSelfHostedUpdateChannelConfigured())", update_controller)
-        self.assertIn('add_definitions(-DSELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64="$ENV{SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64}")', client_cmake)
+        self.assertIn('add_definitions(-DSELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64=', client_cmake)
         self.assertIn("SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64", update_controller)
         self.assertIn("bool decodeStrictBase64(const QByteArray &encoded, QByteArray::Base64Options options, QByteArray &decoded)", update_controller)
         self.assertIn("QByteArray::fromBase64Encoding(\n                encoded, options | QByteArray::AbortOnBase64DecodingErrors)", update_controller)
@@ -2947,7 +2947,8 @@ class SourceContractTests(unittest.TestCase):
         self.assertNotIn("addExclusionRoute(IPAddress(config.m_serverIpv6AddrIn));\n  }", wg_windows)
         self.assertIn("addr.protocol() == QAbstractSocket::UnknownNetworkLayerProtocol", route_monitor)
         self.assertIn("prefix.address().protocol() == QAbstractSocket::UnknownNetworkLayerProtocol", route_monitor)
-        self.assertIn("if (error == NO_ERROR) {\n    updateCapturedRoutes(family, table);", route_monitor)
+        self.assertIn("if (error == NO_ERROR) {\n    const bool updated = updateCapturedRoutes(family, table);", route_monitor)
+        self.assertIn("FreeMibTable(table);\n    return updated;", route_monitor)
         self.assertIn("isOnLinkRoute(row)", route_monitor)
         self.assertIn("ERROR_OBJECT_ALREADY_EXISTS", route_monitor)
         self.assertIn("MIB_IPPROTO_LOCAL", route_monitor)
@@ -3178,7 +3179,7 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        version_fixture = json.loads((REPO_ROOT / "deploy/selfhosted_updates/fixtures/release_version_5.0.3.9.json").read_text(encoding="utf-8"))
+        version_fixture = json.loads((REPO_ROOT / "deploy/selfhosted_updates/fixtures/release_version_5.0.3.11.json").read_text(encoding="utf-8"))
         version = re.search(r"set\(AMNEZIAVPN_VERSION\s+([0-9.]+)", cmake).group(1)
         android_code = int(re.search(r"set\(APP_ANDROID_VERSION_CODE\s+(\d+)\)", cmake).group(1))
         self.assertEqual(version, version_fixture["candidateVersion"])
@@ -3287,8 +3288,8 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('"backendModes"', build_script)
         local_release = (REPO_ROOT / "deploy/selfhosted_updates/local_release.ps1").read_text(encoding="utf-8")
         cpack_ifw = (REPO_ROOT / "cmake/CPack.cmake").read_text(encoding="utf-8")
-        self.assertIn("$sourceBase --version", local_release)
-        self.assertIn("AMNEZIA_IFW_FRAMEWORK_VERSION = $Matches[1]", local_release)
+        self.assertNotIn("& $sourceBase", local_release)
+        self.assertIn('GetVersionInfo((Join-Path $qifRoot "bin\\binarycreator.exe"))', local_release)
         self.assertIn("CPACK_IFW_FRAMEWORK_VERSION_FORCED", cpack_ifw)
         self.assertLess(cpack_ifw.index("CPACK_IFW_FRAMEWORK_VERSION_FORCED"), cpack_ifw.index("include(CPackIFW)"))
         self.assertIn('@("windows", "linux", "android", "headless")', local_release)
@@ -5950,6 +5951,49 @@ class SourceContractTests(unittest.TestCase):
             self.assertFalse(any(".amnezia-backup." in name for name in final_state["containers"]))
 
 
+    def test_bundled_windows_payload_proof_is_fail_closed_and_windows_scoped(self) -> None:
+        client_cmake = (REPO_ROOT / "client/CMakeLists.txt").read_text(encoding="utf-8")
+        local_release = (REPO_ROOT / "deploy/selfhosted_updates/local_release.ps1").read_text(encoding="utf-8")
+
+        # The inert model mirrors the byte-marker gate without touching a real
+        # executable. Empty and wrong key material must never pass the proof.
+        def marker_gate(payload: bytes, public_key: str, sync_host: str) -> bool:
+            if not public_key.strip() or not sync_host.strip():
+                return False
+            return public_key.encode("ascii") in payload and sync_host.encode("ascii") in payload
+
+        self.assertFalse(marker_gate(b"AMNEZIA_SELFHOSTED_BUILD 10.8.1.0", "", "10.8.1.0"))
+        self.assertFalse(marker_gate(b"AMNEZIA_SELFHOSTED_BUILD 10.8.1.0", "wrong-key", "10.8.1.0"))
+        self.assertTrue(marker_gate(b"compiled-key 10.8.1.0", "compiled-key", "10.8.1.0"))
+
+        self.assertIn("Assert-WindowsClientTrust", local_release)
+        self.assertIn('schema = "amnezia-windows-thin-payload-guard-v1"', local_release)
+        self.assertIn("VerifyWindowsThinPayloadOnly", local_release)
+        self.assertIn("Assert-BundledWindowsPayload", local_release)
+        self.assertIn('$thinWindowsArtifactPath = Join-Path $ArtifactDir "AmneziaVPN_${Version}_windows_x64.exe"', local_release)
+        self.assertLess(
+            local_release.index("Assert-WindowsClientTrust $thinWindowsArtifactPath"),
+            local_release.index('Invoke-External "python" $manifestArgs'),
+        )
+        self.assertIn("Windows self-hosted client trust proof requires nonempty public key and sync host", local_release)
+        self.assertIn("if ($bundlesUpdatesInWindowsClient)", local_release)
+        self.assertIn("payloadText.IndexOf($PublicKeyBase64", local_release)
+        self.assertIn("payloadText.IndexOf($SyncHost", local_release)
+        self.assertIn('Get-ChildItem -LiteralPath $inspectionRoot -Recurse -File -Filter "*.7z"', local_release)
+        self.assertIn('Invoke-External $sevenZipPath @("x", "-y", "-o$componentRoot", $archive.FullName)', local_release)
+        self.assertIn('contract.selfHostedBuild -ne $true', local_release)
+        self.assertIn('contract.manifestSha256', local_release)
+        self.assertIn('embeddedManifestSha256', local_release)
+        self.assertIn('Bundled Windows self-hosted client requires SELFHOSTED_UPDATE_BASE_URL', local_release)
+        self.assertIn('if (($BuildPlatform -contains "windows") -and (-not $NoBundleUpdatesInWindowsClient)', local_release)
+        self.assertIn('if(WIN32 AND NOT _amnezia_selfhosted_bundle_dir STREQUAL "")', client_cmake)
+        self.assertIn('_amnezia_selfhosted_manifest_sha256', client_cmake)
+        self.assertIn('manifestSha256', client_cmake)
+        # The ordinary upstream/debug path remains outside the bundled guard.
+        self.assertIn('if(WIN32 AND NOT _amnezia_selfhosted_bundle_dir STREQUAL "")', client_cmake)
+        self.assertIn('add_definitions(-DSELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64=', client_cmake)
+
+
 class ManifestReleasePolicyTests(unittest.TestCase):
     def policy(self) -> dict[str, object]:
         generated_at = datetime.now(timezone.utc).replace(microsecond=0)
@@ -7151,6 +7195,8 @@ class ManifestPublisherTests(unittest.TestCase):
             "-Preflight",
             "-BuildPlatform",
             "windows",
+            "-SyncHost",
+            "172.29.172.252",
             "-BaseUrl",
             "http://172.29.172.252:17865",
             "-PrivateKey",
@@ -7200,6 +7246,8 @@ class ManifestPublisherTests(unittest.TestCase):
                 "off",
                 "-BuildPlatform",
                 "windows",
+                "-SyncHost",
+                "172.29.172.252",
                 "-OutDir",
                 str(out_dir),
                 "-BaseUrl",

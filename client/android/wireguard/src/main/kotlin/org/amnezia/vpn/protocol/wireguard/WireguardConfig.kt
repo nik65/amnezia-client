@@ -224,7 +224,11 @@ open class WireguardConfig protected constructor(
         fun setRandomTrailers(randomTrailers: String) = apply { this.randomTrailers = randomTrailers }
         fun setDisableCookies(disableCookies: String) = apply { this.disableCookies = disableCookies }
 
-        override fun build(): WireguardConfig = configBuild().run { WireguardConfig(this@Builder) }
+        override fun build(): WireguardConfig {
+            enableIncludedUnionIfNeeded()
+            configBuild()
+            return WireguardConfig(this@Builder)
+        }
     }
 
     companion object {

@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.25)
+project(LinuxUapiResultTests LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(Qt6 REQUIRED COMPONENTS Core)
+enable_testing()
+add_executable(linux_uapi_result_tests test_uapi_result.cpp)
+target_link_libraries(linux_uapi_result_tests PRIVATE Qt6::Core)
+add_test(NAME linux_uapi_result COMMAND linux_uapi_result_tests)

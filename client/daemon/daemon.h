@@ -35,6 +35,8 @@ class Daemon : public QObject {
   virtual bool activate(const InterfaceConfig& config);
   virtual bool deactivate(bool emitSignals = true);
   virtual QJsonObject getStatus();
+  int replaceManagedExclusions(const QString& connectionNonce,
+                               const QStringList& before, const QStringList& after);
   QString migrationNonce;
 
   // Callback before any Activating measure is done

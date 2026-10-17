@@ -39,6 +39,7 @@ class LinuxNetworkWatcherWorker final : public QObject {
   // initialization. When a property of them changes, we check if the access
   // point is active and unsecure.
   QStringList m_devicePaths;
+  bool m_initialized = false;
 };
 
 #endif  // LINUXNETWORKWATCHERWORKER_H

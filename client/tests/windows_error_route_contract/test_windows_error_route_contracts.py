@@ -36,7 +36,8 @@ class WindowsErrorAndRouteContracts(unittest.TestCase):
             self.assertIn(f'"errorCode" << {variable}', body)
             self.assertIn(f"WindowsUtils::getErrorMessage({variable})", body)
         self.assertNotIn("WindowsUtils::windowsLog(", body)
-        self.assertNotIn("GetLastError(", body)
+        wlan_body = body.split("// Power notifications", 1)[0]
+        self.assertNotIn("GetLastError(", wlan_body)
 
     def test_route_delete_policy_accepts_only_idempotent_results(self) -> None:
         source = read_source("client/platforms/windows/daemon/windowsroutemonitor.cpp")

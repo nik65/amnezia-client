@@ -24,6 +24,7 @@
   "\\pipe\\ProtectedPrefix\\Administrators\\AmneziaWG\\AmneziaVPN"
 
 constexpr uint32_t WINDOWS_TUNNEL_MONITOR_TIMEOUT_MSEC = 2000;
+constexpr qsizetype WINDOWS_TUNNEL_UAPI_MAX_REPLY_BYTES = 64 * 1024;
 constexpr qint64 WINDOWS_TUNNEL_START_RETRY_BUDGET_MSEC = 61 * 1000;
 constexpr unsigned WINDOWS_TUNNEL_START_RETRY_BACKOFF_MSEC = 250;
 
@@ -63,15 +64,18 @@ WindowsTunnelService::WindowsTunnelService(QObject* parent) : QObject(parent) {
 }
 
 WindowsTunnelService::~WindowsTunnelService() {
-  MZ_COUNT_CTOR(WindowsTunnelService);
+  MZ_COUNT_DTOR(WindowsTunnelService);
   stop();
-  CloseServiceHandle((SC_HANDLE)m_scm);
+  if (m_scm != nullptr) {
+    CloseServiceHandle((SC_HANDLE)m_scm);
+  }
 }
 
 bool WindowsTunnelService::stop() {
+  bool stopped = true;
   SC_HANDLE service = (SC_HANDLE)m_service;
   if (service) {
-    if (!stopAndDeleteTunnelService(service)) return false;
+    stopped = stopAndDeleteTunnelService(service);
     CloseServiceHandle(service);
     m_service = nullptr;
   }
@@ -83,7 +87,7 @@ bool WindowsTunnelService::stop() {
     m_logthread.wait();
     m_logworker = nullptr;
   }
-  return true;
+  return stopped;
 }
 
 bool WindowsTunnelService::isRunning() {
@@ -125,7 +129,7 @@ void WindowsTunnelService::timeout() {
 bool WindowsTunnelService::start(const QString& configData) {
   logger.debug() << "Starting the tunnel service";
 
-  m_logworker = new WindowsTunnelLogger(WindowsCommons::tunnelLogFile());
+  m_logworker = new WindowsTunnelLogger([] { return WindowsCommons::tunnelLogFile(); });
   m_logworker->moveToThread(&m_logthread);
   connect(&m_logthread, &QThread::finished, m_logworker, &QObject::deleteLater);
   m_logthread.start();
@@ -353,29 +357,48 @@ QString WindowsTunnelService::uapiCommand(const QString& command) {
 
   // Write the UAPI command into the pipe.
   QByteArray message = command.toLocal8Bit();
-  DWORD written;
   while (!message.endsWith("\n\n")) {
     message.append('\n');
   }
-  if (!WriteFile(pipe, message.constData(), message.length(), &written,
-                 nullptr)) {
-    WindowsUtils::windowsLog("Failed to write into the pipe");
-    return QString();
+  DWORD writtenTotal = 0;
+  while (writtenTotal < static_cast<DWORD>(message.size())) {
+    DWORD written = 0;
+    const DWORD remaining = static_cast<DWORD>(message.size()) - writtenTotal;
+    if (!WriteFile(pipe, message.constData() + writtenTotal, remaining,
+                   &written, nullptr) || written == 0 || written > remaining) {
+      WindowsUtils::windowsLog("Failed to write the complete UAPI request");
+      return QString();
+    }
+    writtenTotal += written;
   }
 
   // Receive the response from the pipe.
   QByteArray reply;
-  while (!reply.contains("\n\n")) {
+  while (true) {
+    const qsizetype frameEnd = reply.indexOf("\n\n");
+    if (frameEnd >= 0) {
+      if (frameEnd + 2 != reply.size()) {
+        WindowsUtils::windowsLog("Unexpected data after UAPI response frame");
+        return QString();
+      }
+      return QString::fromUtf8(reply.left(frameEnd));
+    }
+
     char buffer[512];
     DWORD read = 0;
     if (!ReadFile(pipe, buffer, sizeof(buffer), &read, nullptr)) {
-      break;
+      WindowsUtils::windowsLog("Failed to read the complete UAPI response");
+      return QString();
+    }
+    if (read == 0 || read > WINDOWS_TUNNEL_UAPI_MAX_REPLY_BYTES ||
+        reply.size() > WINDOWS_TUNNEL_UAPI_MAX_REPLY_BYTES - read) {
+      WindowsUtils::windowsLog("Invalid or oversized UAPI response");
+      return QString();
     }
 
     reply.append(buffer, read);
   }
-
-  return QString::fromUtf8(reply).trimmed();
+  return QString();
 }
 
 // static

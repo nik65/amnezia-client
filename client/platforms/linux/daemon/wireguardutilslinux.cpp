@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "wireguardutilslinux.h"
+#include "uapiresultlinux.h"
 #include "../../../../common/awgBackendObservation.h"
 
 #include <errno.h>
@@ -16,6 +17,7 @@
 #include <QTimer>
 #include <QThread>
 #include <QNetworkInterface>
+#include <QHostAddress>
 
 #include "linuxfirewall.h"
 #include "leakdetector.h"
@@ -209,45 +211,111 @@ bool WireguardUtilsLinux::addInterface(const InterfaceConfig& config) {
     return (err == 0);
 }
 
+bool WireguardUtilsLinux::cleanupEndpointRoute(
+    const QString& peerKey, EndpointRouteState& state) {
+    Q_UNUSED(peerKey);
+    if (state.routeUncertain) return false;
+    if (!state.routeOwned) return true;
+    if (m_rtmonitor == nullptr) return false;
+    const auto result = m_rtmonitor->removeOwnedEndpointRoute(
+        IPAddress(state.endpoint));
+    if (result == LinuxRouteMonitor::EndpointRouteResult::Success ||
+        result == LinuxRouteMonitor::EndpointRouteResult::NotFound) {
+        state.routeOwned = false;
+        state.routeUncertain = false;
+        return true;
+    }
+    if (result == LinuxRouteMonitor::EndpointRouteResult::Uncertain) {
+        state.routeUncertain = true;
+    }
+    return false;
+}
+
 bool WireguardUtilsLinux::deleteInterface() {
+    if (m_peerMutationBusy) {
+        logger.error() << "Refusing reentrant peer/interface mutation";
+        return false;
+    }
+    QScopedValueRollback<bool> mutationGuard(m_peerMutationBusy, true);
+    bool endpointRoutesClean = true;
+    for (auto iterator = m_endpointRouteStates.begin();
+         iterator != m_endpointRouteStates.end(); ++iterator) {
+        EndpointRouteState& state = iterator.value();
+        if (!state.peerRemoved ||
+            !cleanupEndpointRoute(iterator.key(), state)) {
+            endpointRoutesClean = false;
+        }
+    }
+    if (!endpointRoutesClean) {
+        logger.error() << "Endpoint route cleanup remains pending";
+        return false;
+    }
     if (m_rtmonitor) {
         delete m_rtmonitor;
         m_rtmonitor = nullptr;
     }
-
-    if (m_tunnel.state() == QProcess::NotRunning) {
-        return false;
-    }
-
-    // Attempt to terminate gracefully.
+    if (m_tunnel.state() == QProcess::NotRunning) return false;
     m_tunnel.terminate();
     if (!m_tunnel.waitForFinished(WG_TUN_PROC_TIMEOUT)) {
         m_tunnel.kill();
         m_tunnel.waitForFinished(WG_TUN_PROC_TIMEOUT);
     }
-
     if (m_tunnel.state() != QProcess::NotRunning) return false;
-    // Native process exit is insufficient if an interface remains present.
     if (QNetworkInterface::interfaceFromName(WG_INTERFACE).isValid()) return false;
-    // Garbage collect.
     QDir wgRuntimeDir(WG_RUNTIME_DIR);
     QFile::remove(wgRuntimeDir.filePath(QString(WG_INTERFACE) + ".name"));
-
-    // double-check + ensure our firewall is installed and enabled
     KillSwitch::instance()->disableKillSwitch();
+    m_endpointRouteStates.clear();
+    m_peerEndpoints.clear();
     return true;
 }
 
 // dummy implementations for now
 bool WireguardUtilsLinux::updatePeer(const InterfaceConfig& config) {
+    if (m_peerMutationBusy) {
+        logger.error() << "Refusing reentrant peer mutation";
+        return false;
+    }
+    QScopedValueRollback<bool> mutationGuard(m_peerMutationBusy, true);
+    const QString peerKey = config.m_serverPublicKey;
+    const bool hasIpv4Endpoint = !config.m_serverIpv4AddrIn.isEmpty();
+    const bool nonMultihop = config.m_hopType != InterfaceConfig::MultiHopExit;
+    const QString endpoint = hasIpv4Endpoint ? config.m_serverIpv4AddrIn
+                                             : config.m_serverIpv6AddrIn;
     QByteArray publicKey =
         QByteArray::fromBase64(qPrintable(config.m_serverPublicKey));
-
     QByteArray pskKey = QByteArray::fromBase64(qPrintable(config.m_serverPskKey));
-
-    logger.debug() << "Configuring peer" << config.m_serverPublicKey << "via" << config.m_serverIpv4AddrIn;
-
-    // Update/create the peer config
+    logger.debug() << "Configuring peer" << config.m_serverPublicKey
+                   << "via" << endpoint;
+    if (endpoint.isEmpty()) {
+        logger.warning() << "Failed to create peer with no endpoints";
+        return false;
+    }
+    if (config.m_serverPort <= 0 || config.m_serverPort > 65535) {
+        logger.error() << "Invalid peer endpoint port";
+        return false;
+    }
+    if (nonMultihop && !hasIpv4Endpoint) {
+        logger.error() << "IPv6 endpoint exclusion route is unsupported on Linux";
+        return false;
+    }
+    const QHostAddress endpointAddress(endpoint);
+    const auto expectedProtocol = hasIpv4Endpoint
+                                      ? QAbstractSocket::IPv4Protocol
+                                      : QAbstractSocket::IPv6Protocol;
+    if (endpointAddress.protocol() != expectedProtocol) {
+        logger.error() << "Invalid endpoint address family";
+        return false;
+    }
+    if (nonMultihop && m_rtmonitor == nullptr) {
+        logger.error() << "Cannot configure peer without endpoint route monitor";
+        return false;
+    }
+    const auto existingPeer = m_peerEndpoints.constFind(peerKey);
+    if (existingPeer != m_peerEndpoints.constEnd() && *existingPeer != endpoint) {
+        logger.error() << "Refusing untracked endpoint change for existing peer";
+        return false;
+    }
     QString message;
     QTextStream out(&message);
     out << "set=1\n";
@@ -255,16 +323,9 @@ bool WireguardUtilsLinux::updatePeer(const InterfaceConfig& config) {
     if (!config.m_serverPskKey.isNull()) {
         out << "preshared_key=" << QString(pskKey.toHex()) << "\n";
     }
-    if (!config.m_serverIpv4AddrIn.isNull()) {
-        out << "endpoint=" << config.m_serverIpv4AddrIn << ":";
-    } else if (!config.m_serverIpv6AddrIn.isNull()) {
-        out << "endpoint=[" << config.m_serverIpv6AddrIn << "]:";
-    } else {
-        logger.warning() << "Failed to create peer with no endpoints";
-        return false;
-    }
+    if (hasIpv4Endpoint) out << "endpoint=" << config.m_serverIpv4AddrIn << ":";
+    else out << "endpoint=[" << config.m_serverIpv6AddrIn << "]:";
     out << config.m_serverPort << "\n";
-
     out << "replace_allowed_ips=true\n";
     if (!config.m_persistentKeepalive.isEmpty()) {
         out << "persistent_keepalive_interval=" << config.m_persistentKeepalive << "\n";
@@ -272,43 +333,100 @@ bool WireguardUtilsLinux::updatePeer(const InterfaceConfig& config) {
     for (const IPAddress& ip : config.m_allowedIPAddressRanges) {
         out << "allowed_ip=" << ip.toString() << "\n";
     }
-
-    // Exclude the server address, except for multihop exit servers.
-    if ((config.m_hopType != InterfaceConfig::MultiHopExit) &&
-        (m_rtmonitor != nullptr)) {
-        m_rtmonitor->addExclusionRoute(IPAddress(config.m_serverIpv4AddrIn));
-        m_rtmonitor->addExclusionRoute(IPAddress(config.m_serverIpv6AddrIn));
+    EndpointRouteState* routeState = nullptr;
+    if (nonMultihop) {
+        auto stateIterator = m_endpointRouteStates.find(peerKey);
+        if (stateIterator != m_endpointRouteStates.end()) {
+            if (stateIterator->endpoint != endpoint ||
+                stateIterator->routeUncertain || stateIterator->peerRemoved) {
+                logger.error() << "Endpoint route ownership is unresolved";
+                return false;
+            }
+            routeState = &stateIterator.value();
+        } else {
+            EndpointRouteState state;
+            state.endpoint = endpoint;
+            const auto result = m_rtmonitor->createEndpointRoute(IPAddress(endpoint));
+            if (result == LinuxRouteMonitor::EndpointRouteResult::AlreadyExists) {
+                logger.error() << "Endpoint route already exists outside this peer";
+                return false;
+            }
+            if (result == LinuxRouteMonitor::EndpointRouteResult::Failed) {
+                logger.error() << "Failed to install peer endpoint exclusion route";
+                return false;
+            }
+            if (result == LinuxRouteMonitor::EndpointRouteResult::Uncertain) {
+                state.routeUncertain = true;
+                m_endpointRouteStates.insert(peerKey, state);
+                logger.error() << "Endpoint route installation is uncertain";
+                return false;
+            }
+            state.routeOwned = true;
+            m_endpointRouteStates.insert(peerKey, state);
+            routeState = &m_endpointRouteStates[peerKey];
+        }
     }
-
-    int err = uapiErrno(uapiCommand(message));
+    const int err = uapiErrno(uapiCommand(message));
     if (err != 0) {
         logger.error() << "Peer configuration failed:" << strerror(err);
+        if (!m_peerEndpoints.contains(peerKey)) {
+            QString removeMessage;
+            QTextStream removeOut(&removeMessage);
+            removeOut << "set=1\npublic_key=" << QString(publicKey.toHex())
+                      << "\nremove=true\n";
+            const int removeErr = uapiErrno(uapiCommand(removeMessage));
+            if (removeErr != 0 && removeErr != ENOENT) {
+                logger.error() << "Initial peer recovery removal is uncertain:"
+                               << strerror(removeErr);
+                return false;
+            }
+            if (routeState != nullptr) {
+                routeState->peerRemoved = true;
+                if (!cleanupEndpointRoute(peerKey, *routeState)) return false;
+                m_endpointRouteStates.remove(peerKey);
+            }
+        }
+        return false;
     }
-    return (err == 0);
+    m_peerEndpoints.insert(peerKey, endpoint);
+    if (routeState != nullptr) routeState->peerRemoved = false;
+    return true;
 }
 
 bool WireguardUtilsLinux::deletePeer(const InterfaceConfig& config) {
+    if (m_peerMutationBusy) {
+        logger.error() << "Refusing reentrant peer mutation";
+        return false;
+    }
+    QScopedValueRollback<bool> mutationGuard(m_peerMutationBusy, true);
+    const QString peerKey = config.m_serverPublicKey;
     QByteArray publicKey =
         QByteArray::fromBase64(qPrintable(config.m_serverPublicKey));
-
-    // Clear exclustion routes for this peer.
-    if ((config.m_hopType != InterfaceConfig::MultiHopExit) &&
-        (m_rtmonitor != nullptr)) {
-        m_rtmonitor->deleteExclusionRoute(IPAddress(config.m_serverIpv4AddrIn));
-        m_rtmonitor->deleteExclusionRoute(IPAddress(config.m_serverIpv6AddrIn));
+    auto stateIterator = m_endpointRouteStates.find(peerKey);
+    const bool peerAlreadyRemoved = stateIterator != m_endpointRouteStates.end() &&
+                                    stateIterator->peerRemoved;
+    if (!peerAlreadyRemoved) {
+        QString message;
+        QTextStream out(&message);
+        out << "set=1\n";
+        out << "public_key=" << QString(publicKey.toHex()) << "\n";
+        out << "remove=true\n";
+        const int err = uapiErrno(uapiCommand(message));
+        if (err != 0 && err != ENOENT) {
+            logger.error() << "Peer deletion failed:" << strerror(err);
+            return false;
+        }
+        if (stateIterator != m_endpointRouteStates.end()) stateIterator->peerRemoved = true;
     }
-
-    QString message;
-    QTextStream out(&message);
-    out << "set=1\n";
-    out << "public_key=" << QString(publicKey.toHex()) << "\n";
-    out << "remove=true\n";
-
-    int err = uapiErrno(uapiCommand(message));
-    if (err != 0) {
-        logger.error() << "Peer deletion failed:" << strerror(err);
+    if (stateIterator != m_endpointRouteStates.end()) {
+        if (!cleanupEndpointRoute(peerKey, stateIterator.value())) {
+            logger.error() << "Failed to remove peer endpoint exclusion route";
+            return false;
+        }
+        m_endpointRouteStates.erase(stateIterator);
     }
-    return (err == 0);
+    m_peerEndpoints.remove(peerKey);
+    return true;
 }
 
 QList<WireguardUtils::PeerStatus> WireguardUtilsLinux::getPeerStatus() {
@@ -384,7 +502,7 @@ bool WireguardUtilsLinux::deleteRoutePrefix(const IPAddress& prefix) {
         return false;
     }
     if (prefix.prefixLength() > 0) {
-        return m_rtmonitor->insertRoute(prefix);
+        return m_rtmonitor->deleteRoute(prefix);
     }
 
     // Ensure that we do not replace the default route.
@@ -471,16 +589,7 @@ QString WireguardUtilsLinux::uapiCommand(const QString& command) {
 
 // static
 int WireguardUtilsLinux::uapiErrno(const QString& reply) {
-    for (const QString& line : reply.split("\n")) {
-        int eq = line.indexOf('=');
-        if (eq <= 0) {
-            continue;
-        }
-        if (line.left(eq) == "errno") {
-            return line.mid(eq + 1).toInt();
-        }
-    }
-    return EINVAL;
+    return LinuxUapi::resultErrno(reply);
 }
 
 QString WireguardUtilsLinux::waitForTunnelName(const QString& filename) {

@@ -7,6 +7,8 @@
 
 #include <QObject>
 #include <QProcess>
+#include <QHash>
+#include <QScopedValueRollback>
 
 
 #include "daemon/wireguardutils.h"
@@ -49,13 +51,25 @@ private slots:
     void tunnelErrorOccurred(QProcess::ProcessError error);
 
 private:
+    struct EndpointRouteState {
+        QString endpoint;
+        bool routeOwned = false;
+        bool routeUncertain = false;
+        bool peerRemoved = false;
+    };
+
     QString uapiCommand(const QString& command);
     static int uapiErrno(const QString& command);
     QString waitForTunnelName(const QString& filename);
+    bool cleanupEndpointRoute(const QString& peerKey,
+                              EndpointRouteState& state);
 
     QString m_ifname;
     QProcess m_tunnel;
     LinuxRouteMonitor* m_rtmonitor = nullptr;
+    QHash<QString, EndpointRouteState> m_endpointRouteStates;
+    QHash<QString, QString> m_peerEndpoints;
+    bool m_peerMutationBusy = false;
 };
 
 #endif  // WIREGUARDUTILSLINUX_H

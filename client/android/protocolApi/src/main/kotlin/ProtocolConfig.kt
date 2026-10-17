@@ -21,7 +21,8 @@ open class ProtocolConfig protected constructor(
     val httpProxy: ProxyInfo?,
     val allowAllAF: Boolean,
     val blockingMode: Boolean,
-    val mtu: Int
+    val mtu: Int,
+    val useIncludedUnion: Boolean = false
 ) {
 
     protected constructor(builder: Builder) : this(
@@ -36,7 +37,8 @@ open class ProtocolConfig protected constructor(
         builder.httpProxy,
         builder.allowAllAF,
         builder.blockingMode,
-        builder.mtu
+        builder.mtu,
+        builder.useIncludedUnion
     )
 
     open class Builder(blockingMode: Boolean) {
@@ -47,6 +49,21 @@ open class ProtocolConfig protected constructor(
         internal val excludedAddresses: MutableSet<InetNetwork> = hashSetOf()
         internal val includedApplications: MutableSet<String> = hashSetOf()
         internal val excludedApplications: MutableSet<String> = hashSetOf()
+
+        internal var useIncludedUnion: Boolean = false
+            private set
+
+        // Enabled only by a backend that classifies flows inside the TUN.
+        protected fun enableIncludedUnionIfNeeded() {
+            useIncludedUnion = includedAddresses.isNotEmpty() && includedApplications.isNotEmpty()
+        }
+
+        /**
+         * Android 10 added the owner lookup required by the in-TUN union policy.
+         * Keep this as a small overridable seam so the JVM production-config
+         * test can exercise the pre-Q rejection without a device or emulator.
+         */
+        protected open fun androidApiLevel(): Int = Build.VERSION.SDK_INT
 
         internal var searchDomain: String? = null
             private set
@@ -124,7 +141,13 @@ open class ProtocolConfig protected constructor(
                 throw BadConfigException("Config contains addresses for inclusive and exclusive split tunneling at the same time")
             }
 
-            if (includedAddresses.isNotEmpty()) {
+            if (useIncludedUnion) {
+                prependRoutes {
+                    addRoute(InetNetwork("0.0.0.0", 0))
+                    if (allowIpv6Routes) addRoute(InetNetwork("::", 0))
+                    addRoutes(includedAddresses)
+                }
+            } else if (includedAddresses.isNotEmpty()) {
                 // remove default routes, if any
                 removeRoute(InetNetwork("0.0.0.0", 0))
                 removeRoute(InetNetwork("::", 0))
@@ -193,6 +216,11 @@ open class ProtocolConfig protected constructor(
 
         protected fun configBuild() {
             processAddressFamilies()
+            if (useIncludedUnion && androidApiLevel() < Build.VERSION_CODES.Q) {
+                throw BadConfigException(
+                    "Combined site/application split tunneling requires Android 10 or newer"
+                )
+            }
             processSplitTunneling()
             processRoutes()
             validate()

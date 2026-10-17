@@ -1,9 +1,11 @@
 """Durable ownership journal. Recovery addresses immutable owned Docker IDs only."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import time
 
 # Verify the actual control PID1 owns the listening socket. Namespace INPUT
@@ -15,6 +17,42 @@ CONTROL_LISTENER_PROBE = ('import os,pathlib; '
     'rows=[line.split() for line in pathlib.Path("/proc/net/tcp").read_text().splitlines()[1:]]; '
     'assert any(row[1]=="00000000:46A2" and row[3]=="0A" and '
     '"socket:["+row[9]+"]" in owned for row in rows)')
+
+# Exact reviewed predecessors, not a TOFU adoption of whatever is installed.
+# b0921b650 source; and the existing gen1 pair read by the administrator on
+# 2026-10-17 16:51:46Z. Historical bytes must match as a coherent pair.
+CONTROL_BASELINES = (
+    {'service.py': '88254af95c85b49ee2bc0d1d6d981ee401e0be0c5bddce1d0c4462245419ae3e',
+     'target.py': '1ed03cc1fc41c6bbd87c58bcb207bcfa6d38d6501987d2a6a9d8faf469617d32'},
+    {'service.py': 'ed640e5fcbba634a6963d43e207ffaf672704d37044fdb186fd27d61351c6eb2',
+     'target.py': '1ed03cc1fc41c6bbd87c58bcb207bcfa6d38d6501987d2a6a9d8faf469617d32'},
+)
+CONTROL_FILES = ('service.py', 'target.py')
+
+
+def digest(raw):
+    return hashlib.sha256(raw).hexdigest()
+
+
+def durable_bytes(path, raw):
+    """Same-directory atomic write, verified before and after replacement."""
+    fd, temporary = tempfile.mkstemp(prefix='.' + path.name + '-', dir=path.parent)
+    tmp = Path(temporary)
+    with os.fdopen(fd, 'wb') as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    if tmp.read_bytes() != raw:
+        raise ValueError('control maintenance staged readback')
+    os.replace(tmp, path)
+    if path.read_bytes() != raw:
+        raise ValueError('control maintenance readback')
+    fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def atomic(path, value):
@@ -83,6 +121,158 @@ class Journal:
             raise ValueError('created container not found')
         self.value['containers'][name]['id'] = observed['Id']
         self.save()
+
+    def control_helpers(self):
+        """Validate immutable ownership AND the mounted recipe/namespace binding."""
+        source = inspect(self.run, self.value['sourceId'])
+        target = self.owned(self.value['target'])
+        if (source is None or source['Id'] != self.value['sourceId']
+                or source['Name'] != '/' + self.value['source'] or target is None
+                or not source['State']['Running'] or not target['State']['Running']
+                or source['State']['StartedAt'] != self.value['sourceEpoch']
+                or target['State']['StartedAt'] != self.value['targetEpoch']):
+            raise ValueError('control maintenance parent drift')
+        result = []
+        for suffix, parent, role in (('-control', target, 'target'),
+                                     ('-source-control', source, 'source')):
+            name = self.value['target'] + suffix
+            helper = self.owned(name)
+            expected_id = self.value['containers'][name]['id']
+            if helper is None or not expected_id or helper['Id'] != expected_id:
+                raise ValueError('control maintenance missing helper')
+            mounts = helper.get('Mounts', [])
+            migration = [m for m in mounts if m.get('Destination') == '/migration']
+            logs = [m for m in mounts if m.get('Destination') == '/logs']
+            host = helper.get('HostConfig', {})
+            if (host.get('NetworkMode') != 'container:' + parent['Id']
+                    or host.get('Privileged') is not False
+                    or len(migration) != 1 or migration[0].get('Type') != 'bind'
+                    or migration[0].get('Source') != str(self.directory)
+                    or migration[0].get('RW') is not True
+                    or len(logs) != 1 or logs[0].get('Type') != 'bind'
+                    or logs[0].get('Source') != '/opt/amnezia/client-logs'
+                    or logs[0].get('RW') is not False
+                    or helper.get('Config', {}).get('Entrypoint') != ['python']
+                    or helper.get('Config', {}).get('Cmd') != ['/migration/target.py']):
+                raise ValueError('control maintenance helper binding')
+            result.append((name, helper, role))
+        return result
+
+    def control_hashes(self):
+        return {name: digest((self.directory / name).read_bytes()) for name in CONTROL_FILES}
+
+    def protected_control_state(self):
+        # Grant DB and handshake files are intentionally live; this path never
+        # opens them for writing or attempts to restore concurrent client work.
+        names = ('awg0.conf', 'awg0.native.conf', 'ready.json', 'signing.pem', 'start.sh')
+        return {name: digest((self.directory / name).read_bytes())
+                for name in names if (self.directory / name).exists()}
+
+    def check_control_state(self, protected):
+        if self.protected_control_state() != protected:
+            raise ValueError('control maintenance protected state drift')
+        config = '/opt/amnezia/awg/' + ('wg0.conf' if self.value['source'] == 'amnezia-awg' else 'awg0.conf')
+        raw = self.run('docker', 'exec', self.value['sourceId'], 'cat', config)
+        if digest(raw) != self.value['sourceDigest']:
+            raise ValueError('control maintenance source configuration drift')
+
+    def restart_controls(self, expected_hashes, loaded_receipt):
+        # Verify the complete pair before EACH mutation; never operate by name.
+        original = self.control_helpers()
+        for name, old, role in original:
+            current = {n: h for n, h, _ in self.control_helpers()}[name]
+            if current['Id'] != old['Id']:
+                raise ValueError('control maintenance helper replaced')
+            self.run('docker', 'restart', old['Id'])
+            for attempt in range(10):
+                try:
+                    fresh = self.owned(name)
+                    if (fresh is None or not fresh['State']['Running']
+                            or fresh['State']['StartedAt'] == current['State']['StartedAt']):
+                        raise ValueError('control maintenance process not replaced')
+                    self.run('docker', 'exec', old['Id'], 'python', '-c', CONTROL_LISTENER_PROBE)
+                    if loaded_receipt:
+                        probe = ('import json,pathlib; r=json.loads(pathlib.Path("/migration/control-loaded-' + role + '.json").read_text()); '
+                                 'assert r["role"]==' + repr(role) + '; '
+                                 'assert r["hashes"]==' + repr(expected_hashes) + '; '
+                                 'assert r["processStart"]==pathlib.Path("/proc/1/stat").read_text().split()[21]')
+                        self.run('docker', 'exec', old['Id'], 'python', '-c', probe)
+                    break
+                except (subprocess.SubprocessError, ValueError):
+                    if attempt == 9:
+                        raise
+                    time.sleep(1)
+        self.control_helpers()
+
+    def recover_control_maintenance(self):
+        """Any interrupted activation rolls back, including after both imports."""
+        transaction = self.value.get('controlMaintenance')
+        if not transaction:
+            return
+        self.control_helpers()
+        self.check_control_state(transaction['protected'])
+        old, new = transaction['old'], transaction['new']
+        current = self.control_hashes()
+        if any(current[name] not in (old[name], new[name]) for name in CONTROL_FILES):
+            raise ValueError('control maintenance recovery file drift')
+        backups = self.directory / '.control-maintenance'
+        raw = {name: (backups / name).read_bytes() for name in CONTROL_FILES}
+        if {name: digest(value) for name, value in raw.items()} != old:
+            raise ValueError('control maintenance backup drift')
+        for name in CONTROL_FILES:
+            durable_bytes(self.directory / name, raw[name])
+        self.restart_controls(old, transaction['oldLoadedReceipt'])
+        self.check_control_state(transaction['protected'])
+        self.value['controlRecipe'] = old
+        self.value['controlLoadedReceipt'] = transaction['oldLoadedReceipt']
+        self.value['controlMaintenanceResult'] = 'rolled_back'
+        del self.value['controlMaintenance']
+        self.save()
+
+    def maintain_controls(self, recipe_directory):
+        """Refresh only control Python; VPN endpoint and durable grant state stay put."""
+        self.recover_control_maintenance()
+        self.control_helpers()
+        protected = self.protected_control_state()
+        self.check_control_state(protected)
+        old = self.control_hashes()
+        pinned = self.value.get('controlRecipe')
+        if old != pinned and (pinned is not None or old not in CONTROL_BASELINES):
+            raise ValueError('control maintenance unknown baseline')
+        raw = {name: (Path(recipe_directory) / name).read_bytes() for name in CONTROL_FILES}
+        new = {name: digest(value) for name, value in raw.items()}
+        if new == old:
+            # No TOFU: installed bytes still require a pin or reviewed predecessor.
+            self.value['controlRecipe'] = old
+            self.save()
+            return
+        backup = self.directory / '.control-maintenance'
+        backup.mkdir(mode=0o700, exist_ok=True)
+        for name in CONTROL_FILES:
+            durable_bytes(backup / name, (self.directory / name).read_bytes())
+        transaction = {'old': old, 'new': new, 'protected': protected,
+            'oldLoadedReceipt': self.value.get('controlLoadedReceipt', False)}
+        self.value['controlMaintenance'] = transaction
+        self.save()
+        try:
+            for name in CONTROL_FILES:
+                durable_bytes(self.directory / name, raw[name])
+            self.restart_controls(new, True)
+            self.check_control_state(protected)
+            if self.control_hashes() != new:
+                raise ValueError('control maintenance final readback')
+            self.value['controlRecipe'] = new
+            self.value['controlLoadedReceipt'] = True
+            self.value['controlMaintenanceResult'] = 'updated'
+            del self.value['controlMaintenance']
+            self.save()
+        except BaseException:
+            # Persisted intent remains until exact old bytes AND processes return.
+            # A later normal admin invocation repeats the same rollback safely.
+            self.value['controlMaintenance'] = transaction
+            self.save()
+            self.recover_control_maintenance()
+            raise
 
     def recover_ready(self):
         # No old VPN operations. Only the journal-owned parallel helpers resume.

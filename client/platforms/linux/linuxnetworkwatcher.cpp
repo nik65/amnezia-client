@@ -24,16 +24,21 @@ LinuxNetworkWatcher::LinuxNetworkWatcher(QObject* parent)
 LinuxNetworkWatcher::~LinuxNetworkWatcher() {
   MZ_COUNT_DTOR(LinuxNetworkWatcher);
 
-  delete m_worker;
-
   m_thread.quit();
   m_thread.wait();
+  m_worker = nullptr;
 }
 
 void LinuxNetworkWatcher::initialize() {
+  if (m_initialized) {
+    logger.debug() << "initialize ignored: already initialized";
+    return;
+  }
+
   logger.debug() << "initialize";
 
   m_worker = new LinuxNetworkWatcherWorker(&m_thread);
+  connect(&m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
 
   connect(this, &LinuxNetworkWatcher::checkDevicesInThread, m_worker,
           &LinuxNetworkWatcherWorker::checkDevices);
@@ -54,6 +59,7 @@ void LinuxNetworkWatcher::initialize() {
   QTimer::singleShot(2000, this, [this]() {
     QMetaObject::invokeMethod(m_worker, "initialize", Qt::QueuedConnection);
   });
+  m_initialized = true;
 }
 
 void LinuxNetworkWatcher::start() {

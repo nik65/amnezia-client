@@ -30,6 +30,34 @@ def config(peer=PUBLIC, address='10.8.1.2/32'):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_ready_reuse_rechecks_live_parameters_peers_and_endpoint(self):
+        interface, peers = prepare.parse_config(config())
+        interface.pop('PostUp')
+        parameters = {'HeaderProtectionKey': PSK, 'S1': '16', 'S2': '16', 'S3': '16', 'S4': '16',
+                      'ContentPaddingAddition': '0', 'RandomTrailers': '0', 'DisableCookies': '0'}
+        target = dict(interface, **parameters)
+        target['ListenPort'] = '51821'
+        state = {'targetContainer': 'owned-target', 'serverPublicKey': PUBLIC, 'parameters': parameters}
+        dump = ('private\t' + PUBLIC + '\t51821\t0\n' + PUBLIC + '\t' + PSK + '\t(none)\t10.8.1.2/32\t0\t0\t0\t0\n').encode()
+        showconf = ''.join(key + ' = ' + ('off' if key in ('RandomTrailers', 'DisableCookies') else value) + '\n'
+                           for key, value in parameters.items() if key != 'ContentPaddingAddition').encode()
+        calls = []
+        def run(*args):
+            calls.append(args)
+            return dump if args[-1] == 'dump' else showconf
+        prepare.validate_ready_target(run, state, interface, peers, target, peers, False)
+        self.assertTrue(all(call[:2] == ('docker', 'exec') for call in calls))
+        for bad_dump, bad_conf in ((dump.replace(b'51821', b'51822'), showconf),
+                                   (dump.replace(PSK.encode(), PUBLIC.encode()), showconf),
+                                   (dump, showconf.replace(b'S3 = 16', b'S3 = 17'))):
+            with self.assertRaisesRegex(ValueError, 'migration_ready_drift'):
+                prepare.validate_ready_target(lambda *args: bad_dump if args[-1] == 'dump' else bad_conf,
+                                              state, interface, peers, target, peers, False)
+        nonzero = dict(parameters, ContentPaddingAddition='1')
+        with self.assertRaisesRegex(ValueError, 'migration_ready_drift'):
+            prepare.validate_ready_target(run, dict(state, parameters=nonzero), interface, peers,
+                                          dict(target, ContentPaddingAddition='1'), peers, False)
+
     def test_native_uapi_config_preserves_identity_and_fresh_parameters(self):
         interface, peers = prepare.parse_config(config())
         interface.pop('PostUp')
@@ -72,6 +100,13 @@ class ConfigTests(unittest.TestCase):
         for suffix in (b'[Peer]\nPublicKey = ' + PUBLIC.encode() + b'\nAllowedIPs = 10.8.1.3/32\n',
                        b'Endpoint = evil.example:1\n'):
             with self.assertRaises(ValueError):
+                prepare.parse_config(config() + suffix)
+
+    def test_equivalent_peer_addresses_cannot_share_identity(self):
+        other_public = base64.b64encode(b'd' * 32).decode()
+        for address in ('10.8.1.2/32', '10.8.1.2/032', '10.8.1.2/255.255.255.255'):
+            suffix = ('[Peer]\nPublicKey = ' + other_public + '\nAllowedIPs = ' + address + '\n').encode()
+            with self.subTest(address=address), self.assertRaisesRegex(ValueError, 'duplicate peer address'):
                 prepare.parse_config(config() + suffix)
 
 

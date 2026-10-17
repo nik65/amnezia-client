@@ -70,8 +70,9 @@ QString WindowsCommons::tunnelConfigFile() {
 
 // static
 QString WindowsCommons::tunnelLogFile() {
-  static QString tunnelLogFilePath = getTunnelLogFilePath();
-  return tunnelLogFilePath;
+  // The backend directory can appear after service startup. A failed lookup
+  // must not remain cached for the lifetime of the service.
+  return getTunnelLogFilePath();
 }
 
 // static
@@ -107,7 +108,6 @@ QString WindowsCommons::getTunnelLogFilePath() {
     }
   }
 
-  logger.debug() << "Failed to find WireGuard Tunnel log file";
   return QString();
 }
 

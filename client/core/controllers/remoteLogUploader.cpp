@@ -21,6 +21,8 @@
 #include "core/utils/constants/protocolConstants.h"
 #include "core/utils/boundedQueuedSnapshot.h"
 #include "core/utils/remoteLogBatchHealth.h"
+#include "core/utils/remoteLogCursor.h"
+#include "core/utils/remoteLogReceipt.h"
 #include "core/utils/remoteLogSanitizer.h"
 #include "core/utils/selfhosted/clientLogsUtils.h"
 #include "core/utils/selfhosted/clientLogsTarget.h"
@@ -541,11 +543,17 @@ RemoteLogUploader::LogCursor RemoteLogUploader::cursorForKey(const QString &key)
         return cursor;
     }
     const QString cursorPrefix = QLatin1String(cursorSettingsPrefix) + persistentCursorId(key) + QLatin1Char('/');
-    const bool cursorMetadataPresent = settings.contains(cursorPrefix + QStringLiteral("offset"))
-            || settings.contains(cursorPrefix + QStringLiteral("fingerprint"));
-    cursor.offset = settings.value(cursorPrefix + QStringLiteral("offset"), -1).toLongLong();
+    const bool cursorMetadataPresent = amnezia::remoteLogCursorMetadataPresent(
+            settings, cursorPrefix);
+    const QVariant offsetValue = settings.value(cursorPrefix + QStringLiteral("offset"));
+    bool offsetConversionOk = !offsetValue.isValid();
+    cursor.offset = amnezia::remoteLogCursorInt64(offsetValue, -1, &offsetConversionOk);
     cursor.fingerprint = settings.value(cursorPrefix + QStringLiteral("fingerprint")).toString();
-    cursor.fingerprintBytes = settings.value(cursorPrefix + QStringLiteral("fingerprintBytes"), 0).toLongLong();
+    const QVariant fingerprintBytesValue = settings.value(
+            cursorPrefix + QStringLiteral("fingerprintBytes"));
+    bool fingerprintBytesConversionOk = !fingerprintBytesValue.isValid();
+    cursor.fingerprintBytes = amnezia::remoteLogCursorInt64(
+            fingerprintBytesValue, 0, &fingerprintBytesConversionOk);
     cursor.anchor = settings.value(cursorPrefix + QStringLiteral("anchor")).toString();
     cursor.sanitizerSecretSetSha256 = settings.value(
             cursorPrefix + QStringLiteral("sanitizerSecretSetSha256")).toString();
@@ -560,7 +568,8 @@ RemoteLogUploader::LogCursor RemoteLogUploader::cursorForKey(const QString &key)
             && cursor.fingerprintBytes <= fingerprintSampleBytes
             && ((cursor.offset == 0 && cursor.anchor.isEmpty())
                 || (cursor.offset > 0 && isSha256Hex(cursor.anchor)));
-    if (cursorMetadataPresent && !cursorMetadataValid) {
+    if (cursorMetadataPresent && (!offsetConversionOk || !fingerprintBytesConversionOk
+                                  || !cursorMetadataValid)) {
         cursor.persistenceReadable = false;
         m_retryPersistenceFailClosed = true;
     }
@@ -1752,9 +1761,9 @@ void RemoteLogUploader::postNext()
         const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const bool httpOk = reply->error() == QNetworkReply::NoError
                 && statusCode >= 200 && statusCode < 300;
-        const bool receiptAccepted =
-                reply->rawHeader("X-Amnezia-Batch-Accepted") == QByteArrayLiteral("1")
-                && reply->rawHeader("X-Amnezia-Batch-Id") == batchId;
+        const bool receiptAccepted = amnezia::remoteLogBatchReceiptAccepted(
+                reply->rawHeader("X-Amnezia-Batch-Accepted"),
+                reply->rawHeader("X-Amnezia-Batch-Id"), batchId);
         const bool ok = httpOk && receiptAccepted;
         if (ok) {
             bool durableCursorAdvanced = true;
@@ -1833,6 +1842,12 @@ void RemoteLogUploader::postNext()
                              << "httpStatus" << static_cast<uint64_t>(statusCode);
         }
         reply->deleteLater();
+        // A failed transport/receipt already started bounded retry. Do not
+        // send the rest of this batch through the same broken path. Cursors
+        // remain at their last durable ACK and the next scan retries them.
+        if (!ok || m_retryPersistenceFailClosed) {
+            m_pendingPayloads.clear();
+        }
         postNext();
     });
 }

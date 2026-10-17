@@ -7,6 +7,10 @@
 namespace amnezia
 {
 
+// A successful HTTP status alone is not a durable upload receipt.  The
+// collector returns both headers only after its batch receipt is committed;
+// callers must require the exact id they sent so a stale/proxied response
+// cannot advance a local cursor.
 inline constexpr qsizetype MaximumRemoteLogSanitizerExplicitSecrets = 64;
 
 struct RemoteLogSanitizerSecretSet

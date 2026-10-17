@@ -126,9 +126,11 @@ abstract class Protocol {
             }
         }
 
-        for (app in config.includedApplications) {
-            Log.d(TAG, "addAllowedApplication")
-            vpnBuilder.addAllowedApplication(app)
+        if (!config.useIncludedUnion) {
+            for (app in config.includedApplications) {
+                Log.d(TAG, "addAllowedApplication")
+                vpnBuilder.addAllowedApplication(app)
+            }
         }
 
         for (app in config.excludedApplications) {

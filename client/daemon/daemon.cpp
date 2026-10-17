@@ -11,9 +11,11 @@
 #include <QJsonValue>
 #include <QMetaEnum>
 #include <QTimer>
+#include <QThread>
 
 #include "leakdetector.h"
 #include "logger.h"
+#include "core/utils/managedRoutePolicy.h"
 
 constexpr const char* JSON_ALLOWEDIPADDRESSRANGES = "allowedIPAddressRanges";
 constexpr int HANDSHAKE_POLL_MSEC = 250;
@@ -133,7 +135,10 @@ bool Daemon::activate(const InterfaceConfig& config) {
 
   // Configure routing for excluded addresses.
   for (const QString& i : config.m_excludedAddresses) {
-    addExclusionRoute(IPAddress(i));
+    if (!addExclusionRoute(IPAddress(i))) {
+      logger.error() << "Excluded route installation failed";
+      return false;
+    }
   }
 
   // Add the peer to this interface.
@@ -218,11 +223,10 @@ bool Daemon::addExclusionRoute(const IPAddress& prefix) {
     m_excludedAddrSet[prefix]++;
     return true;
   }
-  if (!wgutils()->addExclusionRoute(prefix)) {
-    return false;
-  }
+  // Reserve ownership before the OS call: a reported failure may have left a
+  // partial route/capture mutation that teardown still has to remove.
   m_excludedAddrSet[prefix] = 1;
-  return true;
+  return wgutils()->addExclusionRoute(prefix);
 }
 
 bool Daemon::delExclusionRoute(const IPAddress& prefix) {
@@ -231,8 +235,11 @@ bool Daemon::delExclusionRoute(const IPAddress& prefix) {
     m_excludedAddrSet[prefix]--;
     return true;
   }
-  m_excludedAddrSet.remove(prefix);
-  return wgutils()->deleteExclusionRoute(prefix);
+  const bool deleted = wgutils()->deleteExclusionRoute(prefix);
+  if (deleted) {
+    m_excludedAddrSet.remove(prefix);
+  }
+  return deleted;
 }
 
 // static
@@ -392,6 +399,18 @@ bool Daemon::parseConfig(const QJsonObject& obj, InterfaceConfig& config) {
   if (!parseStringList(obj, "excludedAddresses", config.m_excludedAddresses)) {
     return false;
   }
+  if (obj.contains("managedExcludedAddresses")) {
+    bool valid = false;
+    if (!parseStringList(obj, "managedExcludedAddresses", config.m_managedExcludedAddresses)) return false;
+    const auto canonical = amnezia::managedRoutePolicy::validatedManagedRoutes(
+        config.m_managedExcludedAddresses, &valid);
+    if (!valid || canonical != config.m_managedExcludedAddresses) return false;
+    for (const auto& route : canonical) {
+      if (!config.m_excludedAddresses.contains(route)) return false;
+    }
+    config.m_routeConnectionNonce = obj.value("routeConnectionNonce").toString();
+    config.m_managedExclusionsKnown = config.m_routeConnectionNonce.size() == 36;
+  }
   if (!parseStringList(obj, "vpnDisabledApps", config.m_vpnDisabledApps)) {
     return false;
   }
@@ -495,22 +514,38 @@ bool Daemon::deactivate(bool emitSignals) {
     logger.warning() << "Failed to restore DNS resolvers.";
   }
 
+  bool networkCleanup = true;
+
   // Cleanup peers and routing
   for (const ConnectionState& state : m_connections) {
     const InterfaceConfig& config = state.m_config;
     logger.debug() << "Deleting routes for" << config.m_hopType;
     for (const IPAddress& ip : config.m_allowedIPAddressRanges) {
-      cleaned = wgutils()->deleteRoutePrefix(ip) && cleaned;
+      const bool routeDeleted = wgutils()->deleteRoutePrefix(ip);
+      networkCleanup = routeDeleted && networkCleanup;
+      cleaned = routeDeleted && cleaned;
     }
-    cleaned = wgutils()->deletePeer(config) && cleaned;
+    const bool peerDeleted = wgutils()->deletePeer(config);
+    networkCleanup = peerDeleted && networkCleanup;
+    cleaned = peerDeleted && cleaned;
   }
 
   // Cleanup routing for excluded addresses.
-  for (auto iterator = m_excludedAddrSet.constBegin();
-       iterator != m_excludedAddrSet.constEnd(); ++iterator) {
-    cleaned = wgutils()->deleteExclusionRoute(iterator.key()) && cleaned;
+  const QList<IPAddress> excludedRoutes = m_excludedAddrSet.keys();
+  for (const IPAddress& route : excludedRoutes) {
+    const bool routeDeleted = wgutils()->deleteExclusionRoute(route);
+    networkCleanup = routeDeleted && networkCleanup;
+    cleaned = routeDeleted && cleaned;
+    if (routeDeleted) {
+      m_excludedAddrSet.remove(route);
+    }
   }
-  m_excludedAddrSet.clear();
+
+  // Keep the interface and all pending ownership state available for a retry
+  // when peer or route cleanup did not receive a confirmed success.
+  if (!networkCleanup) {
+    return false;
+  }
 
   // Delete the interface
   cleaned = wgutils()->deleteInterface() && cleaned;
@@ -587,6 +622,49 @@ bool Daemon::switchServer(const InterfaceConfig& config) {
 
   m_connections[config.m_hopType] = ConnectionState(config);
   return true;
+}
+
+int Daemon::replaceManagedExclusions(const QString& connectionNonce,
+                                    const QStringList& before, const QStringList& after) {
+  using namespace amnezia::exclusionPolicy;
+  if (QThread::currentThread() != thread() || !wgutils() ||
+      m_connections.size() != 1 || !m_connections.contains(InterfaceConfig::SingleHop)) return Rejected;
+  auto& current = m_connections[InterfaceConfig::SingleHop].m_config;
+  bool beforeValid = false, afterValid = false;
+  const auto oldRoutes = amnezia::managedRoutePolicy::validatedManagedRoutes(before, &beforeValid);
+  const auto newRoutes = amnezia::managedRoutePolicy::validatedManagedRoutes(after, &afterValid);
+  if (!current.m_managedExclusionsKnown || connectionNonce.isEmpty() ||
+      connectionNonce != current.m_routeConnectionNonce || !beforeValid || !afterValid ||
+      oldRoutes != before || newRoutes != after || before != current.m_managedExcludedAddresses ||
+      !current.m_allowedIPAddressRanges.contains(IPAddress("0.0.0.0/0"))) return Rejected;
+
+  InterfaceConfig desired = current;
+  for (const auto& route : before) {
+    // Owned managed routes have exactly one daemon reference. Never remove a
+    // route shared with a local rule, the endpoint or another generation.
+    if (!desired.m_excludedAddresses.contains(route) || m_excludedAddrSet.value(IPAddress(route)) != 1) return Rejected;
+    desired.m_excludedAddresses.removeAll(route);
+  }
+  for (const auto& route : after) {
+    const IPAddress prefix(route);
+    for (const auto& host : {current.m_serverIpv4AddrIn, current.m_primaryDnsServer, current.m_secondaryDnsServer}) {
+      if (!host.isEmpty() && QHostAddress(host).isInSubnet(prefix.address(), prefix.prefixLength())) return Rejected;
+    }
+    if (desired.m_excludedAddresses.contains(route)) return Rejected;
+    desired.m_excludedAddresses.append(route);
+  }
+  desired.m_managedExcludedAddresses = after;
+  const auto result = wgutils()->replaceExclusionPolicy(current, desired);
+  if (result == Updated) {
+    for (const auto& route : before) m_excludedAddrSet.remove(IPAddress(route));
+    for (const auto& route : after) m_excludedAddrSet.insert(IPAddress(route), 1);
+    current = desired;
+  } else if (result == Uncertain) {
+    // Teardown must include all possibly installed routes even without an ACK.
+    for (const auto& route : after) m_excludedAddrSet.insert(IPAddress(route), 1);
+    current.m_managedExclusionsKnown = false;
+  }
+  return result;
 }
 
 QJsonObject Daemon::getStatus() {

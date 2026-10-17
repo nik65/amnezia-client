@@ -3,9 +3,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
 import json
 import os
+from pathlib import Path
 import secrets
 import threading
-from service import MigrationService
+import types
+
+# Load the exact source bytes, bypassing old timestamp-based .pyc caches.
+# The private startup receipt binds the imported recipe to this PID1 lifetime.
+service_source = Path('/migration/service.py').read_bytes()
+target_source = Path('/migration/target.py').read_bytes()
+service_module = types.ModuleType('service')
+service_module.__file__ = '/migration/service.py'
+exec(compile(service_source, service_module.__file__, 'exec'), service_module.__dict__)
+MigrationService = service_module.MigrationService
 
 scope = os.environ.get('AMNEZIA_MIGRATION_SCOPE', '')
 if not scope:
@@ -71,4 +81,17 @@ class Server(ThreadingHTTPServer):
             return False
 
 
-Server(('0.0.0.0', 18082), Handler).serve_forever()
+server = Server(('0.0.0.0', 18082), Handler)
+role = service.role
+receipt = {'role': role, 'processStart': Path('/proc/self/stat').read_text().split()[21],
+           'hashes': {'service.py': hashlib.sha256(service_source).hexdigest(),
+                      'target.py': hashlib.sha256(target_source).hexdigest()}}
+path = Path('/migration/control-loaded-' + role + '.json')
+temporary = path.with_suffix('.tmp')
+with open(temporary, 'w', encoding='utf-8') as stream:
+    os.fchmod(stream.fileno(), 0o600)
+    json.dump(receipt, stream, sort_keys=True)
+    stream.flush()
+    os.fsync(stream.fileno())
+os.replace(temporary, path)
+server.serve_forever()

@@ -33,12 +33,51 @@ add_definitions(-DDEV_S3_ENDPOINT="$ENV{DEV_S3_ENDPOINT}")
 
 add_definitions(-DFREE_V2_ENDPOINT="$ENV{FREE_V2_ENDPOINT}")
 add_definitions(-DPREM_V1_ENDPOINT="$ENV{PREM_V1_ENDPOINT}")
-add_definitions(-DSELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64="$ENV{SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64}")
-if(DEFINED ENV{SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64} AND NOT "$ENV{SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64}" STREQUAL "")
+set(_amnezia_selfhosted_public_key "$ENV{SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64}")
+set(_amnezia_selfhosted_sync_host "$ENV{SELFHOSTED_UPDATE_SYNC_HOST}")
+set(_amnezia_selfhosted_base_url "$ENV{SELFHOSTED_UPDATE_BASE_URL}")
+set(_amnezia_selfhosted_public_key_sha256 "$ENV{SELFHOSTED_UPDATE_PUBLIC_KEY_SHA256}")
+set(_amnezia_selfhosted_bundle_dir "$ENV{SELFHOSTED_UPDATE_BUNDLE_DIR}")
+set(_amnezia_selfhosted_enabled FALSE)
+if(WIN32 AND NOT _amnezia_selfhosted_bundle_dir STREQUAL "")
+    if(_amnezia_selfhosted_public_key STREQUAL ""
+       OR _amnezia_selfhosted_sync_host STREQUAL ""
+       OR _amnezia_selfhosted_base_url STREQUAL "")
+        message(FATAL_ERROR
+            "Self-hosted Windows bundle requires public key, sync host, and base URL together")
+    endif()
+    if(NOT _amnezia_selfhosted_public_key MATCHES "^[A-Za-z0-9+/=]+$")
+        message(FATAL_ERROR "SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 contains invalid characters")
+    endif()
+    string(LENGTH "${_amnezia_selfhosted_public_key_sha256}" _amnezia_selfhosted_public_key_sha256_length)
+    if(NOT _amnezia_selfhosted_public_key_sha256_length EQUAL 64
+       OR NOT _amnezia_selfhosted_public_key_sha256 MATCHES "^[0-9a-fA-F]+$")
+        message(FATAL_ERROR
+            "SELFHOSTED_UPDATE_PUBLIC_KEY_SHA256 must be the verified raw Ed25519 public-key hash for a self-hosted release")
+    endif()
+    set(_amnezia_expected_selfhosted_base_url "http://${_amnezia_selfhosted_sync_host}:17865")
+    if(NOT _amnezia_selfhosted_base_url STREQUAL _amnezia_expected_selfhosted_base_url)
+        message(FATAL_ERROR
+            "SELFHOSTED_UPDATE_BASE_URL must bind exactly to SELFHOSTED_UPDATE_SYNC_HOST:17865")
+    endif()
+    set(_amnezia_selfhosted_manifest "${_amnezia_selfhosted_bundle_dir}/manifest.json")
+    if(NOT EXISTS "${_amnezia_selfhosted_manifest}")
+        message(FATAL_ERROR
+            "SELFHOSTED_UPDATE_BUNDLE_DIR must contain manifest.json before configuring the bundled client")
+    endif()
+    file(SHA256 "${_amnezia_selfhosted_manifest}" _amnezia_selfhosted_manifest_sha256)
+    set(_amnezia_selfhosted_enabled TRUE)
+    file(GENERATE
+        OUTPUT "${CMAKE_BINARY_DIR}/selfhosted-build-contract.json"
+        CONTENT "{\"schema\":1,\"selfHostedBuild\":true,\"publicKeyConfigured\":true,\"publicKeySha256\":\"${_amnezia_selfhosted_public_key_sha256}\",\"syncHost\":\"${_amnezia_selfhosted_sync_host}\",\"baseUrl\":\"${_amnezia_selfhosted_base_url}\",\"syncPort\":17865,\"manifestSha256\":\"${_amnezia_selfhosted_manifest_sha256}\"}\n"
+    )
+endif()
+if(NOT _amnezia_selfhosted_public_key STREQUAL "")
     add_compile_definitions(AMNEZIA_SELFHOSTED_BUILD)
 endif()
-if(DEFINED ENV{SELFHOSTED_UPDATE_SYNC_HOST} AND NOT "$ENV{SELFHOSTED_UPDATE_SYNC_HOST}" STREQUAL "")
-    add_definitions(-DSELFHOSTED_UPDATE_SYNC_HOST="$ENV{SELFHOSTED_UPDATE_SYNC_HOST}")
+add_definitions(-DSELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64="${_amnezia_selfhosted_public_key}")
+if(NOT _amnezia_selfhosted_sync_host STREQUAL "")
+    add_definitions(-DSELFHOSTED_UPDATE_SYNC_HOST="${_amnezia_selfhosted_sync_host}")
 endif()
 
 set(SELFHOSTED_SSH_TRUSTED_HOST_VALUE "$ENV{SELFHOSTED_SSH_TRUSTED_HOST}")
