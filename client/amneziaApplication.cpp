@@ -1,4 +1,6 @@
 #include "amneziaApplication.h"
+#include <libssh/libssh.h>
+#include "core/controllers/selfhosted/installController.h"
 
 #include <QClipboard>
 #include <QCryptographicHash>
@@ -1156,6 +1158,9 @@ bool AmneziaApplication::parseCommands()
     m_parser.addOption(m_optRoutesExplain);
     m_parser.addOption(m_optWatch);
     m_parser.addOption(m_optPublishBundledUpdatesOnce);
+    m_parser.addOption(QCommandLineOption(QStringLiteral("maintain-awg-controls"),
+        QStringLiteral("Maintain one explicitly selected existing AWG migration control pair and exit"),
+        QStringLiteral("request-json")));
     
     m_parser.process(*this);
 
@@ -1191,6 +1196,37 @@ bool AmneziaApplication::parseCommands()
             m_commandExitCode = 2;
             return false;
         }
+    }
+
+    if (m_operatorCommand.type == amnezia::operatorMode::CommandType::MaintainAwgControls) {
+        // One-shot administrator transport. Never enter init(), Core, the
+        // profile preparation queue, VPN ownership, or the local IPC server.
+        const auto selected = amnezia::operatorMode::parseAwgMaintenanceArgument(m_operatorCommand.argument);
+        QJsonObject receipt;
+        ErrorCode error = ErrorCode::ServerCheckFailed;
+#if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS) && !defined(MACOS_NE)
+        if (m_settings && !selected.isEmpty()) {
+            SecureServersRepository repository(m_settings, nullptr, false);
+            const auto admin = repository.selfHostedAdminConfig(selected.value("serverId").toString());
+            const auto source = selected.value("source").toString() == "amnezia-awg"
+                ? DockerContainer::Awg : DockerContainer::Awg2;
+            if (admin && admin->hasCredentials() && !admin->isReadOnly()
+                    && !admin->sshHostKeyFingerprint.isEmpty() && admin->containers.contains(source)
+                    && ssh_init() == SSH_OK) {
+                error = InstallController::maintainAwgMigrationControls(admin->credentials(), source,
+                    static_cast<qint64>(selected.value("generation").toDouble()),
+                    selected.value("expectedJournalSha256").toString(), receipt);
+                ssh_finalize();
+            }
+        }
+#endif
+        const bool ok = error == ErrorCode::NoError;
+        const QJsonObject output{{"schema", "amnezia.operator.awg-controls.v1"},
+            {"ok", ok}, {"result", ok ? receipt : QJsonObject{}},
+            {"error", ok ? QString() : QStringLiteral("migration_control_maintenance_failed")}};
+        writeConsole(stdout, QString::fromUtf8(QJsonDocument(output).toJson(QJsonDocument::Compact)));
+        m_commandExitCode = ok ? 0 : 2;
+        return false;
     }
 
     if (m_publishBundledUpdatesOnceCommand
@@ -1331,7 +1367,8 @@ bool AmneziaApplication::tryForwardOperatorCommand(
         exitCode = 2;
         return true;
     }
-    if (parsed.request.type == amnezia::operatorMode::CommandType::Watch) {
+    if (parsed.request.type == amnezia::operatorMode::CommandType::Watch
+            || parsed.request.type == amnezia::operatorMode::CommandType::MaintainAwgControls) {
         // Watch owns an event-driven sequence of short status connections. It
         // must enter app.exec() so SIGINT/SIGTERM and socket loss are handled
         // without starting the normal UI/core runtime.
@@ -1818,6 +1855,9 @@ amnezia::operatorMode::CommandResponse AmneziaApplication::executeOperatorComman
     }
     case amnezia::operatorMode::CommandType::Raise:
         // Handled before settings readiness checks above.
+        break;
+    case amnezia::operatorMode::CommandType::MaintainAwgControls:
+        // This administrative operation is deliberately unavailable over IPC.
         break;
     case amnezia::operatorMode::CommandType::None:
         break;

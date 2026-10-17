@@ -218,7 +218,8 @@ open class ProtocolConfig protected constructor(
             processAddressFamilies()
             if (useIncludedUnion && androidApiLevel() < Build.VERSION_CODES.Q) {
                 throw BadConfigException(
-                    "Combined site/application split tunneling requires Android 10 or newer"
+                    "Combined site/application split tunneling requires Android 10 or newer",
+                    reasonCode = ProtocolErrorReason.COMBINED_ROUTING_REQUIRES_ANDROID_10
                 )
             }
             processSplitTunneling()

@@ -1,4 +1,5 @@
 #include "vpnConnection.h"
+#include "core/protocols/androidProtocolBinding.h"
 #include "logger.h"
 #include "core/utils/migrationTeardownContext.h"
 #include "core/utils/managedRouteMismatchDiagnostic.h"
@@ -486,6 +487,39 @@ QStringList routableSplitTunnelRoutes(const QStringList &routes)
     }
     result.removeDuplicates();
     return result;
+}
+
+// DNS answer order and duplicates do not change per-domain route ownership.
+// Unknown DNS work, domain changes and invalid answers remain conservative.
+bool sameResolvedLocalRouteContext(const QVariantMap &before, const QVariantMap &after,
+                                   const QStringList &protectedHosts, int pendingLookups)
+{
+    if (before == after) return true;
+    if (pendingLookups != 0 || before.keys() != after.keys()) return false;
+    for (auto it = before.constBegin(); it != before.constEnd(); ++it) {
+        const QVariant next = after.value(it.key());
+        if (it.value() == next) continue;
+        if (NetworkUtilities::checkIpSubnetFormat(it.key())
+            || it.value().metaType().id() != QMetaType::QString
+            || next.metaType().id() != QMetaType::QString) return false;
+        const auto leftRaw = it.value().toString().split(QRegularExpression("[,;\\s]+"), Qt::SkipEmptyParts);
+        const auto rightRaw = next.toString().split(QRegularExpression("[,;\\s]+"), Qt::SkipEmptyParts);
+        if (leftRaw.isEmpty() || rightRaw.isEmpty()) return false;
+        for (const auto &token : leftRaw + rightRaw) {
+            if (!NetworkUtilities::checkIpSubnetFormat(token)
+                || !isRoutableSplitTunnelRoute(token)) return false;
+        }
+        auto left = splitTunnelStoredIps(it.value().toString());
+        auto right = splitTunnelStoredIps(next.toString());
+        left.sort(); right.sort();
+        if (left != right) return false;
+        const auto effective = [&protectedHosts](const QStringList &routes) {
+            auto result = normalizedSupportedIpv4Routes(splitRoutesKeepingHostsInVpn(routes, protectedHosts));
+            result.removeDuplicates(); result.sort(); return result;
+        };
+        if (effective(left) != effective(right)) return false;
+    }
+    return true;
 }
 
 #ifdef AMNEZIA_DESKTOP
@@ -1169,8 +1203,7 @@ bool VpnConnection::latestPreparedManagedRouteSnapshotIsApplied() const
         || m_preparedManagedRouteMode != m_authoritativeManagedRouteMode
         || m_authoritativeManagedRouteConnectionEpoch != m_connectionEpoch
         || m_authoritativeManagedRouteServerId != m_serverId
-        || m_authoritativeManagedRouteMode != appliedSiteRouteMode()
-        || m_preparedLocalSites != m_authoritativeManagedRouteLocalSites) {
+        || m_authoritativeManagedRouteMode != appliedSiteRouteMode()) {
         return false;
     }
 
@@ -1180,7 +1213,9 @@ bool VpnConnection::latestPreparedManagedRouteSnapshotIsApplied() const
     protectedHosts.removeAll(QString());
     protectedHosts.removeDuplicates();
     protectedHosts.sort();
-    if (protectedHosts != m_authoritativeManagedRouteProtectedHosts) {
+    if (protectedHosts != m_authoritativeManagedRouteProtectedHosts
+        || !sameResolvedLocalRouteContext(m_preparedLocalSites, m_authoritativeManagedRouteLocalSites,
+                                          protectedHosts, m_pendingClientSplitRouteLookups)) {
         return false;
     }
     bool normalizedValid = false;
@@ -1704,7 +1739,8 @@ void VpnConnection::reconcileManagedSplitTunnelRoutes(
               m_authoritativeManagedRouteServerId == m_serverId,
               m_authoritativeManagedRouteMode == requestedMode,
               appliedSiteRouteMode() == requestedMode,
-              m_authoritativeManagedRouteLocalSites == localSites,
+              sameResolvedLocalRouteContext(m_authoritativeManagedRouteLocalSites, localSites,
+                                            protectedHosts, m_pendingClientSplitRouteLookups),
               m_authoritativeManagedRouteProtectedHosts == protectedHosts}});
     const bool runtimeContextMatches = runtimeContextMismatchMask == 0;
 
@@ -2227,6 +2263,12 @@ void VpnConnection::createAndroidConnections()
 
     connect(AndroidController::instance(), &AndroidController::connectionStateChanged, androidVpnProtocol,
             &AndroidVpnProtocol::setConnectionState);
+    connect(AndroidController::instance(), &AndroidController::serviceError, androidVpnProtocol,
+            [this, protocol = QPointer<AndroidVpnProtocol>(androidVpnProtocol), epoch = m_connectionEpoch](amnezia::ErrorCode error) {
+                AndroidProtocolBinding::deliverServiceError(protocol, m_vpnProtocol.data(), epoch, m_connectionEpoch, error, [&]() {
+                    protocol->setConnectionState(Vpn::ConnectionState::Error);
+                });
+            }, Qt::QueuedConnection);
     connect(AndroidController::instance(), &AndroidController::statisticsUpdated, androidVpnProtocol, &AndroidVpnProtocol::setBytesChanged);
     connect(AndroidController::instance(), &AndroidController::migrationPeerObservation,
             androidVpnProtocol, &VpnProtocol::migrationPeerObservation);

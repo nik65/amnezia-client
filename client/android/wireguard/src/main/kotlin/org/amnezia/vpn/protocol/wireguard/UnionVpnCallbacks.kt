@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.os.Build
 import androidx.annotation.Keep
 import org.amnezia.vpn.protocol.BadConfigException
+import org.amnezia.vpn.protocol.ProtocolErrorReason
 import org.amnezia.vpn.util.Log
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -48,7 +49,8 @@ class UnionVpnCallbacks private constructor(
     companion object {
         fun create(context: Context, applications: Set<String>, protect: (Int) -> Boolean): UnionVpnCallbacks {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q)
-                throw BadConfigException("Combining included sites and apps requires Android 10 or newer")
+                throw BadConfigException("Combining included sites and apps requires Android 10 or newer",
+                    reasonCode = ProtocolErrorReason.COMBINED_ROUTING_REQUIRES_ANDROID_10)
             val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
                 ?: throw BadConfigException("Connection owner service is unavailable")
             val uids = applications.map { application ->

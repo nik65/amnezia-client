@@ -1,12 +1,14 @@
 """Compile the current production worker methods with inert dependencies.
 
 No Python behavior model: tests execute the bodies from vpnConnection.cpp.
-IPC, normalization and protocol restart are replaced with named test doubles.
+Routing normalization and network validation are actual production helpers.
+IPC mutation and protocol restart remain named test doubles.
 """
 import pathlib
 import sys
 
 signatures = (
+    "QStringList VpnConnection::normalizedManagedRoutesForRuntime(",
     "void VpnConnection::invalidateAuthoritativeManagedRouteBase()",
     "void VpnConnection::publishManagedRouteBase(",
     "void VpnConnection::prepareManagedRouteConnectionSnapshot(",
@@ -16,7 +18,10 @@ signatures = (
     "void VpnConnection::reconcileManagedSplitTunnelRoutes(",
 )
 source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-functions = []
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "managed_route_semantic_context"))
+from production_helpers import routing_helpers
+network = (pathlib.Path(sys.argv[1]).parent / "core/utils/networkUtilities.cpp").read_text(encoding="utf-8")
+functions = [routing_helpers(source, network)]
 for signature in signatures:
     start = source.index(signature)
     brace = source.index("{", start)

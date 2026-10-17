@@ -13,6 +13,7 @@ QString errorString(ErrorCode code) {
     case(ErrorCode::NotImplementedError): errorMessage = QObject::tr("Function not implemented"); break;
     case(ErrorCode::AmneziaServiceNotRunning): errorMessage = QObject::tr("Background service is not running"); break;
     case(ErrorCode::NotSupportedOnThisPlatform): errorMessage = QObject::tr("The selected protocol is not supported on the current platform"); break;
+    case(ErrorCode::AndroidCombinedRoutingRequiresAndroid10): errorMessage = QObject::tr("Combining included sites and applications requires Android 10 or newer. On Android 9, use only one included list: sites or applications."); break;
 
     // Server errors
     case(ErrorCode::ServerCheckFailed): errorMessage = QObject::tr("Server check failed"); break;

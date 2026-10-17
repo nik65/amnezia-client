@@ -135,7 +135,7 @@ void AwgMigrationController::clearTrialEvidence()
     for (const auto &key : {"grant", "grantExpiresAt", "nonce", "offer", "challengeReceipt", "candidateHash"})
         m_journal.remove(key);
 }
-bool AwgMigrationController::validChallengeReceipt(const QJsonObject &envelope) const
+bool AwgMigrationController::validChallengeReceipt(const QJsonObject &envelope, bool requireUnexpired) const
 {
     const auto offer = m_journal.value("offer").toObject();
     QJsonObject receipt;
@@ -148,7 +148,29 @@ bool AwgMigrationController::validChallengeReceipt(const QJsonObject &envelope) 
         && receipt.value("serverPublicKey") == offer.value("serverPublicKey")
         && receipt.value("containerId") == offer.value("containerId")
         && receipt.value("targetAddress").toString() == offer.value("target").toObject().value("clientAddress").toString().section('/', 0, 0)
-        && receipt.value("expiresAt").toDouble() > QDateTime::currentSecsSinceEpoch();
+        && (!requireUnexpired || receipt.value("expiresAt").toDouble() > QDateTime::currentSecsSinceEpoch());
+}
+bool AwgMigrationController::committedProfileMatches() const
+{
+    const auto candidateHash = m_journal.value("candidateHash").toString();
+    const int index = m_servers->indexOfServerId(m_serverId);
+    return index >= 0 && !candidateHash.isEmpty() && candidateHash == digest(m_sourceProfile)
+        && candidateHash == digest(m_servers->serverJson(index));
+}
+bool AwgMigrationController::targetObservationMatches() const
+{
+    const auto target = m_journal.value("offer").toObject().value("target").toObject();
+    const auto parameters = target.value("parameters").toObject();
+    const auto key = strictBase64(parameters.value("HeaderProtectionKey").toString(), 32);
+    if (key.isEmpty() || parameters.isEmpty()
+        || m_observation.value("deviceIpv4Address").toString().section('/', 0, 0)
+            != target.value("clientAddress").toString().section('/', 0, 0)
+        || m_observation.value("headerProtectionKeyHash").toString()
+            != QString::fromLatin1(QCryptographicHash::hash(key, QCryptographicHash::Sha256).toHex())) return false;
+    const auto observed = m_observation.value("parameterDigests").toObject();
+    for (auto it = parameters.begin(); it != parameters.end(); ++it)
+        if (observed.value(it.key()).toString() != amnezia::awgBackendObservation::digest(it.key(), it.value().toString())) return false;
+    return true;
 }
 void AwgMigrationController::cleanupFailed()
 {
@@ -215,10 +237,14 @@ QJsonObject AwgMigrationController::prepare(const QString &serverId, const QJson
     m_observation = {};
     m_journal = m_servers->migrationJournal(serverId);
     m_sourceProfile = m_servers->serverJson(m_servers->indexOfServerId(serverId));
-    if (client(connection).isEmpty() || !allowTrial) return activeConnection;
+    if (client(connection).isEmpty()) return activeConnection;
+    if (m_journal.value("state") == "committing" && committedProfileMatches()) {
+        if (!persist("ack_pending")) return activeConnection;
+    }
+    if (!allowTrial) return activeConnection;
     if (m_journal.value("state") == "committing") {
-        persist(digest(m_sourceProfile) == m_journal.value("candidateHash").toString()
-                    ? "ack_pending" : "rolled_back");
+        persist(digest(m_sourceProfile) == m_journal.value("sourceHash").toString()
+                    ? "rolled_back" : "recovery_required");
         return activeConnection;
     }
     if (m_journal.value("state") == "trial") {
@@ -286,12 +312,12 @@ void AwgMigrationController::observe(const QString &serverId, quint64 epoch, con
 {
     if (m_activationToken.isEmpty() || observation.value("migrationActivationToken").toString() != m_activationToken) return;
     if (m_cancelled || serverId != m_serverId || client(m_originalConnection).isEmpty()) return;
-    if (m_epoch && m_epoch != epoch) { recordFailure("connection_epoch_changed"); cancel(); return; }
-    m_epoch = epoch;
     bool ok = false;
     const auto handshake = observation.value("lastHandshakeMs").toString().toLongLong(&ok);
     if (!ok || handshake < (m_startedAt / 1000) * 1000 || handshake > QDateTime::currentMSecsSinceEpoch() + 5000
         || observation.value("peerPublicKey").toString() != client(m_originalConnection).value("server_pub_key").toString()) return;
+    if (m_epoch && m_epoch != epoch) { recordFailure("connection_epoch_changed"); cancel(); return; }
+    m_epoch = epoch;
     m_observation = observation;
     if (m_busy) return;
     if (!observation.value("awg3Capable").toBool()) return;
@@ -322,6 +348,7 @@ void AwgMigrationController::observe(const QString &serverId, quint64 epoch, con
         const bool committed = m_servers->compareAndSwapServer(m_serverId, m_journal.value("sourceHash").toString(), profile);
         m_committingProfile = false;
         if (!committed) { failed(); return; }
+        m_sourceProfile = profile;
         m_trial = false;
         m_deadline.stop();
         if (persist("ack_pending")) acknowledge();
@@ -421,6 +448,9 @@ void AwgMigrationController::request(const QString &path, const QJsonObject &bod
 }
 void AwgMigrationController::enrollOrFetch()
 {
+    if (m_journal.value("state") == "committing" && committedProfileMatches()) {
+        if (!persist("ack_pending")) return;
+    }
     if (m_journal.value("state") == "staged" && !m_trial
         && (m_journal.value("offer").toObject().value("expiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()
             || m_journal.value("grantExpiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch())) {
@@ -428,15 +458,23 @@ void AwgMigrationController::enrollOrFetch()
         clearTrialEvidence();
         if (!persist("expired")) { m_journal = stagedJournal; return; }
     }
-    if (!m_allowTrial && !passiveMigrationRequestAllowed(m_journal.value("state").toString())) return;
+    const bool pendingAck = m_journal.value("state") == "ack_pending";
+    if (!m_allowTrial && !pendingAck && !passiveMigrationRequestAllowed(m_journal.value("state").toString())) return;
     const auto kind = m_servers->serverKind(m_serverId);
     if (kind != serverConfigUtils::ConfigType::SelfHostedAdmin
         && kind != serverConfigUtils::ConfigType::SelfHostedUser) return;
+    if (pendingAck) {
+        // ACK recovery never bootstraps or applies another profile. Expired
+        // signed proof remains valid for the server's authenticated renewal.
+        if (!committedProfileMatches() || !targetObservationMatches()
+            || !validChallengeReceipt(m_journal.value("challengeReceipt").toObject(), false)) return;
+        acknowledge();
+        return;
+    }
     if (m_journal.value("state") == "staged" || m_journal.value("state") == "committed"
         || m_journal.value("state") == "recovery_required"
         || m_journal.value("state") == "secret_store_unavailable") return;
     const auto configuration = client(m_originalConnection);
-    if (m_journal.value("state") == "ack_pending") { acknowledge(); return; }
     if (m_journal.value("grantExpiresAt").toDouble() > 0
         && m_journal.value("grantExpiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()) {
         m_journal.remove("grant");
@@ -472,7 +510,6 @@ void AwgMigrationController::enrollOrFetch()
         });
         return;
     }
-    if (m_journal.value("state") == "ack_pending") { acknowledge(); return; }
     request("/migration/v1/offer", binding, [this](const QJsonObject &envelope) {
         QJsonObject offer;
         if (!verifyEnvelope(envelope, strictBase64(m_journal.value("signingPublicKey").toString(), 32), offer)) return;
@@ -550,9 +587,11 @@ void AwgMigrationController::acknowledge()
                 || proof.value("targetHash").toString() != digest(offer.value("target").toObject())
                 || proof.value("expiresAt").toDouble() <= QDateTime::currentSecsSinceEpoch()
                 || proof.value("grant").toString().isEmpty()) return;
+            const auto pendingJournal = m_journal;
             m_journal["grant"] = proof.value("grant");
             m_journal["grantExpiresAt"] = proof.value("expiresAt");
             if (persist("ack_pending")) acknowledge();
+            else m_journal = pendingJournal;
         });
         return;
     }

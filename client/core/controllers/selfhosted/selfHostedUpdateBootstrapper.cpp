@@ -1,4 +1,5 @@
 #include "selfHostedUpdateBootstrapper.h"
+#include "releaseAcceptance.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -14,8 +15,10 @@
 #include <QSet>
 #include <QThreadPool>
 #include <QTimer>
+#include <QTemporaryDir>
 #include <QVariant>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -679,7 +682,47 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
     payload.manifestData = manifestData;
     payload.manifestSha256 = QCryptographicHash::hash(manifestData, QCryptographicHash::Sha256).toHex();
     payload.manifestIdentity = manifestIdentity;
-    return !payload.version.isEmpty() && !payload.manifestSha256.isEmpty();
+    for (auto it = platforms.constBegin(); it != platforms.constEnd(); ++it) {
+        if (it.key().startsWith(QStringLiteral("android"))) {
+            const QJsonValue code = it.value().toObject().value(QStringLiteral("versionCode"));
+            const int value = code.toInt(-1);
+            if (value <= 0 || code != QJsonValue(value)
+                || (payload.androidVersionCode != 0 && payload.androidVersionCode != value)) return false;
+            payload.androidVersionCode = value;
+        }
+    }
+    if (payload.version.isEmpty() || payload.manifestSha256.isEmpty()
+        || !validatePublicationAcceptance(payload)) {
+        logger.warning() << "Publication blocked: missing, invalid, stale or incomplete signed release acceptance";
+        return false;
+    }
+    return true;
+}
+
+bool SelfHostedUpdateBootstrapper::validatePublicationAcceptance(const Payload &payload)
+{
+    using namespace amnezia::selfhostedUpdates;
+    const QString approvalPath = QDir(payload.rootDir).filePath(QStringLiteral("release-acceptance.json"));
+    const QFileInfo approvalInfo(approvalPath);
+    if (!approvalInfo.isFile() || approvalInfo.isSymLink()
+        || hasSymlinkOrReparsePoint(QDir(payload.rootDir), QStringLiteral("release-acceptance.json"))) return false;
+    QFile approvalFile(approvalPath), publisher(QString::fromLatin1(kBundledPublishScript));
+    if (!approvalFile.open(QIODevice::ReadOnly) || approvalFile.size() <= 0
+        || approvalFile.size() > maximumAcceptanceBytes || !publisher.open(QIODevice::ReadOnly)) return false;
+    QJsonObject approval;
+    QByteArray publicKey;
+    if (!decodeStrictBase64(QByteArray(SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64), QByteArray::Base64Encoding, publicKey)
+        || !decodeReleaseAcceptance(approvalFile.read(maximumAcceptanceBytes + 1), publicKey, approval)) return false;
+    QList<PayloadFile> sorted = payload.files;
+    std::sort(sorted.begin(), sorted.end(), [](const PayloadFile &a, const PayloadFile &b) { return a.relativePath < b.relativePath; });
+    QJsonArray artifacts;
+    for (const PayloadFile &file : sorted) {
+        if (QFileInfo(file.localPath).size() != file.size || fileSha256(file.localPath) != file.sha256.toLatin1()) return false;
+        artifacts.append(QJsonObject { { "path", file.relativePath }, { "sha256", file.sha256 }, { "size", file.size } });
+    }
+    return validateReleaseAcceptance(approval, QString::fromLatin1(payload.manifestSha256),
+            QString::fromLatin1(QCryptographicHash::hash(publisher.readAll(), QCryptographicHash::Sha256).toHex()),
+            payload.version, payload.androidVersionCode, artifacts, QDateTime::currentDateTimeUtc());
 }
 
 bool SelfHostedUpdateBootstrapper::selectServerCredentials(amnezia::ServerCredentials &credentials) const
@@ -705,6 +748,19 @@ bool SelfHostedUpdateBootstrapper::selectServerCredentials(amnezia::ServerCreden
 
 bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::ServerCredentials credentials)
 {
+    // Freeze the exact upload inputs before any remote operation. The original
+    // installer is not authenticated here: this gate covers payload + publisher.
+    QTemporaryDir snapshot;
+    if (!snapshot.isValid() || !validatePublicationAcceptance(payload)) return false;
+    for (qsizetype i = 0; i < payload.files.size(); ++i) {
+        PayloadFile &file = payload.files[i];
+        const QString target = snapshot.filePath(QString::number(i));
+        if (!amnezia::selfhostedUpdates::snapshotAcceptanceArtifact(
+                    file.localPath, target, file.size, file.sha256.toLatin1())) return false;
+        file.localPath = target;
+    }
+    // Recheck signature, expiry and the snapshot bytes after potentially lengthy copying.
+    if (!validatePublicationAcceptance(payload)) return false;
     logger.info() << "Publishing bundled self-hosted update payload" << payload.version;
 
     SshSession sshSession;
@@ -1225,6 +1281,12 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
         return reconciliation;
     };
 
+    // Acceptance must still be fresh when starting the publication transaction.
+    // Once prepared, existing reconciliation/rollback must remain available.
+    if (!validatePublicationAcceptance(payload)) {
+        cleanupRemoteTmp();
+        return false;
+    }
     error = runPublisher(QStringLiteral("prepare"));
     const bool prepareAcknowledged = error == amnezia::ErrorCode::NoError
             && exactMachineReceipt(

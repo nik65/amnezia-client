@@ -53,6 +53,13 @@ class AwgMigrationControllerTests : public QObject {
                     {"containerId", "amnezia-awg"}, {"peerPublicKey", config.value("client_pub_key")},
                     {"generation", 7}, {"nonce", "fresh-challenge"}, {"targetAddress", "10.8.1.2"},
                     {"expiresAt", double(QDateTime::currentSecsSinceEpoch() + (expiredProof ? -1 : 600))}}));
+            } else if (path.endsWith("renew")) {
+                reply(sign({{"schema", 1}, {"serverPublicKey", offer.value("serverPublicKey")},
+                    {"peerPublicKey", offer.value("peerPublicKey")}, {"containerId", offer.value("containerId")},
+                    {"generation", offer.value("generation")}, {"nonce", body.value("nonce")},
+                    {"grant", "renewed-grant"}, {"sourceFingerprint", offer.value("sourceFingerprint")},
+                    {"targetHash", digest(offer.value("target").toObject())},
+                    {"expiresAt", double(QDateTime::currentSecsSinceEpoch() + 600)}}));
             } else if (path.endsWith("ack")) reply({{"acknowledged", acknowledge}});
             else qFatal("Unexpected test-boundary request");
         };
@@ -64,6 +71,7 @@ class AwgMigrationControllerTests : public QObject {
         for (auto it = params.begin(); it != params.end(); ++it)
             digests[it.key()] = amnezia::awgBackendObservation::digest(it.key(), it.value().toString());
         return {{"migrationActivationToken", controller.activationToken()},
+            {"deviceIpv4Address", target.value("clientAddress").toString().section('/', 0, 0)},
             {"lastHandshakeMs", QString::number(QDateTime::currentMSecsSinceEpoch())},
             {"peerPublicKey", connection.value("awg_config_data").toObject().value("server_pub_key")},
             {"awg3Capable", true}, {"rxBytes", count}, {"txBytes", count}, {"parameterDigests", digests},
@@ -223,6 +231,153 @@ private slots:
         QCOMPARE(repository.swaps, 1);
         QCOMPARE(repository.journal.value("state").toString(), QString("ack_pending"));
         QVERIFY(requests.contains("/migration/v1/ack"));
+    }
+    void adoptedCommittedTargetRetriesPendingAck_data() {
+        QTest::addColumn<bool>("expiredGrant");
+        QTest::addColumn<bool>("interruptedCommit");
+        QTest::addColumn<bool>("renewalStoreFailure");
+        QTest::newRow("valid grant") << false << false << false;
+        QTest::newRow("expired grant renews signed receipt") << true << false << false;
+        QTest::newRow("CAS completed before ack-pending persistence") << false << true << false;
+        QTest::newRow("interrupted commit with expired grant") << true << true << false;
+        QTest::newRow("renewal write failure preserves durable and RAM grant") << true << false << true;
+    }
+    void adoptedCommittedTargetRetriesPendingAck() {
+        QFETCH(bool, expiredGrant);
+        QFETCH(bool, interruptedCommit);
+        QFETCH(bool, renewalStoreFailure);
+        recover(); auto current = controller(); stage(*current);
+        current->beginActivation("server"); current->prepare("server", connection);
+        acknowledge = false;
+        current->observe("server", 44, observation(*current));
+        current->observe("server", 44, observation(*current, 20));
+        QCOMPARE(repository.journal.value("state").toString(), QString("ack_pending"));
+        QCOMPARE(repository.swaps, 1);
+        const auto committedProfile = repository.profile;
+        if (expiredGrant) {
+            repository.journal["grantExpiresAt"] = double(QDateTime::currentSecsSinceEpoch() - 1);
+            auto receiptPayload = QJsonDocument::fromJson(QByteArray::fromBase64(repository.journal.value("challengeReceipt")
+                .toObject().value("payload").toString().toLatin1())).object();
+            receiptPayload["expiresAt"] = double(QDateTime::currentSecsSinceEpoch() - 1);
+            repository.journal["challengeReceipt"] = sign(receiptPayload);
+        }
+        const auto receipt = repository.journal.value("challengeReceipt");
+        if (interruptedCommit) repository.journal["state"] = "committing";
+        current.reset(); requests.clear(); acknowledge = true;
+        const auto cached = QJsonDocument::fromJson(repository.profile.value("containers").toArray()[0].toObject()
+            .value("awg").toObject().value("last_config").toString().toUtf8()).object();
+        auto adoptedConnection = connection;
+        adoptedConnection["awg_config_data"] = cached;
+        adoptedConnection["hostName"] = cached.value("hostName");
+        current = controller(); current->beginActivation("server");
+        const auto adopted = current->prepare("server", adoptedConnection, false);
+        QCOMPARE(adopted.value("hostName").toString(), QString("new.example"));
+        const auto beforeRenewal = current->testJournal();
+        if (renewalStoreFailure) repository.writesAllowed = false;
+        current->observe("server", 45, observation(*current, 30));
+        if (renewalStoreFailure) {
+            QCOMPARE(repository.journal, beforeRenewal);
+            QCOMPARE(current->testJournal(), beforeRenewal);
+            QCOMPARE(requests, QStringList{"/migration/v1/renew"});
+            QCOMPARE(repository.profile, committedProfile);
+            QCOMPARE(repository.swaps, 1);
+            return;
+        }
+        QCOMPARE(repository.journal.value("state").toString(), QString("committed"));
+        QCOMPARE(requests.contains("/migration/v1/renew"), expiredGrant);
+        QVERIFY(requests.contains("/migration/v1/ack"));
+        QVERIFY(!requests.contains("/migration/v1/bootstrap"));
+        QVERIFY(!requests.contains("/migration/v1/offer"));
+        QCOMPARE(repository.journal.value("challengeReceipt"), receipt);
+        QCOMPARE(repository.swaps, 1);
+        QCOMPARE(repository.profile, committedProfile);
+    }
+    void adoptedPendingAckRejectsUnprovenTarget_data() {
+        QTest::addColumn<QString>("mutation");
+        for (const auto &name : {"profile", "candidate-hash", "native-parameters", "native-key", "native-address", "peer", "receipt"})
+            QTest::newRow(name) << QString(name);
+    }
+    void adoptedPendingAckRejectsUnprovenTarget() {
+        QFETCH(QString, mutation);
+        recover(); auto current = controller(); stage(*current);
+        current->beginActivation("server"); current->prepare("server", connection);
+        acknowledge = false;
+        current->observe("server", 44, observation(*current));
+        current->observe("server", 44, observation(*current, 20));
+        QCOMPARE(repository.journal.value("state").toString(), QString("ack_pending"));
+        auto cached = QJsonDocument::fromJson(repository.profile.value("containers").toArray()[0].toObject()
+            .value("awg").toObject().value("last_config").toString().toUtf8()).object();
+        auto adoptedConnection = connection; adoptedConnection["awg_config_data"] = cached;
+        adoptedConnection["hostName"] = cached.value("hostName");
+        if (mutation == "profile") repository.profile["name"] = "edited-by-user";
+        if (mutation == "candidate-hash") repository.journal["candidateHash"] = "foreign-profile";
+        if (mutation == "receipt") repository.journal["challengeReceipt"] = QJsonObject{};
+        const auto expectedProfile = repository.profile;
+        current.reset(); requests.clear(); acknowledge = true;
+        current = controller(); current->beginActivation("server"); current->prepare("server", adoptedConnection, false);
+        auto native = observation(*current, 30);
+        if (mutation == "native-parameters") native["parameterDigests"] = QJsonObject{};
+        if (mutation == "native-key") native["headerProtectionKeyHash"] = "foreign-key";
+        if (mutation == "native-address") native["deviceIpv4Address"] = "10.8.1.99";
+        if (mutation == "peer") native["peerPublicKey"] = "foreign-peer";
+        current->observe("server", 45, native);
+        QVERIFY(requests.isEmpty());
+        QCOMPARE(repository.journal.value("state").toString(), QString("ack_pending"));
+        QCOMPARE(repository.profile, expectedProfile);
+        QCOMPARE(repository.swaps, 1);
+    }
+    void adoptedInterruptedCommitDoesNotGuessOrSkipFailedJournalWrite_data() {
+        QTest::addColumn<bool>("editedProfile");
+        QTest::newRow("candidate profile but persistence unavailable") << false;
+        QTest::newRow("unknown user profile") << true;
+    }
+    void adoptedInterruptedCommitDoesNotGuessOrSkipFailedJournalWrite() {
+        QFETCH(bool, editedProfile);
+        recover(); auto current = controller(); stage(*current);
+        current->beginActivation("server"); current->prepare("server", connection);
+        acknowledge = false;
+        current->observe("server", 44, observation(*current));
+        current->observe("server", 44, observation(*current, 20));
+        QCOMPARE(repository.journal.value("state").toString(), QString("ack_pending"));
+        repository.journal["state"] = "committing";
+        if (editedProfile) repository.profile["name"] = "user-edited";
+        const auto profile = repository.profile;
+        const auto journal = repository.journal;
+        auto cached = QJsonDocument::fromJson(profile.value("containers").toArray()[0].toObject()
+            .value("awg").toObject().value("last_config").toString().toUtf8()).object();
+        auto adoptedConnection = connection; adoptedConnection["awg_config_data"] = cached;
+        adoptedConnection["hostName"] = cached.value("hostName");
+        current.reset(); requests.clear(); acknowledge = true;
+        if (!editedProfile) repository.writesAllowed = false;
+        current = controller(); current->beginActivation("server");
+        current->prepare("server", adoptedConnection, false);
+        current->observe("server", 45, observation(*current, 30));
+        QVERIFY(requests.isEmpty());
+        QCOMPARE(repository.journal, journal);
+        QCOMPARE(repository.profile, profile);
+        QCOMPARE(repository.swaps, 1);
+    }
+    void invalidObservationCannotPoisonTrialEpoch_data() {
+        QTest::addColumn<bool>("wrongPeer");
+        QTest::newRow("wrong peer") << true;
+        QTest::newRow("stale handshake") << false;
+    }
+    void invalidObservationCannotPoisonTrialEpoch() {
+        QFETCH(bool, wrongPeer);
+        recover(); auto current = controller(); stage(*current);
+        current->beginActivation("server"); current->prepare("server", connection);
+        requests.clear();
+        auto invalid = observation(*current);
+        if (wrongPeer) invalid["peerPublicKey"] = "foreign-peer";
+        else invalid["lastHandshakeMs"] = "1";
+        current->observe("server", 99, invalid);
+        QVERIFY(requests.isEmpty());
+        QCOMPARE(repository.journal.value("state").toString(), QString("trial"));
+        current->observe("server", 44, observation(*current));
+        QVERIFY(requests.contains("/migration/v1/challenge"));
+        current->observe("server", 44, observation(*current, 20));
+        QCOMPARE(repository.journal.value("state").toString(), QString("committed"));
+        QCOMPARE(repository.swaps, 1);
     }
 };
 QTEST_GUILESS_MAIN(AwgMigrationControllerTests)

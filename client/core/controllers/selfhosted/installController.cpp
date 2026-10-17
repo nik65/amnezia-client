@@ -1,4 +1,5 @@
 #include "installController.h"
+#include "awgMaintenanceReceipt.h"
 #include "exportController.h"
 #include <QFile>
 #include <QTcpSocket>
@@ -861,6 +862,56 @@ ErrorCode InstallController::publishServerRoutingRules(const ServerCredentials &
     return publishVersionedServerRoutingRules(credentials, rules, container).errorCode;
 }
 
+ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredentials &credentials,
+        DockerContainer source, qint64 generation, const QString &expectedJournalSha256,
+        QJsonObject &result)
+{
+    result = {};
+    const QRegularExpression hashPattern(QStringLiteral("^[a-f0-9]{64}$"));
+    if (!credentials.isValid() || credentials.sshHostKeyFingerprint.isEmpty()
+            || (source != DockerContainer::Awg && source != DockerContainer::Awg2)
+            || generation < 1 || generation > 9007199254740991LL
+            || !hashPattern.match(expectedJournalSha256).hasMatch())
+        return ErrorCode::ServerCheckFailed;
+    SshSession session;
+    const QString directory = QStringLiteral("/tmp/amnezia-migration-maintenance-%1").arg(Utils::getRandomString(24));
+    ErrorCode error = session.runScript(credentials, QStringLiteral("umask 077; mkdir '%1'").arg(directory));
+    if (error != ErrorCode::NoError) return error;
+    const QStringList files {QStringLiteral("maintenance.py"), QStringLiteral("journal.py"),
+        QStringLiteral("service.py"), QStringLiteral("target.py"),
+        QStringLiteral("ready_validation.py"), QStringLiteral("trusted_image.py")};
+    QJsonObject expectedHashes;
+    auto cleanup = [&]() {
+        QString command = QStringLiteral("rm -f");
+        for (const QString &name : files) command += QStringLiteral(" '%1/%2'").arg(directory, name);
+        session.runScript(credentials, command + QStringLiteral("; rmdir '%1'").arg(directory));
+    };
+    for (const QString &name : files) {
+        QFile resource(QStringLiteral(":/server_scripts/awg_migration/%1").arg(name));
+        if (!resource.open(QIODevice::ReadOnly)) { cleanup(); return ErrorCode::InternalError; }
+        const QByteArray bytes = resource.readAll();
+        if (name == QStringLiteral("service.py") || name == QStringLiteral("target.py"))
+            expectedHashes.insert(name, QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()));
+        error = session.uploadFileToHost(credentials, bytes, directory + QLatin1Char('/') + name);
+        if (error != ErrorCode::NoError) { cleanup(); return error; }
+    }
+    QByteArray output;
+    const QString command = QStringLiteral(
+        "sudo python3 -B '%1/maintenance.py' --source '%2' --generation %3 --expected-journal-sha256 '%4'")
+        .arg(directory, ContainerUtils::containerToString(source)).arg(generation).arg(expectedJournalSha256);
+    error = session.runScript(credentials, command,
+        [&output](const QString &data, libssh::Client &) {
+            const QByteArray bytes = data.toUtf8();
+            if (output.size() + bytes.size() > 16384) return ErrorCode::ServerCheckFailed;
+            output += bytes; return ErrorCode::NoError;
+        }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; }, 10 * 60 * 1000);
+    cleanup();
+    result = QJsonDocument::fromJson(output.trimmed()).object();
+    if (error != ErrorCode::NoError) return error;
+    return AwgMaintenance::validReceipt(result, ContainerUtils::containerToString(source), generation, expectedHashes)
+            ? ErrorCode::NoError : ErrorCode::ServerCheckFailed;
+}
+
 ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &credentials, DockerContainer source,
         const QString &endpointHost, int targetPort, const QString &immutableAwgImage,
         qint64 generation, QJsonObject &result, bool automatic)
@@ -901,9 +952,9 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
     if (error != ErrorCode::NoError) return error;
     auto cleanup = [&]() {
         // Random, fixed-prefix directory created by this invocation only.
-        session.runScript(credentials, QStringLiteral("rm -f '%1/prepare.py' '%1/automatic.py' '%1/trusted_image.py' '%1/service.py' '%1/target.py' '%1/policy.py' '%1/journal.py' '%1/feeds.py'; rmdir '%1'").arg(directory));
+        session.runScript(credentials, QStringLiteral("rm -f '%1/prepare.py' '%1/automatic.py' '%1/trusted_image.py' '%1/service.py' '%1/target.py' '%1/policy.py' '%1/journal.py' '%1/feeds.py' '%1/ready_validation.py'; rmdir '%1'").arg(directory));
     };
-    for (const QString &name : {QStringLiteral("prepare.py"), QStringLiteral("automatic.py"), QStringLiteral("trusted_image.py"), QStringLiteral("service.py"), QStringLiteral("target.py"), QStringLiteral("policy.py"), QStringLiteral("journal.py"), QStringLiteral("feeds.py")}) {
+    for (const QString &name : {QStringLiteral("prepare.py"), QStringLiteral("automatic.py"), QStringLiteral("trusted_image.py"), QStringLiteral("service.py"), QStringLiteral("target.py"), QStringLiteral("policy.py"), QStringLiteral("journal.py"), QStringLiteral("feeds.py"), QStringLiteral("ready_validation.py")}) {
         QFile resource(QStringLiteral(":/server_scripts/awg_migration/%1").arg(name));
         if (!resource.open(QIODevice::ReadOnly)) { cleanup(); return ErrorCode::InternalError; }
         error = session.uploadFileToHost(credentials, resource.readAll(), directory + QLatin1Char('/') + name);

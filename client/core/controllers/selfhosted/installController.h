@@ -116,6 +116,11 @@ public:
             const QString &endpointHost, int targetPort, const QString &immutableAwgImage,
             qint64 generation, QJsonObject &result, bool automatic = false);
 
+    // Explicit selected existing migration only; never provisions VPN or collectors.
+    static ErrorCode maintainAwgMigrationControls(const ServerCredentials &credentials,
+            DockerContainer source, qint64 generation, const QString &expectedJournalSha256,
+            QJsonObject &result);
+
     void clearCachedProfile(const QString &serverId, DockerContainer container);
 
     ErrorCode validateAndPrepareConfig(const QString &serverId);

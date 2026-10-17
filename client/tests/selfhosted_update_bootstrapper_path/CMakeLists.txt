@@ -5,6 +5,7 @@ project(SelfHostedUpdateBootstrapperPathTests LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 REQUIRED COMPONENTS Core)
+find_package(OpenSSL REQUIRED)
 
 enable_testing()
 
@@ -16,7 +17,7 @@ add_executable(selfhosted_update_bootstrapper_path_tests
 )
 
 target_include_directories(selfhosted_update_bootstrapper_path_tests PRIVATE "${CLIENT_ROOT}")
-target_link_libraries(selfhosted_update_bootstrapper_path_tests PRIVATE Qt6::Core)
+target_link_libraries(selfhosted_update_bootstrapper_path_tests PRIVATE Qt6::Core OpenSSL::Crypto)
 if(MSVC)
     target_compile_options(selfhosted_update_bootstrapper_path_tests PRIVATE /W4 /WX /permissive-)
 else()

@@ -67,15 +67,10 @@ public:
     }
     QStringList serverRoutingRulesSyncHosts() const { return protectedHosts; }
     RouteMode appliedSiteRouteMode() const { return actualMode; }
-    // Normalization double excludes fixture-local routes; it never modifies
-    // an installed receipt. Policy validation itself is the real implementation.
-    QStringList normalizedManagedRoutesForRuntime(RouteMode, const QStringList& routes,
-                const QVariantMap& local, const QStringList& protectedList, bool* valid) const {
-        auto result = managedRoutePolicy::validatedManagedRoutes(routes, valid);
-        for (auto i = local.begin(); i != local.end(); ++i) result.removeAll(i.value().toString());
-        for (const auto& host : protectedList) result.removeAll(host);
-        result.removeDuplicates(); result.sort(); return result;
-    }
+    int m_pendingClientSplitRouteLookups = 0;
+    // Production normalization and its route/network helpers are extracted below.
+    QStringList normalizedManagedRoutesForRuntime(RouteMode, const QStringList&,
+                const QVariantMap&, const QStringList&, bool*) const;
     ManagedRouteUpdateResult updateManagedSplitTunnelRoutes(RouteMode, const QStringList& oldRoutes,
                 const QStringList&, const QVariantMap&) {
         ++mutations; oldMutationRoutes = oldRoutes; return nextMutationResult;
@@ -131,8 +126,8 @@ private slots:
         // validation preserves input order. Match that receipt premise here.
         routes.sort();
         worker.m_authoritativeManagedRoutes = routes;
-        // Execute the extracted production reconciliation body. The fixture's
-        // normalizer is inert; full native VpnConnection startup is not tested.
+        // Execute production reconciliation and normalization. Full native
+        // VpnConnection startup and IPC mutation are not tested here.
         worker.reconcile(routes, {}, 999, routes);
         QVERIFY(worker.receipt.accepted && worker.receipt.updated && !worker.receipt.scheduled);
         QCOMPARE(worker.receipt.routes, routes);

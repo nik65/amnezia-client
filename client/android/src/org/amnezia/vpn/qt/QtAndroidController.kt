@@ -14,7 +14,7 @@ object QtAndroidController {
 
     external fun onStatus(stateCode: Int, serverIndex: Int)
     external fun onServiceDisconnected()
-    external fun onServiceError()
+    external fun onServiceError(reasonCode: Int)
 
     external fun onVpnPermissionRejected()
     external fun onNotificationStateChanged()

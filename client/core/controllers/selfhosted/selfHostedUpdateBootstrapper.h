@@ -497,12 +497,14 @@ private:
         QByteArray manifestSha256;
         QByteArray manifestData;
         amnezia::selfhostedUpdates::BundledManifestIdentity manifestIdentity;
+        int androidVersionCode = 0;
     };
 
     QString findPayloadDir() const;
     bool loadPayload(const QString &payloadDir, Payload &payload) const;
     bool selectServerCredentials(amnezia::ServerCredentials &credentials) const;
     static bool publishPayload(Payload payload, amnezia::ServerCredentials credentials);
+    static bool validatePublicationAcceptance(const Payload &payload);
 
     amnezia::selfhostedUpdates::AutomaticPublishRetryState m_publishRetryState;
     SecureServersRepository *m_serversRepository = nullptr;

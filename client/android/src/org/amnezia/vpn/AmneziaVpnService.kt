@@ -78,6 +78,7 @@ const val ACTION_CONNECT = "org.amnezia.vpn.action.connect"
 
 const val MSG_VPN_CONFIG = "VPN_CONFIG"
 const val MSG_ERROR = "ERROR"
+const val MSG_ERROR_REASON = "ERROR_REASON"
 const val MSG_SAVE_LOGS = "SAVE_LOGS"
 const val MSG_CLIENT_NAME = "CLIENT_NAME"
 
@@ -418,8 +419,8 @@ open class AmneziaVpnService : VpnService() {
             is VpnStartException,
             is VpnException -> onError(e.message ?: e.toString())
 
-            is JSONException,
-            is BadConfigException -> onError("VPN config format error: ${e.message}")
+            is JSONException -> onError("VPN config format error: ${e.message}")
+            is BadConfigException -> onErrorWithReason("VPN config format error: ${e.message}", e.reasonCode)
 
             is LoadLibraryException -> onError("${e.message}. Caused: ${e.cause?.message}")
 
@@ -3342,11 +3343,16 @@ open class AmneziaVpnService : VpnService() {
      * Utils methods
      */
     private fun onError(msg: String) {
+        onErrorWithReason(msg, 0)
+    }
+
+    private fun onErrorWithReason(msg: String, reasonCode: Int) {
         Log.e(TAG, msg)
         mainScope.launch {
             clientMessengers.send {
                 ServiceEvent.ERROR.packToMessage {
                     putString(MSG_ERROR, msg)
+                    putInt(MSG_ERROR_REASON, reasonCode)
                 }
             }
         }

@@ -43,6 +43,8 @@ MAX_POLICY_VALIDITY_HOURS = 365 * 24
 # pass it through policy validation so the boundary is deterministic.
 MAX_GENERATED_AT_FUTURE_SKEW = timedelta(minutes=5)
 MAX_MANIFEST_RESPONSE_BYTES = 1024 * 1024
+RELEASE_ACCEPTANCE_SCHEMA = "amnezia-release-acceptance-v1"
+RELEASE_ACCEPTANCE_DOMAIN = b"amnezia-release-acceptance-v1\n"
 HEADLESS_PROVISIONING_FORMAT = "amnezia-headless-provisioning-tar-v1"
 ED25519_PUBLIC_KEY_DER_PREFIX = bytes.fromhex("302a300506032b6570032100")
 ED25519_PUBLIC_KEY_DER_BYTES = len(ED25519_PUBLIC_KEY_DER_PREFIX) + 32
@@ -91,6 +93,108 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def strict_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise SystemExit(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def acceptance_upload_closure(bundle_root: Path) -> list[dict[str, object]]:
+    """Hash every upload file, including provisioning and rollback payloads."""
+    files_root = bundle_root / "files"
+    if not files_root.is_dir() or files_root.is_symlink():
+        raise SystemExit("acceptance requires a regular bundle files directory")
+    result: list[dict[str, object]] = []
+    for path in sorted(files_root.rglob("*")):
+        if path.is_symlink():
+            raise SystemExit("acceptance upload closure must not contain symlinks")
+        if path.is_dir():
+            continue
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise SystemExit("acceptance upload closure contains a nonregular/empty file")
+        relative = path.relative_to(bundle_root).as_posix()
+        if any(part in {"", ".", ".."} for part in PurePosixPath(relative).parts):
+            raise SystemExit("unsafe acceptance upload path")
+        result.append({"path": relative, "sha256": sha256(path), "size": path.stat().st_size})
+    if not result:
+        raise SystemExit("acceptance upload closure is empty")
+    return result
+
+
+def acceptance_receipts(receipts: object) -> list[dict[str, object]]:
+    """Validate the shape returned by the authoritative lab validator, not a PASS file."""
+    fields = {"platform", "kind", "runId", "profileId", "receiptSha256", "cleanupSha256", "status"}
+    if not isinstance(receipts, list) or len(receipts) != 3:
+        raise SystemExit("acceptance requires Windows, both Linux lanes and real Android validation")
+    seen: set[str] = set()
+    for receipt in receipts:
+        if not isinstance(receipt, dict) or set(receipt) != fields:
+            raise SystemExit("invalid exact acceptance receipt fields")
+        platform = receipt["platform"]
+        if not isinstance(platform, str) or platform not in {"android", "linux", "windows"} or platform in seen:
+            raise SystemExit("invalid or duplicate acceptance platform")
+        seen.add(platform)
+        if receipt["kind"] != ("real-device" if platform == "android" else "owned-guest") or receipt["status"] != "PASS":
+            raise SystemExit("acceptance requires owned guests and a real Android device")
+        for field in ("runId", "profileId"):
+            value = receipt[field]
+            if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value):
+                raise SystemExit("invalid acceptance run/profile identity")
+        for field in ("receiptSha256", "cleanupSha256"):
+            if not isinstance(receipt[field], str) or not SHA256_RE.fullmatch(receipt[field]):
+                raise SystemExit("invalid acceptance receipt/cleanup hash")
+    return sorted(receipts, key=lambda item: str(item["platform"]))
+
+
+def acceptance_envelope(payload: dict[str, object], private_key: Path) -> dict[str, object]:
+    """Domain-separated signature; callable only after authoritative validation."""
+    expected = {"schema", "policyId", "manifestSha256", "publisherSha256", "version", "androidVersionCode", "issuedAt", "expiresAt", "artifacts", "receipts"}
+    if set(payload) != expected or type(payload["schema"]) is not int or payload["schema"] != 1 or payload["policyId"] != "amnezia-release-full-v1":
+        raise SystemExit("invalid exact acceptance payload schema")
+    for name in ("manifestSha256", "publisherSha256"):
+        if not isinstance(payload[name], str) or not SHA256_RE.fullmatch(payload[name]):
+            raise SystemExit("invalid acceptance binding hash")
+    if not isinstance(payload["version"], str) or not VERSION_RE.fullmatch(payload["version"]):
+        raise SystemExit("invalid acceptance version")
+    if type(payload["androidVersionCode"]) is not int or not 1 <= payload["androidVersionCode"] <= MAX_ANDROID_VERSION_CODE:
+        raise SystemExit("invalid acceptance Android versionCode")
+    times = []
+    for name in ("issuedAt", "expiresAt"):
+        value = payload[name]
+        if not isinstance(value, str) or not CANONICAL_UTC_RE.fullmatch(value):
+            raise SystemExit("acceptance times must be canonical UTC")
+        try:
+            times.append(datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc))
+        except ValueError as error:
+            raise SystemExit("invalid acceptance UTC date") from error
+    now = datetime.now(timezone.utc)
+    if times[0] > now or not times[0] < times[1] <= times[0] + timedelta(hours=24) or times[1] <= now:
+        raise SystemExit("acceptance must be current, not future-issued, and valid at most 24 hours")
+    if payload["receipts"] != acceptance_receipts(payload["receipts"]):
+        raise SystemExit("acceptance receipts must be sorted by platform")
+    artifacts = payload["artifacts"]
+    if not isinstance(artifacts, list) or not artifacts:
+        raise SystemExit("acceptance artifact closure is empty")
+    previous = ""
+    for entry in artifacts:
+        if not isinstance(entry, dict) or set(entry) != {"path", "sha256", "size"}:
+            raise SystemExit("invalid exact acceptance artifact fields")
+        path = entry["path"]
+        if not isinstance(path, str) or not path.startswith("files/") or "\\" in path or path <= previous or any(p in {"", ".", ".."} for p in path.split("/")):
+            raise SystemExit("unsafe, duplicate or unordered acceptance artifact path")
+        if not isinstance(entry["sha256"], str) or not SHA256_RE.fullmatch(entry["sha256"]) or type(entry["size"]) is not int or not 0 < entry["size"] <= MAX_POLICY_GENERATION:
+            raise SystemExit("invalid acceptance artifact hash/size")
+        previous = path
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    signed_bytes = RELEASE_ACCEPTANCE_DOMAIN + encoded
+    signature = sign_payload(private_key, signed_bytes)
+    verify_payload_signature(private_key, signed_bytes, signature)
+    return {"schema": RELEASE_ACCEPTANCE_SCHEMA, "signatureAlgorithm": "Ed25519", "payload": b64url(signed_bytes), "signature": signature}
 
 
 def inspect_headless_provisioning(
@@ -1705,5 +1809,35 @@ def main() -> int:
     return 0
 
 
+def issue_acceptance_main(argv: list[str]) -> int:
+    """Explicit postvalidation entry; never runs during an ordinary build."""
+    parser = argparse.ArgumentParser(description="Issue publication acceptance only after authenticated complete lab validation")
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--state-root", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--outer-artifact", type=Path, required=True)
+    parser.add_argument("--public-key", type=Path, required=True)
+    parser.add_argument("--acquisition-export", type=Path)
+    args = parser.parse_args(argv)
+    # Import the fixed repository validator, never a caller-selected plugin.
+    repo_root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(repo_root))
+    from deploy.release_lab.publication_acceptance import (
+        AcceptanceUnavailable, validate_publication_acceptance,
+    )
+    try:
+        validate_publication_acceptance(
+            run_id=args.run_id, state_root=args.state_root,
+            manifest_path=args.manifest, outer_artifact=args.outer_artifact,
+            public_key_path=args.public_key,
+            source_authentication_path=args.acquisition_export,
+        )
+    except AcceptanceUnavailable as error:
+        raise SystemExit(str(error)) from error
+    # Future validation must be integrated/reviewed together with issuance;
+    # changing a validator return value alone cannot enable a release signature.
+    raise SystemExit("AUTHENTICATION_UNAVAILABLE: publication acceptance issuance remains disabled")
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(issue_acceptance_main(sys.argv[2:]) if sys.argv[1:2] == ["issue-acceptance"] else main())

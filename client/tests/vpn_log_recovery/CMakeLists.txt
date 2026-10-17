@@ -10,7 +10,8 @@ set(GENERATED_METHODS "${CMAKE_CURRENT_BINARY_DIR}/production_methods.inc")
 add_custom_command(OUTPUT "${GENERATED_METHODS}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/extract_worker_methods.py"
             "${REPO}/client/vpnConnection.cpp" "${GENERATED_METHODS}"
-    DEPENDS "${REPO}/client/vpnConnection.cpp" extract_worker_methods.py
+    DEPENDS "${REPO}/client/vpnConnection.cpp" "${REPO}/client/core/utils/networkUtilities.cpp"
+            "${REPO}/client/tests/managed_route_semantic_context/production_helpers.py" extract_worker_methods.py
     VERBATIM)
 add_executable(vpn_route_recovery_tests test_worker.cpp "${GENERATED_METHODS}")
 set_source_files_properties("${GENERATED_METHODS}" PROPERTIES SKIP_AUTOMOC ON)

@@ -21,6 +21,7 @@ public:
     bool cleanupCompleted(const QString &serverId, const QString &activationToken, quint64 teardownEpoch);
     std::function<void(const QJsonObject &)> reconnectLegacy;
 #ifdef AMNEZIA_AWG_MIGRATION_CONTROLLER_TESTING
+    QJsonObject testJournal() const { return m_journal; }
     std::function<void(const QString &, const QJsonObject &,
                        std::function<void(const QJsonObject &)>)> testRequest;
 #endif
@@ -28,7 +29,9 @@ private:
     void recordFailure(const QString &reason, int httpStatus = 0);
     void clearFailure();
     void clearTrialEvidence();
-    bool validChallengeReceipt(const QJsonObject &envelope) const;
+    bool validChallengeReceipt(const QJsonObject &envelope, bool requireUnexpired = true) const;
+    bool committedProfileMatches() const;
+    bool targetObservationMatches() const;
     void enrollOrFetch();
     void challenge();
     void acknowledge();

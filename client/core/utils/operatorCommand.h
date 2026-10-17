@@ -11,6 +11,7 @@
 #include <QtGlobal>
 
 #include <cmath>
+#include "awgMaintenanceCommand.h"
 
 namespace amnezia::operatorMode
 {
@@ -88,6 +89,7 @@ enum class CommandType {
     Doctor,
     RoutesExplain,
     Watch,
+    MaintainAwgControls,
     // Internal authenticated handshake used by an ordinary secondary launch.
     // It is intentionally not exposed by parseArguments().
     Raise,
@@ -106,6 +108,8 @@ inline QString commandName(CommandType type)
         return QStringLiteral("routes-explain");
     case CommandType::Watch:
         return QStringLiteral("watch");
+    case CommandType::MaintainAwgControls:
+        return QStringLiteral("maintain-awg-controls");
     case CommandType::Raise:
         return QStringLiteral("raise");
     case CommandType::None:
@@ -151,7 +155,9 @@ struct CommandRequest {
             message = QStringLiteral("--routes-explain requires a host name or IP address.");
         } else if (type == CommandType::RoutesExplain && argument.size() > MaximumRouteArgumentLength) {
             message = QStringLiteral("--routes-explain argument is too long.");
-        } else if (type != CommandType::RoutesExplain && !argument.isEmpty()) {
+        } else if (type == CommandType::MaintainAwgControls && parseAwgMaintenanceArgument(argument).isEmpty()) {
+            message = QStringLiteral("--maintain-awg-controls requires an exact selected migration request.");
+        } else if (type != CommandType::RoutesExplain && type != CommandType::MaintainAwgControls && !argument.isEmpty()) {
             message = QStringLiteral("The selected operator command does not accept an argument.");
         }
 
@@ -377,6 +383,13 @@ inline CommandParseResult parseArguments(int argc, char *argv[])
             setCommand(CommandType::Doctor);
         } else if (argument == QStringLiteral("--watch")) {
             setCommand(CommandType::Watch);
+        } else if (argument == QStringLiteral("--maintain-awg-controls")) {
+            setCommand(CommandType::MaintainAwgControls);
+            if (i + 1 >= argc) result.error = QStringLiteral("Missing maintenance request.");
+            else result.request.argument = QString::fromLocal8Bit(argv[++i]);
+        } else if (argument.startsWith(QStringLiteral("--maintain-awg-controls="))) {
+            setCommand(CommandType::MaintainAwgControls);
+            result.request.argument = argument.mid(QStringLiteral("--maintain-awg-controls=").size());
         } else if (argument == QStringLiteral("--routes-explain")) {
             setCommand(CommandType::RoutesExplain);
             if (i + 1 >= argc) {

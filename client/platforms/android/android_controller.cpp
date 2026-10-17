@@ -8,6 +8,7 @@
 #include <android/bitmap.h>
 
 #include "android_controller.h"
+#include "core/protocols/androidProtocolBinding.h"
 #include "android_utils.h"
 #include "ui/controllers/importUiController.h"
 
@@ -40,15 +41,6 @@ AndroidController::AndroidController() : QObject()
             isWaitingStatus = true;
             // This is the Android Activity-to-service binding state, not the VPN
             // tunnel state. Actual tunnel updates arrive via vpnStateChanged/status.
-        },
-        Qt::QueuedConnection);
-
-    connect(
-        this, &AndroidController::serviceError, this,
-        [this]() {
-            qDebug() << "Android event: service error";
-            // todo: add error message
-            emit connectionStateChanged(Vpn::ConnectionState::Error);
         },
         Qt::QueuedConnection);
 
@@ -93,7 +85,7 @@ bool AndroidController::initialize()
     const JNINativeMethod methods[] = {
         {"onStatus", "(II)V", reinterpret_cast<void *>(onStatus)},
         {"onServiceDisconnected", "()V", reinterpret_cast<void *>(onServiceDisconnected)},
-        {"onServiceError", "()V", reinterpret_cast<void *>(onServiceError)},
+        {"onServiceError", "(I)V", reinterpret_cast<void *>(onServiceError)},
         {"onVpnPermissionRejected", "()V", reinterpret_cast<void *>(onVpnPermissionRejected)},
         {"onNotificationStateChanged", "()V", reinterpret_cast<void *>(onNotificationStateChanged)},
         {"onVpnStateChanged", "(I)V", reinterpret_cast<void *>(onVpnStateChanged)},
@@ -545,12 +537,13 @@ void AndroidController::onServiceDisconnected(JNIEnv *env, jobject thiz)
 }
 
 // static
-void AndroidController::onServiceError(JNIEnv *env, jobject thiz)
+void AndroidController::onServiceError(JNIEnv *env, jobject thiz, jint reasonCode)
 {
     Q_UNUSED(env);
     Q_UNUSED(thiz);
 
-    emit AndroidController::instance()->serviceError();
+    const auto error = AndroidProtocolBinding::errorForServiceReason(reasonCode);
+    emit AndroidController::instance()->serviceError(error);
 }
 
 // static

@@ -168,8 +168,7 @@ class AmneziaActivity : QtActivity() {
                         msg.data?.getString(MSG_ERROR)?.let { error ->
                             Log.e(TAG, "From VpnService: $error")
                         }
-                        // todo: add error reporting to Qt
-                        QtAndroidController.onServiceError()
+                        QtAndroidController.onServiceError(msg.data?.getInt(MSG_ERROR_REASON, 0) ?: 0)
                     }
                 }
             }
@@ -741,7 +740,7 @@ class AmneziaActivity : QtActivity() {
             isWaitingStatus = false
             startVpnService(vpnConfig, proto)
             doBindService()
-        } ?: QtAndroidController.onServiceError()
+        } ?: QtAndroidController.onServiceError(0)
     }
 
     private fun getVpnProto(vpnConfig: String): VpnProto? = try {
@@ -773,7 +772,7 @@ class AmneziaActivity : QtActivity() {
                 ContextCompat.startForegroundService(this, it)
             } catch (e: SecurityException) {
                 Log.e(TAG, "Failed to start ${proto.serviceClass.simpleName}: $e")
-                QtAndroidController.onServiceError()
+                QtAndroidController.onServiceError(0)
             }
         }
     }

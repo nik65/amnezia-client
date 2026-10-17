@@ -144,6 +144,21 @@ class Journal:
             migration = [m for m in mounts if m.get('Destination') == '/migration']
             logs = [m for m in mounts if m.get('Destination') == '/logs']
             host = helper.get('HostConfig', {})
+            environment = helper.get('Config', {}).get('Env') or []
+            if not isinstance(environment, list) or any(not isinstance(item, str) or '=' not in item for item in environment):
+                raise ValueError('control maintenance helper environment')
+            values = {}
+            for item in environment:
+                key, value = item.split('=', 1)
+                if key in ('AMNEZIA_MIGRATION_ROLE', 'AMNEZIA_MIGRATION_SCOPE'):
+                    if key in values:
+                        raise ValueError('control maintenance duplicate helper environment')
+                    values[key] = value
+            effective_role = values.get('AMNEZIA_MIGRATION_ROLE', 'target')
+            effective_scope = values.get('AMNEZIA_MIGRATION_SCOPE') or self.value['source']
+            if (effective_role != role or effective_scope != self.value['source']
+                    or (role == 'source' and values.get('AMNEZIA_MIGRATION_SCOPE') != self.value['source'])):
+                raise ValueError('control maintenance helper role/scope')
             if (host.get('NetworkMode') != 'container:' + parent['Id']
                     or host.get('Privileged') is not False
                     or len(migration) != 1 or migration[0].get('Type') != 'bind'
@@ -161,12 +176,31 @@ class Journal:
     def control_hashes(self):
         return {name: digest((self.directory / name).read_bytes()) for name in CONTROL_FILES}
 
-    def protected_control_state(self):
+    def protected_control_state(self, require_native=False):
         # Grant DB and handshake files are intentionally live; this path never
         # opens them for writing or attempts to restore concurrent client work.
-        names = ('awg0.conf', 'awg0.native.conf', 'ready.json', 'signing.pem', 'start.sh')
-        return {name: digest((self.directory / name).read_bytes())
-                for name in names if (self.directory / name).exists()}
+        names = ('awg0.conf', 'ready.json', 'signing.pem', 'start.sh')
+        native = self.directory / 'awg0.native.conf'
+        # Legacy/manual preparation never creates the automatic native recipe.
+        # Protect it when present; the automatic-only entry can require it.
+        if require_native or native.exists() or native.is_symlink():
+            names += ('awg0.native.conf',)
+        if any((self.directory / name).is_symlink() or not (self.directory / name).is_file() for name in names):
+            raise ValueError('control maintenance protected state missing')
+        return {name: digest((self.directory / name).read_bytes()) for name in names}
+
+    def check_loaded_controls(self, expected_hashes):
+        """Read-only proof of both current owned PID1s, including no-op recipes."""
+        for _, helper, role in self.control_helpers():
+            self.check_loaded_helper(helper, role, expected_hashes)
+
+    def check_loaded_helper(self, helper, role, expected_hashes):
+        self.run('docker', 'exec', helper['Id'], 'python', '-c', CONTROL_LISTENER_PROBE)
+        probe = ('import json,pathlib; r=json.loads(pathlib.Path("/migration/control-loaded-' + role + '.json").read_text()); '
+                 'assert r["role"]==' + repr(role) + '; '
+                 'assert r["hashes"]==' + repr(expected_hashes) + '; '
+                 'assert r["processStart"]==pathlib.Path("/proc/1/stat").read_text().split()[21]')
+        self.run('docker', 'exec', helper['Id'], 'python', '-c', probe)
 
     def check_control_state(self, protected):
         if self.protected_control_state() != protected:
@@ -190,13 +224,10 @@ class Journal:
                     if (fresh is None or not fresh['State']['Running']
                             or fresh['State']['StartedAt'] == current['State']['StartedAt']):
                         raise ValueError('control maintenance process not replaced')
-                    self.run('docker', 'exec', old['Id'], 'python', '-c', CONTROL_LISTENER_PROBE)
                     if loaded_receipt:
-                        probe = ('import json,pathlib; r=json.loads(pathlib.Path("/migration/control-loaded-' + role + '.json").read_text()); '
-                                 'assert r["role"]==' + repr(role) + '; '
-                                 'assert r["hashes"]==' + repr(expected_hashes) + '; '
-                                 'assert r["processStart"]==pathlib.Path("/proc/1/stat").read_text().split()[21]')
-                        self.run('docker', 'exec', old['Id'], 'python', '-c', probe)
+                        self.check_loaded_helper(fresh, role, expected_hashes)
+                    else:
+                        self.run('docker', 'exec', old['Id'], 'python', '-c', CONTROL_LISTENER_PROBE)
                     break
                 except (subprocess.SubprocessError, ValueError):
                     if attempt == 9:
@@ -229,7 +260,7 @@ class Journal:
         del self.value['controlMaintenance']
         self.save()
 
-    def maintain_controls(self, recipe_directory):
+    def maintain_controls(self, recipe_directory, validate=None):
         """Refresh only control Python; VPN endpoint and durable grant state stay put."""
         self.recover_control_maintenance()
         self.control_helpers()
@@ -243,7 +274,12 @@ class Journal:
         new = {name: digest(value) for name, value in raw.items()}
         if new == old:
             # No TOFU: installed bytes still require a pin or reviewed predecessor.
+            self.check_loaded_controls(old)
+            self.check_control_state(protected)
+            if validate:
+                validate()
             self.value['controlRecipe'] = old
+            self.value['controlLoadedReceipt'] = True
             self.save()
             return
         backup = self.directory / '.control-maintenance'
@@ -259,6 +295,8 @@ class Journal:
                 durable_bytes(self.directory / name, raw[name])
             self.restart_controls(new, True)
             self.check_control_state(protected)
+            if validate:
+                validate()
             if self.control_hashes() != new:
                 raise ValueError('control maintenance final readback')
             self.value['controlRecipe'] = new

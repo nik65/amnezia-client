@@ -2,6 +2,7 @@ import java.net.InetAddress;
 import android.os.Build;
 import org.amnezia.vpn.protocol.BadConfigException;
 import org.amnezia.vpn.protocol.ProtocolConfig;
+import org.amnezia.vpn.protocol.ProtocolErrorReason;
 import org.amnezia.vpn.protocol.wireguard.WireguardConfig;
 import org.amnezia.vpn.util.net.InetEndpoint;
 import org.amnezia.vpn.util.net.InetNetwork;
@@ -42,15 +43,39 @@ public final class ConfigRoutingTest {
     }
 
     private static void assertLegacyCombinedRejected() throws Exception {
-        LegacyAndroidBuilder builder = new LegacyAndroidBuilder();
-        populate(builder, true, true, true);
+        for (boolean extension : new boolean[] { false, true }) {
+            LegacyAndroidBuilder builder = new LegacyAndroidBuilder();
+            populate(builder, true, true, true);
+            builder.setUseProtocolExtension(extension);
+            try {
+                builder.build();
+                throw new AssertionError("combined lists must fail before VPN establishment on Android < 10");
+            } catch (Exception expected) {
+                if (!(expected instanceof BadConfigException)
+                    || !expected.getMessage().contains("Android 10"))
+                    throw new AssertionError("legacy combined rejection lost its actionable reason", expected);
+                if (((BadConfigException) expected).getReasonCode()
+                    != ProtocolErrorReason.COMBINED_ROUTING_REQUIRES_ANDROID_10)
+                    throw new AssertionError("legacy combined rejection lost its typed reason code", expected);
+                if (((BadConfigException) expected).getReasonCode() != 105)
+                    throw new AssertionError("cross-language Android reason code drifted");
+            }
+        }
+
+        for (boolean sitesOnly : new boolean[] { true, false }) {
+            LegacyAndroidBuilder supported = new LegacyAndroidBuilder();
+            populate(supported, sitesOnly, !sitesOnly, true);
+            if (supported.build().getUseIncludedUnion())
+                throw new AssertionError("one included list on API28 must retain its ordinary routing mode");
+        }
+
         try {
-            builder.build();
-            throw new AssertionError("combined lists must fail before VPN establishment on Android < 10");
+            new ModernAndroidBuilder().build();
+            throw new AssertionError("an invalid ordinary config must still fail");
         } catch (Exception expected) {
             if (!(expected instanceof BadConfigException)
-                || !expected.getMessage().contains("Android 10"))
-                throw new AssertionError("legacy combined rejection lost its actionable reason", expected);
+                || ((BadConfigException) expected).getReasonCode() != 0)
+                throw new AssertionError("generic config failures must not masquerade as API28 union failures");
         }
     }
 

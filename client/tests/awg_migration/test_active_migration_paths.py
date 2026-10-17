@@ -25,8 +25,12 @@ class ActiveMigrationPaths(unittest.TestCase):
         migration = source("core/controllers/awgMigrationController.cpp")
         prepare = migration.split("QJsonObject AwgMigrationController::prepare(", 1)[1].split("void AwgMigrationController::cancel", 1)[0]
         self.assertIn("if (allowTrial) cancel();", prepare)
-        self.assertLess(prepare.index("if (client(connection).isEmpty() || !allowTrial) return activeConnection;"), prepare.index("recoveryJournalForTrial"))
-        self.assertIn('!m_allowTrial && !passiveMigrationRequestAllowed', migration)
+        self.assertLess(prepare.index("if (!allowTrial) return activeConnection;"), prepare.index("recoveryJournalForTrial"))
+        fetch = migration.split("void AwgMigrationController::enrollOrFetch()", 1)[1].split("void AwgMigrationController::challenge()", 1)[0]
+        self.assertIn("passiveMigrationRequestAllowed", fetch)
+        self.assertIn("!m_allowTrial && !pendingAck && !passiveMigrationRequestAllowed", fetch)
+        self.assertIn("committedProfileMatches()", fetch)
+        self.assertIn("targetObservationMatches()", fetch)
 
     def test_android_bound_status_and_periodic_observation_are_active(self):
         service = source("android/src/org/amnezia/vpn/AmneziaVpnService.kt")

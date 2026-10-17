@@ -32,7 +32,8 @@ class ControlMaintenanceTests(unittest.TestCase):
                                ('migration-control', 'control-id'), ('migration-source-control', 'source-control-id')]:
             self.objects[identity] = {'Id': identity, 'Name': '/' + name, 'Image': 'image',
                 'Config': {'Labels': {'amnezia.migration.owner': 'a' * 32},
-                           'Entrypoint': ['python'], 'Cmd': ['/migration/target.py']},
+                           'Entrypoint': ['python'], 'Cmd': ['/migration/target.py'],
+                           'Env': ['AMNEZIA_MIGRATION_ROLE=source', 'AMNEZIA_MIGRATION_SCOPE=amnezia-awg2'] if name.endswith('source-control') else []},
                 'State': {'Running': True, 'StartedAt': 'epoch0'},
                 'HostConfig': {'Privileged': False, 'NetworkMode': 'container:' + ('source-id' if name.endswith('source-control') else 'target-id')},
                 'Mounts': [{'Type': 'bind', 'Source': str(self.installed), 'Destination': '/migration', 'RW': True},
@@ -166,7 +167,11 @@ class ControlMaintenanceTests(unittest.TestCase):
     def test_noop_baseline_pin_does_not_invent_loaded_receipt_support(self):
         for name in CONTROL_FILES:
             (self.recipe / name).write_bytes(self.old[name])
-        self.journal.maintain_controls(self.recipe)
+        self.bad_receipt = True
+        before = (self.installed / 'transaction.json').read_bytes()
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.journal.maintain_controls(self.recipe)
+        self.assertEqual(before, (self.installed / 'transaction.json').read_bytes())
         self.assertFalse(self.journal.value.get('controlLoadedReceipt', False))
         for name in CONTROL_FILES:
             (self.recipe / name).write_bytes(self.new[name])

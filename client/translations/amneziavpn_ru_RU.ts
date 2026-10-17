@@ -5944,6 +5944,10 @@ Create one from the current settings.</source>
 <context>
     <name>QObject</name>
     <message>
+        <source>Combining included sites and applications requires Android 10 or newer. On Android 9, use only one included list: sites or applications.</source>
+        <translation>Для совместного включения сайтов и приложений требуется Android 10 или новее. На Android 9 используйте только один список включения: сайты или приложения.</translation>
+    </message>
+    <message>
         <location filename="../core/utils/errorStrings.cpp" line="11"/>
         <source>No error</source>
         <translation>Нет ошибки</translation>

@@ -1680,6 +1680,31 @@ else {
     Write-Warning "LabLane=off: this is an explicitly unvalidated build-only run; output is not release-gate eligible."
 }
 
+# A successful build or ordinary lab lane does not issue publication approval.
+# Preserve the exact tested outer identity separately: embedding approval into
+# that executable would change its bytes and invalidate its guest binding.
+$acceptanceStatus = [ordered]@{
+    schema = "amnezia-publication-acceptance-status-v1"
+    status = "HOLD_AUTHENTICATED_ACCEPTANCE_UNAVAILABLE"
+    approvalIssued = $false
+    version = $Version
+    reason = "Complete authenticated Windows/Linux/real-Android acquisition is required; cached PASS summaries and LabLane do not authorize publication."
+    manifestSha256 = (Get-FileHash -LiteralPath (Join-Path $OutDir "manifest.json") -Algorithm SHA256).Hash.ToLowerInvariant()
+    originalOuter = $null
+}
+$originalOuterPath = Join-Path $RepoRoot "dist\selfhosted-windows-client\$Version\AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
+if (Test-Path -LiteralPath $originalOuterPath -PathType Leaf) {
+    $originalOuterItem = Get-Item -LiteralPath $originalOuterPath
+    $acceptanceStatus.originalOuter = [ordered]@{
+        path = $originalOuterItem.FullName
+        size = $originalOuterItem.Length
+        sha256 = (Get-FileHash -LiteralPath $originalOuterPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+}
+$acceptanceStatusPath = Join-Path $OutDir "publication-acceptance-status.json"
+[System.IO.File]::WriteAllText($acceptanceStatusPath, ($acceptanceStatus | ConvertTo-Json -Depth 5), [System.Text.UTF8Encoding]::new($false))
+Write-Warning "Publication HOLD: no release-acceptance.json was issued. The unsigned status receipt is diagnostic only."
+
 Write-Step "Done"
 Write-Host "Artifacts: $ArtifactDir"
 Write-Host "Manifest output: $OutDir"

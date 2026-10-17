@@ -1,7 +1,10 @@
 #include <QCoreApplication>
+#include "core/controllers/selfhosted/releaseAcceptance.h"
 #include <QSemaphore>
 #include <QTextStream>
 #include <QThreadPool>
+#include <QTemporaryDir>
+#include <cstdio>
 
 #include <atomic>
 
@@ -387,6 +390,122 @@ int main(int argc, char *argv[])
     invalidGeneration.generation = QStringLiteral("042");
     CHECK(validateBundledPublishTransition(&schemaTwo, invalidGeneration)
           == BundledPublishTransitionResult::InvalidCandidate);
+
+    // Exercise actual Ed25519 envelope verification with a fresh in-memory test key.
+    using namespace amnezia::selfhostedUpdates;
+    const QDateTime acceptanceNow = QDateTime::fromString("2026-10-17T20:00:00Z", Qt::ISODate);
+    const QJsonArray acceptanceArtifacts { QJsonObject { { "path", "files/artifacts/a/test" }, { "sha256", digest }, { "size", 10 } } };
+    QJsonArray acceptanceReceipts;
+    for (const QString &platform : QStringList { "android", "linux", "windows" }) {
+        acceptanceReceipts.append(QJsonObject { { "platform", platform }, { "kind", platform == "android" ? "real-device" : "owned-guest" },
+            { "runId", "test-run" }, { "profileId", "test-profile" }, { "receiptSha256", digest }, { "cleanupSha256", digest }, { "status", "PASS" } });
+    }
+    const QJsonObject acceptance { { "schema", 1 }, { "policyId", "amnezia-release-full-v1" }, { "manifestSha256", digest }, { "publisherSha256", digest }, { "version", "5.0.3.11" },
+        { "androidVersionCode", 2197 }, { "issuedAt", "2026-10-17T19:59:00Z" }, { "expiresAt", "2026-10-17T21:00:00Z" },
+        { "artifacts", acceptanceArtifacts }, { "receipts", acceptanceReceipts } };
+    const auto accepts = [&](const QJsonObject &value) { return validateReleaseAcceptance(value, digest, digest, "5.0.3.11", 2197, acceptanceArtifacts, acceptanceNow); };
+    CHECK(accepts(acceptance));
+    CHECK(!validateReleaseAcceptance(acceptance, digest, digest, "5.0.3.11", 2197, acceptanceArtifacts,
+                                    QDateTime::fromString("2026-10-17T21:00:00Z", Qt::ISODate)));
+    QTemporaryDir artifactDirectory;
+    CHECK(artifactDirectory.isValid());
+    const QString sourceArtifact = artifactDirectory.filePath("source");
+    QFile artifactFile(sourceArtifact);
+    CHECK(artifactFile.open(QIODevice::WriteOnly)); CHECK(artifactFile.write("approved") == 8); artifactFile.close();
+    const QByteArray approvedDigest = QCryptographicHash::hash("approved", QCryptographicHash::Sha256).toHex();
+    const QString snapshotArtifact = artifactDirectory.filePath("snapshot");
+    CHECK(snapshotAcceptanceArtifact(sourceArtifact, snapshotArtifact, 8, approvedDigest));
+    CHECK(artifactFile.open(QIODevice::WriteOnly | QIODevice::Truncate)); CHECK(artifactFile.write("replaced") == 8); artifactFile.close();
+    CHECK(!snapshotAcceptanceArtifact(sourceArtifact, artifactDirectory.filePath("changed"), 8, approvedDigest));
+    CHECK(!snapshotAcceptanceArtifact(sourceArtifact, artifactDirectory.filePath("wrong-size"), 9, approvedDigest));
+    CHECK(!snapshotAcceptanceArtifact(sourceArtifact, snapshotArtifact, 8, approvedDigest));
+    QFile preservedSnapshot(snapshotArtifact); CHECK(preservedSnapshot.open(QIODevice::ReadOnly)); CHECK(preservedSnapshot.readAll() == "approved");
+    for (const auto &field : { "policyId", "manifestSha256", "publisherSha256", "version", "androidVersionCode", "artifacts", "receipts", "issuedAt", "expiresAt" }) {
+        QJsonObject missing = acceptance; missing.remove(field); CHECK(!accepts(missing));
+    }
+    QJsonObject changed = acceptance; changed.insert("manifestSha256", QString(64, u'b')); CHECK(!accepts(changed));
+    changed = acceptance; changed.insert("androidVersionCode", 2198); CHECK(!accepts(changed));
+    changed = acceptance; changed.insert("unknown", true); CHECK(!accepts(changed));
+    changed = acceptance; changed.insert("issuedAt", "2026-10-17T20:00:01Z"); CHECK(!accepts(changed));
+    changed = acceptance; changed.insert("expiresAt", "2026-10-17T20:00:00Z"); CHECK(!accepts(changed));
+    changed = acceptance; changed.insert("expiresAt", "2026-10-19T20:00:00Z"); CHECK(!accepts(changed));
+    changed = acceptance; changed.insert("issuedAt", "2026-10-17T19:59:00+00:00"); CHECK(!accepts(changed));
+    for (int i = 0; i < 3; ++i) {
+        QJsonArray missing = acceptanceReceipts; missing.removeAt(i); changed = acceptance; changed.insert("receipts", missing); CHECK(!accepts(changed));
+        QJsonArray invalid = acceptanceReceipts; QJsonObject receipt = invalid.at(i).toObject(); receipt.insert("status", "PENDING"); invalid[i] = receipt;
+        changed = acceptance; changed.insert("receipts", invalid); CHECK(!accepts(changed));
+        receipt.insert("status", "PASS"); receipt.insert("kind", "emulator"); invalid[i] = receipt;
+        changed.insert("receipts", invalid); CHECK(!accepts(changed));
+    }
+    EVP_PKEY_CTX *keyContext = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
+    EVP_PKEY *testKey = nullptr;
+    CHECK(keyContext && EVP_PKEY_keygen_init(keyContext) == 1 && EVP_PKEY_keygen(keyContext, &testKey) == 1);
+    EVP_PKEY_CTX_free(keyContext);
+    BIO *keyBio = BIO_new(BIO_s_mem());
+    CHECK(keyBio && testKey && PEM_write_bio_PUBKEY(keyBio, testKey) == 1);
+    char *pemData = nullptr; const long pemSize = BIO_get_mem_data(keyBio, &pemData);
+    const QByteArray testPublicKey(pemData, int(pemSize)); BIO_free(keyBio);
+    const auto signEnvelope = [&](const QByteArray &signedPayload) {
+        EVP_MD_CTX *ctx = EVP_MD_CTX_new(); size_t length = 64; QByteArray signature(64, char(0));
+        const bool signedOk = ctx && EVP_DigestSignInit(ctx, nullptr, nullptr, nullptr, testKey) == 1
+            && EVP_DigestSign(ctx, reinterpret_cast<unsigned char *>(signature.data()), &length,
+                              reinterpret_cast<const unsigned char *>(signedPayload.constData()), size_t(signedPayload.size())) == 1;
+        EVP_MD_CTX_free(ctx); CHECK(signedOk);
+        return QJsonDocument(QJsonObject { { "schema", acceptanceSchema }, { "signatureAlgorithm", "Ed25519" },
+            { "payload", QString::fromLatin1(signedPayload.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals)) },
+            { "signature", QString::fromLatin1(signature.toBase64()) } }).toJson(QJsonDocument::Compact);
+    };
+    const QByteArray domain = QByteArray(acceptanceSchema) + '\n';
+    const QByteArray signedApproval = signEnvelope(domain + QJsonDocument(acceptance).toJson(QJsonDocument::Compact));
+    QJsonObject decodedApproval;
+    CHECK(decodeReleaseAcceptance(signedApproval, testPublicKey, decodedApproval)); CHECK(accepts(decodedApproval));
+    CHECK(!decodeReleaseAcceptance(signedApproval + "\n", testPublicKey, decodedApproval));
+    CHECK(!decodeReleaseAcceptance(signedApproval, QByteArray(), decodedApproval));
+    CHECK(!decodeReleaseAcceptance(signEnvelope(QJsonDocument(acceptance).toJson(QJsonDocument::Compact)), testPublicKey, decodedApproval));
+    CHECK(!decodeReleaseAcceptance(signEnvelope(domain + "{\"schema\":1,\"schema\":1}"), testPublicKey, decodedApproval));
+    QByteArray tampered = signedApproval; tampered[tampered.indexOf("payload") + 12] = 'X';
+    CHECK(!decodeReleaseAcceptance(tampered, testPublicKey, decodedApproval));
+    CHECK(!decodeReleaseAcceptance(QByteArray(maximumAcceptanceBytes + 1, 'x'), testPublicKey, decodedApproval));
+    EVP_PKEY_free(testKey);
+
+    // Test-only transport for vectors generated by the actual Python signing
+    // primitive. It never overrides the application's compiled authority.
+    if (app.arguments().contains(QStringLiteral("--acceptance-vector-stdin"))) {
+        QFile input;
+        CHECK(input.open(stdin, QIODevice::ReadOnly));
+        const QByteArray vectorBytes = input.read(1024 * 1024 + 1);
+        CHECK(vectorBytes.size() <= 1024 * 1024);
+        const QJsonDocument vectorDocument = QJsonDocument::fromJson(vectorBytes);
+        CHECK(vectorDocument.isObject());
+        const QJsonObject vector = vectorDocument.object();
+        CHECK(acceptanceKeys(vector, { "publicKeyPemBase64", "envelopeBase64", "expectedPayload", "negativeVectors" }));
+        QByteArray vectorKey, vectorEnvelope;
+        CHECK(acceptanceBase64(vector.value("publicKeyPemBase64").toString(), false, vectorKey));
+        CHECK(acceptanceBase64(vector.value("envelopeBase64").toString(), false, vectorEnvelope));
+        QJsonObject vectorApproval;
+        CHECK(vector.value("expectedPayload").toObject() == acceptance);
+        CHECK(decodeReleaseAcceptance(vectorEnvelope, vectorKey, vectorApproval));
+        CHECK(vectorApproval == acceptance);
+        CHECK(accepts(vectorApproval));
+        const QJsonArray negatives = vector.value("negativeVectors").toArray();
+        CHECK(negatives.size() >= 3);
+        int rejectedDomains = 0, rejectedPolicies = 0;
+        for (const QJsonValue &negativeValue : negatives) {
+            const QJsonObject negative = negativeValue.toObject();
+            CHECK(acceptanceKeys(negative, { "envelopeBase64", "decodeExpected", "policyExpected" }));
+            CHECK(negative.value("decodeExpected").isBool());
+            CHECK(negative.value("policyExpected") == QJsonValue(false));
+            QByteArray negativeEnvelope;
+            CHECK(acceptanceBase64(negative.value("envelopeBase64").toString(), false, negativeEnvelope));
+            QJsonObject negativeApproval;
+            const bool decoded = decodeReleaseAcceptance(negativeEnvelope, vectorKey, negativeApproval);
+            CHECK(decoded == negative.value("decodeExpected").toBool());
+            CHECK(!(decoded && accepts(negativeApproval)));
+            if (decoded) ++rejectedPolicies; else ++rejectedDomains;
+        }
+        CHECK(rejectedDomains >= 1);
+        CHECK(rejectedPolicies >= 2);
+    }
 
     return runner.finish();
 }

@@ -18,6 +18,7 @@ namespace amnezia
         NotImplementedError = 102,
         AmneziaServiceNotRunning = 103,
         NotSupportedOnThisPlatform = 104,
+        AndroidCombinedRoutingRequiresAndroid10 = 105,
 
         // Server errors
         ServerCheckFailed = 200,
