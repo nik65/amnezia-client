@@ -4,6 +4,7 @@
 #include <QTimer>
 #include <QJsonObject>
 #include <functional>
+#include "nativeSessionRestore.h"
 
 // Retains the native IPC receiver independently of the active protocol slot.
 // Receipts identify the retired session, while completion identifies the planned
@@ -21,13 +22,26 @@ public:
     }
     void observe(const QString &nonce, quint64 originalEpoch, bool nativeConfirmed)
     {
-        if (m_finished || nonce.isEmpty() || nonce != m_nonce || originalEpoch != m_originalEpoch) return;
+        if (m_requiresRestoredIdentity || m_finished || nonce.isEmpty() || nonce != m_nonce || originalEpoch != m_originalEpoch) return;
         finish(nativeConfirmed && m_routesConfirmed && m_currentEpoch() == m_disconnectEpoch);
     }
     void expire() { if (!m_finished) finish(false); }
+    void requireRestoredIdentity(const QJsonObject &identity)
+    {
+        m_requiresRestoredIdentity = true;
+        m_expectedIdentity = NativeSessionRestore::identity(identity) ? identity : QJsonObject{};
+    }
     void observeAndroid(const QJsonObject &receipt, quint64 originalEpoch)
     {
         if (!receipt.value("nativeCleanupConfirmed").isBool()) return;
+        if (m_requiresRestoredIdentity) {
+            if (m_expectedIdentity.isEmpty() || m_finished || originalEpoch!=m_originalEpoch
+                || receipt.value("connectionNonce").toString()!=m_nonce
+                || NativeSessionRestore::boundIdentity(receipt)!=m_expectedIdentity) return;
+            finish(receipt.value("nativeCleanupConfirmed").toBool() && m_routesConfirmed
+                && m_currentEpoch()==m_disconnectEpoch);
+            return;
+        }
         observe(receipt.value("connectionNonce").toString(), originalEpoch,
                 receipt.value("nativeCleanupConfirmed").toBool());
     }
@@ -45,6 +59,8 @@ private:
     QString m_nonce;
     quint64 m_originalEpoch, m_disconnectEpoch;
     bool m_routesConfirmed, m_finished = false;
+    bool m_requiresRestoredIdentity = false;
+    QJsonObject m_expectedIdentity;
     std::function<quint64()> m_currentEpoch;
     std::function<void(bool)> m_completed;
 };

@@ -1,4 +1,5 @@
 #include "routeRuleMatcher.h"
+#include "managedRoutePolicy.h"
 
 #include <QAbstractSocket>
 #include <QRegularExpression>
@@ -8,6 +9,8 @@
 
 namespace amnezia::routeRuleMatcher
 {
+static_assert(maximumManagedRulesPerSource == managedRoutePolicy::maximumTotalRouteCount,
+              "Inspector managed coverage must include the complete bounded route receipt");
 namespace
 {
 QString bounded(const QString &value, int maximumLength)
@@ -387,7 +390,8 @@ void inspectRules(const QVariantMap &rules, const QString &source,
                   DomainMatchPolicy domainMatchPolicy, MatchResult &result)
 {
     const bool trustedManaged = source == QStringLiteral("managed");
-    const bool mapTruncated = rules.size() > maximumRulesPerSource;
+    const int maximumRules = trustedManaged ? maximumManagedRulesPerSource : maximumRulesPerSource;
+    const bool mapTruncated = rules.size() > maximumRules;
     if (trustedManaged) {
         result.managedRulesTruncated = mapTruncated;
     } else {
@@ -400,7 +404,7 @@ void inspectRules(const QVariantMap &rules, const QString &source,
 
     int inspectedRules = 0;
     for (auto it = rules.constBegin(); it != rules.constEnd(); ++it) {
-        if (inspectedRules >= maximumRulesPerSource) {
+        if (inspectedRules >= maximumRules) {
             break;
         }
         ++inspectedRules;

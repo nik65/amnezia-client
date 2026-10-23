@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import re
 import shlex
+import os
+import stat
 
 
 def mtu(value):
@@ -238,15 +240,90 @@ def firewall_script(snapshot):
     return '\n'.join(commands) + '\n'
 
 
-def client_policy_epoch():
-    directory = Path('/opt/amnezia/server-routing-rules')
-    if not directory.exists():
-        return None
-    path = directory / 'rules.json'
-    if not path.exists():
-        raise ValueError('managed_client_policy_not_ready')
-    value = json.loads(path.read_text())
+def parse_client_policy_epoch(raw):
+    """Pure epoch decoding, shared by the bounded filesystem adapter and tests."""
+    value = json.loads(raw)
     policy = value.get('policy', {})
     if type(policy.get('revision')) is not int or not re.fullmatch(r'sha256:[a-f0-9]{64}', policy.get('contentSha256', '')):
         raise ValueError('managed_client_policy_not_versioned')
     return {'revision': policy['revision'], 'contentSha256': policy['contentSha256']}
+
+
+def client_policy_epoch(directory='/opt/amnezia/server-routing-rules'):
+    """Read one pinned regular source; never follow links or block on a FIFO."""
+    limit = 1024 * 1024
+    descriptors, states, names = [], [], []
+
+    def signature(value):
+        return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+                value.st_uid, value.st_gid, value.st_size,
+                value.st_mtime_ns, value.st_ctime_ns)
+
+    def reject():
+        raise ValueError('policy_source_untrusted')
+
+    try:
+        path = os.fspath(directory)
+        if not path or '\0' in path:
+            reject()
+        absolute = os.path.abspath(path)
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        descriptors.append(os.open('/', flags))
+        states.append(os.fstat(descriptors[-1]))
+        for name in absolute.split('/'):
+            if not name:
+                continue
+            try:
+                descriptor = os.open(name, flags, dir_fd=descriptors[-1])
+            except FileNotFoundError:
+                return None
+            descriptors.append(descriptor)
+            states.append(os.fstat(descriptor))
+            names.append(name)
+        parent_count = len(descriptors)
+        try:
+            descriptor = os.open('rules.json', os.O_RDONLY | os.O_NOFOLLOW |
+                                 os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=descriptors[-1])
+        except FileNotFoundError:
+            raise ValueError('managed_client_policy_not_ready') from None
+        descriptors.append(descriptor)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or not 0 <= before.st_size <= limit:
+            reject()
+        data = bytearray()
+        while True:
+            chunk = os.read(descriptor, min(16384, limit + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+            if len(data) > limit:
+                reject()
+        # drvfs and other filesystems can coarsen timestamps. Independently
+        # re-read the pinned content rather than trusting metadata alone.
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        confirmed = bytearray()
+        while True:
+            chunk = os.read(descriptor, min(16384, limit + 1 - len(confirmed)))
+            if not chunk:
+                break
+            confirmed.extend(chunk)
+            if len(confirmed) > limit:
+                reject()
+        if confirmed != data:
+            reject()
+        after = os.fstat(descriptor)
+        current = os.stat('rules.json', dir_fd=descriptors[parent_count - 1], follow_symlinks=False)
+        if signature(before) != signature(after) or signature(before) != signature(current) or len(data) != before.st_size:
+            reject()
+        for index in range(parent_count):
+            if signature(states[index]) != signature(os.fstat(descriptors[index])):
+                reject()
+            if index and signature(states[index]) != signature(os.stat(
+                    names[index - 1], dir_fd=descriptors[index - 1], follow_symlinks=False)):
+                reject()
+        return parse_client_policy_epoch(data)
+    except OSError:
+        raise ValueError('policy_source_untrusted') from None
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)

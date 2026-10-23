@@ -1,4 +1,8 @@
 #include "connectionController.h"
+#ifdef Q_OS_ANDROID
+#include "platforms/android/android_controller.h"
+#include <QUuid>
+#endif
 
 #include <limits>
 #include <utility>
@@ -432,6 +436,33 @@ ConnectionController::ConnectionController(SecureServersRepository* serversRepos
     });
 #ifdef Q_OS_ANDROID
     connect(this, &ConnectionController::restoreConnectionRequested, m_vpnConnection, &VpnConnection::restoreConnection, Qt::QueuedConnection);
+    connect(m_vpnConnection, &VpnConnection::serviceDiscoveryRegistered, this,
+        [this](const QString &id, bool accepted) {
+            if (accepted && id == m_serviceDiscoveryRequestId
+                && AndroidServiceDiscovery::coordinator.currentRequest(id))
+                AndroidController::instance()->requestServiceDiscovery(id);
+        }, Qt::QueuedConnection);
+    connect(m_vpnConnection, &VpnConnection::serviceDiscoveryRefreshRequested, this,
+        &ConnectionController::requestServiceDiscovery, Qt::QueuedConnection);
+    connect(m_vpnConnection, &VpnConnection::serviceDiscoveryConnectRefused, this,
+        &ConnectionController::handleServiceDiscoveryConnectRefused, Qt::QueuedConnection);
+    connect(m_vpnConnection, &VpnConnection::nativeRestoreRegistered, this,
+        [this](const QString &id, const QString &generation, bool accepted) {
+            if (id == m_restoreRequestId && generation == m_restoreBindingGeneration && accepted)
+                AndroidController::instance()->requestRestoreStatus(id, generation);
+        }, Qt::QueuedConnection);
+    connect(m_serversRepository, &SecureServersRepository::serverEdited, this,
+        [this](const QString &) { invalidateNativeSessionRestore(); });
+    connect(m_serversRepository, &SecureServersRepository::serverRemoved, this,
+        [this](const QString &, int) { invalidateNativeSessionRestore(); });
+    connect(m_vpnConnection, &VpnConnection::nativeRestoreConnectRefused, this,
+        &ConnectionController::handleNativeRestoreConnectRefused, Qt::QueuedConnection);
+    connect(m_vpnConnection, &VpnConnection::nativeRestoreAccepted, this,
+        [this](const QString &id, const QString &generation) {
+            if (id == m_restoreRequestId && generation == m_restoreBindingGeneration) {
+                m_restoreRequestId.clear(); m_restoreBindingGeneration.clear();
+            }
+        }, Qt::QueuedConnection);
 #endif
     m_serverRoutingRulesSyncTimer.setSingleShot(true);
     connect(&m_serverRoutingRulesSyncTimer, &QTimer::timeout, this, &ConnectionController::syncServerRoutingRules);
@@ -1025,6 +1056,10 @@ QString ConnectionController::awgMigrationState(const QString &serverId) const
 
 ErrorCode ConnectionController::openConnection(const QString &serverId)
 {
+#ifdef Q_OS_ANDROID
+    // Worker connect observes any outstanding challenge before invalidating it.
+    m_restoreRequestId.clear(); m_restoreBindingGeneration.clear();
+#endif
     ++m_awgMigrationReconnectGeneration;
     QJsonObject vpnConfiguration;
     DockerContainer container;
@@ -1063,6 +1098,9 @@ ErrorCode ConnectionController::openConnection(const QString &serverId)
 
 void ConnectionController::closeConnection()
 {
+#ifdef Q_OS_ANDROID
+    invalidateNativeSessionRestore();
+#endif
     const auto generation = ++m_awgMigrationReconnectGeneration;
     const QString id = m_awgMigration->serverId();
     const auto expectedEpoch = m_cachedConnectionEpoch;
@@ -1104,8 +1142,123 @@ void ConnectionController::closeConnection()
 }
 
 #ifdef Q_OS_ANDROID
+void ConnectionController::requestServiceDiscovery()
+{
+    if (!m_vpnConnection) return;
+    if (!m_serviceDiscoveryRequestId.isEmpty()
+        && AndroidServiceDiscovery::coordinator.registeredRequest(m_serviceDiscoveryRequestId)) return;
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    // Register synchronously: no already-queued connect may use a previous grant.
+    if (!AndroidServiceDiscovery::coordinator.registerRefresh(id)) return;
+    m_serviceDiscoveryRequestId = id;
+    QMetaObject::invokeMethod(m_vpnConnection, [vpn=m_vpnConnection, id]() {
+        vpn->registerServiceDiscovery(id);
+    }, Qt::QueuedConnection);
+    QTimer::singleShot(5000, Qt::PreciseTimer, this, [this, id]() {
+        if (id != m_serviceDiscoveryRequestId) return;
+        if (AndroidServiceDiscovery::coordinator.registeredRequest(id)) {
+            AndroidServiceDiscovery::coordinator.invalidate();
+            m_serviceDiscoveryRequestId.clear();
+            QMetaObject::invokeMethod(m_vpnConnection, [vpn=m_vpnConnection, id]() {
+                vpn->serviceDiscoveryTimedOut(id);
+            }, Qt::QueuedConnection);
+        }
+    });
+}
+
+void ConnectionController::handleServiceDiscovery(const QJsonObject &snapshot)
+{
+    if (!m_vpnConnection || AndroidServiceDiscovery::coordinator.snapshot() != snapshot) return;
+    QMetaObject::invokeMethod(m_vpnConnection, [vpn=m_vpnConnection, snapshot]() {
+        vpn->serviceDiscoveryChanged(snapshot);
+    }, Qt::QueuedConnection);
+    if (snapshot.value("phase").toString() == "PENDING" && snapshot.value("requestId").toString().isEmpty())
+        requestServiceDiscovery();
+    else if (snapshot.value("phase").toString() != "PENDING"
+             && snapshot.value("requestId").toString() == m_serviceDiscoveryRequestId)
+        m_serviceDiscoveryRequestId.clear();
+}
+
+void ConnectionController::handleStartAdmission(const QJsonObject &snapshot)
+{
+    if (m_vpnConnection) QMetaObject::invokeMethod(m_vpnConnection, [vpn=m_vpnConnection, snapshot]() {
+        vpn->handleStartAdmission(snapshot);
+    }, Qt::QueuedConnection);
+}
+
+void ConnectionController::handleServiceDiscoveryConnectRefused(ErrorCode error, Vpn::ConnectionState retainedState)
+{
+    // Publishing Error through the normal state path would perform route/DNS
+    // cleanup even though an existing native owner may still be active.
+    if (m_cachedLastConnectionError != ErrorCode::NativeTunnelCleanupUnconfirmed)
+        m_cachedLastConnectionError = error;
+    m_cachedConnectionState = retainedState;
+    emit connectionStateChanged(retainedState);
+    emit serviceDiscoveryBlocked(m_cachedLastConnectionError);
+}
+
+void ConnectionController::handleNativeRestoreConnectRefused(Vpn::ConnectionState retainedState)
+{
+    m_cachedLastConnectionError=ErrorCode::NativeTunnelCleanupUnconfirmed;
+    m_cachedConnectionState=retainedState;
+    emit connectionStateChanged(retainedState);
+}
+
+void ConnectionController::observeNativeSession(quint64 observationTicket)
+{
+    if (m_vpnConnection) QMetaObject::invokeMethod(m_vpnConnection, [vpn=m_vpnConnection,observationTicket]() {
+        vpn->observeUnboundNativeSession(observationTicket);
+    }, Qt::QueuedConnection);
+}
+
+void ConnectionController::invalidateNativeSessionRestore()
+{
+    m_restoreRequestId.clear(); m_restoreBindingGeneration.clear();
+    if (m_vpnConnection) QMetaObject::invokeMethod(m_vpnConnection, &VpnConnection::invalidateNativeRestore, Qt::QueuedConnection);
+}
+
+void ConnectionController::requestNativeSessionRestore(const QString &generation)
+{
+    if (!m_vpnConnection || !NativeSessionRestore::decimal(generation)) return;
+    if (generation == m_restoreBindingGeneration && !m_restoreRequestId.isEmpty()) return;
+    m_restoreRequestId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m_restoreBindingGeneration = generation;
+    const auto id = m_restoreRequestId;
+    QTimer::singleShot(5000,Qt::PreciseTimer,this,[this,id,generation]() {
+        if (m_restoreRequestId==id && m_restoreBindingGeneration==generation) {
+            m_restoreRequestId.clear(); m_restoreBindingGeneration.clear();
+        }
+    });
+    QMetaObject::invokeMethod(m_vpnConnection, [vpn=m_vpnConnection, id, generation]() {
+        vpn->registerNativeRestore(id,generation);
+    }, Qt::QueuedConnection);
+}
+
+void ConnectionController::handleNativeRestoreStatus(const QJsonObject &snapshot)
+{
+    const auto checked = NativeSessionRestore::decode(QJsonDocument(snapshot).toJson(QJsonDocument::Compact));
+    if (checked.isEmpty() || checked.value("requestId")!=m_restoreRequestId
+        || checked.value("bindingGeneration")!=m_restoreBindingGeneration) return;
+    const auto serverId = checked.value("serverId").toString();
+    const int index = m_serversRepository->indexOfServerId(serverId);
+    if (index < 0 || m_serversRepository->serverIdAt(index)!=serverId) return;
+    QJsonObject configuration; DockerContainer container = DockerContainer::None;
+    if (prepareConnection(serverId,configuration,container)!=ErrorCode::NoError
+        || !NativeSessionRestore::matchesConfiguration(checked,serverId,configuration)) return;
+    // Repository data is copied now; the worker never dereferences repositories.
+    QMetaObject::invokeMethod(m_vpnConnection, [vpn=m_vpnConnection, checked, serverId,index,container,configuration]() {
+        vpn->adoptNativeRestore(checked,serverId,index,container,configuration);
+    }, Qt::QueuedConnection);
+}
+
 void ConnectionController::restoreConnection(Vpn::ConnectionState state, int serverIndex)
 {
+    if (state==Vpn::ConnectionState::Disconnected || state==Vpn::ConnectionState::Unknown) {
+        if (m_vpnConnection) QMetaObject::invokeMethod(m_vpnConnection, [vpn=m_vpnConnection,state]() {
+            vpn->observeEmptyNativeServiceState(state);
+        }, Qt::QueuedConnection);
+        return; // Observation only: no wrapper, nonce, cleanup or profile fallback.
+    }
     if (!m_vpnConnection) {
         return;
     }
@@ -1124,6 +1277,9 @@ void ConnectionController::restoreConnection(Vpn::ConnectionState state, int ser
         return;
     }
 
+    if (ContainerUtils::isAwgContainer(container) || container == DockerContainer::WireGuard) {
+        return; // Generic native STATUS never authorizes adoption or a guessed-index gate.
+    }
     ++m_awgMigrationReconnectGeneration;
     ++m_managedRouteReconcileGeneration;
     clearPendingManagedRouteReconciliation();

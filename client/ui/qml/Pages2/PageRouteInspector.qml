@@ -431,6 +431,8 @@ PageType {
         var dnsProcessingTruncated = root.resultMapValue(result, "dnsProcessingTruncated", false) === true;
         var ipv6SplitRouteUnknown = decision === "unknown" && root.resultListContains(warnings, "ipv6_split_rules_not_installed");
         var localRouteReceiptUnavailable = decision === "unknown" && root.resultListContains(warnings, "local_route_receipt_unavailable");
+        var ruleCoverageTruncated = root.resultMapValue(result, "ruleCoverageComplete", true) === false
+                || root.resultListContains(warnings, "route_rule_coverage_truncated");
         var ipv4 = root.joinedResultList(root.resultMapValue(result, "resolvedIpv4", null));
         var ipv6 = root.joinedResultList(root.resultMapValue(result, "resolvedIpv6", null));
         var explanationParts = [];
@@ -472,6 +474,8 @@ PageType {
                 if (routeModeDiverged || managedRouteDiverged
                     || inspectionBasis === "runtimePolicyDiverged") {
                     explanationParts.push(qsTr("The installed route snapshot and the current desired policy diverge, so no definitive route is reported."));
+                } else if (ruleCoverageTruncated) {
+                    explanationParts.push(qsTr("The route-rule set exceeds the inspector's bounded coverage. No route decision is reported."));
                 } else if (inspectionBasis === "runtimeRouteTransitionPending") {
                     explanationParts.push(qsTr("Managed routes are being reconciled or a bounded reconnect is pending. The route remains unknown until a new installation receipt arrives."));
                 } else if (inspectionBasis === "runtimeRouteSnapshotUnconfirmed") {

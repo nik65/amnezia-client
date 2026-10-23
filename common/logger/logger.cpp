@@ -19,6 +19,7 @@
     #include <AmneziaVPN-Swift.h>
 #endif
 
+QRecursiveMutex Logger::m_fileMutex;
 QFile Logger::m_file;
 QTextStream Logger::m_textStream;
 QString Logger::m_logFileName = QString("%1.log").arg(APPLICATION_NAME);
@@ -65,6 +66,7 @@ Logger &Logger::Instance()
 
 bool Logger::init(bool isServiceLogger)
 {
+    const QMutexLocker lock(&m_fileMutex);
     if (m_file.isOpen()) {
         return true;
     }
@@ -95,12 +97,14 @@ bool Logger::init(bool isServiceLogger)
 
 void Logger::deInit()
 {
+    const QMutexLocker lock(&m_fileMutex);
     m_textStream.setDevice(nullptr);
     m_file.close();
 }
 
 bool Logger::isInitialized()
 {
+    const QMutexLocker lock(&m_fileMutex);
     return m_file.isOpen();
 }
 
@@ -171,13 +175,16 @@ QString Logger::serviceLogsFilePath()
 
 QString Logger::getLogFile()
 {
-    if (m_file.isOpen()) {
-        m_file.flush();
+    QString qtLog;
+    {
+        const QMutexLocker lock(&m_fileMutex);
+        if (m_file.isOpen()) {
+            m_file.flush();
+        }
+        QFile file(userLogsFilePath());
+        file.open(QIODevice::ReadOnly);
+        qtLog = file.readAll();
     }
-    QFile file(userLogsFilePath());
-
-    file.open(QIODevice::ReadOnly);
-    QString qtLog = file.readAll();
 
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
     return QString().fromStdString(AmneziaVPN::swiftUpdateLogData(qtLog.toStdString()));
@@ -188,13 +195,16 @@ QString Logger::getLogFile()
 
 QString Logger::getServiceLogFile()
 {
-    if (m_file.isOpen()) {
-        m_file.flush();
+    QString qtLog;
+    {
+        const QMutexLocker lock(&m_fileMutex);
+        if (m_file.isOpen()) {
+            m_file.flush();
+        }
+        QFile file(serviceLogsFilePath());
+        file.open(QIODevice::ReadOnly);
+        qtLog = file.readAll();
     }
-    QFile file(serviceLogsFilePath());
-
-    file.open(QIODevice::ReadOnly);
-    QString qtLog = file.readAll();
 
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
     return QString().fromStdString(AmneziaVPN::swiftUpdateLogData(qtLog.toStdString()));
@@ -206,9 +216,6 @@ QString Logger::getServiceLogFile()
 bool Logger::openLogsFolder(bool isServiceLogger)
 {
     QString path = isServiceLogger ? systemLogDir() : userLogsDir();
-#ifdef Q_OS_WIN
-    path = "file:///" + path;
-#endif
     if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path))) {
         qWarning() << "Can't open url:" << path;
         return false;
@@ -218,6 +225,7 @@ bool Logger::openLogsFolder(bool isServiceLogger)
 
 void Logger::clearLogs(bool isServiceLogger)
 {
+    const QMutexLocker lock(&m_fileMutex);
     bool isLogActive = m_file.isOpen();
     m_file.close();
 
@@ -250,6 +258,7 @@ void Logger::clearServiceLogs()
 
 void Logger::cleanUp()
 {
+    const QMutexLocker lock(&m_fileMutex);
     clearLogs(false);
     QDir dir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
     dir.removeRecursively();
@@ -277,10 +286,17 @@ Logger::LogStreamer::~LogStreamer()
                                     .arg(QDateTime::currentDateTimeUtc().toString("[yyyy-MM-dd hh:mm:ss.zzzZ]"),
                                          logLevelString, m_logger->className(), m_data->m_buffer.trimmed());
 
-    if (m_file.isOpen()) {
-        QTextStream logToFile(&m_file);
-        logToFile << message << Qt::endl << Qt::flush;
+    // Qt may invoke the message handler concurrently from any worker thread.
+    // Serialize complete file records against lifecycle operations. Recursive
+    // init diagnostics can return through the same handler on this thread.
+    {
+        const QMutexLocker lock(&m_fileMutex);
+        if (m_file.isOpen()) {
+            QTextStream logToFile(&m_file);
+            logToFile << message << Qt::endl << Qt::flush;
+        }
     }
+    // A blocked console must not retain the shared log-file lock.
 
     QTextStream logToOutput((m_logLevel == LogLevel::Error) ? stderr : stdout);
     logToOutput << message << Qt::endl << Qt::flush;

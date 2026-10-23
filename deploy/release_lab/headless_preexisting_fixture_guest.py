@@ -254,6 +254,55 @@ def _stop_trace(proc:subprocess.Popen)->None:
         try: proc.wait(timeout=5)
         except subprocess.TimeoutExpired: proc.kill();proc.wait(timeout=5)
 
+def strace_shard_summary(root:pathlib.Path,prefix:str,before:dict,after:dict)->tuple[list,dict]:
+    """Bounded same-fd metadata from actual private -ff files."""
+    keys=('pid','start_ticks','exe_sha256');target={key:before.get(key) for key in keys}
+    if {key:after.get(key) for key in keys}!=target: raise GuestError('strace target identity changed')
+    directory=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    shards=[];files=[];total=0
+    try:
+        ds=os.fstat(directory)
+        if ds.st_uid!=0 or ds.st_gid!=0 or stat.S_IMODE(ds.st_mode)!=0o700: raise GuestError('strace directory identity invalid')
+        names=sorted(name for name in os.listdir(directory) if name.startswith(prefix))
+        if len(names)>256: raise GuestError('strace shard count exceeds bound')
+        for name in names:
+            match=re.fullmatch(re.escape(prefix)+r'\.([1-9][0-9]{0,9})',name)
+            if not match: raise GuestError('strace shard filename invalid')
+            fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+            try:
+                initial=os.fstat(fd)
+                if not stat.S_ISREG(initial.st_mode) or initial.st_uid!=0 or initial.st_gid!=0 or initial.st_nlink!=1 or stat.S_IMODE(initial.st_mode)&0o133: raise GuestError('strace shard ownership invalid')
+                os.fchmod(fd,0o600)
+                before_read=os.fstat(fd)
+                if before_read.st_size>1024*1024 or total+before_read.st_size>4*1024*1024: raise GuestError('strace contents exceed bound')
+                chunks=[];read=0
+                while True:
+                    data=os.read(fd,min(65536,1024*1024+1-read))
+                    if not data:break
+                    read+=len(data)
+                    if read>1024*1024:raise GuestError('strace shard grew beyond bound')
+                    chunks.append(data)
+                body=b''.join(chunks);final=os.fstat(fd);path_stat=os.stat(name,dir_fd=directory,follow_symlinks=False)
+                root_after=os.stat(root,follow_symlinks=False)
+                if (root_after.st_dev,root_after.st_ino,root_after.st_uid,root_after.st_gid,root_after.st_mode)!=(ds.st_dev,ds.st_ino,ds.st_uid,ds.st_gid,ds.st_mode):raise GuestError('strace root identity changed')
+                identity=lambda s:(s.st_dev,s.st_ino,s.st_uid,s.st_gid,s.st_mode,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+                if identity(before_read)!=identity(final) or identity(final)!=identity(path_stat) or len(body)!=final.st_size: raise GuestError('strace shard changed during read')
+                pointer={'path':str(root/name),'uid':final.st_uid,'gid':final.st_gid,'mode':stat.S_IMODE(final.st_mode),'size':len(body),'sha256':hashlib.sha256(body).hexdigest()}
+                counts={name:0 for name in ('execve','exit','exit_group','write')};exits=[]
+                lines=body.splitlines()
+                for line in lines:
+                    call=re.match(rb'^(execve|exit|exit_group|write)\(',line)
+                    if call:counts[call.group(1).decode()]+=1
+                    ended=re.fullmatch(rb'\+\+\+ exited with (-?[0-9]+) \+\+\+',line)
+                    if ended:
+                        if len(exits)>=64:raise GuestError('strace exit metadata exceeds bound')
+                        exits.append(int(ended.group(1)))
+                shards.append(pointer);files.append({'source':pointer,'pid':int(match.group(1)),'lines':len(lines),'syscalls':counts,'process_exits':exits});total+=len(body)
+            finally:os.close(fd)
+    finally:os.close(directory)
+    return shards,{'schema':1,'target_before':target,'target_after':{key:after.get(key) for key in keys},'total_bytes':total,'files':files}
+
+
 def _pre_disconnect_diagnostic(p:FixturePlan,connected:dict,root:pathlib.Path,disconnect)->tuple[dict,dict]:
     identity=connected.get('daemon') if isinstance(connected,dict) else None
     if not isinstance(identity,dict) or any(key not in identity for key in ('pid','start_ticks','exe_sha256')): raise GuestError('connected daemon binding absent before disconnect')
@@ -279,12 +328,10 @@ def _pre_disconnect_diagnostic(p:FixturePlan,connected:dict,root:pathlib.Path,di
     try: result=disconnect()
     except BaseException as exc: failure=exc
     if trace is not None: _stop_trace(trace)
-    for path in sorted(root.glob('pre-disconnect-strace*')):
-        try:
-            if path.is_symlink() or not path.is_file(): raise GuestError('invalid strace shard')
-            os.chmod(path,0o600);shards.append(file_id(str(path)))
-        except FileNotFoundError: pass
+    after=proc_id(fresh['pid']) if reason=='attached' else dict(fresh)
+    shards,coverage=strace_shard_summary(root,'pre-disconnect-strace',fresh,after)
     diagnostic['strace']['shards']=shards
+    if reason=='attached':diagnostic['strace']['coverage']=coverage
     diagnostic['state']=_diagnostic_state(p,fresh,root)
     receipt_path=root/'pre-disconnect-diagnostic.json';write_private(receipt_path,json.dumps(diagnostic,sort_keys=True,separators=(',',':')).encode());diagnostic['receipt']=file_id(str(receipt_path))
     if failure is not None:
@@ -393,10 +440,34 @@ def write_private(path:pathlib.Path,data:bytes)->None:
         os.fsync(fd)
     finally: os.close(fd)
 
+def _main_defaults()->list:
+    row=run(["/usr/sbin/ip","-4","-j","route","show","table","main","default"])
+    try: value=json.loads(row["stdout"])
+    except (TypeError,json.JSONDecodeError) as error: raise GuestError("invalid main default route snapshot") from error
+    if not isinstance(value,list) or any(not isinstance(item,dict) for item in value): raise GuestError("invalid main default route snapshot")
+    return value
+
+
+def _verify_underlay_default(p:FixturePlan)->dict:
+    rows=_main_defaults()
+    if len(rows)!=1: raise GuestError("isolated fixture underlay default route missing or ambiguous")
+    row=rows[0]
+    if (row.get("dst") not in ("default","0.0.0.0/0") or row.get("gateway")!=p.underlay_server
+        or row.get("dev")!=p.host_veth or type(row.get("metric")) is not int or row["metric"]!=42750
+        or row.get("protocol") not in ("static",4)):
+        raise GuestError("isolated fixture underlay default route identity differs")
+    return {"gateway":p.underlay_server,"dev":p.host_veth,"metric":42750,"protocol":"static"}
+
+
 def prepare(p:FixturePlan)->dict:
     if os.geteuid()!=0: raise GuestError("prepare requires root")
     for tool in ("/usr/sbin/ip","/usr/bin/wg","/usr/bin/wg-quick","/usr/bin/python3","/usr/bin/systemctl","/usr/bin/ping"):
         if not pathlib.Path(tool).is_file() or not os.access(tool,os.X_OK): raise GuestError("required tool missing: "+tool)
+    # This sealed no-NIC fixture owns its complete isolated underlay. Refuse
+    # foreign defaults/names before creating anything; never replace a guest route.
+    if _main_defaults(): raise GuestError("isolated fixture requires an empty main default route set")
+    if pathlib.Path(f"/var/run/netns/{p.netns}").exists() or pathlib.Path(f"/sys/class/net/{p.host_veth}").exists() or pathlib.Path(f"/sys/class/net/{p.peer_veth}").exists():
+        raise GuestError("isolated fixture network name already exists")
     root=secure_root(p,True); (root/"secrets").mkdir(0o700); (root/"public").mkdir(0o700); (root/"logs").mkdir(0o700)
     marker=f"amnezia-release-lab:{p.run_id}:headless-preexisting:{p.nonce}"; write_private(root/"marker",(marker+"\n").encode())
     server_key=run(["/usr/bin/wg","genkey"])["stdout"].strip(); client_key=run(["/usr/bin/wg","genkey"])["stdout"].strip()
@@ -414,25 +485,32 @@ def prepare(p:FixturePlan)->dict:
       ["/usr/sbin/ip","netns","add",p.netns],["/usr/sbin/ip","link","add",p.host_veth,"type","veth","peer","name",p.peer_veth],
       ["/usr/sbin/ip","link","set",p.peer_veth,"netns",p.netns],["/usr/sbin/ip","addr","add",p.underlay_host+"/30","dev",p.host_veth],["/usr/sbin/ip","link","set",p.host_veth,"up"],
       ["/usr/sbin/ip","-n",p.netns,"link","set","lo","up"],["/usr/sbin/ip","-n",p.netns,"addr","add",p.underlay_server+"/30","dev",p.peer_veth],["/usr/sbin/ip","-n",p.netns,"link","set",p.peer_veth,"up"],
+      ["/usr/sbin/ip","-4","route","add","default","via",p.underlay_server,"dev",p.host_veth,"metric","42750","proto","static"],
       ["/usr/sbin/ip","-n",p.netns,"link","add",server_if,"type","wireguard"],
       ["/usr/sbin/ip","netns","exec",p.netns,"/usr/bin/wg","set",server_if,"private-key",str(root/"secrets/server.key"),"listen-port","51820","peer",client_pub,"allowed-ips",p.tunnel_client+"/32"],
       ["/usr/sbin/ip","-n",p.netns,"addr","add",p.tunnel_server+"/30","dev",server_if],["/usr/sbin/ip","-n",p.netns,"addr","add",p.routed_test_server,"dev",server_if],["/usr/sbin/ip","-n",p.netns,"link","set",server_if,"up"]]
-    completed=[]; proc=None
+    completed=[]; proc=None; namespace_created=False; veth_created=False
     try:
-        for argv in commands: completed.append(run(argv))
+        for index,argv in enumerate(commands):
+            completed.append(run(argv))
+            if index==0: namespace_created=True
+            if index==1: veth_created=True
+        underlay_default=_verify_underlay_default(p)
         log=open(root/"logs/http.log","xb",buffering=0)
         proc=subprocess.Popen(["/usr/sbin/ip","netns","exec",p.netns,"/usr/bin/python3","-m","http.server","17865","--bind",p.routed_test_server.split('/',1)[0],"--directory",str(root/"public")],stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
         time.sleep(.25)
         if proc.poll() is not None: raise GuestError("policy HTTP server exited")
-        ident=proc_id(proc.pid); meta={"marker":marker,"contract":contract,"contract_sha256":_sha(contract),"netns_inode":os.stat(f"/var/run/netns/{p.netns}").st_ino,"http":ident,"server_interface":server_if,"baseline_config":baseline_config_meta}
+        ident=proc_id(proc.pid); meta={"marker":marker,"contract":contract,"contract_sha256":_sha(contract),"netns_inode":os.stat(f"/var/run/netns/{p.netns}").st_ino,"http":ident,"server_interface":server_if,"baseline_config":baseline_config_meta,"underlay_default":underlay_default}
         write_private(root/"fixture.json",json.dumps(meta,sort_keys=True,separators=(",",":")).encode())
-        return {"schema":1,"operation":"headless-preexisting-prepare","origin":"guest","transport":"qga","run_id":p.run_id,"profile":p.profile,"nonce":p.nonce,"contract":contract,"contract_sha256":_sha(contract),"netns_inode":meta["netns_inode"],"http":ident,"baseline_config":baseline_config_meta,"files":[file_id(str(root/"public/policy.json")),file_id(str(root/"public/profile.json")),file_id(str(root/"public/baseline-profile.json")),file_id(p.config_path),baseline_config_meta]}
+        return {"schema":1,"operation":"headless-preexisting-prepare","origin":"guest","transport":"qga","run_id":p.run_id,"profile":p.profile,"nonce":p.nonce,"contract":contract,"contract_sha256":_sha(contract),"netns_inode":meta["netns_inode"],"http":ident,"baseline_config":baseline_config_meta,"underlay_default":underlay_default,"files":[file_id(str(root/"public/policy.json")),file_id(str(root/"public/profile.json")),file_id(str(root/"public/baseline-profile.json")),file_id(p.config_path),baseline_config_meta]}
     except BaseException:
         if proc is not None and proc.poll() is None:
             try:
                 ident=proc_id(proc.pid); exact_kill(ident); wait_gone(ident)
             except (GuestError,OSError): pass
-        run(["/usr/sbin/ip","netns","del",p.netns],ok=False); run(["/usr/sbin/ip","link","del",p.host_veth],ok=False); raise
+        if namespace_created: run(["/usr/sbin/ip","netns","del",p.netns],ok=False)
+        if veth_created: run(["/usr/sbin/ip","link","del",p.host_veth],ok=False)
+        raise
 
 def parse_cli(row:dict)->dict:
     try: row["json"]=json.loads(row["stdout"])
@@ -442,6 +520,7 @@ def parse_cli(row:dict)->dict:
 def connect_collect(p:FixturePlan,deadline:int)->dict:
     import grp
     root=secure_root(p); meta=json.loads((root/"fixture.json").read_text()); c=meta["contract"]
+    underlay_default=_verify_underlay_default(p)
     daemon=proc_id(main_pid())
     if daemon["exe"]!=p.setup_daemon.path or daemon["exe_sha256"]!=p.setup_daemon.sha256 or daemon["uid"]!=0: raise GuestError("setup daemon identity mismatch")
     cli={}; started=int(time.time())
@@ -476,7 +555,7 @@ def connect_collect(p:FixturePlan,deadline:int)->dict:
     if any(row["gid"]!=service_group["gid"] for row in receipts): raise GuestError("managed receipt service group mismatch")
     http_log=file_id(str(root/"logs/http.log")); raw=(root/"logs/http.log").read_text(errors="replace")
     if 'GET /policy.json HTTP/' not in raw or ' 200 ' not in raw: raise GuestError("policy HTTP GET readback absent")
-    return {"schema":1,"operation":"headless-preexisting-connected","origin":"guest","transport":"qga","injected":False,"run_id":p.run_id,"profile":p.profile,"nonce":p.nonce,"contract_sha256":meta["contract_sha256"],"server_public_key":c["wireguard"]["server_public_key"],"daemon":daemon,"cli":cli,"connect_started_epoch":started,"collected_epoch":int(time.time()),"boot_id":pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),"wireguard":wg,"routed_probe":routed_probe,"kernel":{"table_51821":routes,"rules":rules},"service_group":service_group,"managed_receipts":receipts,"policy_http":{"path":"/policy.json","eof":True,"sha256":c["policy"]["sha256"],"log_sha256":http_log["sha256"]}}
+    return {"schema":1,"operation":"headless-preexisting-connected","origin":"guest","transport":"qga","injected":False,"run_id":p.run_id,"profile":p.profile,"nonce":p.nonce,"contract_sha256":meta["contract_sha256"],"server_public_key":c["wireguard"]["server_public_key"],"daemon":daemon,"cli":cli,"connect_started_epoch":started,"collected_epoch":int(time.time()),"boot_id":pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),"wireguard":wg,"routed_probe":routed_probe,"kernel":{"table_51821":routes,"rules":rules},"service_group":service_group,"managed_receipts":receipts,"underlay_default":underlay_default,"policy_http":{"path":"/policy.json","eof":True,"sha256":c["policy"]["sha256"],"log_sha256":http_log["sha256"]}}
 
 def exact_kill(identity:dict)->None:
     fresh=proc_id(identity["pid"])
@@ -650,6 +729,7 @@ def cleanup(p:FixturePlan,active_path:str="")->dict:
     except FileNotFoundError: pass
     run(["/usr/sbin/ip","netns","del",p.netns]); run(["/usr/sbin/ip","link","del",p.host_veth],ok=False)
     if pathlib.Path(f"/var/run/netns/{p.netns}").exists() or pathlib.Path(f"/sys/class/net/{p.host_veth}").exists(): raise GuestError("owned network cleanup incomplete")
+    if _main_defaults(): raise GuestError("owned underlay default route survived network cleanup")
     guard=json.loads((root/"restart-guard.json").read_text()); current=file_id(guard["path"])
     if current!=guard: raise GuestError("runtime restart guard identity changed")
     pathlib.Path(guard["path"]).unlink(); run(["/usr/bin/systemctl","daemon-reload"])

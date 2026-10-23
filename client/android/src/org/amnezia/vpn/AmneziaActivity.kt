@@ -2,6 +2,7 @@ package org.amnezia.vpn
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.app.AlertDialog
 import android.app.NotificationManager
 import android.content.ActivityNotFoundException
@@ -58,9 +59,16 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import java.util.UUID
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
 import org.amnezia.vpn.protocol.getStatistics
 import org.amnezia.vpn.protocol.getStatus
+import org.amnezia.vpn.protocol.NativeSessionIdentity
+import org.amnezia.vpn.protocol.NativeSessionWire
+import org.amnezia.vpn.protocol.ServiceEventBindingGate
 import org.amnezia.vpn.qt.QtAndroidController
 import org.amnezia.vpn.util.LibraryLoader.loadSharedLibrary
 import org.amnezia.vpn.util.Log
@@ -106,7 +114,230 @@ class AmneziaActivity : QtActivity() {
     private lateinit var mainScope: CoroutineScope
     private val qtInitialized = CompletableDeferred<Unit>()
     private var vpnProto: VpnProto? = null
+    private var discoveryForeground = false
+    private var discoveryGeneration = NativeSessionWire.nextBindingGeneration()
+    private var discoveryRequestId = ""
+    private var discoveryPhase = "PENDING"
+    private var discoveryComponent = "NONE"
+    private var discoveryGrant: String? = null
+    private var discoveryProbe: String? = null
+    private var discoveryDeadline: Job? = null
+    private var discoveryAttempt: DiscoveryAttempt? = null
+    private var activeServiceConnection: ServiceConnection? = null
+    private var boundRemoteMessenger: Messenger? = null
+    private var boundServiceComponent: ComponentName? = null
+    private var pendingControlComponent: ComponentName? = null
+    private var discoveryConsumed = false
+    private data class PendingStart(val config: String, val generation: String, val requestId: String, var issued: Boolean = false)
+    private var pendingStart: PendingStart? = null
+    private var admissionDeadline: Job? = null
+    private inner class DiscoveryAttempt(var generation: Long, val component: ComponentName) {
+        var attempted = false
+        var released = false
+        lateinit var connection: ServiceConnection
+        fun release() {
+            if (released) return
+            released = true
+            if (attempted) try { unbindService(connection) } catch (_: IllegalArgumentException) { }
+        }
+    }
+
+    private fun publishDiscovery(phase: String, component: String = "NONE", reason: String = "NONE") {
+        discoveryPhase = phase
+        discoveryComponent = component
+        val generation = discoveryGeneration
+        val request = discoveryRequestId
+        mainScope.launch {
+            qtInitialized.await()
+            if (generation == discoveryGeneration && request == discoveryRequestId) {
+                QtAndroidController.onServiceDiscovery(ServiceDiscoveryWire.snapshot(request, generation, phase, component, reason))
+            }
+        }
+    }
+
+    private fun invalidateDiscoveryLifecycle() {
+        discoveryDeadline?.cancel()
+        discoveryGeneration = NativeSessionWire.nextBindingGeneration()
+        discoveryRequestId = ""
+        discoveryGrant = null
+        discoveryProbe = null
+        discoveryConsumed = true
+        publishDiscovery("PENDING")
+    }
+
+    @Suppress("DEPRECATION")
+    private fun ownServiceInventory(): List<ComponentName>? = try {
+        val manager = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
+        val records = manager?.getRunningServices(64)
+        if (records == null || records.size >= 64) null else {
+            val classes = setOf(AwgService::class.java.name, OpenVpnService::class.java.name, XrayService::class.java.name)
+            val own = records.filter { it.uid == applicationInfo.uid && it.service.packageName == packageName && it.service.className in classes }
+            if (own.any { !it.started }) null else own.map { it.service }.distinct()
+        }
+    } catch (_: RuntimeException) { null }
+
+    private fun componentKind(component: ComponentName) = when (component.className) {
+        AwgService::class.java.name -> "AWG"
+        OpenVpnService::class.java.name -> "OPENVPN"
+        XrayService::class.java.name -> "XRAY"
+        else -> "NONE"
+    }
+
+    private fun beginServiceDiscovery(request: String) {
+        if (!NativeSessionWire.uuid(request) || !discoveryForeground) return
+        finishPendingStartOnLifecycle()
+        discoveryDeadline?.cancel()
+        discoveryGeneration = NativeSessionWire.nextBindingGeneration()
+        discoveryRequestId = request
+        discoveryConsumed = false
+        discoveryGrant = null
+        publishDiscovery("PENDING")
+        val pendingComponent = pendingControlComponent
+        val pendingConnection = activeServiceConnection
+        if (!isServiceConnected && pendingComponent != null && pendingConnection != null) {
+            // A genuine explicit start has already been dispatched. Its pending control
+            // binding is possible ownership, never a disposable observation attempt.
+            val retained = discoveryAttempt ?: DiscoveryAttempt(discoveryGeneration, pendingComponent).apply {
+                connection = pendingConnection
+                attempted = true
+            }
+            retained.generation = discoveryGeneration
+            discoveryAttempt = retained
+            discoveryDeadline = mainScope.launch {
+                delay(4000)
+                if (discoveryAttempt === retained && !isServiceConnected && discoveryPhase == "PENDING") {
+                    publishDiscovery("UNCERTAIN", reason = "BIND_TIMEOUT")
+                }
+            }
+            return
+        }
+        val inventory = ownServiceInventory()
+        if (inventory == null) { publishDiscovery("UNCERTAIN", reason = "INVENTORY_ERROR"); return }
+        if (inventory.size > 1) { publishDiscovery("UNCERTAIN", reason = "MULTIPLE"); return }
+        if (isServiceConnected) {
+            // Refresh is observational: never release a live control binding to sample inventory.
+            val existing = discoveryAttempt?.component ?: boundServiceComponent
+            if (inventory.size != 1 || inventory.single() != existing) { publishDiscovery("UNCERTAIN", reason = "STATUS_UNPROVEN"); return }
+            val retained = discoveryAttempt ?: DiscoveryAttempt(discoveryGeneration, inventory.single()).apply {
+                connection = checkNotNull(activeServiceConnection)
+                attempted = true
+            }
+            retained.generation = discoveryGeneration
+            discoveryAttempt = retained
+            requestDiscoveryProbe(retained)
+            return
+        }
+        doUnbindService()
+        if (inventory.isEmpty()) { publishDiscovery("EMPTY"); return }
+        val attempt = DiscoveryAttempt(discoveryGeneration, inventory.single())
+        discoveryAttempt = attempt
+        attempt.connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                if (discoveryAttempt !== attempt || attempt.released || !discoveryForeground || attempt.generation != discoveryGeneration) {
+                    attempt.release(); return
+                }
+                if (name != attempt.component || service == null) {
+                    failDiscoveryAttempt(attempt, "BIND_FAILED"); return
+                }
+                activeServiceConnection = this
+                adoptConnectedService(name, service, true)
+                requestDiscoveryProbe(attempt)
+            }
+            override fun onServiceDisconnected(name: ComponentName?) { failDiscoveryAttempt(attempt, "DIED") }
+            override fun onBindingDied(name: ComponentName?) { failDiscoveryAttempt(attempt, "DIED") }
+            override fun onNullBinding(name: ComponentName?) { failDiscoveryAttempt(attempt, "BIND_FAILED") }
+        }
+        discoveryDeadline?.cancel()
+        discoveryDeadline = mainScope.launch {
+            delay(4000)
+            if (discoveryAttempt === attempt && discoveryPhase == "PENDING") failDiscoveryAttempt(attempt, "BIND_TIMEOUT")
+        }
+        try {
+            attempt.attempted = true
+            val intent = Intent().setComponent(attempt.component).setAction("org.amnezia.vpn.RESTORE_OBSERVATION")
+            if (!bindService(intent, attempt.connection, BIND_ABOVE_CLIENT)) failDiscoveryAttempt(attempt, "BIND_FAILED")
+        } catch (_: RuntimeException) { failDiscoveryAttempt(attempt, "BIND_FAILED") }
+    }
+
+    private fun requestDiscoveryProbe(attempt: DiscoveryAttempt) {
+        discoveryProbe = UUID.randomUUID().toString()
+        val probe = Action.REQUEST_STATUS.packToMessage {
+            putString("discoveryRequestId", discoveryProbe)
+            putString("discoveryBindingGeneration", discoveryGeneration.toString())
+        }
+        probe.replyTo = activityMessenger
+        discoveryDeadline?.cancel()
+        discoveryDeadline = mainScope.launch {
+            delay(4000)
+            if (discoveryAttempt === attempt && discoveryPhase == "PENDING") publishDiscovery("UNCERTAIN", reason = "BIND_TIMEOUT")
+        }
+        try { boundRemoteMessenger?.send(probe) ?: publishDiscovery("UNCERTAIN", reason = "BIND_FAILED") }
+        catch (_: Exception) { publishDiscovery("UNCERTAIN", reason = "BIND_FAILED") }
+    }
+
+    private fun failDiscoveryAttempt(attempt: DiscoveryAttempt, reason: String) {
+        if (discoveryAttempt !== attempt || attempt.generation != discoveryGeneration) { attempt.release(); return }
+        doUnbindService()
+        publishDiscovery("UNCERTAIN", reason = reason)
+    }
+
+    private fun finishStart(request: PendingStart, outcome: String, reason: String) {
+        if (pendingStart !== request) return
+        pendingStart = null
+        admissionDeadline?.cancel()
+        QtAndroidController.onStartAdmission(ServiceDiscoveryWire.admission(request.generation, request.requestId, outcome, reason))
+        // Refresh is owned/correlated by C++; close Java's consumed grant immediately.
+        discoveryConsumed = true
+        discoveryGrant = null
+    }
+
+    private fun finishPendingStartOnLifecycle() {
+        pendingStart?.let { finishStart(it, if (it.issued) "DISPATCH_UNCERTAIN" else "CANCELLED", if (it.issued) "START_EXCEPTION" else "LIFECYCLE_CANCELLED") }
+    }
+
     private var isWaitingStatus = true
+    private var restoreBindingGeneration = NativeSessionWire.nextBindingGeneration()
+    private var restoreReadySentGeneration = 0L
+    private var pendingRestoreRequest: String? = null
+    private var legacyStatusRequestGeneration: Long? = null
+    private var isBoundNativeService = false
+    private var nativeObservedSentGeneration = 0L
+    private fun notifyNativeSessionObservedWhenQtReady(generation: Long) {
+        mainScope.launch {
+            qtInitialized.await()
+            if (isServiceConnected && isBoundNativeService && generation == restoreBindingGeneration
+                && nativeObservedSentGeneration != generation) {
+                nativeObservedSentGeneration = generation
+                QtAndroidController.onNativeSessionObserved()
+            }
+        }
+    }
+
+    private fun invalidateRestoreRequest() {
+        restoreBindingGeneration = NativeSessionWire.nextBindingGeneration()
+        pendingRestoreRequest = null
+        legacyStatusRequestGeneration = null
+    }
+    private fun notifyServiceDisconnectedWhenQtReady() {
+        val generation = restoreBindingGeneration
+        mainScope.launch {
+            qtInitialized.await()
+            if (!isServiceConnected && generation == restoreBindingGeneration) {
+                QtAndroidController.onServiceDisconnected()
+            }
+        }
+    }
+    private fun notifyRestoreServiceReadyWhenQtReady() {
+        val generation = restoreBindingGeneration
+        mainScope.launch {
+            qtInitialized.await()
+            if (isServiceConnected && generation == restoreBindingGeneration && restoreReadySentGeneration != generation) {
+                restoreReadySentGeneration = generation
+                QtAndroidController.onRestoreServiceReady(generation)
+            }
+        }
+    }
+
     private var isServiceConnected = false
     private var isInBoundState = false
     private var notificationStateReceiver: BroadcastReceiver? = null
@@ -140,16 +371,71 @@ class AmneziaActivity : QtActivity() {
                         msg.data?.getStatus()?.let { (state) ->
                             Log.d(TAG, "Handle protocol state: $state")
                             QtAndroidController.onVpnStateChanged(state.ordinal)
+                            if (state.name == "DISCONNECTED") invalidateDiscoveryLifecycle()
                         }
                     }
 
                     ServiceEvent.STATUS -> {
+                        val admissionId = msg.data?.getString("admissionRequestId")
+                        if (admissionId != null) {
+                            val pending = pendingStart
+                            if (pending != null && admissionId == pending.requestId && msg.data?.getString("admissionGeneration") == pending.generation) {
+                                when (msg.data?.get("admissionAccepted")) {
+                                    true -> finishStart(pending, "DISPATCHED", "NONE")
+                                    false -> finishStart(pending, "REJECTED", "DISCOVERY_UNCONFIRMED")
+                                    else -> Unit // Missing/mistyped reply is not proof that no command ran.
+                                }
+                            }
+                            return
+                        }
+                        val probeId = msg.data?.getString("discoveryRequestId")
+                        if (probeId != null) {
+                            if (probeId != discoveryProbe || msg.data?.getString("discoveryBindingGeneration") != discoveryGeneration.toString() || discoveryAttempt?.generation != discoveryGeneration) return
+                            discoveryProbe = null
+                            discoveryDeadline?.cancel()
+                            val result = msg.data?.getString("discoveryResult")
+                            val kind = discoveryAttempt?.component?.let(::componentKind) ?: "NONE"
+                            if (result == "IDLE") {
+                                discoveryGrant = msg.data?.getString("discoveryGrant")?.takeIf(NativeSessionWire::uuid)
+                                if (discoveryGrant == null) publishDiscovery("UNCERTAIN", reason = "STATUS_UNPROVEN")
+                                else publishDiscovery(if (kind == "AWG") "IDLE_NATIVE" else "BOUND_LEGACY", kind)
+                            } else if (kind != "AWG" && kind != "NONE") publishDiscovery("BOUND_LEGACY", kind)
+                            else if (result == "ACTIVE") {
+                                publishDiscovery("BOUND_NATIVE", kind)
+                                notifyNativeSessionObservedWhenQtReady(restoreBindingGeneration)
+                            } else publishDiscovery("UNCERTAIN", reason = "STATUS_UNPROVEN")
+                            if (kind == "OPENVPN" || kind == "XRAY") {
+                                legacyStatusRequestGeneration = restoreBindingGeneration
+                                vpnServiceMessenger.send(Action.REQUEST_STATUS, replyTo = activityMessenger)
+                            }
+                            return
+                        }
+                        val request = msg.data?.get("restoreRequestId")
+                        if (request != null) {
+                            val generation = msg.data?.get("restoreBindingGeneration")
+                            if (request is String && request == pendingRestoreRequest && generation is String && generation == restoreBindingGeneration.toString()) {
+                                pendingRestoreRequest = null
+                                val snapshot = msg.data?.get("restoreSnapshot")
+                                if (snapshot is String && snapshot.toByteArray(Charsets.UTF_8).size <= NativeSessionWire.maximumSnapshotBytes) {
+                                    QtAndroidController.onRestoreStatus(snapshot)
+                                }
+                            }
+                            return
+                        }
+                        val statusGeneration = legacyStatusRequestGeneration ?: return
+                        if (!isServiceConnected || statusGeneration != restoreBindingGeneration) return
+                        legacyStatusRequestGeneration = null
                         if (isWaitingStatus) {
                             isWaitingStatus = false
                             msg.data?.getStatus()?.let { (state) ->
-                                mainScope.launch {
+                                if (isBoundNativeService && state.name == "CONNECTED") {
+                                    notifyNativeSessionObservedWhenQtReady(statusGeneration)
+                                } else mainScope.launch {
+                                    qtInitialized.await()
                                     val serverIndex = VpnStateStore.getVpnState().serverIndex
-                                    QtAndroidController.onStatus(state.ordinal, serverIndex)
+                                    if (isServiceConnected && statusGeneration == restoreBindingGeneration) {
+                                        QtAndroidController.onStatus(state.ordinal, serverIndex)
+                                    }
                                 }
                             }
                         }
@@ -175,46 +461,57 @@ class AmneziaActivity : QtActivity() {
         }
     }
 
-    private val activityMessenger: Messenger by lazy(NONE) {
-        Messenger(vpnServiceEventHandler)
+    private val serviceEventBindingGate = ServiceEventBindingGate()
+    private var boundActivityMessenger: Messenger? = null
+    private val activityMessenger: Messenger get() = checkNotNull(boundActivityMessenger)
+
+    private fun createBoundActivityMessenger(): Messenger {
+        val bindingToken = serviceEventBindingGate.bind()
+        return Messenger(object : Handler(Looper.getMainLooper()) {
+            override fun handleMessage(msg: Message) {
+                if (!serviceEventBindingGate.accepts(bindingToken) || !mainScope.isActive) return
+                val ownedMessage = Message.obtain(msg)
+                mainScope.launch {
+                    try {
+                        qtInitialized.await()
+                        if (isServiceConnected && serviceEventBindingGate.accepts(bindingToken)) {
+                            vpnServiceEventHandler.handleMessage(ownedMessage)
+                        }
+                    } finally {
+                        ownedMessage.recycle()
+                    }
+                }
+            }
+        })
     }
 
-    private val serviceConnection: ServiceConnection by lazy(NONE) {
-        object : ServiceConnection {
-            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+    private fun adoptConnectedService(name: ComponentName?, service: IBinder?, observation: Boolean) {
+        if (name == null || service == null) return
+                boundServiceComponent = name
                 Log.d(TAG, "Service ${name?.flattenToString()} was connected")
                 // get a messenger from the service to send actions to the service
-                vpnServiceMessenger.set(Messenger(service))
+                boundRemoteMessenger = Messenger(service)
+                vpnServiceMessenger.set(checkNotNull(boundRemoteMessenger))
+                boundActivityMessenger = createBoundActivityMessenger()
                 // send a messenger to the service to process service events
                 vpnServiceMessenger.send(
                     Action.REGISTER_CLIENT.packToMessage {
                         putString(MSG_CLIENT_NAME, ACTIVITY_MESSENGER_NAME)
+                        putBoolean("discoveryObserver", observation)
                     },
                     replyTo = activityMessenger
                 )
                 isServiceConnected = true
-                if (isWaitingStatus) {
+                isInBoundState = true
+                isBoundNativeService = name?.className == AwgService::class.java.name
+                invalidateRestoreRequest()
+                notifyRestoreServiceReadyWhenQtReady()
+                if (isWaitingStatus && !observation) {
+                    legacyStatusRequestGeneration = restoreBindingGeneration
                     vpnServiceMessenger.send(Action.REQUEST_STATUS, replyTo = activityMessenger)
                 }
-            }
-
-            override fun onServiceDisconnected(name: ComponentName?) {
-                Log.w(TAG, "Service ${name?.flattenToString()} was unexpectedly disconnected")
-                isServiceConnected = false
-                vpnServiceMessenger.reset()
-                isWaitingStatus = true
-                QtAndroidController.onServiceDisconnected()
-                doBindService()
-            }
-
-            override fun onBindingDied(name: ComponentName?) {
-                Log.w(TAG, "Binding to the ${name?.flattenToString()} unexpectedly died")
-                doUnbindService()
-                QtAndroidController.onServiceDisconnected()
-                doBindService()
-            }
-        }
     }
+
 
     /**
      * Activity overloaded methods
@@ -234,8 +531,8 @@ class AmneziaActivity : QtActivity() {
             "VpnService",
             onDeadObjectException = {
                 doUnbindService()
-                QtAndroidController.onServiceDisconnected()
-                doBindService()
+                notifyServiceDisconnectedWhenQtReady()
+                invalidateDiscoveryLifecycle()
             }
         )
         pendingOpenFileUri = savedInstanceState?.getString(KEY_PENDING_OPEN_FILE_URI)
@@ -322,17 +619,14 @@ class AmneziaActivity : QtActivity() {
     override fun onStart() {
         super.onStart()
         Log.d(TAG, "Start Amnezia activity")
-        mainScope.launch {
-            qtInitialized.await()
-            vpnProto?.let { proto ->
-                if (AmneziaVpnService.isRunning(applicationContext, proto.processName)) {
-                    doBindService()
-                }
-            }
-        }
+        discoveryForeground = true
+        invalidateDiscoveryLifecycle()
     }
 
     override fun onStop() {
+        finishPendingStartOnLifecycle()
+        discoveryForeground = false
+        invalidateDiscoveryLifecycle()
         isActivityResumed = false
         hasWindowFocus = false
         // Cancel all pending operations when activity stops
@@ -340,10 +634,7 @@ class AmneziaActivity : QtActivity() {
         openFileDeliveryScheduled = false
         Log.d(TAG, "Stop Amnezia activity")
         doUnbindService()
-        mainScope.launch {
-            qtInitialized.await()
-            QtAndroidController.onServiceDisconnected()
-        }
+        notifyServiceDisconnectedWhenQtReady()
         super.onStop()
     }
 
@@ -630,23 +921,62 @@ class AmneziaActivity : QtActivity() {
     private fun doBindService() {
         Log.d(TAG, "Bind service")
         vpnProto?.let { proto ->
-            Intent(this, proto.serviceClass).also {
-                bindService(it, serviceConnection, BIND_ABOVE_CLIENT or BIND_AUTO_CREATE)
+            val connection = object : ServiceConnection {
+                var released = false
+                fun release() { if (!released) { released = true; try { unbindService(this) } catch (_: IllegalArgumentException) { } } }
+                override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                    if (activeServiceConnection !== this || !discoveryForeground) { release(); return }
+                    if (name?.className != proto.serviceClass.name || service == null) { doUnbindService(); invalidateDiscoveryLifecycle(); return }
+                    pendingControlComponent = null
+                    adoptConnectedService(name, service, false)
+                    val retained = discoveryAttempt
+                    if (retained != null && retained.connection === this && retained.generation == discoveryGeneration && discoveryPhase == "PENDING") {
+                        val inventory = ownServiceInventory()
+                        if (inventory?.size == 1 && inventory.single() == name) requestDiscoveryProbe(retained)
+                        else publishDiscovery("UNCERTAIN", reason = if (inventory == null) "INVENTORY_ERROR" else if (inventory.size > 1) "MULTIPLE" else "STATUS_UNPROVEN")
+                    }
+                }
+                override fun onServiceDisconnected(name: ComponentName?) {
+                    if (activeServiceConnection === this) { doUnbindService(); notifyServiceDisconnectedWhenQtReady(); invalidateDiscoveryLifecycle() }
+                }
+                override fun onBindingDied(name: ComponentName?) { onServiceDisconnected(name) }
+                override fun onNullBinding(name: ComponentName?) { onServiceDisconnected(name) }
             }
+            activeServiceConnection = connection
+            pendingControlComponent = ComponentName(this, proto.serviceClass)
             isInBoundState = true
+            try {
+                if (!bindService(Intent(this, proto.serviceClass), connection, BIND_ABOVE_CLIENT or BIND_AUTO_CREATE)) {
+                    doUnbindService(); invalidateDiscoveryLifecycle()
+                }
+            } catch (_: RuntimeException) { doUnbindService(); invalidateDiscoveryLifecycle() }
         }
     }
 
     @MainThread
     private fun doUnbindService() {
-        if (isInBoundState) {
+        discoveryDeadline?.cancel()
+        val retiringAttempt = discoveryAttempt
+        discoveryAttempt = null
+        val retiringConnection = activeServiceConnection
+        activeServiceConnection = null
+        pendingControlComponent = null
+        retiringAttempt?.release()
+        if (isInBoundState || isServiceConnected) {
             Log.d(TAG, "Unbind service")
             isWaitingStatus = true
+            serviceEventBindingGate.invalidate()
+            invalidateRestoreRequest()
             isServiceConnected = false
-            vpnServiceMessenger.send(Action.UNREGISTER_CLIENT, activityMessenger)
+            isBoundNativeService = false
+            val retiringReceiver = boundActivityMessenger
+            boundActivityMessenger = null
+            if (retiringReceiver != null) vpnServiceMessenger.send(Action.UNREGISTER_CLIENT, retiringReceiver)
             vpnServiceMessenger.reset()
             isInBoundState = false
-            unbindService(serviceConnection)
+            if (retiringAttempt == null && retiringConnection != null) try { unbindService(retiringConnection) } catch (_: IllegalArgumentException) { }
+            boundRemoteMessenger = null
+            boundServiceComponent = null
         }
     }
 
@@ -654,7 +984,7 @@ class AmneziaActivity : QtActivity() {
      * Methods of starting and stopping VpnService
      */
     @MainThread
-    private fun checkVpnPermission(onPermissionGranted: () -> Unit) {
+    private fun checkVpnPermission(onPermissionGranted: () -> Unit, onPermissionDenied: () -> Unit = {}) {
         Log.d(TAG, "Check VPN permission")
         VpnService.prepare(applicationContext)?.let { intent ->
             startActivityForResult(intent, CHECK_VPN_PERMISSION_ACTION_CODE, ActivityResultHandler(
@@ -664,6 +994,7 @@ class AmneziaActivity : QtActivity() {
                     onPermissionGranted()
                 },
                 onFail = {
+                    onPermissionDenied()
                     Log.w(TAG, "Vpn permission denied")
                     showOnVpnPermissionRejectDialog()
                     mainScope.launch {
@@ -790,24 +1121,119 @@ class AmneziaActivity : QtActivity() {
     fun qtAndroidControllerInitialized() {
         Log.v(TAG, "Qt Android controller initialized")
         qtInitialized.complete(Unit)
+        mainScope.launch {
+            if (isServiceConnected) notifyRestoreServiceReadyWhenQtReady()
+            if (discoveryRequestId.isEmpty()) publishDiscovery("PENDING")
+        }
     }
 
     @Suppress("unused")
-    fun start(vpnConfig: String) {
-        Log.v(TAG, "Start VPN")
+    fun requestRestoreStatus(requestId: String, bindingGeneration: Long) {
         mainScope.launch {
-            checkVpnPermission {
-                checkNotificationPermission {
-                    startVpn(vpnConfig)
+            qtInitialized.await()
+            if (!isServiceConnected || bindingGeneration != restoreBindingGeneration || !NativeSessionWire.uuid(requestId)) return@launch
+            pendingRestoreRequest = requestId
+            vpnServiceMessenger.send {
+                Action.REQUEST_STATUS.packToMessage {
+                    putString("restoreRequestId", requestId)
+                    putString("restoreBindingGeneration", bindingGeneration.toString())
                 }
             }
         }
     }
 
     @Suppress("unused")
+    fun stopBound(expectedSessionJson: String) {
+        mainScope.launch {
+            invalidateRestoreRequest()
+            if (NativeSessionIdentity.parseExpected(expectedSessionJson) == null || !isServiceConnected) return@launch
+            vpnServiceMessenger.send {
+                Action.DISCONNECT.packToMessage { putString("expectedNativeSession", expectedSessionJson) }
+            }
+        }
+    }
+
+    @Suppress("unused")
+    fun requestServiceDiscovery(requestId: String) {
+        mainScope.launch { qtInitialized.await(); beginServiceDiscovery(requestId) }
+    }
+
+    @Suppress("unused")
+    fun startWithDiscovery(config: String, generation: String, requestId: String) {
+        mainScope.launch {
+            qtInitialized.await()
+            if (!NativeSessionWire.generation(generation) || !NativeSessionWire.uuid(requestId)) return@launch
+            val request = PendingStart(config, generation, requestId)
+            if (pendingStart != null) {
+                QtAndroidController.onStartAdmission(ServiceDiscoveryWire.admission(generation, requestId, "REJECTED", "STALE"))
+                return@launch
+            }
+            pendingStart = request
+            if (!discoveryForeground || generation != discoveryGeneration.toString() || discoveryConsumed || discoveryPhase !in setOf("EMPTY", "IDLE_NATIVE", "BOUND_LEGACY")) {
+                finishStart(request, "REJECTED", "DISCOVERY_UNCONFIRMED"); return@launch
+            }
+            discoveryConsumed = true
+            checkVpnPermission(onPermissionGranted = {
+                checkNotificationPermission { dispatchAdmittedStart(request) }
+            }, onPermissionDenied = {
+                finishStart(request, "CANCELLED", "PERMISSION_DENIED")
+            })
+        }
+    }
+
+    private fun dispatchAdmittedStart(request: PendingStart) {
+        if (pendingStart !== request) return
+        val proto = getVpnProto(request.config)
+        val inventory = ownServiceInventory()
+        val valid = discoveryForeground && request.generation == discoveryGeneration.toString() && proto != null && inventory != null &&
+            ((discoveryPhase == "EMPTY" && inventory.isEmpty()) ||
+             (discoveryGrant != null && inventory.size == 1 && inventory.single() == discoveryAttempt?.component && proto.serviceClass.name == inventory.single().className))
+        if (!valid || proto == null) { finishStart(request, "REJECTED", "STALE"); return }
+        invalidateRestoreRequest()
+        try {
+            if (discoveryPhase == "EMPTY") {
+                val intent = Intent(this, proto.serviceClass).putExtra(MSG_VPN_CONFIG, request.config)
+                request.issued = true
+                ContextCompat.startForegroundService(this, intent)
+                vpnProto = proto
+                isWaitingStatus = false
+                doBindService()
+                finishStart(request, "DISPATCHED", "NONE")
+            } else {
+                val remote = boundRemoteMessenger
+                val receiver = boundActivityMessenger
+                if (remote == null || receiver == null) { finishStart(request, "REJECTED", "STALE"); return }
+                val message = Action.CONNECT.packToMessage {
+                    putString(MSG_VPN_CONFIG, request.config)
+                    putString("admissionRequestId", request.requestId)
+                    putString("admissionGeneration", request.generation)
+                    putString("discoveryGrant", discoveryGrant)
+                }
+                message.replyTo = receiver
+                request.issued = true
+                remote.send(message)
+                admissionDeadline?.cancel()
+                admissionDeadline = mainScope.launch {
+                    delay(4000)
+                    if (pendingStart === request) finishStart(request, "DISPATCH_UNCERTAIN", "START_EXCEPTION")
+                }
+            }
+        } catch (_: Exception) {
+            finishStart(request, if (request.issued) "DISPATCH_UNCERTAIN" else "REJECTED", "START_EXCEPTION")
+        }
+    }
+
+    @Suppress("unused")
+    fun start(vpnConfig: String) {
+        // Fresh starts require the process-only one-shot JNI admission API.
+        mainScope.launch { invalidateDiscoveryLifecycle() }
+    }
+
+    @Suppress("unused")
     fun stop() {
         Log.v(TAG, "Stop VPN")
         mainScope.launch {
+            invalidateRestoreRequest()
             disconnectFromVpn()
         }
     }

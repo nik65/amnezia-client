@@ -10,12 +10,19 @@ AndroidVpnProtocol::AndroidVpnProtocol(const QJsonObject &configuration, QObject
 ErrorCode AndroidVpnProtocol::start()
 {
     qDebug() << "AndroidVpnProtocol::start()";
-    return AndroidController::instance()->start(m_rawConfig);
+    if (!m_startAdmission.valid()) return ErrorCode::ServiceDiscoveryUnconfirmed;
+    const auto grant = m_startAdmission;
+    m_startAdmission = {};
+    return AndroidController::instance()->start(m_rawConfig, grant);
 }
 
 void AndroidVpnProtocol::stop()
 {
     qDebug() << "AndroidVpnProtocol::stop()";
     setConnectionState(Vpn::ConnectionState::Disconnecting);
+    if (m_rawConfig.contains("restoredNativeSession")) {
+        AndroidController::instance()->stopBound(m_rawConfig.value("restoredNativeSession").toObject());
+        return;
+    }
     AndroidController::instance()->stop();
 }

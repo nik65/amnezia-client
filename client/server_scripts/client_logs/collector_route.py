@@ -15,6 +15,7 @@ SCOPES = {'amnezia-awg2': 'awg0', 'amnezia-awg': 'wg0',
 IMAGE = 'python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df'
 ROOT = Path('/opt/amnezia/client-logs')
 LABEL = 'org.amnezia.client-logs.route'
+TUNNEL_CONTAINER_PREFIX = 'amnezia-client-logs-vpn-'
 
 
 def command(args):
@@ -51,7 +52,7 @@ def validate(source, collector, binding):
     if (source['Id'] != binding['sourceId'] or source['Name'] != '/' + scope
             or not source['State']['Running'] or source['State']['Pid'] <= 0
             or collector['Id'] != binding['collectorId']
-            or collector['Name'] != '/amnezia-client-logs-' + scope
+            or collector['Name'] != '/' + TUNNEL_CONTAINER_PREFIX + scope
             or collector['Config']['Image'] != IMAGE
             or collector['Config'].get('Labels', {}).get(LABEL) != scope
             or collector['HostConfig']['NetworkMode'] != 'container:' + binding['sourceId']):
@@ -59,6 +60,15 @@ def validate(source, collector, binding):
     mounts = [item for item in collector['Mounts'] if item['Destination'] == '/data']
     if len(mounts) != 1 or mounts[0]['Source'] != str(ROOT) or not mounts[0]['RW']:
         raise ValueError('collector data')
+
+
+def publication_binding(scope):
+    if scope not in SCOPES:
+        raise ValueError('scope')
+    source, collector = inspect(scope), inspect(TUNNEL_CONTAINER_PREFIX + scope)
+    binding = {'schema': 1, 'scope': scope, 'sourceId': source['Id'], 'collectorId': collector['Id']}
+    validate(source, collector, binding)
+    return binding
 
 
 def namespace(container):
@@ -136,9 +146,7 @@ def main():
         if len(sys.argv) == 3:
             if sys.argv[2] != '--bind':
                 raise ValueError('operation')
-            source, collector = inspect(scope), inspect('amnezia-client-logs-' + scope)
-            binding = {'schema': 1, 'scope': scope, 'sourceId': source['Id'], 'collectorId': collector['Id']}
-            validate(source, collector, binding)
+            binding = publication_binding(scope)
             reconcile(binding)
             temporary = path.with_suffix('.tmp')
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

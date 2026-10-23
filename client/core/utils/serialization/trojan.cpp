@@ -81,6 +81,16 @@ QJsonObject Deserialize(const QString &trojanUri, QString *alias, QString *errMe
     //
     const auto trueList = QStringList{ "true", "1", "yes", "y" };
     const QUrl trojanUrl(trojanUri.trimmed());
+    if (!trojanUrl.isValid())
+    {
+        *errMessage = QObject::tr("link parse failed: %1").arg(trojanUrl.errorString());
+        return {};
+    }
+    if (trojanUrl.host().isEmpty())
+    {
+        *errMessage = QObject::tr("empty host");
+        return {};
+    }
     const QUrlQuery query(trojanUrl.query());
     *alias = trojanUrl.fragment(QUrl::FullyDecoded);
 

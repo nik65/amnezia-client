@@ -1,0 +1,61 @@
+import java.io.IOException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
+private const val TAG="owned-store"
+private const val STORE_FILE_NAME="vpnState"
+private data class VpnState(val value:Int)
+private class FakeFile { var deletes=0; fun delete():Boolean { deletes++; return true } }
+private class FakeApp { val file=FakeFile(); fun dataStoreFile(name:String):FakeFile { check(name==STORE_FILE_NAME); return file } }
+private object Log { fun e(tag:String,text:String) { check(tag==TAG && text.isNotEmpty()) }; fun w(tag:String,text:String) { check(tag==TAG && text.isNotEmpty()) } }
+private class FakeDataStore {
+ var value=VpnState(11); var failure:Exception?=null; var updates=0
+ var block=false; val entered=CompletableDeferred<Unit>()
+ suspend fun updateData(f:(VpnState)->VpnState):VpnState {
+  updates++
+  if(block) { entered.complete(Unit); awaitCancellation() }
+  failure?.let { throw it }
+  val next=f(value)
+  value=next
+  return next
+ }
+}
+private class ActualStore(val dataStore:FakeDataStore,val app:FakeApp) {
+// ACTUAL_STORE_METHOD
+}
+fun main()= runBlocking {
+ var passed=0;var failed=0
+ for(mode in listOf("cancel-backend","cancel-transform","io-backend","io-transform","runtime-backend","success")) {
+  val data=FakeDataStore();val app=FakeApp();val store=ActualStore(data,app)
+  val cancellation=CancellationException("owned-cancel")
+  if(mode=="cancel-backend")data.failure=cancellation
+  if(mode=="io-backend")data.failure=IOException("owned-transient")
+  if(mode=="runtime-backend")data.failure=IllegalStateException("owned-failure")
+  var thrown:Throwable?=null
+  try { store.store { old ->
+   if(mode=="cancel-transform")throw cancellation
+   if(mode=="io-transform")throw IOException("owned-transform")
+   VpnState(old.value+1)
+  } } catch(e:Throwable) { thrown=e }
+  val cancel=mode.startsWith("cancel")
+  val ok=app.file.deletes==0 && data.updates==1 &&
+   (if(cancel) thrown===cancellation else thrown==null) &&
+   data.value.value==(if(mode=="success")12 else 11)
+  if(ok)passed++ else failed++
+  println("$mode ${if(ok) "PASS" else "FAIL"} deletes=${app.file.deletes} cancelled=${thrown===cancellation} value=${data.value.value}")
+ }
+ val suspendedData=FakeDataStore().apply { block=true }
+ val suspendedApp=FakeApp();val suspendedStore=ActualStore(suspendedData,suspendedApp)
+ var continued=false
+ val child=launch { suspendedStore.store { VpnState(it.value+1) }; continued=true }
+ suspendedData.entered.await()
+ child.cancelAndJoin()
+ val structuredOk=child.isCancelled && !continued && suspendedApp.file.deletes==0 && suspendedData.value.value==11
+ if(structuredOk)passed++ else failed++
+ println("structured-cancellation ${if(structuredOk) "PASS" else "FAIL"} deletes=${suspendedApp.file.deletes} continued=$continued cancelled=${child.isCancelled}")
+ println("passed=$passed failed=$failed")
+ check(failed==0)
+}

@@ -1,0 +1,41 @@
+#include <cstdio>
+#include <memory>
+
+// Inert seams: native-free wrapper with lifetime counters; std::unique_ptr
+// models the owning reset slot. Qt signal subscriptions after the actual
+// createAndroidConnections allocation prefix are deliberately outside scope.
+struct AndroidVpnProtocol {
+    static inline int constructed=0,destroyed=0;
+    int inertConfig=0;
+    unsigned char allocation[64]{};
+    explicit AndroidVpnProtocol(int config):inertConfig(config){++constructed;}
+    ~AndroidVpnProtocol(){++destroyed;}
+};
+class VpnConnection {
+public:
+    int m_vpnConfiguration=1;
+    AndroidVpnProtocol *androidVpnProtocol=nullptr;
+    std::unique_ptr<AndroidVpnProtocol> m_vpnProtocol;
+    AndroidVpnProtocol *createDefaultAndroidVpnProtocol();
+    void createAndroidConnections();
+    // Admission is outside this allocation/lifetime-only fixture.
+    int startAdmission=0;
+    void armStartAdmission(int) {}
+    void freshConnect(){
+ACTUAL_FRESH
+    }
+};
+ACTUAL_CONNECTIONS_PREFIX
+ACTUAL_FACTORY
+int main(){
+    {
+        VpnConnection connection;
+        connection.freshConnect();
+        if(!connection.m_vpnProtocol || connection.m_vpnProtocol.get()!=connection.androidVpnProtocol)
+            return 43;
+    }
+    const int live=AndroidVpnProtocol::constructed-AndroidVpnProtocol::destroyed;
+    std::fprintf(stderr,"WRAPPER_LIFETIME constructed=%d destroyed=%d live=%d\n",
+        AndroidVpnProtocol::constructed,AndroidVpnProtocol::destroyed,live);
+    return AndroidVpnProtocol::constructed==1 && AndroidVpnProtocol::destroyed==1 && live==0 ? 0 : 42;
+}

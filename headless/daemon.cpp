@@ -4,6 +4,7 @@
 
 #include "daemon.h"
 #include "diagnosticEvent.h"
+#include "rollbackCoordinator.h"
 #include <QCoreApplication>
 #include <QJsonDocument>
 
@@ -587,11 +588,41 @@ QByteArray Daemon::dispatchRequest(const Request &request, QLocalSocket *client)
     case Command::ImportRemoteLogs:
         return importRemoteLogsResponse(request);
     case Command::UpdateRollback: {
+        if (m_profileStore.path() != QStringLiteral("/var/lib/amnezia/profiles.json")) {
+            return encodeError(request.requestId, QStringLiteral("rollback_coordinator_unsupported_store"),
+                               QStringLiteral("coordinated system rollback requires the fixed system profile store"));
+        }
+        RollbackCoordinator coordinator;
+        const RollbackCoordinatorResult admission = coordinator.admitRollback();
+        if (!admission.ok) return encodeError(request.requestId, admission.code, admission.message);
+        // Pause the actual in-memory updater sources too, under this request's
+        // mutation scope; changing the file alone leaves cached profiles live.
+        const bool profilesLoaded = m_profileStore.load();
+        const QList<Profile> pausedProfiles = m_profileStore.profiles();
+        if (!profilesLoaded || std::any_of(pausedProfiles.cbegin(), pausedProfiles.cend(),
+                                          [](const Profile &profile) { return profile.autoUpdate; })) {
+            return encodeError(request.requestId, QStringLiteral("rollback_profile_pause_failed"),
+                               QStringLiteral("the daemon could not reload the paused profile store"));
+        }
+        const RollbackCoordinatorResult paused = coordinator.status();
+        if (!paused.ok) return encodeError(request.requestId, paused.code, paused.message);
         const HeadlessUpdateResult result = m_updateManager.rollback();
         if (!result.ok) {
             return encodeError(request.requestId, result.code, result.message);
         }
-        return statusResponse(request.requestId);
+        // The official CLI also wakes the worker: the scheduled restart may
+        // terminate this daemon before this best-effort call completes.
+        const RollbackCoordinatorResult started = coordinator.rollbackRequested();
+        QJsonObject response = QJsonDocument::fromJson(statusResponse(request.requestId)).object();
+        QJsonObject value = response.value(QStringLiteral("result")).toObject();
+        value.insert(QStringLiteral("rollbackCoordinator"), QJsonObject {
+            {QStringLiteral("schema"), 1},
+            {QStringLiteral("acknowledgementAuthority"), QStringLiteral("retained14Coordinator")},
+            {QStringLiteral("workerStartRequested"), started.ok},
+            {QStringLiteral("admission"), admission.evidence},
+        });
+        response.insert(QStringLiteral("result"), value);
+        return QJsonDocument(response).toJson(QJsonDocument::Compact) + '\n';
     }
     }
 

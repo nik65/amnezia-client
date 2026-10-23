@@ -121,7 +121,7 @@ class ReleaseLabContractTests(unittest.TestCase):
             with self.assertRaises(LabError) as guest_start_error:
                 client.guest_exec("/bin/fixture", [secret_guest_stdout])
         guest_start_message = str(guest_start_error.exception)
-        self.assertIn("guest-exec failed for /bin/fixture", guest_start_message)
+        self.assertIn("guest-exec admission failed", guest_start_message)
         self.assertIn("response_has_error=True", guest_start_message)
         self.assertNotIn(secret_stderr, guest_start_message)
         self.assertNotIn(secret_guest_stdout, guest_start_message)

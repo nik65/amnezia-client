@@ -17,6 +17,7 @@
 #include "core/utils/containers/containerUtils.h"
 #include "core/utils/protocolEnum.h"
 #include "core/utils/serverConfigUtils.h"
+#include "core/utils/configPayloadCodec.h"
 #include "core/utils/constants/apiKeys.h"
 #include "core/utils/constants/apiConstants.h"
 #include "core/utils/api/apiUtils.h"
@@ -99,6 +100,10 @@ ImportController::ImportResult ImportController::extractConfigFromData(const QSt
     ImportResult result;
     result.configFileName = configFileName;
     result.maliciousWarningText.clear();
+    if (data.size() > configPayloadCodec::maximumEncodedTextBytes) {
+        result.errorCode = ErrorCode::ImportInvalidConfigError;
+        return result;
+    }
 
     QString config = data;
     QString prefix;
@@ -107,9 +112,13 @@ ImportController::ImportResult ImportController::extractConfigFromData(const QSt
 
     if (config.startsWith("vless://")) {
         configType = ConfigTypes::Xray;
+        const QJsonObject nativeConfig = serialization::vless::Deserialize(config, &prefix, &errormsg);
+        if (!errormsg.isEmpty()) {
+            result.errorCode = ErrorCode::ImportInvalidConfigError;
+            return result;
+        }
         result.config = extractXrayConfig(
-                Utils::JsonToString(serialization::vless::Deserialize(config, &prefix, &errormsg), QJsonDocument::JsonFormat::Compact),
-                configType, prefix);
+                Utils::JsonToString(nativeConfig, QJsonDocument::JsonFormat::Compact), configType, prefix);
         if (!result.config.empty()) {
             result.configType = configType;
             return result;
@@ -118,9 +127,13 @@ ImportController::ImportResult ImportController::extractConfigFromData(const QSt
 
     if (config.startsWith("vmess://") && config.contains("@")) {
         configType = ConfigTypes::Xray;
+        const QJsonObject nativeConfig = serialization::vmess_new::Deserialize(config, &prefix, &errormsg);
+        if (!errormsg.isEmpty()) {
+            result.errorCode = ErrorCode::ImportInvalidConfigError;
+            return result;
+        }
         result.config = extractXrayConfig(
-                Utils::JsonToString(serialization::vmess_new::Deserialize(config, &prefix, &errormsg), QJsonDocument::JsonFormat::Compact),
-                configType, prefix);
+                Utils::JsonToString(nativeConfig, QJsonDocument::JsonFormat::Compact), configType, prefix);
         if (!result.config.empty()) {
             result.configType = configType;
             return result;
@@ -129,9 +142,13 @@ ImportController::ImportResult ImportController::extractConfigFromData(const QSt
 
     if (config.startsWith("vmess://")) {
         configType = ConfigTypes::Xray;
+        const QJsonObject nativeConfig = serialization::vmess::Deserialize(config, &prefix, &errormsg);
+        if (!errormsg.isEmpty()) {
+            result.errorCode = ErrorCode::ImportInvalidConfigError;
+            return result;
+        }
         result.config = extractXrayConfig(
-                Utils::JsonToString(serialization::vmess::Deserialize(config, &prefix, &errormsg), QJsonDocument::JsonFormat::Compact),
-                configType, prefix);
+                Utils::JsonToString(nativeConfig, QJsonDocument::JsonFormat::Compact), configType, prefix);
         if (!result.config.empty()) {
             result.configType = configType;
             return result;
@@ -140,9 +157,13 @@ ImportController::ImportResult ImportController::extractConfigFromData(const QSt
 
     if (config.startsWith("trojan://")) {
         configType = ConfigTypes::Xray;
+        const QJsonObject nativeConfig = serialization::trojan::Deserialize(config, &prefix, &errormsg);
+        if (!errormsg.isEmpty()) {
+            result.errorCode = ErrorCode::ImportInvalidConfigError;
+            return result;
+        }
         result.config = extractXrayConfig(
-                Utils::JsonToString(serialization::trojan::Deserialize(config, &prefix, &errormsg), QJsonDocument::JsonFormat::Compact),
-                configType, prefix);
+                Utils::JsonToString(nativeConfig, QJsonDocument::JsonFormat::Compact), configType, prefix);
         if (!result.config.empty()) {
             result.configType = configType;
             return result;
@@ -151,9 +172,13 @@ ImportController::ImportResult ImportController::extractConfigFromData(const QSt
 
     if (config.startsWith("ss://") && !config.contains("plugin=")) {
         configType = ConfigTypes::ShadowSocks;
+        const QJsonObject nativeConfig = serialization::ss::Deserialize(config, &prefix, &errormsg);
+        if (!errormsg.isEmpty()) {
+            result.errorCode = ErrorCode::ImportInvalidConfigError;
+            return result;
+        }
         result.config = extractXrayConfig(
-                Utils::JsonToString(serialization::ss::Deserialize(config, &prefix, &errormsg), QJsonDocument::JsonFormat::Compact),
-                configType, prefix);
+                Utils::JsonToString(nativeConfig, QJsonDocument::JsonFormat::Compact), configType, prefix);
         if (!result.config.empty()) {
             result.configType = configType;
             return result;
@@ -175,15 +200,19 @@ ImportController::ImportResult ImportController::extractConfigFromData(const QSt
     }
 
     configType = checkConfigFormat(config);
+    if (configType != ConfigTypes::Invalid && config.toUtf8().size() > configPayloadCodec::maximumDecodedBytes) {
+        result.errorCode = ErrorCode::ImportInvalidConfigError;
+        return result;
+    }
     if (configType == ConfigTypes::Invalid) {
         config.replace("vpn://", "");
         QByteArray ba = QByteArray::fromBase64(config.toUtf8(), QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
-        QByteArray baUncompressed = qUncompress(ba);
-        if (!baUncompressed.isEmpty()) {
-            ba = baUncompressed;
+        const auto decoded = configPayloadCodec::decode(ba);
+        if (!decoded.accepted()) {
+            result.errorCode = ErrorCode::ImportInvalidConfigError;
+            return result;
         }
-
-        config = ba;
+        config = QString::fromUtf8(decoded.data);
         configType = checkConfigFormat(config);
     }
 
@@ -262,52 +291,62 @@ ImportController::ImportResult ImportController::extractConfigFromData(const QSt
 ImportController::ImportResult ImportController::extractConfigFromQr(const QByteArray &data)
 {
     ImportResult result;
+    auto invalid = [&result]() {
+        result.errorCode = ErrorCode::ImportInvalidConfigError;
+        return result;
+    };
+    if (data.size() > configPayloadCodec::maximumEncodedTextBytes) {
+        return invalid();
+    }
 
-    QString dataStr = QString::fromUtf8(data);
-    ConfigTypes configType = checkConfigFormat(dataStr);
+    // A stored zlib block can contain protocol markers as plain bytes. Decode
+    // recognized envelopes before considering the input a text configuration.
+    if (configPayloadCodec::hasCompressedEnvelope(data)) {
+        const auto direct = configPayloadCodec::decode(data);
+        if (direct.status != configPayloadCodec::Status::Decoded) {
+            return invalid();
+        }
+        result.config = QJsonDocument::fromJson(direct.data).object();
+        if (result.config.isEmpty()) {
+            return invalid();
+        }
+        result.configType = ConfigTypes::Amnezia;
+        rejectUnsupportedFormatVersion(result);
+        return result;
+    }
+
+    const QString dataStr = QString::fromUtf8(data);
+    const ConfigTypes configType = checkConfigFormat(dataStr);
     if (configType != ConfigTypes::Invalid) {
+        if (data.size() > configPayloadCodec::maximumDecodedBytes) {
+            return invalid();
+        }
         return extractConfigFromData(dataStr, "");
     }
 
-    QJsonObject dataObj = QJsonDocument::fromJson(data).object();
-    if (!dataObj.isEmpty()) {
-        result.config = dataObj;
-        result.configType = ConfigTypes::Amnezia;
-        rejectUnsupportedFormatVersion(result);
-        return result;
-    }
-
-    QByteArray ba_uncompressed = qUncompress(data);
-    if (!ba_uncompressed.isEmpty()) {
-        result.config = QJsonDocument::fromJson(ba_uncompressed).object();
-        if (result.config.isEmpty()) {
-            result.errorCode = ErrorCode::ImportInvalidConfigError;
+    // Large encoded keys have their own input cap; do not parse them as raw
+    // JSON before decoding. Every JSON parser below receives at most16MiB.
+    if (data.size() <= configPayloadCodec::maximumDecodedBytes) {
+        const QJsonObject dataObj = QJsonDocument::fromJson(data).object();
+        if (!dataObj.isEmpty()) {
+            result.config = dataObj;
+            result.configType = ConfigTypes::Amnezia;
+            rejectUnsupportedFormatVersion(result);
             return result;
         }
-        result.configType = ConfigTypes::Amnezia;
-        rejectUnsupportedFormatVersion(result);
-        return result;
     }
 
-    QByteArray ba = QByteArray::fromBase64(data, QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
-    QByteArray baUncompressed = qUncompress(ba);
-
-    if (!baUncompressed.isEmpty()) {
-        ba = baUncompressed;
+    const QByteArray ba = QByteArray::fromBase64(data, QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    const auto decoded = configPayloadCodec::decode(ba);
+    if (!decoded.accepted() || decoded.data.isEmpty()) {
+        return invalid();
     }
-
-    if (!ba.isEmpty()) {
-        result.config = QJsonDocument::fromJson(ba).object();
-        if (result.config.isEmpty()) {
-            result.errorCode = ErrorCode::ImportInvalidConfigError;
-            return result;
-        }
-        result.configType = ConfigTypes::Amnezia;
-        rejectUnsupportedFormatVersion(result);
-        return result;
+    result.config = QJsonDocument::fromJson(decoded.data).object();
+    if (result.config.isEmpty()) {
+        return invalid();
     }
-
-    result.errorCode = ErrorCode::ImportInvalidConfigError;
+    result.configType = ConfigTypes::Amnezia;
+    rejectUnsupportedFormatVersion(result);
     return result;
 }
 
@@ -331,21 +370,20 @@ ImportController::QrParseResult ImportController::parseQrCodeChunk(const QString
 
     QByteArray ba = QByteArray::fromBase64(code.toUtf8(), QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
     QDataStream s(&ba, QIODevice::ReadOnly);
-    qint16 magic;
+    qint16 magic = 0;
     s >> magic;
 
     if (magic == qrCodeUtils::qrMagicCode) {
-        quint8 chunksCount;
-        s >> chunksCount;
-        if (m_totalQrCodeChunksCount != chunksCount) {
+        qrCodeUtils::QrCodeChunk chunk;
+        if (!qrCodeUtils::decodeQrCodeChunk(ba, chunk)) {
+            return parseResult;
+        }
+        if (m_totalQrCodeChunksCount != chunk.chunksCount) {
             m_qrCodeChunks.clear();
         }
 
-        m_totalQrCodeChunksCount = chunksCount;
-
-        quint8 chunkId;
-        s >> chunkId;
-        s >> m_qrCodeChunks[chunkId];
+        m_totalQrCodeChunksCount = chunk.chunksCount;
+        m_qrCodeChunks[chunk.chunkId] = chunk.payload;
         m_receivedQrCodeChunksCount = m_qrCodeChunks.size();
         parseResult.chunksReceived = m_receivedQrCodeChunksCount;
         parseResult.chunksTotal = m_totalQrCodeChunksCount;
@@ -680,7 +718,10 @@ QJsonObject ImportController::extractWireGuardConfig(const QString &data, Config
 QJsonObject ImportController::extractXrayConfig(const QString &data, ConfigTypes configType, const QString &description) const
 {
     QJsonParseError parserErr;
-    QJsonDocument jsonConf = QJsonDocument::fromJson(data.toLocal8Bit(), &parserErr);
+    QJsonDocument jsonConf = QJsonDocument::fromJson(data.toUtf8(), &parserErr);
+    if (parserErr.error != QJsonParseError::NoError || !jsonConf.isObject() || jsonConf.object().isEmpty()) {
+        return {};
+    }
 
     QJsonObject xrayVpnConfig;
     xrayVpnConfig[configKey::config] = jsonConf.toJson().constData();

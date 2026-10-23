@@ -34,6 +34,8 @@ add_library(amnezia_headless_core STATIC
     headlessRoutingController.h
     headlessUpdateManager.cpp
     headlessUpdateManager.h
+    rollbackCoordinator.cpp
+    rollbackCoordinator.h
     remoteLogUploader.cpp
     remoteLogUploader.h
     "${CMAKE_CURRENT_LIST_DIR}/../client/core/utils/selfhosted/clientLogsTarget.h"
@@ -92,7 +94,7 @@ target_compile_definitions(amnezia_headless_core PUBLIC
 add_executable(amneziad daemonMain.cpp)
 target_link_libraries(amneziad PRIVATE amnezia_headless_core Qt6::Core Qt6::Network)
 
-add_executable(amnezia-cli cli.cpp)
+add_executable(amnezia-cli cli.cpp rollbackCliResponse.h)
 target_link_libraries(amnezia-cli PRIVATE amnezia_headless_core Qt6::Core Qt6::Network)
 
 if(BUILD_TESTING)
@@ -163,6 +165,11 @@ configure_file(
 install(TARGETS amneziad amnezia-cli
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
+# Provisioning filesystem dispatch is embedded in the existing CLI executable.
+# Both provisioning and automatic updates retain their established file sets.
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../deploy/headless/native"
+                 "${CMAKE_CURRENT_BINARY_DIR}/provisioning-native")
+target_link_libraries(amnezia-cli PRIVATE headless_fs_core)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/amneziad.service"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/systemd/system"
 )

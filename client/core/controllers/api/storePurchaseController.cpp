@@ -15,6 +15,7 @@
 #include "core/utils/constants/apiKeys.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/serverConfigUtils.h"
+#include "core/utils/configPayloadCodec.h"
 
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
     #include "platforms/ios/ios_controller.h"
@@ -173,11 +174,15 @@ ErrorCode StorePurchaseController::importServiceFromMarket(const QString &userCo
         }
     }
 
-    QByteArray configString = QByteArray::fromBase64(normalizedKey.toUtf8(), QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
-    QByteArray configUncompressed = qUncompress(configString);
-    if (!configUncompressed.isEmpty()) {
-        configString = configUncompressed;
+    if (normalizedKey.size() > configPayloadCodec::maximumEncodedTextBytes) {
+        return ErrorCode::ApiPurchaseError;
     }
+    QByteArray configString = QByteArray::fromBase64(normalizedKey.toUtf8(), QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    const auto decoded = configPayloadCodec::decode(configString);
+    if (!decoded.accepted()) {
+        return ErrorCode::ApiPurchaseError;
+    }
+    configString = decoded.data;
 
     if (configString.isEmpty()) {
         qWarning().noquote() << "[IAP] Subscription response config payload is empty";

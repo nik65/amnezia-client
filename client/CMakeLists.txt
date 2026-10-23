@@ -114,9 +114,10 @@ if(WIN32 OR (APPLE AND NOT IOS) OR (LINUX AND NOT ANDROID))
 endif()
 
 find_package(Qt6 REQUIRED COMPONENTS ${PACKAGES})
+find_package(ZLIB REQUIRED)
 
 set(LIBS ${LIBS}
-    Qt6::Core Qt6::Gui
+    Qt6::Core Qt6::Gui ZLIB::ZLIB
     Qt6::Network Qt6::Xml Qt6::RemoteObjects
     Qt6::Quick Qt6::Svg Qt6::QuickControls2
     Qt6::Core5Compat Qt6::Concurrent
@@ -128,6 +129,13 @@ endif()
 
 qt_standard_project_setup()
 qt_add_executable(${PROJECT} MANUAL_FINALIZATION)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(AMNEZIA_SYSTEMD REQUIRED IMPORTED_TARGET libsystemd>=246)
+    target_sources(${PROJECT} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../ipc/linuxsystemdpeer.cpp")
+    target_compile_definitions(${PROJECT} PRIVATE AMNEZIA_SYSTEMD_PEER_AUTH=1)
+    target_link_libraries(${PROJECT} PRIVATE PkgConfig::AMNEZIA_SYSTEMD)
+endif()
 target_include_directories(${PROJECT} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
 )
@@ -149,6 +157,12 @@ if(WIN32 OR (APPLE AND NOT IOS AND NOT MACOS_NE) OR (LINUX AND NOT ANDROID))
     qt_add_repc_replicas(${PROJECT} ${CMAKE_CURRENT_LIST_DIR}/../ipc/ipc_process_interface.rep)
 endif()
 
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/serverNativeBundle.cmake)
+amnezia_import_server_native_bundle(AMNEZIA_SERVER_NATIVE_QRC)
+if(AMNEZIA_SERVER_NATIVE_QRC)
+    qt6_add_resources(AMNEZIA_SERVER_NATIVE_RESOURCE_SOURCES "${AMNEZIA_SERVER_NATIVE_QRC}")
+endif()
+
 qt6_add_resources(QRC ${QRC}
     ${CMAKE_CURRENT_LIST_DIR}/images/images.qrc
     ${CMAKE_CURRENT_LIST_DIR}/images/flagKit.qrc
@@ -156,6 +170,7 @@ qt6_add_resources(QRC ${QRC}
     ${CMAKE_CURRENT_LIST_DIR}/ui/qml/qml.qrc
     ${CMAKE_CURRENT_LIST_DIR}/server_scripts/serverScripts.qrc
 )
+list(APPEND QRC ${AMNEZIA_SERVER_NATIVE_RESOURCE_SOURCES})
 
 # -- i18n begin
 if(CLIENT_TS_FILES)

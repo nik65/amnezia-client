@@ -11,6 +11,10 @@
 #include <vector>
 
 #include "windowsprivilegedpipe.h"
+#if defined(AMNEZIA_SYSTEMD_PEER_AUTH) && defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+#  include "linuxsystemdpeer.h"
+#  include <cerrno>
+#endif
 
 #ifdef Q_OS_WIN
 #  include <aclapi.h>
@@ -768,6 +772,26 @@ bool authorizePrivilegedServer(QLocalSocket *socket, const QString &expectedExec
 
 #ifndef Q_OS_WIN
     if (!queryLocalServerIdentity(socket, resolved, errorMessage)) {
+#if defined(AMNEZIA_SYSTEMD_PEER_AUTH) && defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+        // Only an actual OS access denial permits service-manager attribution.
+        // Missing/exited peers, readable wrong executables and all other errors
+        // retain the direct authentication failure.
+        struct ucred peer {};
+        socklen_t size = sizeof(peer);
+        if (socket && getsockopt(int(socket->socketDescriptor()), SOL_SOCKET, SO_PEERCRED,
+                                &peer, &size) == 0 && size == sizeof(peer) && peer.pid > 0
+            && peer.uid == 0) {
+            const QByteArray link = QByteArray("/proc/") + QByteArray::number(peer.pid) + "/exe";
+            char target[4096];
+            const auto length = readlink(link.constData(), target, sizeof(target));
+            const int failure = errno;
+            if (linuxSystemd::isExecutableAccessDenied(length, failure)
+                && linuxSystemd::authorize(socket, expected, resolved, errorMessage)) {
+                if (identity) *identity = resolved;
+                return true;
+            }
+        }
+#endif
         return false;
     }
     if (!executablePathsMatch(resolved.executablePath, expected)) {

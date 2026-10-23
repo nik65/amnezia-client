@@ -806,6 +806,7 @@ QVariantMap RouteInspectorController::resultFor(const QString &normalizedHost,
         // the best-effort owner. Keep that case explicitly unknown.
         if (runtimeConnected && installedSnapshotAuthoritative
             && decisionRouteMode != RouteMode::VpnAllSites
+            && addressRuleCoverageComplete
             && !match.matched) {
             localRouteReceiptUnavailable = true;
             route = QStringLiteral("unknown");

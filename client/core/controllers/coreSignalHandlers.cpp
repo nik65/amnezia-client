@@ -383,9 +383,24 @@ void CoreSignalHandlers::initAndroidConnectionHandler()
 {
 #ifdef Q_OS_ANDROID
     connect(AndroidController::instance(), &AndroidController::initConnectionState, this, [this](Vpn::ConnectionState state, int serverIndex) {
-        m_coreController->m_connectionUiController->onConnectionStateChanged(state);
         m_coreController->m_connectionController->restoreConnection(state, serverIndex);
     });
+    connect(AndroidController::instance(), &AndroidController::nativeSessionObserved,
+        m_coreController->m_connectionController, &ConnectionController::observeNativeSession);
+    connect(AndroidController::instance(), &AndroidController::restoreServiceReady,
+        m_coreController->m_connectionController, &ConnectionController::requestNativeSessionRestore);
+    connect(AndroidController::instance(), &AndroidController::restoreStatus,
+        m_coreController->m_connectionController, &ConnectionController::handleNativeRestoreStatus);
+    connect(AndroidController::instance(), &AndroidController::serviceDisconnected,
+        m_coreController->m_connectionController, &ConnectionController::invalidateNativeSessionRestore);
+    connect(AndroidController::instance(), &AndroidController::serviceDiscovery,
+        m_coreController->m_connectionController, &ConnectionController::handleServiceDiscovery);
+    connect(AndroidController::instance(), &AndroidController::startAdmission,
+        m_coreController->m_connectionController, &ConnectionController::handleStartAdmission);
+    connect(AndroidController::instance(), &AndroidController::serviceDiscoveryRefreshNeeded,
+        m_coreController->m_connectionController, &ConnectionController::requestServiceDiscovery);
+    AndroidController::instance()->flushServiceDiscovery();
+    AndroidController::instance()->flushRestoreServiceReady();
     connect(AndroidController::instance(), &AndroidController::importConfigFromOutside, this, [this](QString data) {
         emit m_coreController->m_pageController->goToPageHome();
         m_coreController->m_importController->extractConfigFromData(data);

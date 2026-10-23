@@ -27,7 +27,7 @@ struct WireGuardServerConfig {
 struct WireGuardClientConfig {
     QString nativeConfig;
     QString hostName;
-    int port;
+    int port = 0;
     QString clientIp;
     QString clientPrivateKey;
     QString clientPublicKey;

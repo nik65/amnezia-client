@@ -41,6 +41,11 @@ ConnectionUiController::ConnectionUiController(ConnectionController* connectionC
     connect(m_connectionController, &ConnectionController::serviceReadyWaitFinished, this,
             &ConnectionUiController::onServiceReadyWaitFinished);
 
+#ifdef Q_OS_ANDROID
+    connect(m_connectionController, &ConnectionController::serviceDiscoveryBlocked, this,
+            &ConnectionUiController::notifyConnectionBlocked);
+#endif
+
     m_state = Vpn::ConnectionState::Disconnected;
     m_connectionStateText = QCoreApplication::translate("ConnectionController", "Connect");
 }

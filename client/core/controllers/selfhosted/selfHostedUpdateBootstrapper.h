@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "core/utils/commonStructs.h"
+#include "ownerPublicationPermit.h"
 
 class SecureServersRepository;
 
@@ -490,6 +491,7 @@ private:
     };
 
     struct Payload {
+        amnezia::selfhostedUpdates::PublicationAuthorization mode = amnezia::selfhostedUpdates::PublicationAuthorization::FullAccepted;
         QString rootDir;
         QString manifestPath;
         QString version;

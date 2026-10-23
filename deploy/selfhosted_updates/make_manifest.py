@@ -64,6 +64,9 @@ HEADLESS_PROVISIONING_FILES = (
     "runtime-dependencies.txt",
     "SHA256SUMS",
 )
+HEADLESS_NATIVE_HELPER = "amnezia-headless-fs"
+HEADLESS_CLI_NATIVE_HELPER = "amnezia-cli"
+HEADLESS_NATIVE_PROVISIONING_FILES = HEADLESS_PROVISIONING_FILES + (HEADLESS_NATIVE_HELPER,)
 HEADLESS_PACKAGE_MANIFEST_KEYS = {
     "schema", "version", "platform", "installModes", "artifacts", "service",
     "servicePaths", "trustAnchor", "runtimeManifest", "checksums", "runtimeText",
@@ -216,6 +219,7 @@ def inspect_headless_provisioning(
             members = tar.getmembers()
             names: list[str] = []
             files: dict[str, bytes] = {}
+            modes: dict[str, int] = {}
             for member in members:
                 name = member.name
                 path = PurePosixPath(name.rstrip("/"))
@@ -232,6 +236,8 @@ def inspect_headless_provisioning(
                     or member.name in names
                 ):
                     raise SystemExit(f"unsafe headless provisioning tar member: {name!r}")
+                if path.parts[1] == HEADLESS_NATIVE_HELPER and member.mode != 0o755:
+                    raise SystemExit("native provisioning helper must have mode 0755")
                 names.append(f"headless-package/{path.parts[1]}")
                 extracted = tar.extractfile(member)
                 if extracted is None:
@@ -240,22 +246,31 @@ def inspect_headless_provisioning(
                 if len(data) > 8 * 1024 * 1024:
                     raise SystemExit(f"headless provisioning member is too large: {name!r}")
                 files[path.parts[1]] = data
+                modes[path.parts[1]] = member.mode
     except (tarfile.TarError, OSError) as error:
         raise SystemExit(f"cannot safely inspect headless provisioning archive: {archive}") from error
 
-    expected_members = {f"headless-package/{name}" for name in HEADLESS_PROVISIONING_FILES}
+    try:
+        package_manifest = json.loads(files["package-manifest.json"].decode("utf-8"))
+    except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit("headless package-manifest.json is not valid UTF-8 JSON") from error
+    has_native_helper = isinstance(package_manifest, dict) and "nativeHelper" in package_manifest
+    if has_native_helper and package_manifest["nativeHelper"] not in (HEADLESS_NATIVE_HELPER, HEADLESS_CLI_NATIVE_HELPER):
+        raise SystemExit("headless package-manifest.json has an invalid exact package contract")
+    package_files = (HEADLESS_NATIVE_PROVISIONING_FILES
+                     if has_native_helper and package_manifest["nativeHelper"] == HEADLESS_NATIVE_HELPER
+                     else HEADLESS_PROVISIONING_FILES)
+    expected_keys = HEADLESS_PACKAGE_MANIFEST_KEYS | ({"nativeHelper"} if has_native_helper else set())
+    expected_members = {f"headless-package/{name}" for name in package_files}
     if set(names) != expected_members:
         raise SystemExit(
             "headless provisioning archive has an unexpected file set: "
             + ", ".join(sorted(names))
         )
-    try:
-        package_manifest = json.loads(files["package-manifest.json"].decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise SystemExit("headless package-manifest.json is not valid UTF-8 JSON") from error
     if (
         not isinstance(package_manifest, dict)
-        or set(package_manifest) != HEADLESS_PACKAGE_MANIFEST_KEYS
+        or set(package_manifest) != expected_keys
+        or (has_native_helper and package_manifest["nativeHelper"] not in (HEADLESS_NATIVE_HELPER, HEADLESS_CLI_NATIVE_HELPER))
         or package_manifest.get("schema") != 2
         or package_manifest.get("platform") != "linux-headless-x64"
         or package_manifest.get("installModes") != ["fresh", "upgrade"]
@@ -281,6 +296,8 @@ def inspect_headless_provisioning(
         raise SystemExit(
             f"headless provisioning package version {package_version!r} does not match release {expected_version!r}"
         )
+    if has_native_helper and package_manifest["nativeHelper"] == HEADLESS_CLI_NATIVE_HELPER and modes[HEADLESS_CLI_NATIVE_HELPER] != 0o755:
+        raise SystemExit("native provisioning CLI must have mode 0755")
 
     checksum_lines = files["SHA256SUMS"].decode("utf-8").splitlines()
     checksums: dict[str, str] = {}
@@ -289,7 +306,7 @@ def inspect_headless_provisioning(
         if not match or match.group(2) in checksums:
             raise SystemExit("headless provisioning SHA256SUMS is not a strict checksum receipt")
         checksums[match.group(2)] = match.group(1)
-    if set(checksums) != set(HEADLESS_PROVISIONING_FILES) - {"SHA256SUMS"}:
+    if set(checksums) != set(package_files) - {"SHA256SUMS"}:
         raise SystemExit("headless provisioning SHA256SUMS does not cover the exact package files")
     for name, expected_digest in checksums.items():
         if hashlib.sha256(files[name]).hexdigest() != expected_digest:
@@ -297,7 +314,7 @@ def inspect_headless_provisioning(
 
     return {
         "version": package_version,
-        "files": list(HEADLESS_PROVISIONING_FILES),
+        "files": list(package_files),
         "packageManifestSha256": hashlib.sha256(files["package-manifest.json"]).hexdigest(),
         "checksumsSha256": hashlib.sha256(files["SHA256SUMS"]).hexdigest(),
     }
@@ -1250,7 +1267,9 @@ def verify_manifest(
             or provisioning["format"] != HEADLESS_PROVISIONING_FORMAT
             or provisioning["version"] != expected_version
             or provisioning["packageVersion"] != expected_version
-            or provisioning["packageFiles"] != list(HEADLESS_PROVISIONING_FILES)
+            or provisioning["packageFiles"] not in (
+                list(HEADLESS_PROVISIONING_FILES), list(HEADLESS_NATIVE_PROVISIONING_FILES)
+            )
             or not isinstance(provisioning["packageManifestSha256"], str)
             or not SHA256_RE.fullmatch(provisioning["packageManifestSha256"])
             or not isinstance(provisioning["checksumsSha256"], str)

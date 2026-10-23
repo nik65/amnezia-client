@@ -51,6 +51,8 @@ public:
     }
 
     bool badReceipt = false;
+    bool omitContentLength = false;
+    QByteArray responseBody;
     QList<QByteArray> payloads;
     QList<QByteArray> batchIds;
 
@@ -74,13 +76,18 @@ private:
                 "(?im)^x-amnezia-batch-id:\\s*([^\\r\\n]+)"));
         const auto idMatch = idExpression.match(QString::fromLatin1(header));
         batchIds.append(idMatch.hasMatch() ? idMatch.captured(1).toLatin1() : QByteArray());
-        QByteArray response = "HTTP/1.1 204 No Content\r\nConnection: close\r\n";
+        QByteArray response = responseBody.isEmpty()
+                ? "HTTP/1.1 204 No Content\r\nConnection: close\r\n"
+                : "HTTP/1.1 200 OK\r\nConnection: close\r\n";
         if (!badReceipt) {
             response += "X-Amnezia-Batch-Accepted: 1\r\nX-Amnezia-Batch-Id: ";
             response += batchIds.back();
             response += "\r\n";
         }
-        response += "Content-Length: 0\r\n\r\n";
+        if (!omitContentLength)
+            response += "Content-Length: " + QByteArray::number(responseBody.size()) + "\r\n";
+        response += "\r\n";
+        response += responseBody;
         socket->write(response);
         socket->disconnectFromHost();
     }
@@ -122,16 +129,18 @@ QJsonObject target(const QByteArray &token = QByteArray(64, 'b'))
 }
 
 bool writeConfig(const QString &path, const QString &sourcePath,
-                 const QByteArray &token = QByteArray(64, 'b'))
+                 const QByteArray &token = QByteArray(64, 'b'), bool bootstrap = false)
 {
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly)) return false;
+    QJsonObject configuredTarget = target(token);
+    if (bootstrap) configuredTarget.insert(QStringLiteral("bootstrap"), true);
     const QJsonObject config {
         { QStringLiteral("version"), 1 },
         { QStringLiteral("enabled"), true },
         { QStringLiteral("sourcePath"), sourcePath },
         { QStringLiteral("installationId"), QString(32, QLatin1Char('i')) },
-        { QStringLiteral("clientLogs"), target(token) },
+        { QStringLiteral("clientLogs"), configuredTarget },
     };
     if (file.write(QJsonDocument(config).toJson(QJsonDocument::Compact)) < 0) return false;
     file.close();
@@ -150,6 +159,8 @@ class RemoteLogUploaderTest final : public QObject
     Q_OBJECT
 
 private slots:
+    void oversizedRepliesDoNotCommit_data();
+    void oversizedRepliesDoNotCommit();
     void errorTransitionIsPrivateAndDeduplicated();
     void receiptDoesNotAdvanceWhenStateCommitFails();
     void streamStateSurvivesRestartAndRedactsSecretSplitAcrossBatches();
@@ -160,6 +171,52 @@ private slots:
     void symlinkSourceIsRejected();
     void executableStateModeIsRejected();
 };
+
+void RemoteLogUploaderTest::oversizedRepliesDoNotCommit_data()
+{
+    QTest::addColumn<bool>("bootstrap");
+    QTest::addColumn<bool>("omitContentLength");
+    QTest::newRow("upload-declared") << false << false;
+    QTest::newRow("upload-streaming") << false << true;
+    QTest::newRow("bootstrap-declared") << true << false;
+    QTest::newRow("bootstrap-streaming") << true << true;
+}
+
+void RemoteLogUploaderTest::oversizedRepliesDoNotCommit()
+{
+    QFETCH(bool, bootstrap);
+    QFETCH(bool, omitContentLength);
+    QTemporaryDir directory(QDir::home().filePath(QStringLiteral("amnezia-uploader-test-XXXXXX")));
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(QStringLiteral("client.log"));
+    const QString configPath = directory.filePath(QStringLiteral("client-logs.json"));
+    QVERIFY(appendBytes(sourcePath, QByteArray(1024 * 1024 + 128, 'x')));
+    QVERIFY(writeConfig(configPath, sourcePath,
+                        bootstrap ? QByteArray() : QByteArray(64, 'b'), bootstrap));
+    MockCollector collector;
+    collector.omitContentLength = omitContentLength;
+    QJsonObject issued = target();
+    issued.insert(QStringLiteral("padding"), QString(8192, QLatin1Char('x')));
+    collector.responseBody = bootstrap ? QJsonDocument(issued).toJson(QJsonDocument::Compact)
+                                       : QByteArray(8192, 'x');
+    QVERIFY(collector.listen(QHostAddress::LocalHost));
+    RedirectingNetworkAccessManager network(collector.serverPort());
+    HeadlessRemoteLogUploader uploader(configPath, &network);
+    QVERIFY(uploader.load());
+    const auto bytes = [](const QString &path) {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    };
+    const QByteArray configBefore = bytes(configPath);
+    const QByteArray stateBefore = bytes(configPath + QStringLiteral(".state"));
+    uploader.poll();
+    QCOMPARE(collector.payloads.size(), 1);
+    QCOMPARE(uploader.state(), HeadlessRemoteLogUploader::State::Error);
+    QCOMPARE(uploader.lastReason(), bootstrap ? QStringLiteral("bootstrap_failed")
+                                              : QStringLiteral("upload_failed"));
+    QCOMPARE(bytes(configPath), configBefore);
+    QCOMPARE(bytes(configPath + QStringLiteral(".state")), stateBefore);
+}
 
 void RemoteLogUploaderTest::errorTransitionIsPrivateAndDeduplicated()
 {

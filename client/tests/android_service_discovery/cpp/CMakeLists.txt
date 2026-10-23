@@ -1,0 +1,27 @@
+cmake_minimum_required(VERSION 3.21)
+project(android_service_discovery_contract LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+find_package(Qt6 REQUIRED COMPONENTS Core)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(CLASSIFIER_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/../../../vpnConnection.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CLASSIFIER_SOURCE}")
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_classifier.py"
+    "${CLASSIFIER_SOURCE}" "${CMAKE_CURRENT_BINARY_DIR}/actual_classifier.inc"
+    RESULT_VARIABLE classifier_result)
+if(NOT classifier_result EQUAL 0)
+    message(FATAL_ERROR "Actual production classifier extraction failed")
+endif()
+enable_testing()
+add_executable(android_service_discovery_contract test.cpp)
+target_link_libraries(android_service_discovery_contract PRIVATE Qt6::Core)
+target_include_directories(android_service_discovery_contract PRIVATE ../../../core/utils "${CMAKE_CURRENT_BINARY_DIR}")
+add_test(NAME android_service_discovery_contract COMMAND android_service_discovery_contract)
+set_tests_properties(android_service_discovery_contract PROPERTIES TIMEOUT 30)
+
+set(DISCOVERY_CORPUS "" CACHE FILEPATH "Actual Kotlin serializer discovery JSONL")
+set(ADMISSION_CORPUS "" CACHE FILEPATH "Actual Kotlin serializer admission JSONL")
+if(DISCOVERY_CORPUS AND ADMISSION_CORPUS)
+    add_test(NAME android_service_discovery_kotlin_interop
+        COMMAND android_service_discovery_contract --corpus "${DISCOVERY_CORPUS}" "${ADMISSION_CORPUS}")
+    set_tests_properties(android_service_discovery_kotlin_interop PROPERTIES TIMEOUT 30)
+endif()

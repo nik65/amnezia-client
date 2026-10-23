@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
 
@@ -88,6 +89,9 @@ private slots:
     void expiredOrMismatchedPolicyFailsClosed();
     void candidateRevisionIsMonotonicAndContentBound();
     void canonicalSourceSitesEnforcesMaximumCount();
+    void siteLimitKeepsTheCumulativeRouteBudget();
+    void serverXCompactedPolicyKeysFitTheBoundedBudget();
+    void canonicalContentHashNormalizesDirectHostAliases();
     void metadataLessLegacyPolicyRequiresSafeBoundedContent();
     void managedRouteSafetyHelpersRejectBroadAndSpecialRoutes();
     void managedRouteSafetyHelpersEnforceRouteCaps();
@@ -247,7 +251,7 @@ void ManagedRoutePolicyTest::canonicalSourceSitesEnforcesMaximumCount()
 {
     QJsonObject maximumSites;
     for (qsizetype index = 0; index < managedRoutePolicy::maximumSiteCount; ++index) {
-        maximumSites.insert(QStringLiteral("site-%1.test").arg(index), QStringLiteral("93.184.216.34"));
+        maximumSites.insert(QStringLiteral("site-%1.test").arg(index), QString());
     }
 
     bool valid = false;
@@ -267,6 +271,87 @@ void ManagedRoutePolicyTest::canonicalSourceSitesEnforcesMaximumCount()
         });
     }
     managedRoutePolicy::canonicalSourceSites(oversizedArray, &valid);
+    QVERIFY(!valid);
+}
+
+void ManagedRoutePolicyTest::siteLimitKeepsTheCumulativeRouteBudget()
+{
+    QCOMPARE(managedRoutePolicy::maximumSiteCount, qsizetype(4096));
+    QCOMPARE(managedRoutePolicy::maximumTotalRouteCount, qsizetype(4096));
+    QJsonObject sites;
+    for (qsizetype index = 0; index < managedRoutePolicy::maximumSiteCount; ++index) {
+        sites.insert(QStringLiteral("site-%1.test").arg(index), QString());
+    }
+    bool valid = false;
+    managedRoutePolicy::canonicalSourceSites(sites, &valid);
+    QVERIFY(valid);
+
+    // A domain already reserves one DNS route. Its fallback requires one more,
+    // even though the number of site keys remains within the enlarged cap.
+    sites.insert(QStringLiteral("site-0.test"), QStringLiteral("93.184.216.34"));
+    managedRoutePolicy::canonicalSourceSites(sites, &valid);
+    QVERIFY(!valid);
+    sites.remove(QStringLiteral("site-1.test"));
+    managedRoutePolicy::canonicalSourceSites(sites, &valid);
+    QVERIFY(valid);
+}
+
+void ManagedRoutePolicyTest::serverXCompactedPolicyKeysFitTheBoundedBudget()
+{
+    // Exact direct/domain keys from the observed 2489-key ServerX policy after
+    // coverage-preserving /16 splitting and /32 alias normalization. Values and
+    // operational metadata are intentionally excluded from this regression.
+    QFile fixture(QFINDTESTDATA("fixtures/serverx-revision16-split16-keys.json"));
+    QVERIFY(fixture.open(QIODevice::ReadOnly));
+    const QJsonArray keys = QJsonDocument::fromJson(fixture.readAll()).array();
+    QCOMPARE(keys.size(), qsizetype(2525));
+    QJsonObject sites;
+    for (const QJsonValue &key : keys) {
+        QVERIFY(key.isString());
+        sites.insert(key.toString(), QString());
+    }
+    QCOMPARE(sites.size(), keys.size());
+    bool valid = false;
+    const QJsonObject canonical = managedRoutePolicy::canonicalSourceSites(sites, &valid);
+    QVERIFY(valid);
+    QCOMPARE(canonical, sites);
+    QVERIFY(canonical.size() > 2048);
+
+    sites.insert(QStringLiteral("5.166.0.0/15"), QString());
+    managedRoutePolicy::canonicalSourceSites(sites, &valid);
+    QVERIFY(!valid); // The deliberate public /16 safety floor is preserved.
+}
+
+void ManagedRoutePolicyTest::canonicalContentHashNormalizesDirectHostAliases()
+{
+    const QJsonObject explicitHost {
+            { QStringLiteral("managedSplitTunnelExceptSourceSites"),
+              QJsonObject { { QStringLiteral("8.8.8.8/32"), QString() } } },
+            { QStringLiteral("managedSplitTunnelForceEnabled"), true },
+    };
+    QJsonObject bareHost = explicitHost;
+    bareHost.insert(QStringLiteral("managedSplitTunnelExceptSourceSites"),
+                    QJsonObject { { QStringLiteral("8.8.8.8"), QString() } });
+    bool valid = false;
+    const QJsonObject publisherContent = managedRoutePolicy::canonicalSourcePolicyContent(explicitHost, &valid);
+    QVERIFY(valid);
+    QCOMPARE(publisherContent.value(QStringLiteral("managedSplitTunnelExceptSourceSites")).toObject(),
+             bareHost.value(QStringLiteral("managedSplitTunnelExceptSourceSites")).toObject());
+    const QString consumerHash = managedRoutePolicy::canonicalSourcePolicyHash(bareHost, &valid);
+    QVERIFY(valid);
+    const QString publisherHash = QStringLiteral("sha256:") + QString::fromLatin1(
+            QCryptographicHash::hash(QJsonDocument(publisherContent).toJson(QJsonDocument::Compact),
+                                     QCryptographicHash::Sha256).toHex());
+    QCOMPARE(publisherHash, consumerHash);
+    QCOMPARE(consumerHash,
+             QStringLiteral("sha256:0a603df4643fff43a1b2b986e74bc0a017c714f0c02d7b8c34188271e1edbd8b"));
+
+    managedRoutePolicy::canonicalSourcePolicyContent(QJsonObject(), &valid);
+    QVERIFY(!valid);
+    QJsonObject unsafe = explicitHost;
+    unsafe.insert(QStringLiteral("managedSplitTunnelExceptSourceSites"),
+                  QJsonObject { { QStringLiteral("0.0.0.0/0"), QString() } });
+    managedRoutePolicy::canonicalSourcePolicyContent(unsafe, &valid);
     QVERIFY(!valid);
 }
 

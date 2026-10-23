@@ -1,0 +1,228 @@
+#include "core/utils/androidServiceDiscovery.h"
+#include "core/utils/errorCodes.h"
+#include <QCoreApplication>
+#include <QSharedPointer>
+#include <QTimer>
+#include <QEventLoop>
+#include <functional>
+#include <iostream>
+using namespace amnezia;
+namespace Vpn { enum class ConnectionState { Unknown, Disconnected, Disconnecting, Connecting, Connected, Reconnecting, Preparing, Error }; }
+struct Protocol {
+ static inline int stops=0, destroyed=0;
+ AndroidServiceDiscovery::Grant admission;
+ ~Protocol(){++destroyed;}
+ void setStartAdmission(const AndroidServiceDiscovery::Grant &grant){admission=grant;}
+ void stop(){++stops;}
+};
+class VpnConnection:public QObject {
+public:
+ QString m_discoveryRegisteredId;
+ std::function<void()> m_discoveryReconnectStart;
+ quint64 m_discoveryReconnectEpoch=0,m_connectionEpoch=1;
+ quint64 m_discoveryReconnectSerial=0;
+ unsigned m_discoveryReconnectAttempts=0;
+ QString m_discoveryReconnectServerId,m_serverId="fixture-server";
+ AndroidServiceDiscovery::Ledger m_startAdmissionLedger;
+ QSharedPointer<Protocol> m_vpnProtocol;
+ Protocol *androidVpnProtocol=nullptr;
+ bool m_migrationTeardownContext=false,m_migrationTeardownRecoveryRequired=false,m_unboundNativeSessionObserved=false;
+ Vpn::ConnectionState m_connectionState=Vpn::ConnectionState::Connecting;
+ int registered=0,refreshes=0,refusals=0,changes=0,disconnects=0,accepted=0;
+ ErrorCode error=ErrorCode::NoError;
+ void serviceDiscoveryRegistered(const QString &,bool yes){++registered;accepted+=yes;}
+ void serviceDiscoveryRefreshRequested(){++refreshes;}
+ void serviceDiscoveryConnectRefused(ErrorCode e,Vpn::ConnectionState s){++refusals;error=e;visible=s;}
+ Vpn::ConnectionState visible=Vpn::ConnectionState::Unknown;
+ void vpnProtocolError(ErrorCode e){error=e;}
+ void connectionStateChanged(Vpn::ConnectionState s){++changes;visible=s;}
+ void disconnectSlots(){++disconnects;}
+ void registerServiceDiscovery(const QString &);
+ void serviceDiscoveryTimedOut(const QString &);
+ void refuseServiceDiscovery();
+ void serviceDiscoveryChanged(const QJsonObject &);
+ void awaitReconnectDiscovery(std::function<void()>);
+ void refreshReconnectDiscovery();
+ void armStartAdmission(const AndroidServiceDiscovery::Grant &);
+ void handleStartAdmission(const QJsonObject &);
+ void owner(){m_vpnProtocol.reset(new Protocol);androidVpnProtocol=m_vpnProtocol.data();}
+};
+struct InertNetworkManager { int clears=0;void clearConnectionCache(){++clears;} };
+struct InertApp { InertNetworkManager net;InertNetworkManager*networkManager(){return &net;} };
+static InertApp inertApp;static InertApp *amnApp=&inertApp;
+class ConnectionUiController:public QObject {
+public:
+ std::function<void()> m_pendingConnectionStep;
+ Vpn::ConnectionState m_state=Vpn::ConnectionState::Preparing;
+ bool m_isConnected=false,m_isConnectionInProgress=true;
+ QString m_connectionStateText;
+ ErrorCode last=ErrorCode::NoError,shown=ErrorCode::NoError;int errors=0,changes=0,unsupported=0,noContainers=0;
+ ErrorCode getLastConnectionError(){return last;}
+ void connectionErrorOccurred(ErrorCode e){++errors;shown=e;}
+ void connectionStateChanged(){++changes;}
+ void unsupportedConnectDrawerRequested(){++unsupported;}
+ void noInstalledContainers(){++noContainers;}
+ void notifyConnectionBlocked(ErrorCode);
+ void onConnectionStateChanged(Vpn::ConnectionState);
+};
+class ConnectionController:public QObject {
+public:
+ ErrorCode m_cachedLastConnectionError=ErrorCode::NoError;
+ Vpn::ConnectionState m_cachedConnectionState=Vpn::ConnectionState::Preparing;
+ ConnectionUiController ui;
+ void connectionStateChanged(Vpn::ConnectionState s){ui.last=m_cachedLastConnectionError;ui.onConnectionStateChanged(s);}
+ void serviceDiscoveryBlocked(ErrorCode e){ui.notifyConnectionBlocked(e);}
+ void handleServiceDiscoveryConnectRefused(ErrorCode,Vpn::ConnectionState);
+};
+
+@METHODS@
+static int checks=0;
+#define CHECK(x) do{++checks;if(!(x)){std::cerr<<"line "<<__LINE__<<": "#x"\n";return 1;}}while(false)
+static const QString refreshId="11111111-1111-1111-1111-111111111111", startId="22222222-2222-2222-2222-222222222222";
+static AndroidServiceDiscovery::Grant grant(){return {startId,"1","AWG",1};}
+static QJsonObject outcome(const char *result,const char *reason){return {{"schema",1},{"generation","1"},{"requestId",startId},{"outcome",result},{"reason",reason}};}
+static void reset(){AndroidServiceDiscovery::coordinator.invalidate();NativeSessionRestore::ingress.invalidate();}
+int main(int argc,char**argv){
+ QCoreApplication app(argc,argv);
+ reset();
+ {
+  VpnConnection w;w.owner();w.armStartAdmission(grant());
+  CHECK(w.androidVpnProtocol->admission.valid());
+  w.handleStartAdmission(outcome("REJECTED","DISCOVERY_UNCONFIRMED"));
+  CHECK(!w.m_vpnProtocol);CHECK(w.androidVpnProtocol==nullptr);CHECK(w.disconnects==1);
+  CHECK(w.visible==Vpn::ConnectionState::Disconnected);CHECK(w.error==ErrorCode::ServiceDiscoveryUnconfirmed);CHECK(w.refreshes==1);
+  w.handleStartAdmission(outcome("REJECTED","DISCOVERY_UNCONFIRMED"));CHECK(w.disconnects==1);CHECK(Protocol::stops==0);
+ }
+ {
+  VpnConnection w;w.owner();w.armStartAdmission(grant());const auto owner=w.m_vpnProtocol;
+  w.handleStartAdmission(outcome("DISPATCHED","NONE"));w.handleStartAdmission(outcome("REJECTED","STALE"));
+  CHECK(w.m_vpnProtocol==owner);CHECK(w.disconnects==0);CHECK(w.refreshes==1);
+ }
+ {
+  VpnConnection w;w.owner();w.armStartAdmission(grant());const auto owner=w.m_vpnProtocol;
+  w.handleStartAdmission(outcome("DISPATCH_UNCERTAIN","START_EXCEPTION"));
+  CHECK(w.m_vpnProtocol==owner);CHECK(w.visible==Vpn::ConnectionState::Unknown);CHECK(w.error==ErrorCode::ServiceDiscoveryUnconfirmed);
+  w.handleStartAdmission(outcome("REJECTED","STALE"));CHECK(w.m_vpnProtocol==owner);CHECK(w.disconnects==0);
+ }
+ {
+  VpnConnection w;w.owner();w.armStartAdmission(grant());++w.m_connectionEpoch;
+  w.handleStartAdmission(outcome("CANCELLED","PERMISSION_DENIED"));CHECK(w.m_vpnProtocol);CHECK(w.refusals==0);
+ }
+ {
+  VpnConnection w;w.owner();w.armStartAdmission(grant());const auto retired=w.m_vpnProtocol;
+  w.owner();w.handleStartAdmission(outcome("REJECTED","STALE"));CHECK(w.m_vpnProtocol!=retired);CHECK(w.disconnects==0);
+ }
+ {
+  VpnConnection w;w.owner();w.armStartAdmission(grant());w.m_unboundNativeSessionObserved=true;
+  w.handleStartAdmission(outcome("CANCELLED","LIFECYCLE_CANCELLED"));CHECK(!w.m_vpnProtocol);CHECK(w.error==ErrorCode::NativeTunnelCleanupUnconfirmed);CHECK(w.visible==Vpn::ConnectionState::Unknown);CHECK(Protocol::stops==0);
+ }
+ reset();
+ {
+  VpnConnection w;w.owner();w.armStartAdmission(grant());NativeSessionRestore::ingress.observe();
+  w.handleStartAdmission(outcome("REJECTED","STALE"));
+  CHECK(!w.m_vpnProtocol);CHECK(w.error==ErrorCode::NativeTunnelCleanupUnconfirmed);CHECK(w.visible==Vpn::ConnectionState::Unknown);CHECK(Protocol::stops==0);
+ }
+ reset();
+ {
+  VpnConnection w;CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);CHECK(w.accepted==1);
+  w.serviceDiscoveryTimedOut("33333333-3333-3333-3333-333333333333");CHECK(w.refusals==0);
+  w.serviceDiscoveryTimedOut(refreshId);CHECK(w.refusals==1);CHECK(w.refreshes==0);CHECK(w.error==ErrorCode::ServiceDiscoveryUnconfirmed);
+  w.serviceDiscoveryTimedOut(refreshId);CHECK(w.refusals==1);
+ }
+ reset();
+ {
+  VpnConnection w;w.m_connectionState=Vpn::ConnectionState::Reconnecting;
+  CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
+  w.awaitReconnectDiscovery([]{});w.m_discoveryReconnectAttempts=3;w.serviceDiscoveryTimedOut(refreshId);
+  CHECK(w.m_connectionState==Vpn::ConnectionState::Disconnected);CHECK(w.visible==Vpn::ConnectionState::Disconnected);CHECK(w.error==ErrorCode::ServiceDiscoveryUnconfirmed);CHECK(!w.m_discoveryReconnectStart);CHECK(Protocol::stops==0);
+ }
+ {
+  ConnectionController main;main.handleServiceDiscoveryConnectRefused(ErrorCode::ServiceDiscoveryUnconfirmed,Vpn::ConnectionState::Disconnected);
+  CHECK(main.m_cachedLastConnectionError==ErrorCode::ServiceDiscoveryUnconfirmed);CHECK(main.ui.m_state==Vpn::ConnectionState::Disconnected);CHECK(!main.ui.m_isConnectionInProgress);CHECK(main.ui.shown==ErrorCode::ServiceDiscoveryUnconfirmed);CHECK(main.ui.errors==1);
+  main.m_cachedLastConnectionError=ErrorCode::NativeTunnelCleanupUnconfirmed;main.handleServiceDiscoveryConnectRefused(ErrorCode::ServiceDiscoveryUnconfirmed,Vpn::ConnectionState::Unknown);
+  CHECK(main.ui.shown==ErrorCode::NativeTunnelCleanupUnconfirmed);CHECK(main.ui.m_state==Vpn::ConnectionState::Unknown);CHECK(!main.ui.m_isConnectionInProgress);CHECK(main.m_cachedLastConnectionError==ErrorCode::NativeTunnelCleanupUnconfirmed);
+ }
+ reset();
+ {
+  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;});CHECK(w.refreshes==1);
+  CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
+  QJsonObject terminal{{"schema",1},{"requestId",refreshId},{"generation","101"},{"phase","EMPTY"},{"component","NONE"},{"reason","NONE"}};
+  CHECK(AndroidServiceDiscovery::coordinator.ingest(terminal));
+  auto stale=terminal;stale["generation"]="99";w.serviceDiscoveryChanged(stale);CHECK(started==0);
+  w.serviceDiscoveryChanged(terminal);CHECK(started==1);w.serviceDiscoveryChanged(terminal);CHECK(started==1);
+ }
+ reset();
+ {
+  VpnConnection w;w.m_connectionState=Vpn::ConnectionState::Reconnecting;
+  int started=0;w.awaitReconnectDiscovery([&]{++started;});
+  CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
+  w.serviceDiscoveryTimedOut(refreshId);
+  CHECK(bool(w.m_discoveryReconnectStart));CHECK(w.refreshes==2);CHECK(w.refusals==0);CHECK(started==0);
+  CHECK(w.m_connectionState==Vpn::ConnectionState::Reconnecting);CHECK(Protocol::stops==0);
+  CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
+  QJsonObject terminal{{"schema",1},{"requestId",refreshId},{"generation","102"},{"phase","EMPTY"},{"component","NONE"},{"reason","NONE"}};
+  CHECK(AndroidServiceDiscovery::coordinator.ingest(terminal));w.serviceDiscoveryChanged(terminal);
+  CHECK(started==1);CHECK(!w.m_discoveryReconnectStart);w.serviceDiscoveryChanged(terminal);CHECK(started==1);
+ }
+ reset();
+ {
+  VpnConnection w;w.owner();w.armStartAdmission(grant());auto owner=w.m_vpnProtocol;
+  VpnConnection retiring;retiring.m_connectionState=Vpn::ConnectionState::Reconnecting;
+  retiring.awaitReconnectDiscovery([]{});NativeSessionRestore::ingress.observe();
+  QEventLoop loop;QTimer::singleShot(6500,Qt::PreciseTimer,&loop,&QEventLoop::quit);loop.exec();
+  CHECK(retiring.visible==Vpn::ConnectionState::Unknown);CHECK(retiring.error==ErrorCode::NativeTunnelCleanupUnconfirmed);CHECK(!retiring.m_discoveryReconnectStart);CHECK(Protocol::stops==0);
+  CHECK(w.m_vpnProtocol==owner);CHECK(w.visible==Vpn::ConnectionState::Unknown);CHECK(w.refusals==1);CHECK(w.disconnects==0);
+  w.handleStartAdmission(outcome("REJECTED","STALE"));CHECK(!w.m_vpnProtocol);CHECK(w.disconnects==1);CHECK(Protocol::stops==0);
+ }
+ reset();
+ {
+  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;});
+  CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
+  QJsonObject uncertain{{"schema",1},{"requestId",refreshId},{"generation","103"},{"phase","UNCERTAIN"},{"component","NONE"},{"reason","STATUS_UNPROVEN"}};
+  CHECK(AndroidServiceDiscovery::coordinator.ingest(uncertain));w.serviceDiscoveryChanged(uncertain);w.serviceDiscoveryChanged(uncertain);
+  QEventLoop loop;QTimer::singleShot(350,Qt::PreciseTimer,&loop,&QEventLoop::quit);loop.exec();
+  CHECK(w.refreshes==2);CHECK(started==0);CHECK(w.refusals==0);CHECK(bool(w.m_discoveryReconnectStart));
+  w.serviceDiscoveryChanged(uncertain);CHECK(started==0); // stale snapshot cannot consume a later grant
+  CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
+  auto fresh=uncertain;fresh["generation"]="104";fresh["phase"]="EMPTY";fresh["reason"]="NONE";
+  CHECK(AndroidServiceDiscovery::coordinator.ingest(fresh));w.serviceDiscoveryChanged(fresh);CHECK(started==1);
+ }
+ reset();
+ for(bool serverChange:{false,true}) {
+  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;});
+  CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
+  if(serverChange)w.m_serverId="other-server";else ++w.m_connectionEpoch;
+  w.serviceDiscoveryTimedOut(refreshId);CHECK(!w.m_discoveryReconnectStart);CHECK(started==0);CHECK(w.refusals==0);CHECK(w.refreshes==1);
+ }
+ reset();
+ {
+  VpnConnection w;int oldStarted=0,newStarted=0;
+  w.awaitReconnectDiscovery([&]{++oldStarted;});
+  CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
+  QJsonObject uncertain{{"schema",1},{"requestId",refreshId},{"generation","105"},{"phase","UNCERTAIN"},{"component","NONE"},{"reason","BIND_TIMEOUT"}};
+  CHECK(AndroidServiceDiscovery::coordinator.ingest(uncertain));w.serviceDiscoveryChanged(uncertain);
+  w.awaitReconnectDiscovery([&]{++newStarted;}); // same epoch, new wait serial
+  QEventLoop loop;QTimer::singleShot(350,Qt::PreciseTimer,&loop,&QEventLoop::quit);loop.exec();
+  CHECK(w.refreshes==2);CHECK(w.m_discoveryReconnectAttempts==1);CHECK(oldStarted==0);CHECK(newStarted==0);
+  CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
+  auto fresh=uncertain;fresh["generation"]="106";fresh["phase"]="EMPTY";fresh["reason"]="NONE";
+  CHECK(AndroidServiceDiscovery::coordinator.ingest(fresh));w.serviceDiscoveryChanged(fresh);
+  CHECK(newStarted==1);CHECK(oldStarted==0);
+ }
+ reset();
+ {
+  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;});
+  for(int i=0;i<3;++i) {
+   CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
+   w.serviceDiscoveryTimedOut(refreshId);
+  }
+  CHECK(w.refreshes==3);CHECK(w.m_discoveryReconnectAttempts==3);CHECK(!w.m_discoveryReconnectStart);
+  CHECK(started==0);CHECK(w.refusals==1);CHECK(w.error==ErrorCode::ServiceDiscoveryUnconfirmed);
+ }
+ CHECK(Protocol::stops==0);
+ std::cout<<"actual-worker checks="<<checks<<" native-stops="<<Protocol::stops<<"\n";
+ return 0;
+}
+
+
+

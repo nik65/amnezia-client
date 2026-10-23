@@ -38,6 +38,11 @@ from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import unquote, urlparse
 
 try:
+    import windows_netstack_fixture_contract as windows_route_fixture
+except ImportError:
+    from . import windows_netstack_fixture_contract as windows_route_fixture
+
+try:
     from automatic_migration_fixture_network import bind as bind_migration_wan, validate as validate_migration_wan, NETWORK as MIGRATION_WAN_NETWORK
 except ImportError:
     from .automatic_migration_fixture_network import bind as bind_migration_wan, validate as validate_migration_wan, NETWORK as MIGRATION_WAN_NETWORK
@@ -128,14 +133,31 @@ SEMANTIC_HELPER_RELATIVES = (
     "deploy/release_lab/android/consumer_fixture_server.py",
     "deploy/release_lab/headless_native_acceptance.py",
     "deploy/release_lab/headless_native_qga_adapter.py",
+    "deploy/release_lab/headless_pending_observer.py",
     "deploy/release_lab/headless_native_e2e_driver.py",
     "deploy/release_lab/headless_native_fixture_server.py",
     "deploy/release_lab/headless_native_http_fixture.py",
     "deploy/release_lab/headless_native_reboot_collector.py",
+    "deploy/release_lab/headless_coordinated_rollback_acceptance.py",
+    "deploy/release_lab/headless_coordinated_rollback_collector.py",
+    "deploy/release_lab/headless_coordinated_rollback_driver.py",
+    "deploy/release_lab/headless_coordinated_http_fixture.py",
+    "deploy/release_lab/coordinated_headless_registration.py",
+    "deploy/release_lab/coordinated_linux_live_acquisition.py",
+    "deploy/release_lab/coordinated_acquisition_contract.py",
+    "deploy/release_lab/coordinated_release_acceptance.py",
     "deploy/release_lab/headless_preexisting_fixture.py",
     "deploy/release_lab/headless_preexisting_fixture_guest.py",
     "deploy/release_lab/guest_helpers/linux_gui_window_evidence.py",
     "deploy/release_lab/linux_gui_visual_ack.py",
+    "deploy/release_lab/linux_gui_fixture.py",
+    "deploy/release_lab/linux_desktop_readiness.py",
+    "deploy/release_lab/guest_helpers/linux_gui_softpipe_setup.py",
+    "deploy/release_lab/guest_helpers/linux_gui_readiness_probe.py",
+    "deploy/release_lab/guest_helpers/linux_gui_xres_dependency.py",
+    "deploy/release_lab/guest_helpers/linux_gui_continuous.py",
+    "dist/release-lab-fixtures/gui-xres-noble-amd64-20261023/libxres1_1.2.1-1build1_amd64.deb",
+    "deploy/release_lab/guest_helpers/linux_gui_xres_probe.py",
 )
 ANDROID_VULKAN_RELATIVES = {
     "bundle": "dist/release-lab-fixtures/android-cvd-vulkan-noble-amd64-20260913.tar.gz",
@@ -160,6 +182,72 @@ ANDROID_HOST_DEPENDENCY_RELATIVES = {
 
 class LabError(RuntimeError):
     """An expected fail-closed lab error."""
+
+
+class QgaGuestExecutionError(LabError):
+    """A failed command with bounded private evidence, never in its message.
+
+    The capture is the complete response body encoded as canonical JSON when
+    within the limit, not the original socket framing. Oversized bodies retain
+    an explicitly marked prefix and the digest/size of the entire encoding.
+    """
+
+    PRIVATE_CAPTURE_LIMIT = 1024 * 1024
+
+    def __init__(self, response: Any):
+        digest = hashlib.sha256()
+        prefix = bytearray()
+        total = 0
+        encoder = json.JSONEncoder(sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        for chunk in encoder.iterencode(response):
+            encoded = chunk.encode("utf-8")
+            digest.update(encoded)
+            total += len(encoded)
+            remaining = self.PRIVATE_CAPTURE_LIMIT - len(prefix)
+            if remaining > 0:
+                prefix.extend(encoded[:remaining])
+        self.__capture = bytes(prefix)
+        self.__capture_size = total
+        self.__capture_sha256 = digest.hexdigest()
+        payload = response.get("return", {}) if isinstance(response, Mapping) else {}
+        if not isinstance(payload, Mapping):
+            payload = {}
+        exit_code = payload.get("exitcode")
+        safe_code = exit_code if type(exit_code) is int else "invalid"
+        super().__init__(
+            "guest step exited "
+            f"(exit_code={safe_code}; "
+            f"stdout_bytes={_safe_failure_metadata(payload.get('out-data'))}; "
+            f"stderr_bytes={_safe_failure_metadata(payload.get('err-data'))})"
+        )
+
+    def private_failure_capture(self) -> dict[str, Any]:
+        """Return sensitive evidence for private archival only, never logging."""
+        return {
+            "schema": "qga-guest-execution-failure-v1",
+            "encoding": "canonical-json-ascii",
+            "body": self.__capture,
+            "original_size": self.__capture_size,
+            "original_sha256": self.__capture_sha256,
+            "captured_size": len(self.__capture),
+            "limit": self.PRIVATE_CAPTURE_LIMIT,
+            "truncated": self.__capture_size > len(self.__capture),
+        }
+
+
+class QgaGuestAdmissionError(QgaGuestExecutionError):
+    """A rejected guest-exec response, retaining the exact private envelope."""
+
+    def __init__(self, response: Any):
+        super().__init__(response)
+        # Never include executable/arguments, QGA error descriptions, or an
+        # untrusted PID in public text. Existing private archive accepts this
+        # typed subclass through its QgaGuestExecutionError boundary.
+        LabError.__init__(self, "guest-exec admission failed "
+                          f"(invalid response or guest PID; {_safe_qga_response_metadata(response)})")
+
+    def private_failure_capture(self) -> dict[str, Any]:
+        return {**super().private_failure_capture(), "phase": "guest-exec-admission"}
 
 
 def android_attempt_matches_fixture(
@@ -1262,31 +1350,26 @@ class QgaClient:
 
     def guest_exec(self, executable: str, args: Sequence[str]) -> dict[str, Any]:
         result = self.request("guest-exec", {"path": executable, "arg": list(args), "capture-output": True})
-        if "return" not in result or not isinstance(result["return"], dict):
-            raise LabError(
-                f"guest-exec failed for {executable} "
-                f"({_safe_qga_response_metadata(result)})"
-            )
-        return result["return"]
+        payload = result.get("return") if isinstance(result, dict) else None
+        if (not isinstance(result, dict) or "error" in result
+                or not isinstance(payload, dict) or type(payload.get("pid")) is not int
+                or payload["pid"] <= 0):
+            raise QgaGuestAdmissionError(result)
+        return payload
 
     def guest_exec_wait(self, executable: str, args: Sequence[str], timeout: float = 120.0) -> dict[str, Any]:
         """Run a guest command and require its real exit status and assertion."""
         started = self.guest_exec(executable, args)
         guest_pid = started.get("pid")
-        if not isinstance(guest_pid, int):
-            raise LabError("guest-exec returned no guest PID")
+        if type(guest_pid) is not int or guest_pid <= 0:
+            raise LabError("guest-exec returned no valid guest PID")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             result = self.request("guest-exec-status", {"pid": guest_pid})
             payload = result.get("return", {})
             if payload.get("exited") is True:
                 if payload.get("exitcode") != 0:
-                    raise LabError(
-                        "guest step exited "
-                        f"(exit_code={payload.get('exitcode')}; "
-                        f"stdout_bytes={_safe_failure_metadata(payload.get('out-data'))}; "
-                        f"stderr_bytes={_safe_failure_metadata(payload.get('err-data'))})"
-                    )
+                    raise QgaGuestExecutionError(result)
                 output = ""
                 if payload.get("out-data"):
                     output = base64.b64decode(payload["out-data"]).decode("utf-8", errors="replace")
@@ -1674,8 +1757,12 @@ class LabController:
         return {"schema": SCHEMA_VERSION, "ready": ready, "dry_run": self.dry_run, "checks": checks, "release_passed": False}
 
     @mutation_operation
-    def create(self, lane: str, artifacts: Mapping[str, Path], outer_artifact: Path | None = None, run_id: str | None = None, manifest: Path | None = None, baseline_artifacts: Mapping[str, Path] | None = None, baseline_version: str | None = None, candidate_version: str | None = None, manifest_public_key: Path | None = None, baseline_manifest: Path | None = None, headless_baseline_receipt: Path | None = None, headless_candidate_receipt: Path | None = None, baseline_outer_artifact: Path | None = None, *, automatic_migration_wan: bool = False) -> dict[str, Any]:
+    def create(self, lane: str, artifacts: Mapping[str, Path], outer_artifact: Path | None = None, run_id: str | None = None, manifest: Path | None = None, baseline_artifacts: Mapping[str, Path] | None = None, baseline_version: str | None = None, candidate_version: str | None = None, manifest_public_key: Path | None = None, baseline_manifest: Path | None = None, headless_baseline_receipt: Path | None = None, headless_candidate_receipt: Path | None = None, baseline_outer_artifact: Path | None = None, *, automatic_migration_wan: bool = False, headless_capability: str = 'native-rollback-v1') -> dict[str, Any]:
         self.assert_mutation_context()
+        if type(headless_capability) is not str or headless_capability not in {'native-rollback-v1', 'headless-coordinated-rollback-with-pause-v1'}:
+            raise LabError('unsupported explicit headless capability')
+        if headless_capability != 'native-rollback-v1' and (lane not in {'candidate', 'release'} or 'linux-headless-x64' not in artifacts):
+            raise LabError('coordinated capability requires a headless candidate/release plan')
         profiles = load_profiles()
         if type(automatic_migration_wan) is not bool or (automatic_migration_wan and lane != 'publisher-diagnostic'):
             raise LabError('automatic migration WAN is diagnostic-only')
@@ -1799,6 +1886,11 @@ class LabController:
             "expected_profiles": list(dict.fromkeys(expected_profiles)),
             "profiles": {profile_id: {"status": "created", "evidence": None, "vm": None} for profile_id in profiles},
         }
+        if headless_capability != 'native-rollback-v1':
+            from .coordinated_headless_registration import write_capability
+            state['runs'][run_id]['headless_capability'] = headless_capability
+            if not self.dry_run:
+                state['runs'][run_id]['headless_capability_record'] = write_capability(self, state['runs'][run_id])
         if automatic_migration_wan:
             policy_path = repo_root() / 'deploy/release_lab/fixtures/automatic-migration-wan-contract.json'
             ready = json.loads((self.root / profiles['server-router']['golden_readiness']).read_text())
@@ -2741,13 +2833,24 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
         return diagnostic
 
     @mutation_operation
-    def run_steps(self, run_id: str, profile_id: str, selected: Iterable[str] | None = None, preserve_failed_guest: bool = False) -> dict[str, Any]:
+    def run_steps(self, run_id: str, profile_id: str, selected: Iterable[str] | None = None, preserve_failed_guest: bool = False, windows_route_fixture_path: Path | None = None, windows_route_fixture_sha256: str | None = None) -> dict[str, Any]:
         self.assert_mutation_context()
         if profile_id == ANDROID_PROFILE_ID:
             raise LabError(ANDROID_SANDBOX_DISABLED_REASON)
         profiles = load_profiles(); profile = profiles[profile_id]
         artifact_id = artifact_id_for_profile(profile_id)
         planned_run = self.get_run(run_id)
+        fixture = None
+        if windows_route_fixture_path is not None or windows_route_fixture_sha256 is not None:
+            if (not windows_route_fixture_path or not windows_route_fixture_sha256 or self.dry_run
+                    or profile_id != "windows-x64" or set(selected or []) != {"outer-clean"}
+                    or not preserve_failed_guest or not self.uses_hyperv(planned_run, profile_id)
+                    or planned_run.get("profiles", {}).get(profile_id, {}).get("case_receipts")
+                    or planned_run.get("profiles", {}).get(profile_id, {}).get("hyperv_cases")
+                    or planned_run.get("profiles", {}).get(profile_id, {}).get("vm")):
+                raise LabError("Windows route fixture requires fresh Hyper-V outer-clean with preserve-failed-guest")
+            fixture = windows_route_fixture.checked_manifest(windows_route_fixture_path, windows_route_fixture_sha256,
+                                                             planned_run["outer_artifact"]["sha256"])
         artifact = planned_run.get("outer_artifact") if profile_id == "windows-x64" else planned_run.get("artifacts", {}).get(artifact_id)
         if not isinstance(artifact, dict):
             raise LabError(f"no planned artifact for guest profile {profile_id}")
@@ -2858,6 +2961,25 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                     try: health_receipt = json.loads(str(health_readback.get("receipt", "")))
                     except json.JSONDecodeError as exc: raise LabError(f"Hyper-V {case_id} service-health returned no receipt") from exc
                     validate_receipt(health_receipt, run_id=run_id, profile_id=profile_id, artifact=final_artifact, case_id=case_id, baseline_version=str(planned_run["baseline_version"]), candidate_version=str(planned_run["candidate_version"]), expected_role="candidate")
+                    if fixture is not None:
+                        current_phase = "netstack-fixture"
+                        # Freeze a private capsule for this newly-created actual VM only.
+                        windows_route_fixture.checked_manifest(windows_route_fixture_path, windows_route_fixture_sha256, final_artifact["sha256"])
+                        bound_path, bound_sha, nonce, task_token = windows_route_fixture.bind_manifest(
+                            fixture, self.root / "private-fixtures" / run_id / case_id,
+                            run_id=run_id, case_id=case_id, vm_id=str(case_vm["vm_id"]), path_mapper=windows_path_for_wsl)
+                        prepared = self.hyperv_call("prepare-interactive", run_id=run_id, CaseId=case_id, credential=True)
+                        if prepared.get("interactive_ready") is not True or prepared.get("vm_id") != str(case_vm["vm_id"]):
+                            raise LabError("fixture interactive preparation lacks actual child binding")
+                        dataplane = self.hyperv_call("netstack-fixture", run_id=run_id, CaseId=case_id, credential=True,
+                            FixtureManifestPath=windows_path_for_wsl(bound_path), FixtureManifestSha256=bound_sha,
+                            ExpectedArtifactSha256=final_artifact["sha256"])
+                        windows_route_fixture.validate_observed(dataplane, run_id=run_id, case_id=case_id,
+                            vm_id=str(case_vm["vm_id"]), nonce=nonce, task_token=task_token,
+                            parent_sha256=health_result["parent_sha256"], artifact_sha256=final_artifact["sha256"],
+                            manifest_sha256=bound_sha, helper_sha256=fixture["files"]["helper"]["sha256"], routes_sha256=fixture["files"]["routes"]["sha256"],
+                            expected_route_shape="synthetic-windows-dataplane-v1", expected_route_count=len(windows_route_fixture.strict_json(Path(fixture["files"]["expected_routes"]["path"]).read_bytes())))
+                        immutable_json_dump(self.root / "exports" / run_id / profile_id / case_id / "dataplane.json", dataplane)
                     case_receipts.append({"case_id": case_id, "steps": case_steps, "service_health": health_receipt, "vm_id": health_result.get("vm_id"), "parent_sha256": health_result.get("parent_sha256")})
                     known_case_ids.add(case_id)
                     self._persist_hyperv_case_progress(
@@ -3644,7 +3766,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
 
     @mutation_operation
     def _register_full4(self, run_id: str, kind: str, value: Mapping[str, Any]) -> dict[str, Any]:
-        if kind not in {"android", "headless", "linux-visual"}:
+        if kind not in {"android", "headless", "linux-visual", "headless-coordinated"}:
             raise LabError("unsupported full4 semantic evidence kind")
         run = self.get_run(run_id); root = ensure_owned_child(self.root,self.root / "runs" / run_id / "full4-semantic","full4 semantic directory"); root.mkdir(parents=True, exist_ok=True)
         path = root / f"{kind}.json"
@@ -4262,6 +4384,11 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
         if cleanup.get("stopped") is not True or cleanup.get("listener_closed") is not True or cleanup.get("unknown_survivors") != []: raise LabError("headless fixture cleanup is incomplete")
         return self._register_full4(run_id,"headless",{"http":dict(http),"update":dict(update),"rollback":dict(rollback),"reboot":dict(reboot),"cleanup":dict(cleanup)})
 
+    @mutation_operation
+    def register_headless_coordinated_semantic(self, run_id: str, plan: Any, semantic: Mapping[str, Any], context: Any, ordinary_capture: Mapping[str, Any]) -> dict[str, Any]:
+        from .coordinated_headless_registration import register
+        return register(self, run_id, plan, semantic, context, ordinary_capture)
+
     def register_linux_visual(self, run_id: str, ack: Mapping[str, Any], collect: Mapping[str, Any]) -> dict[str, Any]:
         validate_root_visual_ack(owned_root=self.root,ack=ack,collect=collect)
         return self._register_full4(run_id,"linux-visual",{"ack":dict(ack),"collect":dict(collect)})
@@ -4817,6 +4944,8 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "run":
             command.add_argument("--step", action="append", default=[])
             command.add_argument("--preserve-failed-guest", action="store_true")
+            command.add_argument("--windows-route-fixture", type=Path)
+            command.add_argument("--windows-route-fixture-sha256")
         if name == "collect": command.add_argument("--case-id")
     nested_probe = sub.add_parser("nested-android-probe")
     nested_probe.add_argument("--run-id", required=True)
@@ -4899,7 +5028,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "guest-probe": result = controller.guest_probe(args.run_id, args.profile)
         elif args.command == "nested-android-probe": result = controller.nested_android_probe(args.run_id)
         elif args.command == "android-visual-decide": result = controller.decide_nested_android_visual(args.run_id, args.attempt_nonce, args.request_id, args.request_sha256, args.decision, args.bounds)
-        elif args.command == "run": result = controller.run_steps(args.run_id, args.profile, args.step or None, args.preserve_failed_guest)
+        elif args.command == "run":
+            fixture_args = {}
+            if args.windows_route_fixture is not None or args.windows_route_fixture_sha256 is not None:
+                fixture_args = dict(windows_route_fixture_path=args.windows_route_fixture, windows_route_fixture_sha256=args.windows_route_fixture_sha256)
+            result = controller.run_steps(args.run_id, args.profile, args.step or None, args.preserve_failed_guest, **fixture_args)
         elif args.command == "collect": result = controller.collect(args.run_id, args.profile, args.case_id)
         elif args.command == "run-suite": result = controller.run_suite(args.lane, parse_artifacts(args.artifact), Path(args.outer_artifact).resolve() if args.outer_artifact else None, args.run_id, Path(args.manifest).resolve() if args.manifest else None, parse_artifacts(args.baseline_artifact), args.baseline_version, args.candidate_version, Path(args.manifest_public_key).resolve() if args.manifest_public_key else None, Path(args.baseline_manifest).resolve() if args.baseline_manifest else None, Path(args.headless_baseline_receipt).resolve() if args.headless_baseline_receipt else None, Path(args.headless_candidate_receipt).resolve() if args.headless_candidate_receipt else None, Path(args.baseline_outer_artifact).resolve() if args.baseline_outer_artifact else None)
         elif args.command == "reset": result = controller.reset(args.run_id, args.profile)

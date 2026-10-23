@@ -1,16 +1,62 @@
 """Bounded orchestration for genuine headless N-1 -> N -> rollback -> reboot."""
 from __future__ import annotations
-import json,os,re
+import base64,hashlib,json,os,re,stat
 from dataclasses import asdict,dataclass
 from datetime import datetime,timezone
 from pathlib import Path
 from typing import Any,Mapping
 from .headless_native_acceptance import NativeUpdatePlan,UPDATE_STATE,validate_update_receipt,validate_rollback_receipt,validate_reboot_receipt
 from .headless_native_qga_adapter import HeadlessNativeQgaAdapter
+from .headless_pending_observer import PendingObservation
 from .headless_native_http_fixture import HeadlessNativeHttpFixture
 from .headless_preexisting_fixture import FixturePlan,validate_baseline_owned,validate_connected,_sha
 
 class HeadlessE2EError(RuntimeError): pass
+CAPTURE_LIMIT=1024*1024
+
+def capture_prevalidation(root:Path,name:str,value:Any)->Path:
+ """Private immutable original JSON observation, before semantic interpretation."""
+ root=Path(root).absolute()
+ if not re.fullmatch(r'[A-Za-z0-9._-]{1,160}',name):raise HeadlessE2EError('private capture name invalid')
+ for part in (root,*root.parents):
+  if part.is_symlink() or not part.is_dir():raise HeadlessE2EError('private capture archive ancestry differs')
+ digest=hashlib.sha256();size=0;kept=bytearray()
+ for text in json.JSONEncoder(ensure_ascii=True,sort_keys=True,separators=(',',':')).iterencode(value):
+  for offset in range(0,len(text),4096):
+   chunk=text[offset:offset+4096].encode();digest.update(chunk);size+=len(chunk)
+   if len(kept)<CAPTURE_LIMIT:kept.extend(chunk[:CAPTURE_LIMIT-len(kept)])
+ record={'schema':'amnezia-headless-prevalidation-v1','size':size,'sha256':digest.hexdigest(),'truncated':size>CAPTURE_LIMIT,'bytes_base64':base64.b64encode(kept).decode()}
+ data=(json.dumps(record,sort_keys=True)+'\n').encode();leaf=name+'-prevalidation.private.json';directory=None
+ try:
+  if os.name=='posix':
+   directory=os.open(root.anchor,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+   for component in root.parts[1:]:
+    child=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=directory);os.close(directory);directory=child
+   held=os.fstat(directory);named=root.lstat()
+   if not stat.S_ISDIR(held.st_mode) or (held.st_dev,held.st_ino)!=(named.st_dev,named.st_ino):raise HeadlessE2EError('private capture archive identity differs')
+   fd=os.open(leaf,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=directory)
+  else:fd=os.open(root/leaf,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0),0o600)
+  with os.fdopen(fd,'wb') as out:
+   os.fchmod(out.fileno(),0o600);out.write(data);out.flush();os.fsync(out.fileno())
+ finally:
+  if directory is not None:os.close(directory)
+ if size>CAPTURE_LIMIT:raise HeadlessE2EError('private capture exceeds bound; truncated evidence retained')
+ return root/leaf
+
+def capture_server_reset_failure(server,root,nonce,primary):
+ receipt=getattr(server,'reset_failure_receipt',None)
+ if receipt is not None:
+  try:capture_prevalidation(root,nonce+'-http-reset-error',receipt)
+  except BaseException as archive_error:primary.add_note('private reset failure archive unavailable: '+type(archive_error).__name__)
+
+def cleanup_server_after_failure(server,http,primary):
+ if http is None:
+  try:http=server.collect()
+  except BaseException as collection_error:
+   primary.add_note('HTTP receipt collection unavailable: '+type(collection_error).__name__)
+   return server.abort()
+ return server.stop(http)
+
 def _now():return datetime.now(timezone.utc).isoformat().replace('+00:00','Z')
 def _state(raw:Mapping,key:str)->str:
  try:
@@ -21,8 +67,10 @@ class PreexistingQgaBridge:
  """Executes the reviewed guest helper and its durable crash authorization chain."""
  def __init__(self,qga:Any,plan:FixturePlan,script_source:Path,script_path:str):
   self.qga,self.plan,self.script=qga,plan,script_path;self.root=plan.owned_root;self.plan_path=f"{self.root}/plan.json";data=script_source.read_bytes();self.script_sha=__import__('hashlib').sha256(data).hexdigest();self.script_size=len(data);qga.write_file(script_path,data)
- def _run(self,action,*extra,timeout=120):
+ def _run(self,action,*extra,timeout=120,capture_root=None):
   r=self.qga.guest_exec_wait('/usr/bin/python3',[self.script,action,'--plan',self.plan_path,*extra],timeout=timeout)
+  if capture_root is not None:capture_prevalidation(capture_root,self.plan.nonce+'-'+action+'-response',r)
+  if 'exitcode' in r and (type(r['exitcode']) is not int or r['exitcode']!=0):raise HeadlessE2EError('preexisting guest operation failed')
   try:v=json.loads(r['stdout'])
   except Exception as e:raise HeadlessE2EError(f'preexisting {action} receipt missing') from e
   if not isinstance(v,dict) or v.get('origin')!='guest' or v.get('transport')!='qga':raise HeadlessE2EError(f'preexisting {action} receipt origin')
@@ -37,7 +85,7 @@ class PreexistingQgaBridge:
   durable=f'{self.root}/connected.json';raw=(json.dumps(dict(connected),sort_keys=True,separators=(',',':'))+'\n').encode();self.qga.write_file(durable,raw)
   archive=controller_archive.resolve();disk=json.loads(archive.read_text());digest=_sha(disk)
   if disk!=dict(connected) or digest!=_sha(connected) or not str(archive).startswith('/var/lib/amnezia-release-lab/receipts/'):raise HeadlessE2EError('controller archive binding')
-  return validate_baseline_owned(self.plan,connected,self._run('baseline-handoff','--connected',durable,'--deadline','120'))
+  return validate_baseline_owned(self.plan,connected,self._run('baseline-handoff','--connected',durable,'--deadline','120',capture_root=archive.parent))
  def boot_id(self,legacy):return str(legacy['boot_id'])
  def promote_systemd_baseline(self,legacy):
   cli_hash=getattr(self,'legacy_cli_sha256',None)
@@ -113,26 +161,32 @@ class HeadlessNativeE2EDriver:
    legacy=self.preexisting.crash_and_restart(connected,connected_archive);self._archive('baseline-legacy-start',legacy);self.preexisting.promote_systemd_baseline(legacy)
    before=self.native.identity(self.plan.baseline,'baseline-before');boot=self.preexisting.boot_id(legacy)
    before_doctor=self.native.cli_json(['/usr/local/bin/amnezia-cli','--socket','/run/amnezia/amneziad.sock','--json','doctor'],'cli:doctor')
-   self.server.start();server_started=True;self.server.reset();staged=self.native.stage_profile()
-   pending=self.native.wait_for(self.native.collect_update_pending,lambda x:_state(x,'pending_state')=='restart_pending',timeout=update_timeout,label='native update pending')
-   stable=self.native.wait_for(self.native.collect_update_stable,lambda x:_state(x,'stable_state')=='updated',timeout=update_timeout,label='native update stable')
+   self.server.prevalidation_archive=self.archive_root;self.server.start();server_started=True;self.server.reset()
+   with PendingObservation(self.native,'restart_pending',update_timeout,failure_archive=self.archive_root) as observation:
+    staged=self.native.stage_profile()
+    pending=observation.collect()
+   stable=self.native.wait_for(self.native.collect_update_stable,lambda x:_state(x,'stable_state') in {'updated','no_update'},timeout=update_timeout,label='native update stable')
    after=self.native.identity(self.plan.candidate,'candidate-after');http=self.server.collect()
-   update=self.native.build_update_receipt(before_raw=before,after_raw=after,boot_id=boot,raw_sources={"before_doctor":before_doctor,"profile_store":staged['profile_store'],**pending,**stable},http_receipt=http,observed_at=_now());validate_update_receipt(self.plan,update,http);self._archive('update',update)
-   rb=self.collector.trigger_rollback(self.plan.candidate.cli_sha256);rb_pending=self.native.wait_for(self.native.collect_rollback_pending,lambda x:_state(x,'pending_state')=='rollback_restart_pending',timeout=rollback_timeout,label='rollback pending');rb_stable=self.native.wait_for(self.native.collect_rollback_stable,lambda x:_state(x,'stable_state')=='rolled_back',timeout=rollback_timeout,label='rollback stable')
-   rollback=self.native.build_rollback_receipt(before_raw=self.native.identity(self.plan.candidate,'candidate-before'),after_raw=self.native.identity(self.plan.baseline,'baseline-after'),boot_id=boot,cli_process=rb['cli_process'],raw_sources={"cli_response":rb['cli_response'],**rb_pending,**rb_stable},update_receipt=update,observed_at=_now());validate_rollback_receipt(self.plan,rollback,update);self._archive('rollback',rollback)
+   update=self.native.build_update_receipt(before_raw=before,after_raw=after,boot_id=boot,raw_sources={"before_doctor":before_doctor,"profile_store":staged['profile_store'],**pending,**stable},http_receipt=http,observed_at=_now());capture_prevalidation(self.archive_root,self.plan.attempt_nonce+'-update',update);validate_update_receipt(self.plan,update,http);self._archive('update',update)
+   rb_before=self.native.identity(self.plan.candidate,'candidate-before')
+   with PendingObservation(self.native,'rollback_restart_pending',rollback_timeout,failure_archive=self.archive_root) as observation:
+    rb=self.collector.trigger_rollback(self.plan.candidate.cli_sha256)
+    rb_pending=observation.collect()
+   rb_stable=self.native.wait_for(self.native.collect_rollback_stable,lambda x:_state(x,'stable_state')=='rolled_back',timeout=rollback_timeout,label='rollback stable')
+   rollback=self.native.build_rollback_receipt(before_raw=rb_before,after_raw=self.native.identity(self.plan.baseline,'baseline-after'),boot_id=boot,cli_process=rb['cli_process'],raw_sources={"cli_response":rb['cli_response'],**rb_pending,**rb_stable},update_receipt=update,observed_at=_now());capture_prevalidation(self.archive_root,self.plan.attempt_nonce+'-rollback',rollback);validate_rollback_receipt(self.plan,rollback,update);self._archive('rollback',rollback)
    observed=self.collector.reboot_and_collect(boot,self.plan.baseline,reboot_timeout)
-   reboot=self.native.build_reboot_receipt(boot_id_before=observed['boot_id_before'],boot_id_after=observed['boot_id_after'],after_raw=observed['after_raw'],raw_sources=observed['raw_sources'],expected_release=self.plan.baseline,prior_receipt=rollback,observed_at=_now());validate_reboot_receipt(self.plan,reboot,self.plan.baseline,rollback);self._archive('reboot',reboot)
+   reboot=self.native.build_reboot_receipt(boot_id_before=observed['boot_id_before'],boot_id_after=observed['boot_id_after'],after_raw=observed['after_raw'],raw_sources=observed['raw_sources'],expected_release=self.plan.baseline,prior_receipt=rollback,observed_at=_now());capture_prevalidation(self.archive_root,self.plan.attempt_nonce+'-reboot',reboot);validate_reboot_receipt(self.plan,reboot,self.plan.baseline,rollback);self._archive('reboot',reboot)
    cleanup=self.native.validate_fixture_cleanup(self.server.stop(http),http);server_started=False;self.preexisting.cleanup(reboot);preexisting_started=False;cleaned=True;self._archive('cleanup',cleanup)
    return {"update":update,"rollback":rollback,"reboot":reboot,"cleanup":cleanup}
-  except BaseException as exc:primary=exc;raise
+  except BaseException as exc:
+   primary=exc;capture_server_reset_failure(self.server,self.archive_root,self.plan.attempt_nonce,primary);raise
   finally:
    if primary is not None:
     try:self._archive('failure',{"error_type":type(primary).__name__,"error":str(primary),"observed_at":_now()})
     except BaseException as e:primary.add_note(f"failure archive also failed: {e}")
     if server_started:
      try:
-      if http is None:http=self.server.collect()
-      self.server.stop(http)
+      cleanup_server_after_failure(self.server,http,primary)
      except BaseException as e:primary.add_note(f"server fixture cleanup also failed: {e}")
     if preexisting_started:
      try:self.preexisting.cleanup({})

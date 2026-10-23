@@ -300,6 +300,15 @@ HeadlessUpdateManager::HeadlessUpdateManager(std::shared_ptr<CommandRunner> runn
                                              QString statePath,
                                              QString installDirectory,
                                              bool requireRootOwnedFiles)
+    : HeadlessUpdateManager(std::move(runner), std::move(statePath),
+                            std::move(installDirectory), requireRootOwnedFiles,
+                            Initialization::Normal)
+{
+}
+
+HeadlessUpdateManager::HeadlessUpdateManager(std::shared_ptr<CommandRunner> runner,
+                                           QString statePath, QString installDirectory,
+                                           bool requireRootOwnedFiles, Initialization initialization)
     : m_runner(runner ? std::move(runner) : std::make_shared<RealCommandRunner>()),
       m_statePath(std::move(statePath)),
       m_installDirectory(installDirectory.trimmed().isEmpty()
@@ -313,6 +322,13 @@ HeadlessUpdateManager::HeadlessUpdateManager(std::shared_ptr<CommandRunner> runn
         m_journalPath = QDir(m_updateRoot).filePath(QStringLiteral("transaction.json"));
         m_rollbackReceiptPath = QDir(m_updateRoot).filePath(QStringLiteral("rollback-receipt.json"));
         m_gcMarkerPath = QDir(m_updateRoot).filePath(QString::fromLatin1(GcMarkerFileName));
+    }
+    if (initialization == Initialization::Normal) initializeState();
+}
+
+void HeadlessUpdateManager::initializeState()
+{
+    if (!m_statePath.isEmpty()) {
         // The update root is part of the state identity.  Create it before
         // reading/writing receipts so canonical paths are stable even when
         // automatic updates are disabled on first start.
@@ -553,6 +569,49 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
         return { false, QStringLiteral("update_in_progress"),
                  QStringLiteral("another headless update operation owns the transaction lock") };
     }
+    return checkAndApplyWithLock(profile, currentVersion);
+}
+
+HeadlessUpdateResult HeadlessUpdateManager::acknowledgeStoppedRollback(
+        const QString &statePath, const QString &installDirectory,
+        const QString &verifiedTargetVersion, std::shared_ptr<CommandRunner> runner,
+        bool requireRootOwnedFiles)
+{
+    // The coordinator has already stopped and identity-checked the daemon.
+    // Deferred construction performs no state read, mutation or garbage collection.
+    HeadlessUpdateManager manager(std::move(runner), statePath, installDirectory,
+                                  requireRootOwnedFiles, Initialization::Deferred);
+    const QFileInfo root(manager.m_updateRoot);
+    const QFileInfo parent(root.absolutePath());
+    const auto unsafe = [requireRootOwnedFiles](const QFileInfo &entry) {
+        return !entry.isDir() || entry.isSymLink()
+            || (requireRootOwnedFiles && entry.ownerId() != 0)
+            || (entry.permissions() & (QFileDevice::WriteGroup | QFileDevice::WriteOther)) != 0;
+    };
+    if (statePath.isEmpty() || installDirectory.isEmpty() || !validVersion(verifiedTargetVersion)
+        || unsafe(root) || unsafe(parent)) {
+        return { false, QStringLiteral("rollback_coordinator_storage_invalid"),
+                 QStringLiteral("rollback coordinator requires existing protected update storage") };
+    }
+    QLockFile processLock(QDir(manager.m_updateRoot).filePath(QStringLiteral("update.lock")));
+    processLock.setStaleLockTime(0);
+    if (!processLock.tryLock(0)) {
+        return { false, QStringLiteral("update_in_progress"),
+                 QStringLiteral("another headless update operation owns the transaction lock") };
+    }
+    // One lock spans initialization/GC, pending-target admission and acknowledgement.
+    manager.initializeState();
+    if (!manager.m_stateValid || manager.m_lastState != QStringLiteral("rollback_restart_pending")
+        || manager.m_rollbackVersion != verifiedTargetVersion) {
+        return { false, QStringLiteral("rollback_coordinator_pending_mismatch"),
+                 QStringLiteral("a matching genuine pending rollback is required") };
+    }
+    return manager.checkAndApplyWithLock(Profile {}, verifiedTargetVersion);
+}
+
+HeadlessUpdateResult HeadlessUpdateManager::checkAndApplyWithLock(const Profile &profile,
+                                                               const QString &currentVersion)
+{
     if (m_updateInProgress) {
         return failure(QStringLiteral("update_in_progress"),
                        QStringLiteral("a headless update transaction is already in progress"));
@@ -563,7 +622,9 @@ HeadlessUpdateResult HeadlessUpdateManager::checkAndApply(const Profile &profile
     }
     if (!m_stateValid || !checkableUpdateState(m_lastState)) {
         return failure(QStringLiteral("recovery_required"),
-                       QStringLiteral("headless update state is not stable; pending evidence requires recovery"));
+                       m_lastError.isEmpty()
+                               ? QStringLiteral("headless update state is not stable; pending evidence requires recovery")
+                               : m_lastError);
     }
     if (!m_journalPath.isEmpty() && QFileInfo::exists(m_journalPath)) {
         QFile journalFile(m_journalPath);

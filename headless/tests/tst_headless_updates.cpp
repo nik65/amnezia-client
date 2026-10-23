@@ -10,6 +10,8 @@
 #include <QStringList>
 #include <QCoreApplication>
 #include <QVersionNumber>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
 
 #include "headlessUpdateManager.h"
 
@@ -64,6 +66,178 @@ class HeadlessUpdateTest : public QObject
     Q_OBJECT
 
 private slots:
+    void signedProvisioningManifestContract()
+    {
+        // The runner mounts an empty disposable directory here in a PRIVATE
+        // mount namespace. Never replace a workstation/fleet trust anchor.
+        if (qEnvironmentVariable("AMNEZIA_DISPOSABLE_TRUST_FIXTURE") != QStringLiteral("1"))
+            QSKIP("requires private disposable trust-anchor mount namespace");
+        QFile marker(QStringLiteral("/etc/amnezia/.disposable-parser-fixture"));
+        QVERIFY(marker.open(QIODevice::ReadOnly));
+        QCOMPARE(marker.readAll(), QByteArray("test-only\n"));
+        EVP_PKEY_CTX *keyContext = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
+        QVERIFY(keyContext);
+        QCOMPARE(EVP_PKEY_keygen_init(keyContext), 1);
+        EVP_PKEY *rawKey = nullptr;
+        QCOMPARE(EVP_PKEY_keygen(keyContext, &rawKey), 1);
+        EVP_PKEY_CTX_free(keyContext);
+        std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(rawKey, EVP_PKEY_free);
+        BIO *bio = BIO_new(BIO_s_mem());
+        QVERIFY(bio);
+        QCOMPARE(PEM_write_bio_PUBKEY(bio, key.get()), 1);
+        char *publicData = nullptr;
+        const long publicSize = BIO_get_mem_data(bio, &publicData);
+        const QByteArray publicKey(publicData, publicSize);
+        BIO_free(bio);
+        QFile trust(QStringLiteral("/etc/amnezia/update-public-key.pem"));
+        QVERIFY(trust.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        QCOMPARE(trust.write(publicKey), publicKey.size());
+        trust.close();
+        QVERIFY(trust.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+        const QStringList files {"install_headless.sh", "amneziad", "amnezia-cli",
+            "amneziad.service", "package-manifest.json", "runtime-dependencies.json",
+            "runtime-dependencies.txt", "SHA256SUMS"};
+        const QString hash(64, QLatin1Char('a'));
+        QJsonObject artifact {{"url", "artifacts/update.tar.gz"}, {"sha256", hash},
+            {"size", 1024}, {"format", "amnezia-headless-tar-v1"}, {"autoInstall", true}};
+        QJsonObject provisioning {{"url", "artifacts/provisioning.tar.gz"}, {"sha256", hash},
+            {"size", 2048}, {"format", "amnezia-headless-provisioning-tar-v1"},
+            {"version", "5.0.3.14"}, {"packageVersion", "5.0.3.14"},
+            {"packageManifestSha256", hash}, {"checksumsSha256", hash},
+            {"packageFiles", QJsonArray::fromStringList(files)}};
+        // Complete payload model, including the other three release platforms.
+        QJsonObject platforms {{"linux-headless-x64", artifact}};
+        for (const auto &platform : {"windows-x64", "linux-x64", "android-arm64-v8a"})
+            platforms.insert(QLatin1String(platform), QJsonObject{{"url", "artifacts/other"}, {"sha256", hash}, {"size", 1}});
+        const QJsonObject payload {{"schema", 1}, {"version", "5.0.3.14"},
+            {"platforms", platforms}, {"autoInstall", true}, {"changelog", "fixture"},
+            {"releaseDate", "2026-10-23"}, {"headlessProvisioning", provisioning}};
+        Profile profile;
+        profile.forwardRoutes = QStringList{QStringLiteral("10.77.0.1/32")};
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        HeadlessUpdateManager manager({}, directory.filePath("state.json"), directory.path(), false);
+        auto parse = [&](const QJsonObject &body, const Profile &selected,
+                         const QString &current = QStringLiteral("5.0.3.13")) {
+            const QByteArray bytes = QJsonDocument(body).toJson(QJsonDocument::Compact);
+            EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+            if (!ctx || EVP_DigestSignInit(ctx, nullptr, nullptr, nullptr, key.get()) != 1)
+                qFatal("test signing initialization failed");
+            QByteArray signature(64, '\0'); size_t size = 64;
+            if (EVP_DigestSign(ctx, reinterpret_cast<unsigned char *>(signature.data()), &size,
+                    reinterpret_cast<const unsigned char *>(bytes.constData()), bytes.size()) != 1)
+                qFatal("test signing failed");
+            EVP_MD_CTX_free(ctx);
+            QJsonObject envelope {{"schema", "amnezia-selfhosted-update-v1"},
+                {"signatureAlgorithm", "Ed25519"},
+                {"payload", QString::fromLatin1(bytes.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals))},
+                {"signature", QString::fromLatin1(signature.toBase64())}};
+            HeadlessUpdateManager::Candidate candidate;
+            return manager.parseManifest(QJsonDocument(envelope).toJson(QJsonDocument::Compact),
+                QUrl("http://10.77.0.1:17864/manifest.json"), selected,
+                trust.fileName(), publicKey, current, candidate);
+        };
+        QVERIFY2(parse(payload, profile).ok, qPrintable(parse(payload, profile).message));
+        QCOMPARE(parse(payload, profile, QStringLiteral("5.0.3.14")).code, QStringLiteral("no_update"));
+        auto rejectProvisioning = [&](const QJsonObject &metadata) {
+            auto bad = payload; bad["headlessProvisioning"] = metadata;
+            const auto result = parse(bad, profile);
+            QVERIFY(!result.ok); QCOMPARE(result.code, QStringLiteral("invalid_manifest"));
+        };
+        auto nine = provisioning;
+        auto names = QJsonArray::fromStringList(files); names.append("amnezia-headless-fs");
+        nine["packageFiles"] = names; rejectProvisioning(nine);
+        auto sameVersionNine = payload; sameVersionNine["headlessProvisioning"] = nine;
+        QCOMPARE(parse(sameVersionNine, profile, QStringLiteral("5.0.3.14")).code,
+                 QStringLiteral("invalid_manifest"));
+        auto unknown = provisioning; unknown["unknown"] = true; rejectProvisioning(unknown);
+        auto reordered = files; reordered.swapItemsAt(0, 1);
+        auto bad = provisioning; bad["packageFiles"] = QJsonArray::fromStringList(reordered); rejectProvisioning(bad);
+        auto duplicate = files; duplicate[1] = duplicate[0];
+        bad = provisioning; bad["packageFiles"] = QJsonArray::fromStringList(duplicate); rejectProvisioning(bad);
+        auto unknownFile = files; unknownFile[1] = QStringLiteral("unexpected-binary");
+        bad = provisioning; bad["packageFiles"] = QJsonArray::fromStringList(unknownFile); rejectProvisioning(bad);
+        for (const auto &value : {QJsonValue(0), QJsonValue(-1), QJsonValue(1.5), QJsonValue("2")}) {
+            bad = provisioning; bad["size"] = value; rejectProvisioning(bad);
+        }
+        for (const auto &field : {"sha256", "checksumsSha256", "packageManifestSha256"}) {
+            bad = provisioning; bad[QLatin1String(field)] = "invalid"; rejectProvisioning(bad);
+        }
+        bad = provisioning; bad["format"] = "unknown"; rejectProvisioning(bad);
+        bad = provisioning; bad["url"] = "http://203.0.113.1/provisioning"; rejectProvisioning(bad);
+        for (const auto &field : {"size", "url", "sha256", "format", "unknown"}) {
+            auto brokenArtifact = artifact;
+            brokenArtifact[QLatin1String(field)] = QLatin1String(field) == QLatin1String("url")
+                ? QStringLiteral("http://203.0.113.1/update") : QStringLiteral("invalid");
+            auto brokenPlatforms = platforms; brokenPlatforms["linux-headless-x64"] = brokenArtifact;
+            auto brokenPayload = payload; brokenPayload["platforms"] = brokenPlatforms;
+            const auto result = parse(brokenPayload, profile);
+            QVERIFY(!result.ok); QCOMPARE(result.code, QStringLiteral("invalid_manifest"));
+        }
+        Profile unforwarded = profile; unforwarded.forwardRoutes.clear();
+        QVERIFY(!parse(payload, unforwarded).ok);
+        qInfo("actual signed parseManifest: ordered8 ACCEPTED; original9 and malformed metadata REJECTED");
+    }
+
+    void recoveryCheckPreservesRollbackReceiptReason()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString updates = temporaryDirectory.filePath(QStringLiteral("updates"));
+        const QString rollback = QDir(updates).filePath(QStringLiteral("rollback-test"));
+        QVERIFY(QDir().mkpath(rollback));
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("state.json"));
+        const QString digest = QString::fromLatin1(QCryptographicHash::hash(
+                QByteArrayLiteral("old"), QCryptographicHash::Sha256).toHex());
+        const QJsonObject hashes {{QStringLiteral("amneziad"), digest},
+                                  {QStringLiteral("amnezia-cli"), digest}};
+        for (const QString &name : hashes.keys()) {
+            QFile backup(QDir(rollback).filePath(name));
+            QVERIFY(backup.open(QIODevice::WriteOnly));
+            QCOMPARE(backup.write("old"), qint64(3));
+        }
+        QJsonObject state {{QStringLiteral("version"), 2},
+                           {QStringLiteral("state"), QStringLiteral("applied")},
+                           {QStringLiteral("lastCheckedAt"), QString()},
+                           {QStringLiteral("lastAppliedVersion"), QStringLiteral("5.0.3.10")},
+                           {QStringLiteral("rollbackDirectory"), rollback},
+                           {QStringLiteral("rollbackVersion"), QStringLiteral("5.0.3.8")},
+                           {QStringLiteral("rollbackHashes"), hashes},
+                           {QStringLiteral("installDirectory"), temporaryDirectory.path()},
+                           {QStringLiteral("updateRoot"), QDir(updates).canonicalPath()},
+                           {QStringLiteral("lastError"), QString()}};
+        QFile stateFile(statePath);
+        QVERIFY(stateFile.open(QIODevice::WriteOnly));
+        QVERIFY(stateFile.write(QJsonDocument(state).toJson()) > 0);
+        stateFile.close();
+        QJsonObject receipt {{QStringLiteral("version"), 1},
+                             {QStringLiteral("rollbackDirectory"), rollback},
+                             {QStringLiteral("rollbackVersion"), QStringLiteral("5.0.3.3")},
+                             {QStringLiteral("rollbackHashes"), hashes},
+                             {QStringLiteral("installDirectory"), temporaryDirectory.path()},
+                             {QStringLiteral("updateRoot"), QDir(updates).canonicalPath()}};
+        QFile receiptFile(QDir(updates).filePath(QStringLiteral("rollback-receipt.json")));
+        QVERIFY(receiptFile.open(QIODevice::WriteOnly));
+        const QByteArray originalReceipt = QJsonDocument(receipt).toJson();
+        QCOMPARE(receiptFile.write(originalReceipt), qint64(originalReceipt.size()));
+        receiptFile.close();
+        HeadlessUpdateManager manager({}, statePath, temporaryDirectory.path(), false);
+        const QString reason = QStringLiteral("headless rollback receipt is invalid");
+        QCOMPARE(manager.status().value(QStringLiteral("lastError")).toString(), reason);
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            const HeadlessUpdateResult result = manager.checkAndApply(Profile {}, QStringLiteral("5.0.3.10"));
+            QVERIFY(!result.ok);
+            QCOMPARE(result.code, QStringLiteral("recovery_required"));
+            QCOMPARE(manager.status().value(QStringLiteral("lastError")).toString(), reason);
+            QVERIFY(manager.status().value(QStringLiteral("recoveryRequired")).toBool());
+        }
+        QVERIFY(receiptFile.open(QIODevice::ReadOnly));
+        QCOMPARE(receiptFile.readAll(), originalReceipt);
+        HeadlessUpdateManager reloaded({}, statePath, temporaryDirectory.path(), false);
+        QCOMPARE(reloaded.status().value(QStringLiteral("lastError")).toString(), reason);
+    }
+
     void incompatibleCandidateIsRejectedBeforeJournalOrReplacement()
     {
 #ifdef Q_OS_WIN

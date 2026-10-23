@@ -1,6 +1,9 @@
 #include <QtTest/QtTest>
 
 #include <QHostAddress>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QVariantMap>
 
 #include "core/utils/routeRuleMatcher.h"
@@ -39,6 +42,8 @@ private slots:
     void boundedInputsAndStoredRouteCountAreEnforced();
     void matchedValueIsBoundedAndReportsTruncation();
     void oversizedRuleMapsExposeIncompleteCoverage();
+    void managedReceiptBudgetIsIndependentOfLocalRuleLimit();
+    void actualAndroidPolicy17ReceiptMatchesItsLaterSubnet();
     void oversizedStoredValuesExposeIncompleteCoverage();
     void dnsBoundProcessesSeventeenthAddress();
     void dnsBoundMarksSixtyFifthAddressUnexamined();
@@ -375,6 +380,66 @@ void RouteRuleMatcherTest::oversizedRuleMapsExposeIncompleteCoverage()
     QVERIFY(!result.coverageComplete);
     QVERIFY(result.localRulesTruncated);
     QCOMPARE(result.localRulesInspected, routeRuleMatcher::maximumRulesPerSource);
+}
+
+void RouteRuleMatcherTest::managedReceiptBudgetIsIndependentOfLocalRuleLimit()
+{
+    QCOMPARE(routeRuleMatcher::maximumRulesPerSource, 512);
+    QCOMPARE(routeRuleMatcher::maximumManagedRulesPerSource,
+             int(managedRoutePolicy::maximumTotalRouteCount));
+    QVariantMap rules;
+    for (int index = 0; index < routeRuleMatcher::maximumManagedRulesPerSource - 1; ++index) {
+        rules.insert(QHostAddress(0x0b000000u + quint32(index)).toString(), QVariant());
+    }
+    rules.insert(QStringLiteral("77.88.0.0/16"), QVariant());
+    auto result = routeRuleMatcher::matchRules(
+            {}, rules, QStringLiteral("77.88.8.8"), address("77.88.8.8"));
+    QVERIFY(result.coverageComplete);
+    QVERIFY(!result.managedRulesTruncated);
+    QCOMPARE(result.managedRulesInspected, routeRuleMatcher::maximumManagedRulesPerSource);
+    QVERIFY(result.accepted.matched);
+    QCOMPARE(result.accepted.rule, QStringLiteral("77.88.0.0/16"));
+
+    // A single additional managed route is still explicitly incomplete.
+    rules.insert(QStringLiteral("11.1.0.1"), QVariant());
+    result = routeRuleMatcher::matchRules(
+            {}, rules, QStringLiteral("77.88.8.8"), address("77.88.8.8"));
+    QVERIFY(!result.coverageComplete);
+    QVERIFY(result.managedRulesTruncated);
+    QCOMPARE(result.managedRulesInspected, routeRuleMatcher::maximumManagedRulesPerSource);
+
+    // The same oversized input must not raise the old local-settings budget.
+    result = routeRuleMatcher::matchRules(
+            rules, {}, QStringLiteral("77.88.8.8"), address("77.88.8.8"));
+    QVERIFY(!result.coverageComplete);
+    QVERIFY(result.localRulesTruncated);
+    QCOMPARE(result.localRulesInspected, routeRuleMatcher::maximumRulesPerSource);
+}
+
+void RouteRuleMatcherTest::actualAndroidPolicy17ReceiptMatchesItsLaterSubnet()
+{
+    // Route keys captured read-only from the real phone's policy17 VPN link.
+    // This verifies explanation of the installed route list, not packet egress.
+    QFile fixture(QFINDTESTDATA("fixtures/android-policy17-installed-route-keys.json"));
+    QVERIFY(fixture.open(QIODevice::ReadOnly));
+    const QJsonArray keys = QJsonDocument::fromJson(fixture.readAll()).array();
+    QCOMPARE(keys.size(), qsizetype(2584));
+    QVariantMap rules;
+    for (const QJsonValue &key : keys) {
+        QVERIFY(key.isString());
+        rules.insert(key.toString(), QVariant());
+    }
+    QCOMPARE(rules.size(), keys.size());
+    QVERIFY(rules.keys().indexOf(QStringLiteral("77.88.0.0/16"))
+            >= routeRuleMatcher::maximumRulesPerSource);
+    const auto result = routeRuleMatcher::matchRules(
+            {}, rules, QStringLiteral("77.88.8.8"), address("77.88.8.8"));
+    QVERIFY(result.coverageComplete);
+    QVERIFY(!result.managedRulesTruncated);
+    QCOMPARE(result.managedRulesInspected, rules.size());
+    QVERIFY(result.accepted.matched);
+    QCOMPARE(result.accepted.rule, QStringLiteral("77.88.0.0/16"));
+    QCOMPARE(result.accepted.source, QStringLiteral("managed"));
 }
 
 void RouteRuleMatcherTest::oversizedStoredValuesExposeIncompleteCoverage()

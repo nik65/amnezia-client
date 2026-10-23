@@ -4,6 +4,7 @@ set(HEADERS ${HEADERS}
     ${CLIENT_ROOT_DIR}/core/utils/migrations.h
     ${CLIENT_ROOT_DIR}/../ipc/ipc.h
     ${CLIENT_ROOT_DIR}/amneziaApplication.h
+    ${CLIENT_ROOT_DIR}/core/utils/configPayloadCodec.h
     ${CLIENT_ROOT_DIR}/core/utils/errorCodes.h
     ${CLIENT_ROOT_DIR}/core/utils/routeModes.h
     ${CLIENT_ROOT_DIR}/core/utils/boundedQueuedSnapshot.h
@@ -111,6 +112,7 @@ endif()
 set(SOURCES ${SOURCES}
     ${CLIENT_ROOT_DIR}/core/utils/migrations.cpp
     ${CLIENT_ROOT_DIR}/amneziaApplication.cpp
+    ${CLIENT_ROOT_DIR}/core/utils/configPayloadCodec.cpp
     ${CLIENT_ROOT_DIR}/core/utils/errorStrings.cpp
     ${CLIENT_ROOT_DIR}/core/utils/routeRuleMatcher.cpp
     ${CLIENT_ROOT_DIR}/core/utils/remoteLogSanitizer.cpp

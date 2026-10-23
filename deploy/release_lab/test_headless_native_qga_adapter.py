@@ -3,7 +3,7 @@ from unittest.mock import Mock
 import pytest
 from deploy.release_lab.headless_native_acceptance import (Fixture, NativeUpdatePlan, OuterBinding, ReleaseBytes,
  UPDATE_JOURNAL, ROLLBACK_RECEIPT)
-from deploy.release_lab.headless_native_qga_adapter import HeadlessNativeQgaAdapter, HeadlessNativeQgaError, UNIT_PREFLIGHT
+from deploy.release_lab.headless_native_qga_adapter import HeadlessNativeQgaAdapter, HeadlessNativeQgaError, UNIT_PREFLIGHT, READ_SET
 
 def release(v,t): return ReleaseBytes(v,t*64,1,chr(ord(t)+1)*64,2,chr(ord(t)+2)*64,3,chr(ord(t)+3)*64,4,"f"*64)
 def plan(): return NativeUpdatePlan("run","case","nonce-1234567890","2026-09-13T10:00:00Z",OuterBinding(2,3,"11111111-1111-1111-1111-111111111111","/var/lib/amnezia-release-lab/r/qmp","/var/lib/amnezia-release-lab/r/qga"),release("5.0.1.38","a"),release("5.0.1.39","b"),Fixture("http://10.8.1.2:1234",("10.8.1.0/24",),"nonce-1234567890","/manifest.json","/artifact"))
@@ -16,6 +16,11 @@ class Fake:
   if path.endswith("amnezia-cli"): return {"exitcode":0,"stdout":json.dumps({"ok":True,"result":{}})}
   if path=="/usr/bin/python3" and len(args)>1 and args[1]==UNIT_PREFLIGHT:
    return {"exitcode":0,"stdout":json.dumps({"unit":"amneziad.service","exec_start_raw":"{ path=/usr/local/bin/amneziad ; argv[]=/usr/local/bin/amneziad ; }","exe":"/usr/local/bin/amneziad","sha256":args[2],"size":int(args[3]),"main_pid":123 if args[4]=="post" else 0,"proc_exe_sha256":args[2] if args[4]=="post" else ""})}
+  if path=='/usr/bin/python3' and args[1]==READ_SET:
+   spec=json.loads(args[2]);records={}
+   for logical,value in spec['files'].items():records[logical]={"origin":"guest","transport":"qga","path":value,"bytes_b64":"e30=","sha256":"44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","size":2,"uid":0,"gid":0,"mode":"0600"}
+   for logical,value in spec['absent'].items():records[logical]={"origin":"guest","transport":"qga","path":value+'.absence',"bytes_b64":"eyJleGlzdHMiOmZhbHNlfQ==","sha256":"unused","size":16,"uid":0,"gid":0,"mode":"0600"}
+   return {'exitcode':0,'stdout':json.dumps({'records':records})}
   if "READ_RAW" in " ".join(args): raise AssertionError
   if args[:2]==["-c", __import__('deploy.release_lab.headless_native_qga_adapter',fromlist=['ABSENCE']).ABSENCE]: return {"exitcode":0,"stdout":"{\"exists\":false}"}
   if path=="/usr/bin/python3" and args[1].startswith("import base64"):
@@ -38,8 +43,8 @@ def test_collectors_return_raw_records_without_acceptance_bool():
  f=Fake(); a=HeadlessNativeQgaAdapter(f,plan(),lambda:plan().outer_binding)
  for value in (a.collect_update_pending(),a.collect_update_stable(),a.trigger_rollback(),a.collect_rollback_pending(),a.collect_rollback_stable()):
   assert value and all("passed" not in record for record in value.values())
- assert any(UPDATE_JOURNAL in c[1] for c in f.calls if isinstance(c[1],list))
- assert any(ROLLBACK_RECEIPT in c[1] for c in f.calls if isinstance(c[1],list))
+ assert any(UPDATE_JOURNAL in " ".join(c[1]) for c in f.calls if isinstance(c[1],list))
+ assert any(ROLLBACK_RECEIPT in " ".join(c[1]) for c in f.calls if isinstance(c[1],list))
 def test_reboot_waits_for_new_boot_id():
  f=Fake(); times=iter([0,1,2]); a=HeadlessNativeQgaAdapter(f,plan(),lambda:plan().outer_binding,clock=lambda:next(times),sleeper=lambda _:setattr(f,"boot","new"))
  assert a.reboot("old",10)=={"boot_id_before":"old","boot_id_after":"new"}

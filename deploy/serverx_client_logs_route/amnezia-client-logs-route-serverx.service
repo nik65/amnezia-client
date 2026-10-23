@@ -1,0 +1,12 @@
+[Unit]
+Description=Restore ServerX diagnostic collector after VPN container recreation
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/amnezia-client-logs-route-serverx
+TimeoutStartSec=240
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+

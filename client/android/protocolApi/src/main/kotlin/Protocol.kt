@@ -25,6 +25,9 @@ abstract class Protocol {
     abstract val statistics: Statistics
     open val migrationObservation: String? get() = null
     open val migrationCleanupObservation: String? get() = null
+    open fun readRestoredSessionBinding(): NativeSessionBinding? = null
+    open fun readNativeIdleObservation(): NativeIdleObservation = NativeIdleObservation(NativeIdleState.UNKNOWN, 0)
+    open fun stopVpnIfBound(expected: NativeSessionIdentity): Boolean = false
     protected lateinit var context: Context
     protected lateinit var state: MutableStateFlow<ProtocolState>
     protected lateinit var onError: (String) -> Unit
@@ -87,7 +90,26 @@ abstract class Protocol {
         }
     }
 
-    protected open fun buildVpnInterface(config: ProtocolConfig, vpnBuilder: Builder) {
+    protected fun interfaceRoutes(config: ProtocolConfig): Set<Route> {
+        val ordered = mutableListOf<Route>()
+        if (Build.BRAND == "samsung") config.dnsServers.forEach { ordered += Route(InetNetwork(it), true) }
+        ordered.addAll(config.routes)
+        return compactRoutes(if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU)
+            ordered.filter { it.include } else ordered)
+    }
+
+    protected fun applyInterfaceRoutes(routes: Collection<Route>, vpnBuilder: Builder) {
+        for ((inetNetwork, include) in routes) {
+            if (include) vpnBuilder.addRoute(inetNetwork)
+            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) vpnBuilder.excludeRoute(inetNetwork)
+        }
+    }
+
+    protected open fun buildVpnInterface(config: ProtocolConfig, vpnBuilder: Builder) =
+        buildVpnInterfaceWithRoutes(config, vpnBuilder, interfaceRoutes(config))
+
+    /** Metadata is configured once; a bootstrap may only append the exact final route projection. */
+    protected fun buildVpnInterfaceWithRoutes(config: ProtocolConfig, vpnBuilder: Builder, routes: Collection<Route>) {
         vpnBuilder.setSession(VPN_SESSION_NAME)
 
         for (addr in config.addresses) {
@@ -99,32 +121,13 @@ abstract class Protocol {
             Log.d(TAG, "addDnsServer: $addr")
             vpnBuilder.addDnsServer(addr)
         }
-        // fix for Samsung android ignoring DNS servers outside the VPN route range
-        if (Build.BRAND == "samsung") {
-            for (addr in config.dnsServers) {
-                Log.d(TAG, "addRoute: $addr")
-                vpnBuilder.addRoute(InetNetwork(addr))
-            }
-        }
 
         config.searchDomain?.let {
             Log.d(TAG, "addSearchDomain: $it")
             vpnBuilder.addSearchDomain(it)
         }
 
-        for ((inetNetwork, include) in config.routes) {
-            if (include) {
-                Log.d(TAG, "addRoute: $inetNetwork")
-                vpnBuilder.addRoute(inetNetwork)
-            } else {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    Log.d(TAG, "excludeRoute: $inetNetwork")
-                    vpnBuilder.excludeRoute(inetNetwork)
-                } else {
-                    Log.e(TAG, "Trying to exclude route $inetNetwork on old Android")
-                }
-            }
-        }
+        applyInterfaceRoutes(routes, vpnBuilder)
 
         if (!config.useIncludedUnion) {
             for (app in config.includedApplications) {

@@ -27,6 +27,7 @@ packages:
   - libxcb-render-util0
   - libxcb-cursor0
   - xserver-xorg
+  - libxres1
 ssh_pwauth: false
 disable_root: true
 users:

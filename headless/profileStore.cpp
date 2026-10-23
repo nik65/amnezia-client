@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QLockFile>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QUrl>
@@ -291,6 +292,14 @@ bool ProfileStore::save()
         m_lastError = QStringLiteral("unable to create profile store directory");
         return false;
     }
+    // The rollback coordinator transforms the raw store under this same lock.
+    // Serialize product writers so a stale save cannot overwrite its pause.
+    QLockFile writerLock(m_path + QStringLiteral(".lock"));
+    writerLock.setStaleLockTime(0);
+    if (!writerLock.tryLock(0)) {
+        m_lastError = QStringLiteral("profile store is owned by another writer");
+        return false;
+    }
 
     QJsonArray entries;
     for (const Profile &profile : m_profiles) {
@@ -301,12 +310,18 @@ bool ProfileStore::save()
         { QStringLiteral("profiles"), entries },
     };
 
+    const QByteArray serialized = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    if (serialized.size() > MaximumStoreBytes) {
+        m_lastError = QStringLiteral("profile store exceeds the size limit");
+        return false;
+    }
+
     QSaveFile file(m_path);
     if (!file.open(QIODevice::WriteOnly)) {
         m_lastError = QStringLiteral("unable to write profile store");
         return false;
     }
-    if (file.write(QJsonDocument(root).toJson(QJsonDocument::Indented)) < 0
+    if (file.write(serialized) != serialized.size()
         || !file.commit()) {
         m_lastError = QStringLiteral("unable to commit profile store");
         return false;

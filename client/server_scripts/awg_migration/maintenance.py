@@ -53,6 +53,10 @@ def maintain(source, generation, expected_journal_sha256, recipe_directory=None,
         if hashlib.sha256(raw).hexdigest() != expected_journal_sha256:
             raise ValueError('maintenance journal changed')
         value = json.loads(raw)
+        if value.get('nativeFeedSha256') is not None:
+            # Native runtime/loaded-FD maintenance is not implemented. Never
+            # replace its source pair with a legacy-only recipe or weaken its gate.
+            raise ValueError('native_feed_existing_generation_requires_maintenance')
         ready = json.loads((directory / 'ready.json').read_bytes())
         if (value.get('phase') != 'ready' or value.get('source') != source
                 or 'controlMaintenance' in value

@@ -40,9 +40,22 @@ public:
                                        const QString &currentVersion);
     HeadlessUpdateResult rollback();
     QJsonObject status() const;
+    // Coordinator-only native entry: caller has verified/stopped the target
+    // service. Acquire process ownership BEFORE loading state or running GC.
+    // Explicit paths are a C++ fixture seam; no CLI accepts arbitrary paths.
+    static HeadlessUpdateResult acknowledgeStoppedRollback(
+        const QString &statePath, const QString &installDirectory,
+        const QString &verifiedTargetVersion,
+        std::shared_ptr<CommandRunner> runner = {}, bool requireRootOwnedFiles = true);
 
 private:
     friend class ::HeadlessUpdateTest;
+    enum class Initialization { Normal, Deferred };
+    HeadlessUpdateManager(std::shared_ptr<CommandRunner> runner, QString statePath,
+                         QString installDirectory, bool requireRootOwnedFiles,
+                         Initialization initialization);
+    void initializeState();
+    HeadlessUpdateResult checkAndApplyWithLock(const Profile &profile, const QString &currentVersion);
 
     struct Candidate
     {

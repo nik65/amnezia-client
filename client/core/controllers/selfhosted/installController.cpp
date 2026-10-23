@@ -26,6 +26,7 @@
 #include "core/utils/containers/containerUtils.h"
 #include "core/utils/protocolEnum.h"
 #include "core/utils/selfhosted/sshSession.h"
+#include "core/utils/selfhosted/serverNativeBundle.h"
 #include "core/installers/awgInstaller.h"
 #include "core/installers/installerBase.h"
 #include "core/installers/openvpnInstaller.h"
@@ -346,14 +347,11 @@ namespace
         return parseServerRoutingRulesRevisionOutput(stdOut, revision, errorMessage);
     }
 
-    QJsonObject canonicalServerRoutingRulesContent(const QJsonObject &rules)
+    QJsonObject canonicalServerRoutingRulesContent(const QJsonObject &rules, bool *valid = nullptr)
     {
-        QJsonObject content;
-        content.insert(QStringLiteral("schemaVersion"), 1);
-        content.insert(configKey::managedSplitTunnelExceptSourceSites, serverRoutingRulesSourceSites(rules));
-        content.insert(configKey::managedSplitTunnelForceEnabled,
-                       rules.value(configKey::managedSplitTunnelForceEnabled).toBool(false));
-        return content;
+        // Publish the same semantic content that clients hash after validation.
+        // In particular, host and host/32 aliases must not get different digests.
+        return managedRoutePolicy::canonicalSourcePolicyContent(rules, valid);
     }
 
     QJsonObject versionedServerRoutingRules(const QJsonObject &rules, qint64 revision,
@@ -361,7 +359,12 @@ namespace
     {
         const QDateTime generatedAt = QDateTime::currentDateTimeUtc();
         const QDateTime expiresAt = generatedAt.addYears(serverRoutingRulesPolicyLifetimeYears);
-        const QJsonObject content = canonicalServerRoutingRulesContent(rules);
+        bool contentValid = false;
+        const QJsonObject content = canonicalServerRoutingRulesContent(rules, &contentValid);
+        if (!contentValid) {
+            contentSha256.clear();
+            return {};
+        }
         const QByteArray canonicalContent = QJsonDocument(content).toJson(QJsonDocument::Compact);
         const QByteArray digest = QCryptographicHash::hash(canonicalContent, QCryptographicHash::Sha256).toHex();
         contentSha256 = QStringLiteral("sha256:%1").arg(QString::fromLatin1(digest));
@@ -945,28 +948,63 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
         }
         probe.abort();
     }
+    const auto nativeBundle = amnezia::serverNative::loadResourceBundle();
+    if (nativeBundle.present && !nativeBundle.valid) {
+        result.insert(QStringLiteral("reason"), QStringLiteral("native_bundle_invalid"));
+        return ErrorCode::ServerCheckFailed;
+    }
     SshSession session;
+    std::optional<amnezia::serverNative::Binary> nativeFeed;
+    if (nativeBundle.present) {
+        QByteArray architectureOutput;
+        const ErrorCode architectureError = session.runScript(credentials, QStringLiteral("uname -m"),
+            [&architectureOutput](const QString &data, libssh::Client &) {
+                const QByteArray bytes = data.toUtf8();
+                if (architectureOutput.size() + bytes.size() > 128) return ErrorCode::ServerCheckFailed;
+                architectureOutput += bytes;
+                return ErrorCode::NoError;
+            }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+        if (architectureError != ErrorCode::NoError) return architectureError;
+        const auto architecture = amnezia::serverNative::parseArchitecture(QString::fromLatin1(architectureOutput.trimmed()));
+        if (architecture) nativeFeed = nativeBundle.find(QStringLiteral("awg-feed"), *architecture);
+        if (!nativeFeed) {
+            result.insert(QStringLiteral("reason"), QStringLiteral("native_feed_architecture_unavailable"));
+            return ErrorCode::ServerCheckFailed;
+        }
+    }
     const QString directory = QStringLiteral("/tmp/amnezia-migration-%1").arg(Utils::getRandomString(24));
     ErrorCode error = session.runScript(credentials,
             QStringLiteral("umask 077; mkdir '%1'").arg(directory));
     if (error != ErrorCode::NoError) return error;
     auto cleanup = [&]() {
         // Random, fixed-prefix directory created by this invocation only.
-        session.runScript(credentials, QStringLiteral("rm -f '%1/prepare.py' '%1/automatic.py' '%1/trusted_image.py' '%1/service.py' '%1/target.py' '%1/policy.py' '%1/journal.py' '%1/feeds.py' '%1/ready_validation.py'; rmdir '%1'").arg(directory));
+        if (nativeFeed)
+            session.runScript(credentials, QStringLiteral("sudo rm -f '%1/native-feed'").arg(directory));
+        session.runScript(credentials, QStringLiteral("rm -f '%1/native-feed.upload' '%1/prepare.py' '%1/automatic.py' '%1/trusted_image.py' '%1/service.py' '%1/target.py' '%1/policy.py' '%1/journal.py' '%1/feeds.py' '%1/ready_validation.py'; rmdir '%1'").arg(directory));
     };
     for (const QString &name : {QStringLiteral("prepare.py"), QStringLiteral("automatic.py"), QStringLiteral("trusted_image.py"), QStringLiteral("service.py"), QStringLiteral("target.py"), QStringLiteral("policy.py"), QStringLiteral("journal.py"), QStringLiteral("feeds.py"), QStringLiteral("ready_validation.py")}) {
+        if (nativeFeed && name == QStringLiteral("feeds.py")) continue;
         QFile resource(QStringLiteral(":/server_scripts/awg_migration/%1").arg(name));
         if (!resource.open(QIODevice::ReadOnly)) { cleanup(); return ErrorCode::InternalError; }
         error = session.uploadFileToHost(credentials, resource.readAll(), directory + QLatin1Char('/') + name);
         if (error != ErrorCode::NoError) { cleanup(); return error; }
     }
+    if (nativeFeed) {
+        error = session.uploadFileToHost(credentials, nativeFeed->bytes, directory + QStringLiteral("/native-feed.upload"));
+        if (error != ErrorCode::NoError) { cleanup(); return error; }
+        error = session.runScript(credentials, QStringLiteral(
+            "sudo install -o 0 -g 0 -m 0755 '%1/native-feed.upload' '%1/native-feed' && rm -f '%1/native-feed.upload'").arg(directory));
+        if (error != ErrorCode::NoError) { cleanup(); return error; }
+    }
     QByteArray output;
-    const QString script = automatic ? QStringLiteral(
+    QString script = automatic ? QStringLiteral(
             "sudo python3 -B '%1/prepare.py' --source '%2' --host '%3' --automatic")
             .arg(directory, ContainerUtils::containerToString(source), endpointHost) : QStringLiteral(
             "sudo python3 -B '%1/prepare.py' --source '%2' --host '%3' --port %4 --image '%5' --generation %6")
             .arg(directory, ContainerUtils::containerToString(source), endpointHost)
             .arg(targetPort).arg(immutableAwgImage).arg(generation);
+    if (nativeFeed)
+        script += QStringLiteral(" --native-feed '%1/native-feed' --native-feed-sha256 '%2'").arg(directory, nativeFeed->sha256);
     error = session.runScript(credentials, script + QStringLiteral(" --preflight"),
             [&output](const QString &data, libssh::Client &) {
                 if (output.size() + data.size() > 16384) return ErrorCode::ServerCheckFailed;
@@ -1059,6 +1097,10 @@ ServerRoutingRulesPublishResult InstallController::publishVersionedServerRouting
 
                 publishedRevision = compareAndSwapRevision + 1;
                 versionedRules = versionedServerRoutingRules(rules, publishedRevision, result.contentSha256);
+                if (versionedRules.isEmpty()) {
+                    result.failureReason = QStringLiteral("Managed routing policy failed canonical validation");
+                    return ErrorCode::ServerCheckFailed;
+                }
                 sourceData = serverRoutingRulesSourceData(versionedRules);
                 resolverScript = serverRoutingRulesResolverScript(versionedRules);
                 constexpr qsizetype maxUploadBytes = 2 * 1024 * 1024;

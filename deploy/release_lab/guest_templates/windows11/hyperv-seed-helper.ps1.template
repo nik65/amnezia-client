@@ -11,6 +11,14 @@ $requiredLines = @(
 foreach ($requiredLine in $requiredLines) {
     if ($markerLines -notcontains $requiredLine) { throw "Hyper-V seed marker is missing required line: $requiredLine" }
 }
+# The sealed, network-isolated lab baseline can be reused after the default
+# local password lifetime. Keep its runtime-only automation account usable;
+# this runs during new guest provisioning, never against an existing parent.
+$labAccount = Get-LocalUser -Name 'labadmin' -ErrorAction Stop
+if (-not $labAccount.Enabled) { throw 'Hyper-V labadmin account is disabled' }
+Set-LocalUser -Name 'labadmin' -PasswordNeverExpires $true -ErrorAction Stop
+$labAccount = Get-LocalUser -Name 'labadmin' -ErrorAction Stop
+if ($null -ne $labAccount.PasswordExpires) { throw 'Hyper-V labadmin password expiration was not disabled' }
 $readyPath = 'C:\ProgramData\AmneziaLab\READY'
 New-Item -ItemType Directory -Path (Split-Path -Parent $readyPath) -Force | Out-Null
 @(

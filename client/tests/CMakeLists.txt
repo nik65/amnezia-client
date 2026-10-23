@@ -5,8 +5,14 @@ enable_testing()
 
 set(AMNEZIA_FOCUSED_TEST_DIRS
     connection_health_probe
+    qr_frames
+    config_payload_codec
+    bounded_network_reply
+    server_native_bundle
+    headless_provisioning_contract
     ipc_server_process_security
     managed_route_policy
+    native_gateway_context
     operator_command
     privileged_ipc_security
     remote_log_sanitizer
@@ -41,6 +47,10 @@ add_subdirectory(route_rule_matcher)
 add_subdirectory(secure_qsettings_broker)
 add_subdirectory(ssh_host_key_pin)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+    add_subdirectory(update_download_lifetime)
+endif()
+
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(AMNEZIA_PYTHON_TEST_ENV
     "PYTHONDONTWRITEBYTECODE=1"
@@ -65,11 +75,18 @@ add_test(
             ${Python3_EXECUTABLE} -m unittest
             client.tests.privileged_ipc_security.test_security_source_contracts -v
 )
+add_test(
+    NAME headless_native_bundle_contracts
+    COMMAND ${CMAKE_COMMAND} -E env ${AMNEZIA_PYTHON_TEST_ENV}
+            ${Python3_EXECUTABLE} -m unittest
+            deploy.headless.test_native_helper_bundle -v
+)
 
 set_tests_properties(
     selfhosted_update_python_contracts
     client_log_collector_python_contracts
     privileged_ipc_python_contracts
+    headless_native_bundle_contracts
     PROPERTIES
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         TIMEOUT 900

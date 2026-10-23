@@ -50,6 +50,15 @@ public:
 
 #ifdef Q_OS_ANDROID
     void restoreConnection(Vpn::ConnectionState state, int serverIndex);
+    void requestNativeSessionRestore(const QString &generation);
+    void handleNativeRestoreStatus(const QJsonObject &snapshot);
+    void invalidateNativeSessionRestore();
+    void observeNativeSession(quint64 observationTicket);
+    void handleNativeRestoreConnectRefused(Vpn::ConnectionState retainedState);
+    void requestServiceDiscovery();
+    void handleServiceDiscovery(const QJsonObject &snapshot);
+    void handleStartAdmission(const QJsonObject &snapshot);
+    void handleServiceDiscoveryConnectRefused(amnezia::ErrorCode error, Vpn::ConnectionState retainedState);
 #endif
 
     void onKillSwitchModeChanged(bool enabled);
@@ -90,6 +99,9 @@ public:
     bool isContainerSupported(DockerContainer container) const;
 
 signals:
+#ifdef Q_OS_ANDROID
+    void serviceDiscoveryBlocked(amnezia::ErrorCode error);
+#endif
     void connectionStateChanged(Vpn::ConnectionState state);
     void serverRoutingRulesChanged(int serverIndex);
 
@@ -130,6 +142,10 @@ signals:
 #endif
 
 private:
+#ifdef Q_OS_ANDROID
+    QString m_restoreRequestId, m_restoreBindingGeneration;
+    QString m_serviceDiscoveryRequestId;
+#endif
     AwgMigrationController *m_awgMigration = nullptr;
     quint64 m_awgMigrationReconnectGeneration = 0;
     struct ManagedRouteSyncSnapshot

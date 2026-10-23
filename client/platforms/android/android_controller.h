@@ -5,6 +5,7 @@
 #include <QPixmap>
 
 #include "core/protocols/vpnProtocol.h"
+#include "core/utils/androidServiceDiscovery.h"
 
 using namespace amnezia;
 
@@ -30,7 +31,13 @@ public:
     };
 
     ErrorCode start(const QJsonObject &vpnConfig);
+    ErrorCode start(const QJsonObject &vpnConfig, const AndroidServiceDiscovery::Grant &grant);
+    void requestServiceDiscovery(const QString &requestId);
+    void flushServiceDiscovery();
     void stop();
+    void stopBound(const QJsonObject &identity);
+    void requestRestoreStatus(const QString &requestId, const QString &generation);
+    void flushRestoreServiceReady();
     void resetLastServer(int serverIndex);
     void saveFile(const QString &fileName, const QString &data);
     QString openFile(const QString &filter);
@@ -75,6 +82,12 @@ public:
 signals:
     void connectionStateChanged(Vpn::ConnectionState state);
     void status(ConnectionState state, int serverIndex);
+    void restoreServiceReady(const QString &generation);
+    void nativeSessionObserved(quint64 observationTicket);
+    void restoreStatus(const QJsonObject &snapshot);
+    void serviceDiscovery(const QJsonObject &snapshot);
+    void startAdmission(const QJsonObject &snapshot);
+    void serviceDiscoveryRefreshNeeded();
     void serviceDisconnected();
     void serviceError(amnezia::ErrorCode error);
     void vpnPermissionRejected();
@@ -100,6 +113,12 @@ signals:
 
 private:
     bool isWaitingStatus = true;
+    bool m_serviceDiscoveryRoutesReady = false;
+    QJsonObject m_cachedServiceDiscovery;
+    QString m_restoreServiceGeneration;
+    QString m_restoreReadyDeliveredGeneration;
+    bool m_restoreRoutesReady = false;
+    quint64 m_nativeObservationDeliveredTicket = 0;
 
     static jclass log;
     static jmethodID logDebug;
@@ -115,6 +134,11 @@ private:
 
     // JNI functions called by Android
     static void onStatus(JNIEnv *env, jobject thiz, jint stateCode, jint serverIndex);
+    static void onRestoreServiceReady(JNIEnv *env, jobject thiz, jlong generation);
+    static void onNativeSessionObserved(JNIEnv *env, jobject thiz);
+    static void onRestoreStatus(JNIEnv *env, jobject thiz, jstring snapshot);
+    static void onServiceDiscovery(JNIEnv *env, jobject thiz, jstring snapshot);
+    static void onStartAdmission(JNIEnv *env, jobject thiz, jstring snapshot);
     static void onServiceDisconnected(JNIEnv *env, jobject thiz);
     static void onServiceError(JNIEnv *env, jobject thiz, jint reasonCode);
     static void onVpnPermissionRejected(JNIEnv *env, jobject thiz);

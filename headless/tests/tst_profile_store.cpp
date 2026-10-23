@@ -51,6 +51,91 @@ private slots:
         QCOMPARE(profiles.constFirst().dnsDomains, profile.dnsDomains);
     }
 
+    void enforcesSerializedSizeAndPreservesLastGoodStore()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("profiles.json"));
+        ProfileStore store(path);
+        Profile profile;
+        profile.id = QStringLiteral("boundary");
+        profile.name = QStringLiteral("Boundary");
+        profile.protocol = QStringLiteral("wireguard");
+        profile.configPath = QStringLiteral("/tmp/config");
+        const auto serialized = [&store](const Profile &value) {
+            return QJsonDocument(QJsonObject {
+                { QStringLiteral("version"), 1 },
+                { QStringLiteral("profiles"), QJsonArray { store.toJson(value) } },
+            }).toJson(QJsonDocument::Indented);
+        };
+        constexpr qsizetype limit = 16 * 1024 * 1024;
+        profile.configPath += QString(limit - serialized(profile).size(), QLatin1Char('a'));
+        QCOMPARE(serialized(profile).size(), limit);
+        QVERIFY2(store.add(profile), qPrintable(store.lastError()));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QByteArray lastGood = file.readAll();
+        file.close();
+        QCOMPARE(lastGood.size(), limit);
+        ProfileStore reloaded(path);
+        QVERIFY2(reloaded.load(), qPrintable(reloaded.lastError()));
+        QCOMPARE(reloaded.profiles().size(), 1);
+
+        Profile extra = profile;
+        extra.id = QStringLiteral("extra");
+        extra.configPath = QStringLiteral("/tmp/extra");
+        QVERIFY(!store.add(extra));
+        QCOMPARE(store.lastError(), QStringLiteral("profile store exceeds the size limit"));
+        QCOMPARE(store.profiles().size(), 1);
+        QVERIFY(!store.contains(extra.id));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QCOMPARE(file.readAll(), lastGood);
+        file.close();
+        QVERIFY(reloaded.load());
+        QCOMPARE(reloaded.profiles().size(), 1);
+
+        // A single byte above the cap must also fail before replacing an empty store.
+        const QString abovePath = directory.filePath(QStringLiteral("above.json"));
+        ProfileStore above(abovePath);
+        profile.configPath += QLatin1Char('a');
+        QCOMPARE(serialized(profile).size(), limit + 1);
+        QVERIFY(!above.add(profile));
+        QVERIFY(above.profiles().isEmpty());
+        QVERIFY(!QFile::exists(abovePath));
+    }
+
+    void rollsBackMutationsWhenSavingFails()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("profiles.json"));
+        ProfileStore store(path);
+        Profile profile;
+        profile.id = QStringLiteral("first");
+        profile.name = QStringLiteral("First");
+        profile.protocol = QStringLiteral("wireguard");
+        profile.configPath = QStringLiteral("/tmp/first");
+        QVERIFY(store.add(profile));
+        profile.id = QStringLiteral("second");
+        QVERIFY(store.add(profile));
+        const QString preservedPath = directory.filePath(QStringLiteral("preserved.json"));
+        QVERIFY(QFile::rename(path, preservedPath));
+        QVERIFY(QDir().mkdir(path)); // Deterministic failure even when tests run as root.
+        QVERIFY(!store.remove(QStringLiteral("first")));
+        QCOMPARE(store.profiles().size(), 2);
+        QCOMPARE(store.profiles().at(0).id, QStringLiteral("first"));
+        QCOMPARE(store.profiles().at(1).id, QStringLiteral("second"));
+        profile.id = QStringLiteral("third");
+        QVERIFY(!store.add(profile));
+        QCOMPARE(store.profiles().size(), 2);
+        QVERIFY(!store.contains(profile.id));
+        QVERIFY(QDir().rmdir(path));
+        QVERIFY(QFile::rename(preservedPath, path));
+        ProfileStore reloaded(path);
+        QVERIFY(reloaded.load());
+        QCOMPARE(reloaded.profiles().size(), 2);
+    }
+
     void rejectsDuplicateIdsAndUnsupportedProtocols()
     {
         QTemporaryDir temporaryDirectory;

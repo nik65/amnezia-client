@@ -24,6 +24,7 @@
 #include <unistd.h>
 #endif
 
+#include "../client/core/utils/boundedNetworkReply.h"
 #include "../client/core/utils/remoteLogSanitizer.h"
 #include "../client/core/utils/selfhosted/clientLogsTarget.h"
 
@@ -34,6 +35,7 @@ namespace
 constexpr int ConfigVersion = 1;
 constexpr qint64 MaximumConfigBytes = 64 * 1024;
 constexpr qint64 MaximumStateBytes = 16 * 1024;
+constexpr qint64 MaximumCollectorResponseBytes = 4096;
 constexpr qint64 MaximumBatchBytes = 15 * 1024 * 1024;
 constexpr qint64 RebindTailBytes = 1024 * 1024;
 constexpr qint64 CursorAnchorBytes = 256;
@@ -654,6 +656,7 @@ void HeadlessRemoteLogUploader::poll()
         bootstrapRequest.setRawHeader("X-Amnezia-Installation-Id",
                                       m_config.value(QStringLiteral("installationId")).toString().toUtf8());
         QNetworkReply *bootstrapReply = m_networkManager->post(bootstrapRequest, QByteArray());
+        const auto bootstrapBody = amnezia::boundNetworkReplyBody(bootstrapReply, MaximumCollectorResponseBytes);
         QEventLoop bootstrapLoop;
         QObject::connect(bootstrapReply, &QNetworkReply::finished,
                          &bootstrapLoop, &QEventLoop::quit);
@@ -661,13 +664,14 @@ void HeadlessRemoteLogUploader::poll()
         bootstrapLoop.exec();
         const int bootstrapStatus = bootstrapReply->attribute(
                 QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const QJsonDocument bootstrapDocument = QJsonDocument::fromJson(bootstrapReply->readAll());
+        const QJsonDocument bootstrapDocument = QJsonDocument::fromJson(bootstrapBody->data);
         const QJsonObject issued = bootstrapDocument.object();
         const QString issuedEndpoint = issued.value(QStringLiteral("endpoint")).toString();
         const QString issuedClientId = issued.value(QStringLiteral("clientId")).toString();
         const QString issuedToken = issued.value(QStringLiteral("token")).toString();
         const bool enrolled = bootstrapReply->isFinished()
                 && bootstrapReply->error() == QNetworkReply::NoError
+                && !bootstrapBody->tooLarge
                 && bootstrapStatus >= 200 && bootstrapStatus < 300
                 && issuedEndpoint == target.value(QStringLiteral("endpoint")).toString()
                 && issuedClientId == target.value(QStringLiteral("clientId")).toString()
@@ -944,13 +948,14 @@ void HeadlessRemoteLogUploader::poll()
     request.setRawHeader("X-Amnezia-Batch-Id", id.toLatin1());
     request.setRawHeader("X-Amnezia-Installation-Id", m_config.value(QStringLiteral("installationId")).toString().toUtf8());
     QNetworkReply *reply = m_networkManager->post(request, payload);
+    const auto responseBody = amnezia::boundNetworkReplyBody(reply, MaximumCollectorResponseBytes);
     QEventLoop loop;
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     QTimer::singleShot(RequestTimeoutMs, &loop, &QEventLoop::quit);
     loop.exec();
     const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool transportAccepted = reply->isFinished()
-            && reply->error() == QNetworkReply::NoError;
+            && reply->error() == QNetworkReply::NoError && !responseBody->tooLarge;
     const bool accepted = transportAccepted
             && statusCode >= 200 && statusCode < 300
             && reply->rawHeader("X-Amnezia-Batch-Accepted") == QByteArrayLiteral("1")

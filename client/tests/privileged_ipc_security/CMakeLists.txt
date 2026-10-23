@@ -25,6 +25,13 @@ target_include_directories(privileged_ipc_security_tests PRIVATE
     "${REPOSITORY_ROOT}/client"
 )
 target_link_libraries(privileged_ipc_security_tests PRIVATE Qt6::Core Qt6::Core5Compat Qt6::Network)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(AMNEZIA_SYSTEMD REQUIRED IMPORTED_TARGET libsystemd>=246)
+    target_sources(privileged_ipc_security_tests PRIVATE "${REPOSITORY_ROOT}/ipc/linuxsystemdpeer.cpp")
+    target_compile_definitions(privileged_ipc_security_tests PRIVATE AMNEZIA_SYSTEMD_PEER_AUTH=1)
+    target_link_libraries(privileged_ipc_security_tests PRIVATE PkgConfig::AMNEZIA_SYSTEMD)
+endif()
 
 if(WIN32)
     target_sources(privileged_ipc_security_tests PRIVATE

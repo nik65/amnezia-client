@@ -96,7 +96,14 @@ void NewsModel::setProcessedIndex(int index)
 {
     if (index < 0 || index >= m_items.size() || m_processedIndex == index)
         return;
+    const int previousIndex = m_processedIndex;
     m_processedIndex = index;
+    if (previousIndex >= 0 && previousIndex < m_items.size()) {
+        const QModelIndex previous = this->index(previousIndex);
+        emit dataChanged(previous, previous, { IsProcessedRole });
+    }
+    const QModelIndex current = this->index(index);
+    emit dataChanged(current, current, { IsProcessedRole });
     emit processedIndexChanged(index);
 }
 

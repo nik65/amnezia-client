@@ -78,6 +78,8 @@ namespace amnezia
         OpenVpnUnknownError = 701,
         OpenVpnTapAdapterError = 702,
         AddressPoolError = 703,
+        NativeTunnelCleanupUnconfirmed = 704,
+        ServiceDiscoveryUnconfirmed = 705,
 
         // 3rd party utils errors
         OpenSslFailed = 800,

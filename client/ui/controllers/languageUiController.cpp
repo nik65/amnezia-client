@@ -1,5 +1,8 @@
 #include "languageUiController.h"
 
+#include <QUrl>
+#include <QUrlQuery>
+
 LanguageUiController::LanguageUiController(SettingsController *settingsController, LanguageModel *languageModel, QObject *parent)
     : QObject(parent), m_settingsController(settingsController), m_languageModel(languageModel)
 {
@@ -73,11 +76,23 @@ LanguageSettings::AvailableLanguageEnum LanguageUiController::getSystemLanguageE
 
 QString LanguageUiController::getCurrentSiteUrl(const QString &path) const
 {
-    auto locale = m_settingsController->getAppLanguage();
-    if (locale.language() == QLocale::Russian) {
-        return "https://storage.googleapis.com/amnezia/amnezia.org?utm_source=app&utm_campaign=amnezia_hello" + (path.isEmpty() ? "" : (QString("?m-path=/%1").arg(path)));
+    const auto locale = m_settingsController->getAppLanguage();
+    const bool useMirror = locale.language() == QLocale::Russian;
+    QUrl url(useMirror ? QStringLiteral("https://storage.googleapis.com/amnezia/amnezia.org")
+                       : QStringLiteral("https://amnezia.org"));
+    QUrlQuery query;
+    query.addQueryItem(QStringLiteral("utm_source"), QStringLiteral("app"));
+    query.addQueryItem(QStringLiteral("utm_campaign"), QStringLiteral("amnezia_hello"));
+    if (!path.isEmpty()) {
+        const QString sitePath = QStringLiteral("/") + path;
+        if (useMirror) {
+            query.addQueryItem(QStringLiteral("m-path"), sitePath);
+        } else {
+            url.setPath(sitePath);
+        }
     }
-    return QString("https://amnezia.org?utm_source=app&utm_campaign=amnezia_hello") + (path.isEmpty() ? "" : (QString("/%1").arg(path)));
+    url.setQuery(query);
+    return url.toString();
 }
 
 QString LanguageUiController::getCurrentDocsUrl(const QString &path) const

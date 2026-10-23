@@ -1,0 +1,14 @@
+{
+  "schema": "amnezia-public-signed-release-unit-fixture-v1",
+  "sourcePath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\release-candidate-5.0.3.13-2199-20261019\\owner-normal-source-freeze-v3\\bundle\\manifest.json",
+  "sourceSHA256": "75c41ab23a9f880d35bc7181736bbc11850b3878009207220a0ac3c9be763211",
+  "sourceSize": 2730,
+  "releaseVersion": "5.0.3.13",
+  "signatureAlgorithm": "Ed25519",
+  "originalSignatureVerifiedBeforeExactCopy": true,
+  "bytesTransformed": false,
+  "credentialsPresent": false,
+  "urlRecords": "all relative, no authority/query/fragment/userinfo",
+  "keysCopied": false,
+  "at": "2026-10-22T19:45:58.146777+00:00"
+}

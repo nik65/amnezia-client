@@ -7,6 +7,13 @@ set -euo pipefail
 export LC_ALL=C
 SOURCE_PACKAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_ROOT="$SOURCE_PACKAGE_ROOT"
+# Never execute a helper from the caller-controlled source directory. This is
+# set only after the private copy, receipt, checksums and trust anchor agree.
+NATIVE_HELPER=""
+NATIVE_HELPER_ARGS=()
+run_native_helper() {
+    "$NATIVE_HELPER" "${NATIVE_HELPER_ARGS[@]}" "$@"
+}
 RECOVER_ONLY=0
 if [[ "${1:-}" == "--recover" ]]; then
     RECOVER_ONLY=1
@@ -120,6 +127,10 @@ verify_transaction_root() {
     (( mode_bits & 0022 )) && return 1
 }
 fsync_path_directory() {
+    if [[ -n "$NATIVE_HELPER" ]]; then
+        run_native_helper fsync-directory "$1"
+        return $?
+    fi
     python3 - "$1" <<'PY'
 import os
 import sys
@@ -132,6 +143,10 @@ finally:
 PY
 }
 fsync_regular_path() {
+    if [[ -n "$NATIVE_HELPER" ]]; then
+        run_native_helper fsync-file "$1"
+        return $?
+    fi
     python3 - "$1" <<'PY'
 import os
 import sys
@@ -159,6 +174,13 @@ clear_recovery_required() {
 }
 write_transaction_journal() {
     local phase="$1"
+    if [[ -n "$NATIVE_HELPER" ]]; then
+        run_native_helper journal-write "$phase" "${MODE:-}" "${BACKUP_DIR:-}" \
+            "${SERVICE_TARGET:-/etc/systemd/system/amneziad.service}" \
+            "${SERVICE_WAS_ENABLED:-not-found}" "${SERVICE_WAS_ACTIVE:-inactive}" \
+            "${GROUP_WAS_PRESENT:-false}" "${GROUP_CREATED:-false}"
+        return $?
+    fi
     python3 - "$TRANSACTION_JOURNAL" "$phase" "${MODE:-}" "${BACKUP_DIR:-}" \
         "${SERVICE_TARGET:-/etc/systemd/system/amneziad.service}" \
         "${SERVICE_WAS_ENABLED:-not-found}" "${SERVICE_WAS_ACTIVE:-inactive}" \
@@ -296,6 +318,10 @@ verify_recovery_backup() {
     # entry (content, size, mode and numeric ownership) before any recovery
     # mutation; a merely complete-looking directory is not sufficient after
     # a crash or partial copy.
+    if [[ -n "$NATIVE_HELPER" ]]; then
+        run_native_helper journal-validate-backup
+        return $?
+    fi
     python3 - "$TRANSACTION_JOURNAL" "$backup_dir" <<'PY'
 import hashlib
 import json
@@ -356,20 +382,12 @@ PY
 verify_active_health() {
     [[ -S /run/amnezia/amneziad.sock ]] && /usr/local/bin/amnezia-cli --socket /run/amnezia/amneziad.sock doctor --json >/dev/null
 }
-recover_transaction() {
-    if [[ ! -e "$TRANSACTION_JOURNAL" && ! -L "$TRANSACTION_JOURNAL" ]]; then
-        [[ ! -e "$RECOVERY_MARKER" && ! -L "$RECOVERY_MARKER" ]] && return 0
-        echo "headless provisioning recovery marker exists without a durable journal" >&2
-        return 1
+read_transaction_journal() {
+    if [[ -n "$NATIVE_HELPER" ]]; then
+        run_native_helper journal-recovery-read
+        return $?
     fi
-    if [[ -L "$TRANSACTION_JOURNAL" || ! -f "$TRANSACTION_JOURNAL" \
-        || "$(stat -c '%u' -- "$TRANSACTION_JOURNAL" 2>/dev/null || true)" != "0" \
-        || "$(stat -c '%a' -- "$TRANSACTION_JOURNAL" 2>/dev/null || true)" != "600" ]]; then
-        echo "headless provisioning journal is not a root-owned mode 0600 regular file" >&2
-        return 1
-    fi
-    local journal_values
-    if ! journal_values="$(python3 - "$TRANSACTION_JOURNAL" <<'PY'
+    python3 - "$TRANSACTION_JOURNAL" <<'PY'
 import json
 import re
 import sys
@@ -409,7 +427,21 @@ for key in ("mode", "backupDir", "serviceTarget", "serviceEnabled", "serviceActi
 print("true" if value["groupPresent"] else "false")
 print("true" if value["groupCreated"] else "false")
 PY
-)"; then
+}
+recover_transaction() {
+    if [[ ! -e "$TRANSACTION_JOURNAL" && ! -L "$TRANSACTION_JOURNAL" ]]; then
+        [[ ! -e "$RECOVERY_MARKER" && ! -L "$RECOVERY_MARKER" ]] && return 0
+        echo "headless provisioning recovery marker exists without a durable journal" >&2
+        return 1
+    fi
+    if [[ -L "$TRANSACTION_JOURNAL" || ! -f "$TRANSACTION_JOURNAL" \
+        || "$(stat -c '%u' -- "$TRANSACTION_JOURNAL" 2>/dev/null || true)" != "0" \
+        || "$(stat -c '%a' -- "$TRANSACTION_JOURNAL" 2>/dev/null || true)" != "600" ]]; then
+        echo "headless provisioning journal is not a root-owned mode 0600 regular file" >&2
+        return 1
+    fi
+    local journal_values
+    if ! journal_values="$(read_transaction_journal)"; then
         echo "headless provisioning recovery cannot parse its durable journal" >&2
         return 1
     fi
@@ -603,6 +635,7 @@ cleanup_pretransaction() {
 trap cleanup_pretransaction EXIT
 if ! python3 - "$SOURCE_PACKAGE_ROOT" "$PRIVATE_INPUTS_ROOT" "$PUBLIC_KEY" "$VERIFIED_RECEIPT" <<'PY'
 import hashlib
+import json
 import os
 import stat
 import sys
@@ -658,6 +691,12 @@ if private_stat.st_uid != 0 or (private_stat.st_mode & 0o777) != 0o700:
     raise SystemExit("private package-input directory must be root-owned and mode 0700")
 for name in expected_names:
     copy_exact(Path(source_root) / name, package_root / name, name)
+manifest = json.loads((package_root / "package-manifest.json").read_text(encoding="utf-8"))
+if "nativeHelper" in manifest:
+    if manifest["nativeHelper"] not in ("amnezia-headless-fs", "amnezia-cli"):
+        raise SystemExit("unknown native provisioning helper")
+    if manifest["nativeHelper"] == "amnezia-headless-fs":
+        copy_exact(Path(source_root) / "amnezia-headless-fs", package_root / "amnezia-headless-fs", "native helper")
 copy_exact(Path(public_key_text), private_root / "update-public-key.pem", "public key")
 copy_exact(Path(receipt_text), private_root / "verified-receipt.json", "verified receipt")
 PY
@@ -732,6 +771,10 @@ verify_root_private_file() {
     fi
 }
 verify_root_private_tree() {
+    if [[ -n "$NATIVE_HELPER" ]]; then
+        run_native_helper verify-root-private-tree "$1"
+        return $?
+    fi
     python3 - "$1" <<'PY'
 import os
 import stat
@@ -827,9 +870,6 @@ for candidate in /usr/local/bin/amneziad /usr/local/bin/amnezia-cli /etc/amnezia
     fi
 done
 if [[ "$MODE" == "upgrade" ]]; then
-    for candidate in /var/lib/amnezia /run/amnezia /etc/amnezia /etc/amnezia/profiles; do
-        verify_root_private_tree "$candidate" || exit 4
-    done
     for candidate in /run/systemd/system /usr/local/lib/systemd/system; do
         if [[ -e "$candidate" || -L "$candidate" ]]; then
             verify_root_private_directory "$candidate" || exit 4
@@ -904,7 +944,11 @@ def load(name):
     try: return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error: raise SystemExit(f"invalid JSON package file: {name}") from error
 manifest = load("package-manifest.json")
-if set(manifest) != {"schema","version","platform","installModes","artifacts","service","servicePaths","trustAnchor","runtimeManifest","checksums","runtimeText"} or manifest["schema"] != 2 or not version_re.fullmatch(manifest["version"]): raise SystemExit("invalid package-manifest.json")
+manifest_fields = {"schema","version","platform","installModes","artifacts","service","servicePaths","trustAnchor","runtimeManifest","checksums","runtimeText"}
+if "nativeHelper" in manifest:
+    if manifest["nativeHelper"] not in ("amnezia-headless-fs", "amnezia-cli"): raise SystemExit("invalid native helper")
+    manifest_fields.add("nativeHelper")
+if set(manifest) != manifest_fields or manifest["schema"] != 2 or not version_re.fullmatch(manifest["version"]): raise SystemExit("invalid package-manifest.json")
 if manifest["platform"] != "linux-headless-x64" or manifest["installModes"] != ["fresh","upgrade"] or manifest["artifacts"] != ["amneziad","amnezia-cli","amneziad.service"] or manifest["servicePaths"] != ["/etc/systemd/system/amneziad.service","/run/systemd/system/amneziad.service","/usr/local/lib/systemd/system/amneziad.service","/usr/lib/systemd/system/amneziad.service","/lib/systemd/system/amneziad.service"]: raise SystemExit("invalid package artifact/service contract")
 if manifest["service"] != "amneziad.service" or manifest["trustAnchor"] != "external-ed25519-sha256-receipt" or manifest["runtimeManifest"] != "runtime-dependencies.json" or manifest["checksums"] != "SHA256SUMS" or manifest["runtimeText"] != "runtime-dependencies.txt": raise SystemExit("invalid package references")
 for name in ("install_headless.sh","amneziad","amnezia-cli","amneziad.service","package-manifest.json","runtime-dependencies.json","runtime-dependencies.txt","SHA256SUMS"):
@@ -950,6 +994,11 @@ root = Path(root_text)
 expected_files = ["install_headless.sh", "amneziad", "amnezia-cli", "amneziad.service",
                   "package-manifest.json", "runtime-dependencies.json",
                   "runtime-dependencies.txt", "SHA256SUMS"]
+manifest = json.loads((root / "package-manifest.json").read_text(encoding="utf-8"))
+if "nativeHelper" in manifest:
+    if manifest["nativeHelper"] not in ("amnezia-headless-fs", "amnezia-cli"): raise SystemExit("invalid native helper")
+    if manifest["nativeHelper"] == "amnezia-headless-fs":
+        expected_files.append("amnezia-headless-fs")
 def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 receipt_file = Path(receipt_path)
 if not receipt_file.is_file() or receipt_file.is_symlink(): raise SystemExit("verified receipt must be regular")
@@ -967,6 +1016,14 @@ manifest = json.loads((root / "package-manifest.json").read_text(encoding="utf-8
 if manifest.get("version") != receipt["version"] or manifest.get("artifacts") != ["amneziad", "amnezia-cli", "amneziad.service"]: raise SystemExit("package version/artifacts do not match receipt")
 for name in expected_files:
     if not (root / name).is_file() or (root / name).is_symlink(): raise SystemExit("package member is not a regular file")
+if "nativeHelper" in manifest:
+    helper_name = manifest["nativeHelper"]
+    helper_rows = [line for line in (root / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+                   if line.endswith("  " + helper_name)]
+    if len(helper_rows) != 1 or not re.fullmatch(r"[0-9a-f]{64}  " + re.escape(helper_name), helper_rows[0]):
+        raise SystemExit("native helper checksum entry is missing or ambiguous")
+    if digest(root / helper_name) != helper_rows[0][:64]:
+        raise SystemExit("native helper does not match authenticated checksums")
 PY
 then
     echo "verified provisioning receipt is missing or does not match this package" >&2
@@ -980,8 +1037,32 @@ if [[ "$(sha256sum "$PUBLIC_KEY" | awk '{print tolower($1)}')" != "${EXPECTED_KE
     echo "supplied trust anchor fingerprint does not match the expected receipt" >&2
     exit 3
 fi
+NATIVE_HELPER_KIND="$(python3 - "$PACKAGE_ROOT/package-manifest.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")).get("nativeHelper", ""))
+PY
+)" || exit 3
+if [[ "$NATIVE_HELPER_KIND" == "amnezia-headless-fs" ]]; then
+    if [[ -L "$PACKAGE_ROOT/amnezia-headless-fs" || ! -f "$PACKAGE_ROOT/amnezia-headless-fs" || ! -x "$PACKAGE_ROOT/amnezia-headless-fs" ]]; then
+        echo "authenticated native provisioning helper is not executable/regular" >&2
+        exit 3
+    fi
+    NATIVE_HELPER="$PACKAGE_ROOT/amnezia-headless-fs"
+fi
+if [[ "$MODE" == "upgrade" ]]; then
+    for candidate in /var/lib/amnezia /run/amnezia /etc/amnezia /etc/amnezia/profiles; do
+        verify_root_private_tree "$candidate" || exit 4
+    done
+fi
 for binary in amneziad amnezia-cli; do
-    if ! python3 - "$PACKAGE_ROOT/$binary" <<'PY'
+    if [[ -n "$NATIVE_HELPER" ]]; then
+        if ! run_native_helper verify-elf64-x86-64 "$PACKAGE_ROOT/$binary"; then
+            echo "headless binary is not an x86_64 ELF64 executable: $binary" >&2
+            exit 3
+        fi
+    elif ! python3 - "$PACKAGE_ROOT/$binary" <<'PY'
 import struct
 import sys
 from pathlib import Path
@@ -1005,6 +1086,12 @@ PY
         exit 3
     fi
 done
+if [[ "$NATIVE_HELPER_KIND" == "amnezia-cli" ]]; then
+    # Explicit authenticated package capability; never probe an old CLI and
+    # silently fall back. Both binaries passed static/runtime checks above.
+    NATIVE_HELPER="$PACKAGE_ROOT/amnezia-cli"
+    NATIVE_HELPER_ARGS=(--provisioning-fs)
+fi
 if [[ "$MODE" == "fresh" ]]; then SERVICE_PATH=/etc/systemd/system/amneziad.service; fi
 SERVICE_WAS_ACTIVE=""
 SERVICE_WAS_ENABLED=""

@@ -15,6 +15,10 @@ inline constexpr int maximumStoredRoutesPerRule = 64;
 inline constexpr int maximumMatchedValueLength = 2048;
 inline constexpr int maximumRawStoredValueLength = 4096;
 inline constexpr int maximumRulesPerSource = 512;
+// Managed policy/installation receipts have their own cumulative route budget.
+// Keep legacy local settings bounded separately instead of truncating a valid
+// confirmed managed snapshot at the much smaller local-rule limit.
+inline constexpr int maximumManagedRulesPerSource = 4096;
 
 inline constexpr int resolvedAddressScoreBase = 7000;
 inline constexpr int addressScoreBase = 8000;

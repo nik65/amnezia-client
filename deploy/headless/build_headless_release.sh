@@ -9,6 +9,11 @@ if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-
     echo "usage: $0 x.y.z.w [output-directory]" >&2
     exit 2
 fi
+BUILD_JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
+if [[ ! "$BUILD_JOBS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "CMAKE_BUILD_PARALLEL_LEVEL must be a positive integer" >&2
+    exit 2
+fi
 fsync_output_directory() {
     python3 - "$1" <<'PY'
 import os
@@ -51,7 +56,7 @@ if [[ -n "${AMNEZIA_HEADLESS_OPENSSL_CRYPTO_LIBRARY:-}" ]]; then
 fi
 
 cmake "${cmake_args[@]}"
-cmake --build "$BUILD_DIR" --target amneziad amnezia-cli --parallel
+cmake --build "$BUILD_DIR" --target amneziad amnezia-cli --parallel "$BUILD_JOBS"
 DESTDIR="$STAGE_DIR" cmake --install "$BUILD_DIR" --prefix /usr/local --strip
 
 mkdir -p "$OUT_DIR"
@@ -83,7 +88,7 @@ install -m 0755 "$STAGE_DIR/usr/local/bin/amneziad" "$PACKAGE_DIR/amneziad"
 install -m 0755 "$STAGE_DIR/usr/local/bin/amnezia-cli" "$PACKAGE_DIR/amnezia-cli"
 install -m 0644 "$STAGE_DIR/usr/local/lib/systemd/system/amneziad.service" "$PACKAGE_DIR/amneziad.service"
 cat > "$PACKAGE_DIR/package-manifest.json" <<EOF
-{"schema":2,"version":"$VERSION","platform":"linux-headless-x64","installModes":["fresh","upgrade"],"artifacts":["amneziad","amnezia-cli","amneziad.service"],"service":"amneziad.service","servicePaths":["/etc/systemd/system/amneziad.service","/run/systemd/system/amneziad.service","/usr/local/lib/systemd/system/amneziad.service","/usr/lib/systemd/system/amneziad.service","/lib/systemd/system/amneziad.service"],"trustAnchor":"external-ed25519-sha256-receipt","runtimeManifest":"runtime-dependencies.json","checksums":"SHA256SUMS","runtimeText":"runtime-dependencies.txt"}
+{"schema":2,"version":"$VERSION","platform":"linux-headless-x64","installModes":["fresh","upgrade"],"artifacts":["amneziad","amnezia-cli","amneziad.service"],"service":"amneziad.service","servicePaths":["/etc/systemd/system/amneziad.service","/run/systemd/system/amneziad.service","/usr/local/lib/systemd/system/amneziad.service","/usr/lib/systemd/system/amneziad.service","/lib/systemd/system/amneziad.service"],"trustAnchor":"external-ed25519-sha256-receipt","runtimeManifest":"runtime-dependencies.json","checksums":"SHA256SUMS","runtimeText":"runtime-dependencies.txt","nativeHelper":"amnezia-cli"}
 EOF
 cat > "$PACKAGE_DIR/runtime-dependencies.json" <<'EOF'
 {"schema":2,"distribution":"ubuntu","architectures":["amd64"],"releases":[

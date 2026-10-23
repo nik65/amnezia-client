@@ -20,6 +20,7 @@
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/constants/protocolConstants.h"
 #include "core/utils/boundedQueuedSnapshot.h"
+#include "core/utils/boundedNetworkReply.h"
 #include "core/utils/remoteLogBatchHealth.h"
 #include "core/utils/remoteLogCursor.h"
 #include "core/utils/remoteLogReceipt.h"
@@ -1673,12 +1674,14 @@ void RemoteLogUploader::bootstrapCurrentTarget()
     }
 
     QNetworkReply *reply = m_networkAccessManager.post(request, QByteArray());
-    connect(reply, &QNetworkReply::finished, this, [this, reply, target = m_currentTarget]() {
+    const auto responseBody = amnezia::boundNetworkReplyBody(reply, maxBootstrapResponseBytes);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, responseBody, target = m_currentTarget]() {
         const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const bool networkOk = reply->error() == QNetworkReply::NoError && statusCode >= 200 && statusCode < 300;
+        const bool networkOk = reply->error() == QNetworkReply::NoError
+                && statusCode >= 200 && statusCode < 300 && !responseBody->tooLarge;
         bool tokenStored = false;
         if (networkOk) {
-            const QByteArray response = reply->read(maxBootstrapResponseBytes + 1);
+            const QByteArray response = responseBody->data;
             if (response.size() > maxBootstrapResponseBytes) {
                 logger.warning() << "Bootstrap response rejected"
                                  << "target" << targetIdentity(target).left(12)
@@ -1757,14 +1760,15 @@ void RemoteLogUploader::postNext()
     }
 
     QNetworkReply *reply = m_networkAccessManager.post(request, payload.data);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, payload, batchId]() {
+    const auto responseBody = amnezia::boundNetworkReplyBody(reply, maxBootstrapResponseBytes);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, responseBody, payload, batchId]() {
         const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const bool httpOk = reply->error() == QNetworkReply::NoError
                 && statusCode >= 200 && statusCode < 300;
         const bool receiptAccepted = amnezia::remoteLogBatchReceiptAccepted(
                 reply->rawHeader("X-Amnezia-Batch-Accepted"),
                 reply->rawHeader("X-Amnezia-Batch-Id"), batchId);
-        const bool ok = httpOk && receiptAccepted;
+        const bool ok = httpOk && receiptAccepted && !responseBody->tooLarge;
         if (ok) {
             bool durableCursorAdvanced = true;
             if (payload.advancesCursor) {

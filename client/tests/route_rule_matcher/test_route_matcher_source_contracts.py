@@ -135,10 +135,24 @@ class RouteMatcherSourceContracts(unittest.TestCase):
         self.assertIn("maximumMatchedValueLength", header)
         self.assertIn("matchedValue.left(maximumMatchedValueLength)", implementation)
         self.assertNotIn(".split(separator", implementation)
-        self.assertIn("inspectedRules >= maximumRulesPerSource", implementation)
+        self.assertIn("inspectedRules >= maximumRules", implementation)
+        self.assertIn("trustedManaged ? maximumManagedRulesPerSource : maximumRulesPerSource", implementation)
+        self.assertIn("maximumManagedRulesPerSource == managedRoutePolicy::maximumTotalRouteCount", implementation)
         self.assertIn("rawValue.left(maximumRawStoredValueLength)", implementation)
         self.assertIn("score == best.score", implementation)
         self.assertIn('source == QStringLiteral("local")', implementation)
+
+    def test_incomplete_coverage_keeps_its_reason_in_controller_and_ui(self) -> None:
+        inspector = source("client/core/controllers/routeInspectorController.cpp")
+        qml = source("client/ui/qml/Pages2/PageRouteInspector.qml")
+        no_match_branch = inspector[inspector.index("if (runtimeConnected && installedSnapshotAuthoritative") :]
+        no_match_branch = no_match_branch[:no_match_branch.index("if (runtimeDecisionUnknown)")]
+        self.assertIn("&& addressRuleCoverageComplete", no_match_branch)
+        self.assertIn("localRouteReceiptUnavailable = true", no_match_branch)
+        self.assertIn('"route_rule_coverage_truncated"', qml)
+        self.assertIn("else if (ruleCoverageTruncated)", qml)
+        self.assertLess(qml.index("else if (ruleCoverageTruncated)"),
+                        qml.index("else if (localRouteReceiptUnavailable)"))
 
     def test_guardian_recovery_requires_ui_action_and_epoch_bound_ack(self) -> None:
         health_header = source(

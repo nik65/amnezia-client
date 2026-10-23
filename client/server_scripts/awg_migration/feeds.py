@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-PACKAGE_SUFFIXES = ('.exe', '.msi', '.apk', '.zip', '.tar.gz', '.tgz', '.deb', '.rpm', '.AppImage', '.sig', '.sha256')
+PACKAGE_SUFFIXES = ('.exe', '.msi', '.apk', '.zip', '.tar.gz', '.tgz', '.deb', '.rpm', '.run', '.AppImage', '.sig', '.sha256')
 
 
 def feed_mounts(directory):
@@ -25,7 +25,7 @@ def open_feed(root, request, routing=False):
     allowed = path == ('/rules.json' if routing else '/manifest.json')
     if not routing and len(parts) >= 2 and parts[0] == 'files' and parts[-1].endswith(PACKAGE_SUFFIXES):
         allowed = True
-    if not allowed or any(not re.fullmatch('[A-Za-z0-9._-]+', part) or part in ('.', '..') for part in parts):
+    if not allowed or any(not re.fullmatch('[A-Za-z0-9._+-]+', part) or part in ('.', '..') for part in parts):
         raise ValueError('path')
     flags = os.O_RDONLY | os.O_NOFOLLOW
     directory = os.open(root, flags | os.O_DIRECTORY)
@@ -56,7 +56,8 @@ class Handler(BaseHTTPRequestHandler):
         with stream:
             self.send_response(200)
             self.send_header('Content-Length', str(size))
-            self.send_header('Content-Type', 'application/json' if self.path.endswith('.json') else 'application/octet-stream')
+            path = unquote(urlsplit(self.path).path, errors='strict')
+            self.send_header('Content-Type', 'application/json' if path.endswith('.json') else 'application/octet-stream')
             self.send_header('Cache-Control', 'no-store')
             self.end_headers()
             if not head:

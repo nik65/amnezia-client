@@ -51,7 +51,9 @@ enum class VpnProto(
         override fun createProtocol(): Protocol = Xray.instance
     };
 
-    private var _protocol: Protocol? = null
+    @Volatile private var _protocol: Protocol? = null
+    /** Discovery must never construct a dormant native backend. */
+    fun peekProtocol(): Protocol? = _protocol
     val protocol: Protocol
         get() {
             if (_protocol == null) _protocol = createProtocol()

@@ -210,7 +210,6 @@ def validate_http_receipt(plan: NativeUpdatePlan, receipt: Mapping) -> dict:
             if artifact_seen: raise HeadlessAcceptanceError("fixture served the candidate artifact more than once")
             artifact_seen = True; digest = plan.candidate.tar_sha256; size = plan.candidate.tar_size
         elif path == plan.fixture.manifest_path:
-            if artifact_seen: raise HeadlessAcceptanceError("manifest GET occurred outside the update phase")
             digest = plan.candidate.manifest_sha256; size = plan.candidate.manifest_size
         else:
             raise HeadlessAcceptanceError("fixture request path differs from the plan")
@@ -282,7 +281,7 @@ def validate_update_receipt(plan: NativeUpdatePlan, receipt: Mapping, http_recei
     if not isinstance(raw, Mapping): raise HeadlessAcceptanceError("native update raw sources are missing")
     before_doctor = _raw_json(raw.get("before_doctor"), "baseline doctor", path="cli:doctor")
     after_doctor = _raw_json(raw.get("after_doctor"), "candidate doctor", path="cli:doctor")
-    if not isinstance(before_doctor, Mapping) or not isinstance(after_doctor, Mapping) or before_doctor.get("ok") is not True or after_doctor.get("ok") is not True or (((after_doctor.get("result") or {}).get("updates") or {}).get("state") != "updated"):
+    if not isinstance(before_doctor, Mapping) or not isinstance(after_doctor, Mapping) or before_doctor.get("ok") is not True or after_doctor.get("ok") is not True or (((after_doctor.get("result") or {}).get("updates") or {}).get("state") not in {"updated", "no_update"}):
         raise HeadlessAcceptanceError("raw doctor responses do not prove stable candidate health")
     profile_store = _raw_json(raw.get("profile_store"), "profile store", path=FIXED_STORE)
     profile_source = raw.get("profile_store")
@@ -298,8 +297,19 @@ def validate_update_receipt(plan: NativeUpdatePlan, receipt: Mapping, http_recei
     absence = _raw_json(raw.get("retired_journal"), "retired update journal", path=UPDATE_JOURNAL + ".absence")
     if not isinstance(pending, Mapping) or not isinstance(stable, Mapping) or not isinstance(rollback, Mapping) or not isinstance(journal, Mapping) or pending.get("version") != 2 or pending.get("state") != "restart_pending" or journal.get("phase") != "restart_pending":
         raise HeadlessAcceptanceError("product did not persist restart_pending update state/journal")
-    if stable.get("version") != 2 or stable.get("state") != "updated" or stable.get("lastAppliedVersion") != plan.candidate.version:
+    if stable.get("version") != 2 or stable.get("state") not in {"updated", "no_update"} or stable.get("lastAppliedVersion") != plan.candidate.version:
         raise HeadlessAcceptanceError("product stable update state is invalid")
+    after_health = after_doctor.get("result") or {}
+    if stable.get("state") == "no_update" or (after_health.get("updates") or {}).get("state") == "no_update":
+        health = after_doctor.get("result") or {}
+        updates = health.get("updates") or {}
+        if (stable.get("lastError") != "" or health.get("ready") is not True
+                or updates.get("state") != "no_update" or updates.get("lastError") != ""
+                or updates.get("lastAppliedVersion") != plan.candidate.version
+                or pending.get("lastAppliedVersion") != plan.candidate.version
+                or journal.get("candidateHashes") != {"amneziad": plan.candidate.amneziad_sha256, "amnezia-cli": plan.candidate.cli_sha256}
+                or journal.get("candidateSizes") != {"amneziad": plan.candidate.amneziad_size, "amnezia-cli": plan.candidate.cli_size}):
+            raise HeadlessAcceptanceError("post-ack no_update lacks exact healthy target transaction evidence")
     rollback_hashes = rollback.get("rollbackHashes") if isinstance(rollback, Mapping) else None
     if (rollback.get("version") != 1 or rollback.get("rollbackVersion") != plan.baseline.version
             or not isinstance(rollback_hashes, Mapping) or rollback_hashes.get("amneziad") != plan.baseline.amneziad_sha256

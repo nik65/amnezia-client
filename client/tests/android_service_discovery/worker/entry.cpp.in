@@ -1,0 +1,94 @@
+#include "core/utils/androidServiceDiscovery.h"
+#include "core/utils/errorCodes.h"
+#include <QCoreApplication>
+#include <QUuid>
+#include <QDebug>
+#include <QTimer>
+#include <QScopedValueRollback>
+#include <functional>
+#include <iostream>
+#define Q_OS_ANDROID 1
+using namespace amnezia;
+namespace Vpn { enum class ConnectionState {Unknown,Disconnected,Disconnecting,Connecting,Error}; }
+enum class DockerContainer {Awg};
+namespace ContainerUtils {static QString containerToString(DockerContainer){return "Awg";}}
+@CLASSIFIER@
+class VpnConnection : public QObject {
+public:
+ bool m_vpnProtocol=false,m_migrationTeardownContext=false,m_migrationTeardownRecoveryRequired=false;
+ quint64 m_connectionEpoch=5;QString m_serverId="server";int m_preparedManagedRouteMode=0;
+ int mutations=0,refused=0,errors=0,refreshes=0,states=0,teardowns=0,nativeRefused=0;
+ int fixtureStartedIndex=-1;QString fixtureStartedServer;QJsonObject fixtureStartedConfiguration;
+ NativeSessionRestore::Pending m_pendingNativeRestore;
+ QString m_nativeRestoreProbe;bool m_unboundNativeSessionObserved=false;QJsonObject m_restoredNativeIdentity;
+ Vpn::ConnectionState m_connectionState=Vpn::ConnectionState::Disconnected;
+ std::function<void()> m_discoveryReconnectStart;
+ bool m_manualDiscoveryResuming=false;
+ quint64 m_manualDiscoveryRequestSerial=0,m_discoveryReconnectEpoch=0,m_discoveryReconnectSerial=0;
+ unsigned m_discoveryReconnectAttempts=0;
+ QString m_discoveryReconnectServerId,m_discoveryRegisteredId;
+ AndroidServiceDiscovery::Ledger m_startAdmissionLedger;
+ void invalidateNativeRestore(){m_pendingNativeRestore.invalidate();}
+ void nativeRestoreConnectRefused(Vpn::ConnectionState){++nativeRefused;}
+ bool rejectNativeRestoreConnect();
+ void refuseServiceDiscovery(){++refused;}
+ void setConnectionState(Vpn::ConnectionState){++states;}
+ void vpnProtocolError(ErrorCode){++errors;}
+ void migrationTeardownObserved(const QString&,quint64,bool){++teardowns;}
+ void serviceDiscoveryRefreshRequested(){++refreshes;}
+ void serviceDiscoveryRegistered(const QString&,bool){}
+ void connectionStateChanged(Vpn::ConnectionState){++states;}
+ void serviceDiscoveryConnectRefused(ErrorCode,Vpn::ConnectionState){++refused;}
+ void registerServiceDiscovery(const QString&);
+ void serviceDiscoveryTimedOut(const QString&);
+ void serviceDiscoveryChanged(const QJsonObject&);
+ void awaitReconnectDiscovery(std::function<void()>);
+ void refreshReconnectDiscovery();
+ void disconnectFromVpn();
+ void beginManagedRouteReconnectSession(const QString&server){++mutations;fixtureStartedServer=server;}
+ void connectToVpn(const QString&,int,DockerContainer,const QJsonObject&);
+};
+@REJECT@
+@ENTRY@
+@OBSERVATION@
+static int failures=0,checks=0;
+#define CHECK(x) do{++checks;if(!(x)){++failures;std::cerr<<"line "<<__LINE__<<": "#x"\n";}}while(false)
+static quint64 generation=100;
+static void ready(){
+ NativeSessionRestore::ingress.invalidate();auto &c=AndroidServiceDiscovery::coordinator;c.invalidate();const QString id="11111111-1111-1111-1111-111111111111";
+ c.registerRefresh(id);c.acknowledge(id);c.ingest({{"schema",1},{"requestId",id},{"generation",QString::number(++generation)},{"phase","EMPTY"},{"component","NONE"},{"reason","NONE"}});
+}
+int main(int argc,char**argv){QCoreApplication app(argc,argv);const QJsonObject config{{"protocol","awg"}};
+ ready();{VpnConnection w;auto c=config;c["migrationReconnectExpectedEpoch"]="4";c["migrationReconnectExpectedServerId"]="server";w.connectToVpn("server",0,DockerContainer::Awg,c);CHECK(w.mutations==0);CHECK(AndroidServiceDiscovery::coordinator.allowsFresh());}
+ ready();{VpnConnection w;auto c=config;c["migrationReconnectExpectedEpoch"]="5";c["migrationReconnectExpectedServerId"]="other";w.connectToVpn("server",0,DockerContainer::Awg,c);CHECK(w.mutations==0);CHECK(AndroidServiceDiscovery::coordinator.allowsFresh());}
+ ready();{VpnConnection w;w.m_migrationTeardownContext=true;w.connectToVpn("server",0,DockerContainer::Awg,config);CHECK(w.mutations==0);CHECK(w.teardowns==1);CHECK(AndroidServiceDiscovery::coordinator.allowsFresh());}
+ ready();{VpnConnection w;w.m_migrationTeardownRecoveryRequired=true;w.connectToVpn("server",0,DockerContainer::Awg,config);CHECK(w.mutations==0);CHECK(w.errors==1);CHECK(AndroidServiceDiscovery::coordinator.allowsFresh());}
+ ready();{VpnConnection w;w.connectToVpn("server",0,DockerContainer::Awg,config);CHECK(w.mutations==1);CHECK(!AndroidServiceDiscovery::coordinator.allowsFresh());w.connectToVpn("server",0,DockerContainer::Awg,config);CHECK(w.mutations==1);CHECK(bool(w.m_discoveryReconnectStart));}
+ const QString pendingId="44444444-4444-4444-4444-444444444444";
+ const QJsonObject pending{{"requestId",pendingId},{"bindingGeneration","9"}};
+ ready();{VpnConnection w;CHECK(w.m_pendingNativeRestore.registerRequest(pendingId,"9",5));auto c=config;c["migrationReconnectExpectedEpoch"]="4";c["migrationReconnectExpectedServerId"]="server";w.connectToVpn("server",0,DockerContainer::Awg,c);CHECK(w.m_pendingNativeRestore.matches(pending,5));CHECK(w.mutations==0);CHECK(AndroidServiceDiscovery::coordinator.allowsFresh());}
+ ready();{VpnConnection w;CHECK(w.m_pendingNativeRestore.registerRequest(pendingId,"9",5));auto c=config;c["migrationReconnectExpectedEpoch"]="5";c["migrationReconnectExpectedServerId"]="other";w.connectToVpn("server",0,DockerContainer::Awg,c);CHECK(w.m_pendingNativeRestore.matches(pending,5));CHECK(w.mutations==0);CHECK(AndroidServiceDiscovery::coordinator.allowsFresh());}
+ ready();{VpnConnection w;NativeSessionRestore::ingress.observe();w.connectToVpn("server",0,DockerContainer::Awg,config);CHECK(w.mutations==0);CHECK(w.nativeRefused==1);CHECK(AndroidServiceDiscovery::coordinator.allowsFresh());}
+ // A pending manual entry waits without mutating the connection epoch or
+ // starting a tunnel. A current fresh observation resumes exactly once.
+ ready();AndroidServiceDiscovery::coordinator.invalidate();{VpnConnection w;
+ w.connectToVpn("requested",3,DockerContainer::Awg,config);CHECK(w.mutations==0);CHECK(w.m_connectionEpoch==5);
+ CHECK(bool(w.m_discoveryReconnectStart));CHECK(w.m_connectionState==Vpn::ConnectionState::Connecting);CHECK(w.refreshes==1);
+ ready();auto snapshot=AndroidServiceDiscovery::coordinator.snapshot();w.serviceDiscoveryChanged(snapshot);
+ CHECK(w.mutations==1);CHECK(w.fixtureStartedServer=="requested");CHECK(w.fixtureStartedIndex==3);CHECK(w.fixtureStartedConfiguration==config);CHECK(!w.m_discoveryReconnectStart);w.serviceDiscoveryChanged(snapshot);CHECK(w.mutations==1);}
+ // Expiry is observational and bounded to three rounds; no fresh grant means
+ // no native start and a cancellable terminal Disconnected state.
+ ready();AndroidServiceDiscovery::coordinator.invalidate();{VpnConnection w;w.connectToVpn("server",0,DockerContainer::Awg,config);
+ for(int i=0;i<3;++i){const QString id=QUuid::createUuid().toString(QUuid::WithoutBraces);CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(id));w.registerServiceDiscovery(id);w.serviceDiscoveryTimedOut(id);}
+ CHECK(w.mutations==0);CHECK(!w.m_discoveryReconnectStart);CHECK(w.m_discoveryReconnectAttempts==3);CHECK(w.m_connectionState==Vpn::ConnectionState::Disconnected);}
+ // Saved callbacks cannot resurrect a cancelled/superseded request.
+ ready();AndroidServiceDiscovery::coordinator.invalidate();{VpnConnection w;w.connectToVpn("server",0,DockerContainer::Awg,config);auto old=w.m_discoveryReconnectStart;
+ CHECK(bool(old));w.disconnectFromVpn();ready();if(old)old();CHECK(w.mutations==0);CHECK(!w.m_discoveryReconnectStart);}
+ for(bool changeEpoch:{false,true}){ready();AndroidServiceDiscovery::coordinator.invalidate();VpnConnection w;w.connectToVpn("server",0,DockerContainer::Awg,config);
+ if(changeEpoch)++w.m_connectionEpoch;else w.m_serverId="different";ready();w.serviceDiscoveryChanged(AndroidServiceDiscovery::coordinator.snapshot());CHECK(w.mutations==0);CHECK(!w.m_discoveryReconnectStart);}
+ ready();AndroidServiceDiscovery::coordinator.invalidate();{VpnConnection w;w.connectToVpn("server",0,DockerContainer::Awg,config);auto old=w.m_discoveryReconnectStart;
+ CHECK(bool(old));w.connectToVpn("new-server",7,DockerContainer::Awg,config);ready();if(old)old();CHECK(w.mutations==0);w.serviceDiscoveryChanged(AndroidServiceDiscovery::coordinator.snapshot());CHECK(w.mutations==1);CHECK(w.fixtureStartedServer=="new-server");CHECK(w.fixtureStartedIndex==7);if(old)old();CHECK(w.mutations==1);}
+ ready();AndroidServiceDiscovery::coordinator.invalidate();{VpnConnection w;w.connectToVpn("server",0,DockerContainer::Awg,config);auto current=w.m_discoveryReconnectStart;
+ CHECK(bool(current));w.m_discoveryReconnectStart={};if(current)current();CHECK(w.mutations==0);CHECK(w.refused==1);CHECK(w.refreshes==1);CHECK(!w.m_manualDiscoveryResuming);CHECK(!w.m_discoveryReconnectStart);CHECK(w.m_connectionState==Vpn::ConnectionState::Disconnected);}
+ ready();AndroidServiceDiscovery::coordinator.invalidate();{VpnConnection w;w.connectToVpn("server",0,DockerContainer::Awg,config);NativeSessionRestore::ingress.observe();ready();NativeSessionRestore::ingress.observe();w.serviceDiscoveryChanged(AndroidServiceDiscovery::coordinator.snapshot());CHECK(w.mutations==0);}
+ std::cout<<"actual-entry checks="<<checks<<" failures="<<failures<<"\n";return failures?42:0;}

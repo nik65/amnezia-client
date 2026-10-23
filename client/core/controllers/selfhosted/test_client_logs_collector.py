@@ -542,6 +542,43 @@ class ClientLogsCollectorTest(unittest.TestCase):
         self.assertTrue(newest.exists())
         self.assertLessEqual(self.collector.storage_summary()["bytes"], 8)
 
+    def test_default_retention_keeps_observed_day_of_tiny_windows_chunks(self):
+        # Observed daily PC/WorkPC cadence must not exhaust file retention
+        # while both client byte budgets and the shared budgets have room.
+        observed_counts = {"a" * 64: 1706, "c" * 64: 1687}
+        now = time.time()
+        chunk = b"tiny diagnostic record\n" * 16
+        self.assertLess(sum(observed_counts.values()), self.collector.MAX_TOTAL_FILES)
+        self.assertLess(len(chunk) * sum(observed_counts.values()),
+                        self.collector.MAX_TOTAL_BYTES)
+        for client_id, count in observed_counts.items():
+            self.assertLess(len(chunk) * count, self.collector.MAX_CLIENT_BYTES)
+            client_dir = self.root / "logs" / client_id
+            client_dir.mkdir(mode=0o700, exist_ok=True)
+            for index in range(count):
+                path = client_dir / f"chunk-{index:04d}.log"
+                path.write_bytes(chunk)
+                modified = now - 86400 + index * 86399 / (count - 1)
+                os.utime(path, (modified, modified))
+            self.collector.prune_client_dir(str(client_dir))
+
+        self.collector.prune_all_logs()
+
+        retained = {
+            client_id: {
+                "files": len(list((self.root / "logs" / client_id).glob("*.log"))),
+                "first_chunk_retained": (self.root / "logs" / client_id /
+                                         "chunk-0000.log").exists(),
+            }
+            for client_id in observed_counts
+        }
+        expected = {
+            client_id: {"files": count, "first_chunk_retained": True}
+            for client_id, count in observed_counts.items()
+        }
+        self.maxDiff = None
+        self.assertEqual(expected, retained)
+
     def test_prune_enforces_file_count(self):
         client_dir = self.root / "logs" / self.CLIENT_ID
         client_dir.mkdir(mode=0o700, exist_ok=True)
@@ -730,7 +767,15 @@ class ClientLogsCollectorTest(unittest.TestCase):
             self.assertIn("--security-opt no-new-privileges:true", run_line)
             self.assertIn("--read-only", run_line)
             self.assertIn("--tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777", run_line)
-            self.assertIn("PYTHONDONTWRITEBYTECODE=1", run_line)
+            self.assertIn("__COLLECTOR_RUNTIME_FLAGS__", run_line)
+        runtime_selection = re.search(
+            r'script\.replace\("__COLLECTOR_RUNTIME_FLAGS__", useNative\s*'
+            r'\? QStringLiteral\("([^"\n]*)"\)\.arg\(nativeCollector->sha256\)\s*'
+            r': QStringLiteral\("([^"\n]*)"\)\);', source)
+        self.assertIsNotNone(runtime_selection, "runtime flags must select native and legacy explicitly")
+        native_flags, legacy_flags = runtime_selection.groups()
+        self.assertEqual("--label org.amnezia.client-logs.native-sha256=%1", native_flags)
+        self.assertEqual("-e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1", legacy_flags)
 
     @unittest.skipUnless(os.name == "posix", "requires real POSIX flock")
     def test_client_lock_serializes_independent_processes(self):

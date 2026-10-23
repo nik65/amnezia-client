@@ -84,7 +84,10 @@ struct ManagedRoutePolicyMetadata
 namespace managedRoutePolicy
 {
 
-inline constexpr qsizetype maximumSiteCount = 2048;
+// Direct IP entries each consume one route; permit the site set to reach the
+// same bounded budget. Domains with fallback addresses still consume extra
+// route reservations below and cannot exceed maximumTotalRouteCount.
+inline constexpr qsizetype maximumSiteCount = 4096;
 inline constexpr qsizetype maximumRoutesPerSite = 64;
 inline constexpr qsizetype maximumTotalRouteCount = 4096;
 inline constexpr qsizetype maximumStoredRouteValueLength = 4096;

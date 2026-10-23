@@ -80,14 +80,14 @@ if not defined QIF_ROOT_PATH set "QIF_ROOT_PATH=%_qif_root_path%"
 :: use vswhere to find path to vcvarsall.bat
 if not defined VCINSTALLDIR (
     if not defined VS_INSTALLER_PATH set "VS_INSTALLER_PATH=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-    if exist "%VS_INSTALLER_PATH%" (
-        if defined "%VS_INSTALLATION_VERSION%" (
+    if exist "!VS_INSTALLER_PATH!" (
+        if defined VS_INSTALLATION_VERSION (
             set "_version=-version [%VS_INSTALLATION_VERSION%]"
         ) else (
             set "_version=-latest"
         )
         for /f "usebackq tokens=*" %%I in (
-            `"%VS_INSTALLER_PATH%" -products * %_version% -property resolvedInstallationPath`
+            `"!VS_INSTALLER_PATH!" -products * !_version! -property resolvedInstallationPath`
         ) do (
             if not defined VCVARS_PATH set "VCVARS_PATH=%%I\VC\Auxiliary\Build\vcvarsall.bat"
         )

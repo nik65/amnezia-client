@@ -43,6 +43,10 @@ struct LocalPeerIdentity
 [[nodiscard]] bool authorizePrivilegedClient(QLocalSocket *socket, const QString &expectedExecutablePath,
                                              LocalPeerIdentity *identity = nullptr,
                                              QString *errorMessage = nullptr);
+// Linux desktop may attribute an inaccessible root peer executable through the
+// protected system manager's exact packaged unit and connected-peer pidfd.
+// Like Windows SCM, this trusts the root administrator/service manager; it is
+// not a claim that /proc/<pid>/exe was observed. All readable mismatches reject.
 [[nodiscard]] bool authorizePrivilegedServer(QLocalSocket *socket, const QString &expectedExecutablePath,
                                              const QString &windowsServiceName,
                                              LocalPeerIdentity *identity = nullptr,

@@ -8,6 +8,7 @@
 #include <android/bitmap.h>
 
 #include "android_controller.h"
+#include "core/utils/nativeSessionRestore.h"
 #include "core/protocols/androidProtocolBinding.h"
 #include "android_utils.h"
 #include "ui/controllers/importUiController.h"
@@ -39,6 +40,8 @@ AndroidController::AndroidController() : QObject()
         [this]() {
             qDebug() << "Android event: service disconnected";
             isWaitingStatus = true;
+            m_restoreServiceGeneration.clear();
+            m_restoreReadyDeliveredGeneration.clear();
             // This is the Android Activity-to-service binding state, not the VPN
             // tunnel state. Actual tunnel updates arrive via vpnStateChanged/status.
         },
@@ -84,6 +87,11 @@ bool AndroidController::initialize()
 
     const JNINativeMethod methods[] = {
         {"onStatus", "(II)V", reinterpret_cast<void *>(onStatus)},
+        {"onRestoreServiceReady", "(J)V", reinterpret_cast<void *>(onRestoreServiceReady)},
+        {"onNativeSessionObserved", "()V", reinterpret_cast<void *>(onNativeSessionObserved)},
+        {"onRestoreStatus", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onRestoreStatus)},
+        {"onServiceDiscovery", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onServiceDiscovery)},
+        {"onStartAdmission", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onStartAdmission)},
         {"onServiceDisconnected", "()V", reinterpret_cast<void *>(onServiceDisconnected)},
         {"onServiceError", "(I)V", reinterpret_cast<void *>(onServiceError)},
         {"onVpnPermissionRejected", "()V", reinterpret_cast<void *>(onVpnPermissionRejected)},
@@ -135,17 +143,150 @@ void AndroidController::callActivityMethod(const char *methodName, const char *s
 
 ErrorCode AndroidController::start(const QJsonObject &vpnConfig)
 {
-    isWaitingStatus = false;
-    auto config = QJsonDocument(vpnConfig).toJson();
-    callActivityMethod("start", "(Ljava/lang/String;)V",
-                       QJniObject::fromString(config).object<jstring>());
+    Q_UNUSED(vpnConfig);
+    return ErrorCode::ServiceDiscoveryUnconfirmed;
+}
 
+ErrorCode AndroidController::start(const QJsonObject &vpnConfig, const AndroidServiceDiscovery::Grant &grant)
+{
+    const std::lock_guard<std::recursive_mutex> admissionLock(NativeSessionRestore::admissionMutex);
+    if (NativeSessionRestore::ingress.observed()) return ErrorCode::NativeTunnelCleanupUnconfirmed;
+    // A configuration field can never manufacture this process-only admission.
+    if (!grant.valid() || !AndroidServiceDiscovery::coordinator.authorizeStart(grant))
+        return ErrorCode::ServiceDiscoveryUnconfirmed;
+    NativeSessionRestore::ingress.invalidate();
+    isWaitingStatus = false;
+    QMetaObject::invokeMethod(this, [this]() { m_restoreServiceGeneration.clear(); m_restoreReadyDeliveredGeneration.clear(); }, Qt::QueuedConnection);
+    const auto config = QJsonDocument(vpnConfig).toJson();
+    callActivityMethod("startWithDiscovery", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V",
+        QJniObject::fromString(config).object<jstring>(),
+        QJniObject::fromString(grant.generation).object<jstring>(),
+        QJniObject::fromString(grant.requestId).object<jstring>());
     return ErrorCode::NoError;
+}
+
+void AndroidController::requestServiceDiscovery(const QString &requestId)
+{
+    if (!m_serviceDiscoveryRoutesReady || !AndroidServiceDiscovery::coordinator.currentRequest(requestId)) return;
+    callActivityMethod("requestServiceDiscovery", "(Ljava/lang/String;)V",
+        QJniObject::fromString(requestId).object<jstring>());
+}
+
+void AndroidController::flushServiceDiscovery()
+{
+    if (m_serviceDiscoveryRoutesReady) return;
+    m_serviceDiscoveryRoutesReady = true;
+    if (!m_cachedServiceDiscovery.isEmpty()
+        && AndroidServiceDiscovery::coordinator.snapshot() == m_cachedServiceDiscovery)
+        emit serviceDiscovery(m_cachedServiceDiscovery);
+    emit serviceDiscoveryRefreshNeeded();
+}
+
+void AndroidController::onServiceDiscovery(JNIEnv *env, jobject thiz, jstring snapshot)
+{
+    Q_UNUSED(thiz);
+    if (!snapshot || env->GetStringLength(snapshot) > 2048) return;
+    const auto object = AndroidServiceDiscovery::decodeDiscovery(QJniObject(snapshot).toString().toUtf8());
+    // This closes a lifecycle admission floor on the JNI thread, before a queued
+    // worker can create a protocol or change routes.
+    if (object.isEmpty() || !AndroidServiceDiscovery::coordinator.ingest(object)) return;
+    auto controller = AndroidController::instance();
+    QMetaObject::invokeMethod(controller, [controller, object]() {
+        if (AndroidServiceDiscovery::coordinator.snapshot() != object) return;
+        controller->m_cachedServiceDiscovery = object;
+        if (controller->m_serviceDiscoveryRoutesReady) emit controller->serviceDiscovery(object);
+    }, Qt::QueuedConnection);
+}
+
+void AndroidController::onStartAdmission(JNIEnv *env, jobject thiz, jstring snapshot)
+{
+    Q_UNUSED(thiz);
+    if (!snapshot || env->GetStringLength(snapshot) > 2048) return;
+    const auto object = AndroidServiceDiscovery::decodeAdmission(QJniObject(snapshot).toString().toUtf8());
+    if (object.isEmpty()) return;
+    auto controller = AndroidController::instance();
+    QMetaObject::invokeMethod(controller, [controller, object]() {
+        if (controller->m_serviceDiscoveryRoutesReady) emit controller->startAdmission(object);
+    }, Qt::QueuedConnection);
 }
 
 void AndroidController::stop()
 {
+    NativeSessionRestore::ingress.invalidate();
+    QMetaObject::invokeMethod(this, [this]() { m_restoreServiceGeneration.clear(); m_restoreReadyDeliveredGeneration.clear(); }, Qt::QueuedConnection);
     callActivityMethod("stop", "()V");
+}
+
+void AndroidController::flushRestoreServiceReady()
+{
+    m_restoreRoutesReady = true;
+    const auto generation = m_restoreServiceGeneration;
+    const auto ticket = NativeSessionRestore::ingress.version();
+    QMetaObject::invokeMethod(this, [this, generation, ticket]() {
+        if (!m_restoreRoutesReady || ticket!=NativeSessionRestore::ingress.version()) return;
+        if (NativeSessionRestore::ingress.observed(ticket) && m_nativeObservationDeliveredTicket!=ticket) {
+            m_nativeObservationDeliveredTicket=ticket;
+            emit nativeSessionObserved(ticket); // Queue the gate before worker registration.
+        }
+        if (!generation.isEmpty() && generation==m_restoreServiceGeneration && generation!=m_restoreReadyDeliveredGeneration) {
+            m_restoreReadyDeliveredGeneration=generation;
+            emit restoreServiceReady(generation);
+        }
+    }, Qt::QueuedConnection);
+}
+
+void AndroidController::requestRestoreStatus(const QString &requestId, const QString &generation)
+{
+    if (!m_restoreRoutesReady || generation != m_restoreServiceGeneration
+        || !NativeSessionRestore::uuid(requestId) || !NativeSessionRestore::decimal(generation)) return;
+    callActivityMethod("requestRestoreStatus", "(Ljava/lang/String;J)V",
+        QJniObject::fromString(requestId).object<jstring>(), jlong(generation.toLongLong()));
+}
+
+void AndroidController::stopBound(const QJsonObject &identity)
+{
+    if (!NativeSessionRestore::identity(identity)) return; // Never downgrade.
+    NativeSessionRestore::ingress.invalidate();
+    QMetaObject::invokeMethod(this, [this]() { m_restoreServiceGeneration.clear(); m_restoreReadyDeliveredGeneration.clear(); }, Qt::QueuedConnection);
+    callActivityMethod("stopBound", "(Ljava/lang/String;)V",
+        QJniObject::fromString(QString::fromUtf8(QJsonDocument(identity).toJson(QJsonDocument::Compact))).object<jstring>());
+}
+
+void AndroidController::onRestoreServiceReady(JNIEnv *env, jobject thiz, jlong generation)
+{
+    Q_UNUSED(env); Q_UNUSED(thiz);
+    if (generation <= 0) return;
+    auto controller = AndroidController::instance();
+    QMetaObject::invokeMethod(controller, [controller, generation]() {
+        const auto value = QString::number(generation);
+        if (controller->m_restoreServiceGeneration == value) return;
+        controller->m_restoreServiceGeneration = value;
+        if (controller->m_restoreRoutesReady) controller->flushRestoreServiceReady();
+    }, Qt::QueuedConnection);
+}
+
+void AndroidController::onNativeSessionObserved(JNIEnv *env, jobject thiz)
+{
+    Q_UNUSED(env); Q_UNUSED(thiz);
+    const std::lock_guard<std::recursive_mutex> admissionLock(NativeSessionRestore::admissionMutex);
+    NativeSessionRestore::ingress.observe();
+    auto controller=AndroidController::instance();
+    QMetaObject::invokeMethod(controller, [controller]() {
+        if (controller->m_restoreRoutesReady) controller->flushRestoreServiceReady();
+    }, Qt::QueuedConnection);
+}
+
+void AndroidController::onRestoreStatus(JNIEnv *env, jobject thiz, jstring snapshot)
+{
+    Q_UNUSED(thiz);
+    if (!snapshot || env->GetStringLength(snapshot) > 8192) return;
+    const auto object = NativeSessionRestore::decode(QJniObject(snapshot).toString().toUtf8());
+    if (object.isEmpty()) return;
+    auto controller = AndroidController::instance();
+    QMetaObject::invokeMethod(controller, [controller, object]() {
+        if (object.value("bindingGeneration").toString() == controller->m_restoreServiceGeneration)
+            emit controller->restoreStatus(object);
+    }, Qt::QueuedConnection);
 }
 
 void AndroidController::resetLastServer(int serverIndex)

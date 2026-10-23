@@ -5,6 +5,7 @@
 #include <QFutureWatcher>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QPromise>
 #include <QUuid>
 
@@ -14,6 +15,7 @@
 #include "core/utils/containers/containerUtils.h"
 #include "core/utils/protocolEnum.h"
 #include "core/utils/serverConfigUtils.h"
+#include "core/utils/configPayloadCodec.h"
 #include "core/utils/constants/apiKeys.h"
 #include "core/utils/constants/apiConstants.h"
 #include "core/utils/api/apiUtils.h"
@@ -123,6 +125,9 @@ ErrorCode SubscriptionController::extractServerConfigJsonFromResponse(const QByt
 {
     QString data = QJsonDocument::fromJson(apiResponseBody).object().value(configKey::config).toString();
 
+    if (data.size() > configPayloadCodec::maximumEncodedTextBytes) {
+        return ErrorCode::ApiConfigEmptyError;
+    }
     data.replace("vpn://", "");
     QByteArray ba = QByteArray::fromBase64(data.toUtf8(), QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
 
@@ -131,10 +136,11 @@ ErrorCode SubscriptionController::extractServerConfigJsonFromResponse(const QByt
         return ErrorCode::ApiConfigEmptyError;
     }
 
-    QByteArray ba_uncompressed = qUncompress(ba);
-    if (!ba_uncompressed.isEmpty()) {
-        ba = ba_uncompressed;
+    const auto decoded = configPayloadCodec::decode(ba);
+    if (!decoded.accepted()) {
+        return ErrorCode::ApiConfigEmptyError;
     }
+    ba = decoded.data;
 
     QString configStr = ba;
     if (protocol == configKey::awg) {
@@ -170,7 +176,13 @@ ErrorCode SubscriptionController::extractServerConfigJsonFromResponse(const QByt
         configStr = QString(QJsonDocument(newServerConfig).toJson());
     }
 
-    serverConfigJson = QJsonDocument::fromJson(configStr.toUtf8()).object();
+    QJsonParseError parseError;
+    const auto configDocument = QJsonDocument::fromJson(configStr.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !configDocument.isObject()
+        || configDocument.object().isEmpty()) {
+        return ErrorCode::ApiConfigEmptyError;
+    }
+    serverConfigJson = configDocument.object();
     return ErrorCode::NoError;
 }
 
@@ -282,12 +294,16 @@ ErrorCode SubscriptionController::importTrialFromGateway(const QString &userCoun
         return ErrorCode::ApiConfigEmptyError;
     }
 
+    if (key.size() > configPayloadCodec::maximumEncodedTextBytes) {
+        return ErrorCode::ApiConfigEmptyError;
+    }
     key.replace(QStringLiteral("vpn://"), QString());
     QByteArray configBytes = QByteArray::fromBase64(key.toUtf8(), QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
-    QByteArray uncompressed = qUncompress(configBytes);
-    if (!uncompressed.isEmpty()) {
-        configBytes = uncompressed;
+    const auto decoded = configPayloadCodec::decode(configBytes);
+    if (!decoded.accepted()) {
+        return ErrorCode::ApiConfigEmptyError;
     }
+    configBytes = decoded.data;
 
     if (configBytes.isEmpty()) {
         return ErrorCode::ApiConfigEmptyError;

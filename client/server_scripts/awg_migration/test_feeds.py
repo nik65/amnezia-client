@@ -6,6 +6,7 @@ import threading
 import unittest
 from urllib.error import HTTPError
 from urllib.request import urlopen
+from urllib.parse import quote
 from feeds import FeedServer, feed_mounts
 
 
@@ -52,6 +53,31 @@ class FeedTransportTests(unittest.TestCase):
         with urlopen(self.url + '/files/client.apk', timeout=2) as response:
             self.assertEqual(b'public signed package', response.read())
         self.denied('/files/')
+
+    def test_android_plus_filename_from_manifest_url(self):
+        filename = 'AmneziaVPN_test_android9+_arm64-v8a.apk'
+        directory = self.root / 'files' / 'artifacts' / ('0' * 64)
+        directory.mkdir(parents=True)
+        payload = b'owned inert fixture'
+        (directory / filename).write_bytes(payload)
+        prefix = '/files/artifacts/' + ('0' * 64) + '/'
+        for target in (prefix + quote(filename, safe=''), prefix + filename):
+            with self.subTest(target=target), urlopen(self.url + target, timeout=2) as response:
+                self.assertEqual(200, response.status)
+                self.assertEqual('application/octet-stream', response.headers['Content-Type'])
+                self.assertEqual(payload, response.read())
+        self.denied(prefix + quote(quote(filename, safe=''), safe=''))
+        self.denied(prefix + quote(filename + '.bak', safe=''))
+
+    def test_linux_run_package_and_manifest_query_mime(self):
+        (self.root / 'files' / 'client.run').write_bytes(b'linux fixture')
+        with urlopen(self.url + '/files/client.run', timeout=2) as response:
+            self.assertEqual(b'linux fixture', response.read())
+        self.denied('/files/client.run.bak')
+        for request in ('/manifest.json?cache=1', '/manifest.j%73on?cache=1'):
+            with urlopen(self.url + request, timeout=2) as response:
+                self.assertEqual('application/json', response.headers['Content-Type'])
+                self.assertEqual(b'public manifest', response.read())
 
     def test_final_and_ancestor_symlinks_hardlinks_and_encoded_traversal_rejected(self):
         (self.root / 'files' / 'leak.apk').symlink_to(self.secret)

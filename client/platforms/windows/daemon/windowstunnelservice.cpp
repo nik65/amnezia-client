@@ -104,26 +104,42 @@ bool WindowsTunnelService::isRunning() {
 }
 
 void WindowsTunnelService::timeout() {
+  // Ignore a queued monitor callback after an explicit stop.
+  if (!m_timer.isActive()) {
+    return;
+  }
+
+  const auto reportBackendFailure = [this] {
+    // Keep cleanup retries alive, but avoid a two-second failure/log storm.
+    // Schedule before emit: a synchronous receiver may stop, restart or delete us.
+    const int interval = m_timer.interval();
+    m_timer.setInterval(interval < 5000 ? 5000 : interval < 15000 ? 15000 : 60000);
+    emit backendFailure();
+  };
+
   if (m_service == nullptr) {
     logger.error() << "The service doesn't exist";
-    emit backendFailure();
+    reportBackendFailure();
     return;
   }
 
   SERVICE_STATUS status;
   if (!QueryServiceStatus((SC_HANDLE)m_service, &status)) {
     WindowsUtils::windowsLog("Failed to retrieve the service status");
-    emit backendFailure();
+    reportBackendFailure();
     return;
   }
 
   if (status.dwCurrentState == SERVICE_RUNNING) {
-    // The service is active
+    // A recovered service starts a fresh normal monitor episode.
+    if (m_timer.interval() != WINDOWS_TUNNEL_MONITOR_TIMEOUT_MSEC) {
+      m_timer.setInterval(WINDOWS_TUNNEL_MONITOR_TIMEOUT_MSEC);
+    }
     return;
   }
 
   logger.debug() << "The service is not active";
-  emit backendFailure();
+  reportBackendFailure();
 }
 
 bool WindowsTunnelService::start(const QString& configData) {

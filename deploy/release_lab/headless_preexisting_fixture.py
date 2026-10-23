@@ -48,7 +48,7 @@ class FixturePlan:
     @property
     def netns(self)->str: return f"amnfx-{self.tag}"
     @property
-    def host_veth(self)->str: return f"afxh{self.tag}"
+    def host_veth(self)->str: return f"enafx{self.tag}"
     @property
     def peer_veth(self)->str: return f"afxn{self.tag}"
     @property
@@ -98,6 +98,7 @@ def build_contract(plan:FixturePlan, *, server_public_key:str)->dict:
     baseline_cli=lambda *args:[f"{plan.owned_root}/legacy/amnezia-cli","--socket",plan.socket_path,"--json",*args]
     return {"schema":1,"operation":"headless-preexisting-fixture","binding":asdict(plan),"marker":f"amnezia-release-lab:{plan.run_id}:headless-preexisting:{plan.nonce}",
       "network":{"kind":"guest-local-netns","netns":plan.netns,"host_veth":plan.host_veth,"peer_veth":plan.peer_veth,
+        "default_route":{"gateway":plan.underlay_server,"dev":plan.host_veth,"metric":42750,"protocol":"static"},
         "underlay":f"10.203.{plan.octet}.0/30","underlay_host":plan.underlay_host,"underlay_server":plan.underlay_server,
         "tunnel":f"10.204.{plan.octet}.0/30","tunnel_server":plan.tunnel_server,"tunnel_client":plan.tunnel_client,"routed_test_prefix":plan.routed_test_prefix,"routed_test_server":plan.routed_test_server,"udp_port":51820,"http_port":17865,"host_network_mutation":False},
       "files":{"client_config":plan.config_path,"baseline_client_config":plan.baseline_config_path,"server_private_key":f"{plan.owned_root}/secrets/server.key","client_private_key":f"{plan.owned_root}/secrets/client.key","policy":f"{plan.owned_root}/public/policy.json","profile":f"{plan.owned_root}/public/profile.json","baseline_profile":f"{plan.owned_root}/public/baseline-profile.json","mode":384},
@@ -211,6 +212,53 @@ def validate_managed_receipt_retirement(plan:FixturePlan, connected:Mapping, ret
     if not isinstance(proof,Mapping) or set(proof)!={"path","uid","gid","mode","size","sha256"} or not _under(str(proof.get("path","")),PurePosixPath(plan.owned_root)) or proof.get("uid")!=0 or proof.get("gid")!=0 or proof.get("mode")!=384 or not isinstance(proof.get("size"),int) or proof.get("size")<=0 or not SHA.fullmatch(str(proof.get("sha256",""))): raise FixtureError("retired proof identity invalid")
     return dict(retirement)
 
+def validate_strace_evidence(owned_root:str,target:Mapping,trace:object)->None:
+    """Validate guest-derived aggregate; VPN shutdown proof is independent.
+
+    The trace ends after CLI disconnect and before systemd stop: daemon exit,
+    execve, or write individually cannot be mandatory here.
+    """
+    scope=['execve','exit','exit_group','write'];keys={'path','uid','gid','mode','size','sha256'}
+    def pointer(value):
+        if not isinstance(value,Mapping) or set(value)!=keys:return False
+        path=value.get('path');size=value.get('size')
+        return (isinstance(path,str) and path.startswith(owned_root+'/') and str(PurePosixPath(path))==path and '..' not in PurePosixPath(path).parts
+                and all(type(value.get(key)) is int for key in ('uid','gid','mode','size')) and value['uid']==value['gid']==0 and value['mode']==0o600
+                and 0<=size<=1024*1024 and isinstance(value.get('sha256'),str) and SHA.fullmatch(value['sha256']) is not None
+                and ((size==0)==(value['sha256']==hashlib.sha256(b'').hexdigest())))
+    if (not isinstance(trace,Mapping) or trace.get('reason') not in ('attached','strace-unavailable','ptrace-attach-unavailable','ptrace-identity-drift')
+            or trace.get('available') is not (trace.get('reason')=='attached') or trace.get('scope')!=scope or type(trace.get('duration_limit_seconds')) is not int or trace['duration_limit_seconds']!=30
+            or type(trace.get('shards')) is not list or len(trace['shards'])>256 or any(not pointer(row) for row in trace['shards'])):
+        raise FixtureError('pre-disconnect strace evidence invalid')
+    shards=trace['shards'];paths=[row['path'] for row in shards]
+    if len(paths)!=len(set(paths)):raise FixtureError('duplicate strace shard identity')
+    if trace['reason']!='attached':return  # Diagnostic unavailability remains optional.
+    expected={key:target.get(key) for key in ('pid','start_ticks','exe_sha256')}
+    if type(expected['pid']) is not int or expected['pid']<=1 or type(expected['start_ticks']) is not int or expected['start_ticks']<=0 or not isinstance(expected['exe_sha256'],str) or not SHA.fullmatch(expected['exe_sha256']):raise FixtureError('strace process identity invalid')
+    coverage=trace.get('coverage')
+    def same_target(value):
+        return (isinstance(value,Mapping) and set(value)==set(expected) and type(value.get('pid')) is int
+                and type(value.get('start_ticks')) is int and value==expected)
+    if (not isinstance(coverage,Mapping) or set(coverage)!={'schema','target_before','target_after','total_bytes','files'} or type(coverage.get('schema')) is not int or coverage['schema']!=1
+            or not same_target(coverage.get('target_before')) or not same_target(coverage.get('target_after'))
+            or type(coverage.get('total_bytes')) is not int or not 0<coverage['total_bytes']<=4*1024*1024 or coverage['total_bytes']!=sum(row['size'] for row in shards)
+            or type(coverage.get('files')) is not list or len(coverage['files'])!=len(shards)):
+        raise FixtureError('strace aggregate binding invalid')
+    calls=0;seen=set()
+    for row in coverage['files']:
+        if not isinstance(row,Mapping) or set(row)!={'source','pid','lines','syscalls','process_exits'} or not pointer(row.get('source')) or row.get('source') not in shards:raise FixtureError('strace source closure invalid')
+        source=row['source'];path=source['path'];match=re.fullmatch(re.escape(owned_root)+r'/pre-disconnect-strace\.([1-9][0-9]{0,9})',path)
+        if path in seen or not match or type(row.get('pid')) is not int or row['pid']!=int(match.group(1)):raise FixtureError('strace shard PID invalid')
+        seen.add(path)
+        if type(row.get('lines')) is not int or not 0<=row['lines']<=source['size'] or (source['size']>0 and row['lines']==0):raise FixtureError('strace line metadata invalid')
+        counts=row.get('syscalls');exits=row.get('process_exits')
+        if (not isinstance(counts,Mapping) or set(counts)!=set(scope) or any(type(value) is not int or value<0 for value in counts.values()) or sum(counts.values())>row['lines']
+                or type(exits) is not list or len(exits)>min(64,row['lines']) or any(type(code) is not int or not -2147483648<=code<=2147483647 for code in exits)):
+            raise FixtureError('strace scoped syscall metadata invalid')
+        calls+=sum(counts.values())
+    if calls<=0:raise FixtureError('strace contains no actual scoped syscall coverage')
+
+
 def validate_baseline_owned(plan:FixturePlan,connected:Mapping,receipt:Mapping)->dict:
     prior=validate_connected(plan,connected);contract=build_contract(plan,server_public_key=prior["server_public_key"])
     if receipt.get("schema")!=1 or receipt.get("operation")!="headless-preexisting-baseline-owned" or receipt.get("origin")!="guest" or receipt.get("transport")!="qga" or receipt.get("connected_receipt_sha256")!=_sha(prior): raise FixtureError("baseline handoff binding invalid")
@@ -221,8 +269,8 @@ def validate_baseline_owned(plan:FixturePlan,connected:Mapping,receipt:Mapping)-
     if not isinstance(diagnostic,Mapping) or not isinstance(target,Mapping) or diagnostic.get("schema")!=1 or diagnostic.get("target")!={key:target.get(key) for key in ("pid","start_ticks","exe_sha256")}: raise FixtureError("pre-disconnect diagnostic binding invalid")
     trace=diagnostic.get("strace"); pointer_keys=("path","uid","gid","mode","size","sha256")
     def private_pointer(value:object)->bool:
-        return isinstance(value,Mapping) and set(value)==set(pointer_keys) and isinstance(value.get("path"),str) and value["path"].startswith(plan.owned_root+"/") and value.get("uid")==value.get("gid")==0 and value.get("mode")==0o600 and isinstance(value.get("size"),int) and value["size"]>0 and re.fullmatch(r"[0-9a-f]{64}",str(value.get("sha256",""))) is not None
-    if not isinstance(trace,Mapping) or trace.get("reason") not in ("attached","strace-unavailable","ptrace-attach-unavailable","ptrace-identity-drift") or trace.get("available") is not (trace.get("reason")=="attached") or trace.get("scope")!=["execve","exit","exit_group","write"] or trace.get("duration_limit_seconds")!=30 or not isinstance(trace.get("shards"),list) or any(not private_pointer(x) for x in trace["shards"]): raise FixtureError("pre-disconnect strace evidence invalid")
+        return isinstance(value,Mapping) and set(value)==set(pointer_keys) and isinstance(value.get("path"),str) and value["path"].startswith(plan.owned_root+"/") and all(type(value.get(key)) is int for key in ('uid','gid','mode','size')) and value.get("uid")==value.get("gid")==0 and value.get("mode")==0o600 and value["size"]>0 and re.fullmatch(r"[0-9a-f]{64}",str(value.get("sha256",""))) is not None
+    validate_strace_evidence(plan.owned_root,target,trace)
     if not private_pointer(diagnostic.get("state")) or not private_pointer(diagnostic.get("receipt")): raise FixtureError("pre-disconnect protected state missing")
     if not isinstance(terminal,Mapping) or terminal.get("MainPID")!="0" or terminal.get("ActiveState")!="inactive" or terminal.get("SubState")!="dead" or terminal.get("Job") not in ("",None): raise FixtureError("graceful service terminal invalid")
     validate_managed_receipt_retirement(plan,connected,receipt.get("managed_receipt_retirement"))

@@ -80,7 +80,7 @@ OpenVpnServerConfig OpenVpnServerConfig::fromJson(const QJsonObject& json)
 
 bool OpenVpnServerConfig::hasEqualServerSettings(const OpenVpnServerConfig& other) const
 {
-    return subnetAddress == other.subnetAddress && 
+    return subnetAddress == other.subnetAddress && subnetCidr == other.subnetCidr && subnetMask == other.subnetMask && 
            port == other.port && 
            transportProto == other.transportProto &&
            cipher == other.cipher &&

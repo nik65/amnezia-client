@@ -1,0 +1,11 @@
+[Unit]
+Description=Check ServerX diagnostic collector route every thirty seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=30s
+AccuracySec=1s
+Unit=amnezia-client-logs-route-serverx.service
+
+[Install]
+WantedBy=timers.target

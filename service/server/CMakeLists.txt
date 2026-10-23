@@ -295,6 +295,13 @@ include_directories(
 
 
 add_executable(${PROJECT} ${SOURCES} ${HEADERS} ${RESOURCES})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(AMNEZIA_SYSTEMD REQUIRED IMPORTED_TARGET libsystemd>=246)
+    target_sources(${PROJECT} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../ipc/linuxsystemdpeer.cpp")
+    target_compile_definitions(${PROJECT} PRIVATE AMNEZIA_SYSTEMD_PEER_AUTH=1)
+    target_link_libraries(${PROJECT} PRIVATE PkgConfig::AMNEZIA_SYSTEMD)
+endif()
 target_link_libraries(${PROJECT} PRIVATE Qt6::Core Qt6::Widgets Qt6::Network Qt6::RemoteObjects Qt6::Core5Compat Qt6::DBus Qt6::Concurrent ${LIBS})
 target_compile_definitions(${PROJECT} PRIVATE "MZ_$<UPPER_CASE:${MZ_PLATFORM_NAME}>")
 

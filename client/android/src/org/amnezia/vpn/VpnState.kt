@@ -8,6 +8,7 @@ import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.dataStoreFile
 import java.io.InputStream
 import java.io.OutputStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.firstOrNull
@@ -63,10 +64,10 @@ object VpnStateStore {
     suspend fun store(f: (vpnState: VpnState) -> VpnState) {
         try {
             dataStore.updateData(f)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Failed to store VpnState: $e")
-            Log.w(TAG, "Remove DataStore file")
-            app.dataStoreFile(STORE_FILE_NAME).delete()
         }
     }
 }

@@ -15,3 +15,16 @@ target_include_directories(windows_tunnel_service_lifecycle_tests PRIVATE
 enable_testing()
 add_test(NAME windows_tunnel_service_lifecycle
          COMMAND windows_tunnel_service_lifecycle_tests)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(MONITOR_FIXTURE "${CMAKE_CURRENT_BINARY_DIR}/monitor_fixture.cpp")
+add_custom_command(OUTPUT "${MONITOR_FIXTURE}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/test_windowstunnelservicemonitor.py"
+        --source "${REPO}/client/platforms/windows/daemon/windowstunnelservice.cpp"
+        --out "${CMAKE_CURRENT_BINARY_DIR}" --emit-only
+    DEPENDS "${REPO}/client/platforms/windows/daemon/windowstunnelservice.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/test_windowstunnelservicemonitor.py"
+    VERBATIM)
+add_executable(windows_tunnel_service_monitor_tests "${MONITOR_FIXTURE}")
+add_test(NAME windows_tunnel_service_monitor
+    COMMAND windows_tunnel_service_monitor_tests)

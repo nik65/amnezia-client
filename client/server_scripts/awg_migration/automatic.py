@@ -1,6 +1,8 @@
 """Administrator-only automatic planning, executed under the preparation lock."""
 import hashlib
 import json
+import os
+import stat
 import re
 import socket
 
@@ -34,6 +36,62 @@ def select_port(occupied, source_port):
     raise ValueError('migration_udp_port_unavailable')
 
 
+
+MAX_JOURNAL_BYTES = 1024 * 1024
+
+
+def _read_transaction(path):
+    """Read one stable regular journal without following links or opening FIFOs."""
+    descriptor = None
+    try:
+        before_path = path.lstat()
+        if not stat.S_ISREG(before_path.st_mode) or before_path.st_size > MAX_JOURNAL_BYTES:
+            raise ValueError('migration_journal_conflict')
+        flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+        flags |= getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_size > MAX_JOURNAL_BYTES
+                or (before.st_dev, before.st_ino) != (before_path.st_dev, before_path.st_ino)):
+            raise ValueError('migration_journal_conflict')
+        chunks, count = [], 0
+        while True:
+            block = os.read(descriptor, min(65536, MAX_JOURNAL_BYTES + 1 - count))
+            if not block:
+                break
+            chunks.append(block)
+            count += len(block)
+            if count > MAX_JOURNAL_BYTES:
+                raise ValueError('migration_journal_conflict')
+        after = os.fstat(descriptor)
+        after_path = path.lstat()
+        def signature(value):
+            return (value.st_dev, value.st_ino, value.st_mode, value.st_size,
+                    value.st_mtime_ns, value.st_ctime_ns)
+        if (signature(before) != signature(after) or signature(after) != signature(after_path)
+                or count != after.st_size):
+            raise ValueError('migration_journal_conflict')
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError('migration_journal_conflict')
+                result[key] = value
+            return result
+        def invalid_constant(_):
+            raise ValueError('migration_journal_conflict')
+        journal = json.loads(b''.join(chunks).decode('utf-8'),
+                             object_pairs_hook=unique_object, parse_constant=invalid_constant)
+        if not isinstance(journal, dict):
+            raise ValueError('migration_journal_conflict')
+        return journal
+    except (OSError, UnicodeError, ValueError):
+        raise ValueError('migration_journal_conflict') from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def plan(root, source, host, image, raw, source_port, occupied):
     if ':' in host or not re.fullmatch(r'[A-Za-z0-9.-]{1,253}', host):
         raise ValueError('migration_endpoint_unsupported')
@@ -45,16 +103,20 @@ def plan(root, source, host, image, raw, source_port, occupied):
         transaction = directory / 'transaction.json'
         if not transaction.exists():
             raise ValueError('migration_journal_conflict')
-        journal = json.loads(transaction.read_text())
+        journal = _read_transaction(transaction)
         if journal.get('phase') != 'ready':
             # prepare() owns recovery; retain this generation for its retry.
             continue
-        ready.append(journal)
+        ready.append((directory, journal))
     if ready:
         if len(ready) != 1:
             raise ValueError('migration_journal_conflict')
-        journal = ready[0]
+        directory, journal = ready[0]
         request = journal['request']
+        generation = request.get('generation')
+        if (type(generation) is not int or not 1 <= generation <= 9007199254740991
+                or directory.name != str(generation)):
+            raise ValueError('migration_journal_conflict')
         if (request['image'] != image or request['host'] != host
                 or journal['sourceDigest'] != hashlib.sha256(raw).hexdigest()):
             # Never create another endpoint or rotate identity silently.

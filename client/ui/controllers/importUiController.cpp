@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 
 #include "systemController.h"
+#include "core/utils/configPayloadCodec.h"
 
 #ifdef Q_OS_ANDROID
     #include "platforms/android/android_controller.h"
@@ -34,7 +35,7 @@ ImportUiController::ImportUiController(ImportController* importController, QObje
 bool ImportUiController::extractConfigFromFile(const QString &fileName)
 {
     QString data;
-    if (!SystemController::readFile(fileName, data)) {
+    if (!SystemController::readFile(fileName, data, amnezia::configPayloadCodec::maximumEncodedTextBytes)) {
         emit importErrorOccurred(ErrorCode::ImportOpenConfigError, false);
         return false;
     }
@@ -208,5 +209,13 @@ QString ImportUiController::readTextFile(const QString &fileName)
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return {};
     }
-    return QString::fromUtf8(file.readAll());
+    constexpr auto maximumBytes = amnezia::configPayloadCodec::maximumEncodedTextBytes;
+    if (file.size() > maximumBytes) {
+        return {};
+    }
+    const QByteArray data = file.read(maximumBytes + 1);
+    if (data.size() > maximumBytes || !file.atEnd() || file.error() != QFile::NoError) {
+        return {};
+    }
+    return QString::fromUtf8(data);
 }

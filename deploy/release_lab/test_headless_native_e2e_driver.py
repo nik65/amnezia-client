@@ -35,5 +35,10 @@ def test_embedded_promotion_program_compiles_and_executes_exact_helper(tmp_path)
 def test_sequence_hands_clean_state_to_baseline_before_update():
  source=Path(__import__('deploy.release_lab.headless_native_e2e_driver',fromlist=['x']).__file__).read_text()
  assert "baseline-handoff" in source and "validate_baseline_owned" in source
- assert source.index("prepare_and_connect") < source.index("crash_and_restart") < source.index("before=self.native.identity") < source.index("collect_update_pending")
+ run=ast.parse(textwrap.dedent(inspect.getsource(HeadlessNativeE2EDriver.run)))
+ calls=[n for n in ast.walk(run) if isinstance(n,ast.Call)]
+ line=lambda name:min(n.lineno for n in calls if isinstance(n.func,ast.Attribute) and n.func.attr==name)
+ armed=next(n for n in ast.walk(run) if isinstance(n,ast.With) and isinstance(n.items[0].context_expr,ast.Call) and isinstance(n.items[0].context_expr.func,ast.Name) and n.items[0].context_expr.func.id=='PendingObservation' and n.items[0].context_expr.args[1].value=='restart_pending')
+ assert line('prepare_and_connect') < line('crash_and_restart') < line('identity') < armed.lineno < line('stage_profile')
+ assert any(isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr=='stage_profile' for n in ast.walk(armed))
  assert "self._run('crash'" not in source and "crash_authorization" not in source

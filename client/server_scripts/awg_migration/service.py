@@ -1,5 +1,8 @@
 """Private, peer-bound AWG migration control plane; never a public update feed."""
 import base64
+import selectors
+import signal
+import struct
 from contextlib import closing, contextmanager
 import hashlib
 import hmac
@@ -90,19 +93,226 @@ def sign(payload, directory):
             'signature': base64.b64encode(signature).decode()}
 
 
+class NativeControl:
+    """Private captured-helper transport; HTTP and authentication stay with PID1."""
+    def __init__(self):
+        self.fd, self.sha256, self.directory = -1, '', '/migration'
+
+    @classmethod
+    def capture(cls, path, expected_sha256, directory='/migration'):
+        failure = 'native_control_rejected'
+        if os.name != 'posix' or not hasattr(os, 'memfd_create'):
+            raise ValueError(failure)
+        import fcntl
+        if not isinstance(expected_sha256, str) or not re.fullmatch('[a-f0-9]{64}', expected_sha256):
+            raise ValueError(failure)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1
+                    or stat.S_IMODE(info.st_mode) != 0o755 or not 64 <= info.st_size <= 32 * 1024 ** 2):
+                raise ValueError(failure)
+            chunks, remaining = [], info.st_size
+            while remaining:
+                chunk = os.read(fd, min(remaining, 128 * 1024))
+                if not chunk:
+                    raise ValueError(failure)
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b''.join(chunks)
+            after = os.fstat(fd)
+            if (os.read(fd, 1) or (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                    != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                    or hashlib.sha256(raw).hexdigest() != expected_sha256):
+                raise ValueError(failure)
+        finally:
+            os.close(fd)
+        machine = {'x86_64': 62, 'aarch64': 183}.get(os.uname().machine)
+        if (raw[:7] != b'\x7fELF\x02\x01\x01' or machine is None
+                or struct.unpack_from('<H', raw, 18)[0] != machine
+                or struct.unpack_from('<H', raw, 16)[0] != 2):
+            raise ValueError(failure)
+        offset = struct.unpack_from('<Q', raw, 32)[0]
+        size, count = struct.unpack_from('<HH', raw, 54)
+        if (size != 56 or not 1 <= count <= 128 or offset < 64 or offset + size * count > len(raw)
+                or raw[7] not in (0, 3) or raw[8] != 0 or struct.unpack_from('<I', raw, 20)[0] != 1
+                or struct.unpack_from('<H', raw, 52)[0] != 64):
+            raise ValueError(failure)
+        entry = struct.unpack_from('<Q', raw, 24)[0]
+        executable_entry = False
+        page = 65536 if machine == 183 else 4096
+        for i in range(count):
+            kind, flags, file_offset, address, _, file_size, memory_size, alignment = struct.unpack_from(
+                '<IIQQQQQQ', raw, offset + i * size)
+            if kind in (2, 3) or file_offset + file_size > len(raw) or file_size > memory_size:
+                raise ValueError(failure)
+            if kind == 1:
+                if (address + memory_size > 0xffffffffffffffff or file_offset % page != address % page
+                        or (alignment > 1 and (alignment & (alignment - 1)
+                            or file_offset % alignment != address % alignment))):
+                    raise ValueError(failure)
+                if flags & 1 and address <= entry < address + file_size:
+                    executable_entry = True
+        if not executable_entry:
+            raise ValueError(failure)
+        self = cls()
+        self.fd = os.memfd_create('amnezia-control', os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+        try:
+            with os.fdopen(os.dup(self.fd), 'wb') as stream:
+                stream.write(raw)
+                stream.flush()
+            os.fchmod(self.fd, 0o500)
+            seals = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
+            fcntl.fcntl(self.fd, fcntl.F_ADD_SEALS, seals)
+            if fcntl.fcntl(self.fd, fcntl.F_GET_SEALS) != seals:
+                raise ValueError(failure)
+            self.sha256, self.directory = expected_sha256, str(directory)
+            self.capability()
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+    def receipt(self):
+        return {'sha256': self.sha256, 'fd': self.fd, 'protocol': 'control-json-v1'}
+
+    def capability(self):
+        value = self.dispatch('target', 'amnezia-awg', '/native-control-capability', '127.0.0.1',
+                              {'content-length': '2'}, b'{}', lambda: None)
+        if value != {'handled': False, 'status': 403, 'body': '', 'authenticate': False}:
+            raise ValueError('native_control_rejected')
+
+    def _invoke(self, request):
+        failure = 'native_control_rejected'
+        try:
+            payload = json.dumps(request, separators=(',', ':')).encode()
+            if len(payload) > 256 * 1024 or self.fd < 0:
+                raise ValueError(failure)
+            with tempfile.TemporaryFile() as stream:
+                stream.write(payload)
+                stream.seek(0)
+                process = subprocess.Popen(['/proc/self/fd/' + str(self.fd), '--control-json'],
+                    stdin=stream, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    pass_fds=(self.fd,), start_new_session=True, cwd=self.directory,
+                    env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C'})
+                output, errors = bytearray(), 0
+                deadline = time.monotonic() + 45
+                try:
+                    with selectors.DefaultSelector() as ready:
+                        ready.register(process.stdout, selectors.EVENT_READ)
+                        ready.register(process.stderr, selectors.EVENT_READ)
+                        while ready.get_map():
+                            remaining = deadline - time.monotonic()
+                            if remaining <= 0:
+                                raise ValueError(failure)
+                            for key, unused in ready.select(min(remaining, 0.1)):
+                                chunk = os.read(key.fileobj.fileno(), 16384)
+                                if not chunk:
+                                    ready.unregister(key.fileobj)
+                                elif key.fileobj is process.stdout:
+                                    output.extend(chunk)
+                                    if len(output) > 16 * 1024 ** 2 + 1:
+                                        raise ValueError(failure)
+                                else:
+                                    errors += len(chunk)
+                                    if errors > 65536:
+                                        raise ValueError(failure)
+                    process.wait(timeout=max(0.001, deadline - time.monotonic()))
+                    response = json.loads(output)
+                except BaseException:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.wait()
+                    raise
+                finally:
+                    process.stdout.close()
+                    process.stderr.close()
+            if process.returncode or not isinstance(response, dict) or set(response) != {'result'}:
+                raise ValueError(failure)
+            result = response['result']
+            if (not isinstance(result, dict) or set(result) != {'handled', 'status', 'body', 'authenticate'}
+                    or type(result['handled']) is not bool or type(result['authenticate']) is not bool
+                    or type(result['status']) is not int or result['status'] not in (200, 403)
+                    or not isinstance(result['body'], str)
+                    or len(result['body'].encode('utf8')) > 8 * 1024 ** 2
+                    or (result['authenticate'] and (not result['handled'] or result['status'] != 403 or result['body']))
+                    or (result['status'] == 403 and result['body'])
+                    or (not result['handled'] and (result['body'] or result['authenticate'] or result['status'] != 403))):
+                raise ValueError(failure)
+            return result
+        except (OSError, subprocess.SubprocessError, UnicodeError, json.JSONDecodeError):
+            raise ValueError(failure) from None
+
+    def dispatch(self, role, scope, path, peer_address, headers, raw_body, authenticate):
+        if not isinstance(raw_body, bytes) or not 0 < len(raw_body) <= 16384:
+            raise ValueError('native_control_rejected')
+        request = {'role': role, 'scope': scope, 'path': path, 'peerAddress': peer_address,
+                   'headers': headers, 'body': raw_body.decode('utf8'), 'authenticatedClient': None}
+        result = self._invoke(request)
+        if result['authenticate']:
+            client = authenticate()
+            if client is None:
+                return None
+            if not isinstance(client, str) or not re.fullmatch('[a-f0-9]{64}', client):
+                raise ValueError('native_control_rejected')
+            request['authenticatedClient'] = client
+            result = self._invoke(request)
+            if result['authenticate']:
+                raise ValueError('native_control_rejected')
+        return result
+
+
 class MigrationService:
-    def __init__(self, directory, role, scope):
+    def __init__(self, directory, role, scope, native=None):
         self.directory, self.role, self.scope = directory, role, scope
+        self.native = native
 
     def dispatch(self, handler, authenticate):
         if not handler.path.startswith('/migration/v1/'):
             return False
         try:
-            self.handle(handler, authenticate)
+            if self.native is None:
+                self.handle(handler, authenticate)
+            else:
+                self.handle_native(handler, authenticate)
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError,
                 sqlite3.Error):
             handler.send_error(403)
         return True
+
+    def handle_native(self, handler, authenticate):
+        headers = {}
+        relevant = {'content-length', 'transfer-encoding', 'x-amnezia-migration-grant'}
+        for name, value in handler.headers.items():
+            key = name.lower()
+            if key in relevant:
+                if key in headers:
+                    raise ValueError('duplicate header')
+                headers[key] = value
+        size = int(headers.get('content-length', '-1'))
+        if not 0 < size <= 16384:
+            raise ValueError('body size')
+        response = self.native.dispatch(self.role, self.scope, handler.path,
+            handler.client_address[0], headers, handler.rfile.read(size), authenticate)
+        if response is None:
+            return
+        if not response['handled'] or response['status'] != 200:
+            handler.send_error(403)
+            return
+        raw = response['body'].encode('utf8')
+        handler.send_response(200)
+        handler.send_header('Content-Type', 'application/json')
+        handler.send_header('Cache-Control', 'no-store')
+        handler.send_header('Content-Length', str(len(raw)))
+        handler.end_headers()
+        handler.wfile.write(raw)
 
     def handle(self, handler, authenticate):
         if handler.headers.get('Transfer-Encoding'):

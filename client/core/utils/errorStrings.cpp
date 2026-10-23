@@ -82,6 +82,8 @@ QString errorString(ErrorCode code) {
     case (ErrorCode::OpenVpnAdaptersInUseError): errorMessage = QObject::tr("Can't connect: another VPN connection is active"); break;
     case (ErrorCode::OpenVpnTapAdapterError): errorMessage = QObject::tr("Can't setup OpenVPN TAP network adapter"); break;
     case (ErrorCode::AddressPoolError): errorMessage = QObject::tr("VPN pool error: no available addresses"); break;
+    case (ErrorCode::ServiceDiscoveryUnconfirmed): errorMessage = QObject::tr("Android VPN service discovery is not confirmed. Wait for discovery and try again."); break;
+    case (ErrorCode::NativeTunnelCleanupUnconfirmed): errorMessage = QObject::tr("Native VPN tunnel cleanup could not be confirmed. The connection remains blocked to avoid starting a second tunnel."); break;
 
     case (ErrorCode::ImportInvalidConfigError): errorMessage = QObject::tr("The config does not contain any containers and credentials for connecting to the server"); break;
     case (ErrorCode::ImportBackupFileUseRestoreInstead): errorMessage = QObject::tr("Backup files cannot be imported here. Use 'Restore from backup' instead."); break;

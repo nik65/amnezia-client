@@ -5,6 +5,7 @@ import subprocess
 import sys
 import types
 import json
+import re
 import unittest
 from unittest.mock import patch
 
@@ -15,12 +16,21 @@ route = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(route)
 
 
+def publisher_collector_name(scope):
+    # Derive the fixture from the actual exporter's constant rather than
+    # repeating the helper's expectation (which previously hid this mismatch).
+    source = Path(__file__).parents[2] / 'core/utils/constants/protocolConstants.h'
+    namespace = source.read_text(encoding='utf-8').split('namespace clientLogs', 1)[1].split('namespace openvpn', 1)[0]
+    prefix = re.search(r'tunnelContainerName\[\]\s*=\s*"([^"]+)"', namespace).group(1)
+    return prefix + '-' + scope
+
+
 class RouteTests(unittest.TestCase):
     def setUp(self):
         self.binding = {'schema': 1, 'scope': 'amnezia-awg2', 'sourceId': 'a' * 64, 'collectorId': 'b' * 64}
         self.source = {'Id': 'a' * 64, 'Name': '/amnezia-awg2',
                        'State': {'Running': True, 'Pid': 11, 'StartedAt': 'epoch1'}}
-        self.collector = {'Id': 'b' * 64, 'Name': '/amnezia-client-logs-amnezia-awg2',
+        self.collector = {'Id': 'b' * 64, 'Name': '/' + publisher_collector_name('amnezia-awg2'),
                           'State': {'Running': True, 'Pid': 12},
                           'Config': {'Image': route.IMAGE, 'Labels': {route.LABEL: 'amnezia-awg2'}},
                           'HostConfig': {'NetworkMode': 'container:' + 'a' * 64},
@@ -47,6 +57,29 @@ class RouteTests(unittest.TestCase):
     def test_existing_rule_no_restart_or_add(self):
         self.run_reconcile()
         self.assertFalse(any('-A' in call or 'restart' in call for call in self.calls))
+
+    def test_bind_discovers_actual_exporter_name_for_every_scope(self):
+        for scope in route.SCOPES:
+            source, collector = copy.deepcopy(self.source), copy.deepcopy(self.collector)
+            source['Name'] = '/' + scope
+            collector['Name'] = '/' + publisher_collector_name(scope)
+            collector['Config']['Labels'][route.LABEL] = scope
+            names = []
+            def inspect(name):
+                names.append(name)
+                if name == scope: return source
+                if name == publisher_collector_name(scope): return collector
+                raise ValueError('exporter did not create this container')
+            with self.subTest(scope=scope), patch.object(route, 'inspect', side_effect=inspect):
+                binding = route.publication_binding(scope)
+                self.assertEqual(binding['collectorId'], collector['Id'])
+                self.assertEqual(names, [scope, publisher_collector_name(scope)])
+
+    def test_wrong_old_prefix_refused_without_route_mutation(self):
+        self.collector['Name'] = '/amnezia-client-logs-amnezia-awg2'
+        with self.assertRaisesRegex(ValueError, 'publication identity'):
+            self.run_reconcile()
+        self.assertEqual(self.calls, [])
 
     def test_namespace_recreation_restarts_only_owned_collector_and_restores_exact_rule(self):
         self.net['b' * 64] = 'oldnet'
@@ -130,12 +163,12 @@ class RouteTests(unittest.TestCase):
     def publisher_guard(self, collector):
         source = Path(__file__).parents[2] / 'core/controllers/selfhosted/exportController.cpp'
         guard = source.read_text(encoding='utf-8').split("<<'ROUTE_GUARD'", 1)[1].split('\n', 1)[1].split('\nROUTE_GUARD', 1)[0]
-        for key, value in {'__VPN_CONTAINER__': 'amnezia-awg2', '__TUNNEL_CONTAINER__': 'amnezia-client-logs-amnezia-awg2',
+        for key, value in {'__VPN_CONTAINER__': 'amnezia-awg2', '__TUNNEL_CONTAINER__': publisher_collector_name('amnezia-awg2'),
                            '__COLLECTOR_IMAGE__': route.IMAGE, '__HOST_DIRECTORY__': '/opt/amnezia/client-logs', '__CONTAINER_SCOPE__': 'amnezia-awg2'}.items():
             guard = guard.replace(key, value)
         def command(args, **kwargs):
             if args[1] == 'ps':
-                value = b'amnezia-client-logs-amnezia-awg2\n'
+                value = (publisher_collector_name('amnezia-awg2') + '\n').encode()
             else:
                 selected = copy.deepcopy(self.source if args[2] == 'amnezia-awg2' else collector)
                 if 'Mounts' in selected:

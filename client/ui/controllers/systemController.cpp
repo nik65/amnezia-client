@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QQuickItem>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QtConcurrent>
@@ -79,28 +80,49 @@ bool SystemController::saveFile(const QString &fileName, const QByteArray &data)
 #endif
 }
 
-bool SystemController::readFile(const QString &fileName, QByteArray &data)
+bool SystemController::readFile(const QString &fileName, QByteArray &data, qint64 maximumBytes)
 {
+    // Reserve room for one overflow byte without overflowing QByteArray/qint64.
+    if (maximumBytes < -1 || maximumBytes >= QByteArray::maxSize()) {
+        return false;
+    }
 #ifdef Q_OS_ANDROID
-    int fd = AndroidController::instance()->getFd(fileName);
-    if (fd == -1) return false;
+    auto *android = AndroidController::instance();
+    const int fd = android->getFd(fileName);
+    if (fd < 0) {
+        return false;
+    }
+    const auto closeFd = qScopeGuard([android] { android->closeFd(); });
     QFile file;
-    if(!file.open(fd, QIODevice::ReadOnly)) return false;
-    data = file.readAll();
-    AndroidController::instance()->closeFd();
+    // Android owns the descriptor; closeFd must run on every path after getFd.
+    if (!file.open(fd, QIODevice::ReadOnly, QFileDevice::DontCloseHandle)) {
+        return false;
+    }
 #else
     QFile file(fileName);
-    if (!file.open(QIODevice::ReadOnly)) return false;
-    data = file.readAll();
+    if (!file.open(QIODevice::ReadOnly)) {
+        return false;
+    }
 #endif
+    if (maximumBytes >= 0 && file.size() > maximumBytes) {
+        return false;
+    }
+    const QByteArray bytes = maximumBytes < 0 ? file.readAll() : file.read(maximumBytes + 1);
+    if (file.error() != QFile::NoError || !file.atEnd()
+        || (maximumBytes >= 0 && bytes.size() > maximumBytes)) {
+        return false;
+    }
+    data = bytes;
     return true;
 }
 
-bool SystemController::readFile(const QString &fileName, QString &data)
+bool SystemController::readFile(const QString &fileName, QString &data, qint64 maximumBytes)
 {
     QByteArray byteArray;
-    if(!readFile(fileName, byteArray)) return false;
-    data = byteArray;
+    if (!readFile(fileName, byteArray, maximumBytes)) {
+        return false;
+    }
+    data = QString::fromUtf8(byteArray);
     return true;
 }
 

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import threading
 import types
@@ -21,7 +22,15 @@ scope = os.environ.get('AMNEZIA_MIGRATION_SCOPE', '')
 if not scope:
     with open('/migration/ready.json', encoding='utf-8') as stream:
         scope = json.load(stream)['containerId']
-service = MigrationService('/migration', os.environ.get('AMNEZIA_MIGRATION_ROLE', 'target'), scope)
+native_control = None
+if 'AMNEZIA_CONTROL_NATIVE_SHA256' in os.environ:
+    expected_native_sha256 = os.environ['AMNEZIA_CONTROL_NATIVE_SHA256']
+    if not re.fullmatch('[a-f0-9]{64}', expected_native_sha256):
+        raise ValueError('native_control_invalid')
+    # Explicit native selection fails at startup; it never starts legacy control.
+    native_control = service_module.NativeControl.capture(Path('/app/awg-feed'), expected_native_sha256)
+service = MigrationService('/migration', os.environ.get('AMNEZIA_MIGRATION_ROLE', 'target'),
+                           scope, native=native_control)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -86,6 +95,8 @@ role = service.role
 receipt = {'role': role, 'processStart': Path('/proc/self/stat').read_text().split()[21],
            'hashes': {'service.py': hashlib.sha256(service_source).hexdigest(),
                       'target.py': hashlib.sha256(target_source).hexdigest()}}
+if native_control is not None:
+    receipt['nativeControl'] = native_control.receipt()
 path = Path('/migration/control-loaded-' + role + '.json')
 temporary = path.with_suffix('.tmp')
 with open(temporary, 'w', encoding='utf-8') as stream:

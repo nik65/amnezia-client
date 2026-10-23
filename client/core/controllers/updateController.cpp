@@ -1,5 +1,6 @@
 #include "updateController.h"
 #include "core/utils/installerDiagnosticProjection.h"
+#include "core/utils/boundedNetworkReply.h"
 
 #include <QCryptographicHash>
 #include <QDate>
@@ -118,6 +119,7 @@ namespace
 #endif
 
     constexpr qsizetype kManifestMaxPayloadBytes = 1024 * 1024;
+    constexpr qsizetype kUpdateMetadataMaxPayloadBytes = 1024 * 1024;
     constexpr int kManifestTransferTimeoutMs = 7000;
     constexpr int kInstallerTransferTimeoutMs = 2 * 60 * 1000;
     constexpr int kInstallerTotalDeadlineMs = 25 * 60 * 1000;
@@ -2761,45 +2763,29 @@ void UpdateController::fetchSelfHostedManifestFromUrls(const QList<QUrl> &manife
     request.setTransferTimeout(kManifestTransferTimeoutMs);
 
     QNetworkReply *reply = amnApp->networkManager()->get(request);
+    reply->setParent(this);
     const quint64 generation = m_updateCheckGeneration;
     m_updateCheckReplies.insert(reply);
-    auto *manifestData = new QByteArray();
-    auto *manifestTooLarge = new bool(false);
-    QObject::connect(reply, &QIODevice::readyRead, this, [reply, manifestData, manifestTooLarge]() {
-        if (manifestData->size() > kManifestMaxPayloadBytes) {
-            return;
-        }
-        manifestData->append(reply->readAll());
-        if (manifestData->size() > kManifestMaxPayloadBytes) {
-            *manifestTooLarge = true;
-            reply->abort();
-        }
+    QObject::connect(reply, &QObject::destroyed, this, [this, reply]() {
+        m_updateCheckReplies.remove(reply);
     });
-    QObject::connect(reply, &QNetworkReply::metaDataChanged, this, [reply, manifestTooLarge]() {
-        const QVariant contentLength = reply->header(QNetworkRequest::ContentLengthHeader);
-        if (contentLength.isValid() && contentLength.toLongLong() > kManifestMaxPayloadBytes) {
-            *manifestTooLarge = true;
-            reply->abort();
-        }
-    });
+    const auto body = amnezia::boundNetworkReplyBody(reply, kManifestMaxPayloadBytes);
     QObject::connect(reply, &QNetworkReply::finished, this,
-                     [this, reply, manifestData, manifestTooLarge, manifestUrls, urlIndex,
+                     [this, reply, body, manifestUrls, urlIndex,
                       manifestUrl, generation]() {
         m_updateCheckReplies.remove(reply);
         if (!m_updateCheckRunning || generation != m_updateCheckGeneration) {
             reply->deleteLater();
-            delete manifestData;
-            delete manifestTooLarge;
             return;
         }
         const bool ok = (reply->error() == QNetworkReply::NoError);
         const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QString errorString = ok ? QString() : reply->errorString();
-        const QByteArray data = ok ? *manifestData : QByteArray();
+        const QByteArray data = ok && !body->tooLarge ? body->data : QByteArray();
         reply->deleteLater();
 
         const bool responseValid = ok && statusCode >= 200 && statusCode < 300
-                && !*manifestTooLarge && data.size() <= kManifestMaxPayloadBytes
+                && !body->tooLarge && data.size() <= kManifestMaxPayloadBytes
                 && samePinnedUrl(manifestUrl, reply->url())
                 && !reply->attribute(QNetworkRequest::RedirectionTargetAttribute).isValid();
         const ManifestProcessResult processResult = responseValid
@@ -2809,14 +2795,10 @@ void UpdateController::fetchSelfHostedManifestFromUrls(const QList<QUrl> &manife
             if (!ok) {
                 logger.info() << "Self-hosted update manifest unavailable at" << manifestUrl.toString() << errorString;
             }
-            delete manifestData;
-            delete manifestTooLarge;
             fetchSelfHostedManifestFromUrls(manifestUrls, urlIndex + 1);
             return;
         }
 
-        delete manifestData;
-        delete manifestTooLarge;
         if (processResult == ManifestProcessResult::NoUpdate) {
             finishUpdateCheck();
             return;
@@ -2837,21 +2819,26 @@ void UpdateController::doGetAsync(const QString &endpoint, std::function<void(bo
     req.setUrl(QUrl(fullUrl));
 
     QNetworkReply *reply = amnApp->networkManager()->get(req);
+    reply->setParent(this);
     const quint64 generation = m_updateCheckGeneration;
     m_updateCheckReplies.insert(reply);
+    QObject::connect(reply, &QObject::destroyed, this, [this, reply]() {
+        m_updateCheckReplies.remove(reply);
+    });
+    const auto body = amnezia::boundNetworkReplyBody(reply, kUpdateMetadataMaxPayloadBytes);
     setupNetworkErrorHandling(reply, endpoint);
 
     QObject::connect(reply, &QNetworkReply::finished, this,
-                     [this, reply, endpoint, onDone, generation]() {
+                     [this, reply, body, endpoint, onDone, generation]() {
         m_updateCheckReplies.remove(reply);
         if (!m_updateCheckRunning || generation != m_updateCheckGeneration) {
             reply->deleteLater();
             return;
         }
-        const bool ok = (reply->error() == QNetworkReply::NoError);
+        const bool ok = (reply->error() == QNetworkReply::NoError) && !body->tooLarge;
         QByteArray data;
         if (ok) {
-            data = reply->readAll();
+            data = body->data;
         } else {
             handleNetworkError(reply, endpoint);
         }
@@ -2862,6 +2849,7 @@ void UpdateController::doGetAsync(const QString &endpoint, std::function<void(bo
 
 void UpdateController::fetchGatewayUrl()
 {
+    const quint64 generation = m_updateCheckGeneration;
     auto gatewayController = QSharedPointer<GatewayController>::create(m_appSettingsRepository->getGatewayEndpoint(),
                                                                        m_appSettingsRepository->isDevGatewayEnv(),
                                                                        7000,
@@ -2873,9 +2861,15 @@ void UpdateController::fetchGatewayUrl()
                                      .build();
 
     // Workaround: wait before contacting gateway to avoid rate limit triggered by other requests (news etc.)
-    QTimer::singleShot(1000, this, [this, gatewayController, apiPayload]() {
+    QTimer::singleShot(1000, this, [this, gatewayController, apiPayload, generation]() {
+        if (!m_updateCheckRunning || generation != m_updateCheckGeneration) {
+            return;
+        }
         gatewayController->postAsync(QStringLiteral("%1v1/updater_endpoint"), apiPayload)
-            .then(this, [this, gatewayController](QPair<ErrorCode, QByteArray> result) {
+            .then(this, [this, gatewayController, generation](QPair<ErrorCode, QByteArray> result) {
+                if (!m_updateCheckRunning || generation != m_updateCheckGeneration) {
+                    return;
+                }
                 auto [err, gatewayResponse] = result;
                 if (err != ErrorCode::NoError) {
                     logger.error() << "Gateway request failed, error code:" << static_cast<int>(err);
@@ -3796,7 +3790,8 @@ bool UpdateController::runInstaller()
 
     QNetworkReply *reply = amnApp->networkManager()->get(request);
 
-    QObject::connect(reply, &QNetworkReply::finished, [this, reply]() {
+    reply->setParent(this);
+    QObject::connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         if (reply->error() == QNetworkReply::NoError) {
             const QString installerPath = localInstallerPath();
             const QByteArray installerData = reply->readAll();
@@ -3876,21 +3871,26 @@ bool UpdateController::startArtifactDownload()
         return false;
     }
 
-    auto *file = new QSaveFile(installerPath);
-    file->setDirectWriteFallback(false);
-    if (!file->open(QIODevice::WriteOnly)) {
+    // Replies own their callbacks; shared state closes staging even if either
+    // the reply or the controller is destroyed before finished is emitted.
+    struct DownloadState {
+        explicit DownloadState(const QString &path)
+            : file(path), hash(QCryptographicHash::Sha256) { }
+        QSaveFile file;
+        QCryptographicHash hash;
+        qint64 bytesWritten = 0;
+        bool writeFailed = false;
+        bool downloadTooLarge = false;
+        bool totalDeadlineExceeded = false;
+    };
+    const auto state = std::make_shared<DownloadState>(installerPath);
+    state->file.setDirectWriteFallback(false);
+    if (!state->file.open(QIODevice::WriteOnly)) {
         logger.error() << "Failed to open exclusive self-hosted installer staging file:"
-                       << installerPath << file->errorString();
-        delete file;
+                       << installerPath << state->file.errorString();
         finishSelfHostedInstallerAttempt(InstallerHandoffResult::Failed);
         return false;
     }
-
-    auto *hash = new QCryptographicHash(QCryptographicHash::Sha256);
-    auto *bytesWritten = new qint64(0);
-    auto *writeFailed = new bool(false);
-    auto *downloadTooLarge = new bool(false);
-    auto *totalDeadlineExceeded = new bool(false);
 
     QNetworkRequest request;
     request.setTransferTimeout(kInstallerTransferTimeoutMs);
@@ -3899,64 +3899,54 @@ bool UpdateController::startArtifactDownload()
                          QNetworkRequest::ManualRedirectPolicy);
 
     QNetworkReply *reply = amnApp->networkManager()->get(request);
+    reply->setParent(this);
     auto *totalDeadlineTimer = new QTimer(reply);
     totalDeadlineTimer->setSingleShot(true);
     totalDeadlineTimer->setInterval(kInstallerTotalDeadlineMs);
     QObject::connect(totalDeadlineTimer, &QTimer::timeout, reply,
-                     [reply, totalDeadlineExceeded]() {
-        *totalDeadlineExceeded = true;
+                     [reply, state]() {
+        state->totalDeadlineExceeded = true;
         reply->abort();
     });
     totalDeadlineTimer->start();
-    QObject::connect(reply, &QNetworkReply::metaDataChanged, this, [this, reply, downloadTooLarge]() {
+    QObject::connect(reply, &QNetworkReply::metaDataChanged, this, [this, reply, state]() {
         const QVariant contentLength = reply->header(QNetworkRequest::ContentLengthHeader);
         if (m_selectedArtifact.size >= 0 && contentLength.isValid()
             && contentLength.toLongLong() > m_selectedArtifact.size) {
-            *downloadTooLarge = true;
+            state->downloadTooLarge = true;
             reply->abort();
         }
     });
-    QObject::connect(reply, &QIODevice::readyRead, this, [this, reply, file, hash, bytesWritten, writeFailed, downloadTooLarge]() {
+    QObject::connect(reply, &QIODevice::readyRead, this, [this, reply, state]() {
         const QByteArray chunk = reply->readAll();
-        if (chunk.isEmpty() || *writeFailed || *downloadTooLarge) {
+        if (chunk.isEmpty() || state->writeFailed || state->downloadTooLarge) {
             return;
         }
-        if (m_selectedArtifact.size >= 0 && *bytesWritten + chunk.size() > m_selectedArtifact.size) {
-            *downloadTooLarge = true;
+        if (m_selectedArtifact.size >= 0 && state->bytesWritten + chunk.size() > m_selectedArtifact.size) {
+            state->downloadTooLarge = true;
             reply->abort();
             return;
         }
-        if (file->write(chunk) != chunk.size()) {
-            *writeFailed = true;
+        if (state->file.write(chunk) != chunk.size()) {
+            state->writeFailed = true;
             return;
         }
-        hash->addData(chunk);
-        *bytesWritten += chunk.size();
+        state->hash.addData(chunk);
+        state->bytesWritten += chunk.size();
     });
     QObject::connect(reply, &QNetworkReply::finished, this,
-                     [this, reply, file, hash, bytesWritten, writeFailed, downloadTooLarge,
-                      totalDeadlineExceeded, totalDeadlineTimer, installerPath]() {
+                     [this, reply, state, totalDeadlineTimer, installerPath]() {
         totalDeadlineTimer->stop();
-        const auto cleanup = [file, hash, bytesWritten, writeFailed, downloadTooLarge,
-                              totalDeadlineExceeded]() {
-            delete file;
-            delete hash;
-            delete bytesWritten;
-            delete writeFailed;
-            delete downloadTooLarge;
-            delete totalDeadlineExceeded;
-        };
-
-        if (reply->bytesAvailable() > 0 && !*writeFailed && !*downloadTooLarge) {
+        if (reply->bytesAvailable() > 0 && !state->writeFailed && !state->downloadTooLarge) {
             const QByteArray chunk = reply->readAll();
             if (!chunk.isEmpty()) {
-                if (m_selectedArtifact.size >= 0 && *bytesWritten + chunk.size() > m_selectedArtifact.size) {
-                    *downloadTooLarge = true;
-                } else if (file->write(chunk) != chunk.size()) {
-                    *writeFailed = true;
+                if (m_selectedArtifact.size >= 0 && state->bytesWritten + chunk.size() > m_selectedArtifact.size) {
+                    state->downloadTooLarge = true;
+                } else if (state->file.write(chunk) != chunk.size()) {
+                    state->writeFailed = true;
                 } else {
-                    hash->addData(chunk);
-                    *bytesWritten += chunk.size();
+                    state->hash.addData(chunk);
+                    state->bytesWritten += chunk.size();
                 }
             }
         }
@@ -3965,62 +3955,55 @@ bool UpdateController::startArtifactDownload()
                 && !reply->attribute(QNetworkRequest::RedirectionTargetAttribute).isValid();
         if (reply->error() != QNetworkReply::NoError || statusCode < 200 || statusCode >= 300
             || !finalUrlPinned) {
-            logger.error() << (*totalDeadlineExceeded
+            logger.error() << (state->totalDeadlineExceeded
                                        ? "Self-hosted installer hard total deadline exceeded:"
                                        : "Self-hosted installer download failed:")
                            << static_cast<int>(reply->error()) << reply->errorString()
                            << "HTTP status:" << statusCode;
             reply->deleteLater();
-            file->cancelWriting();
-            cleanup();
+            state->file.cancelWriting();
             finishSelfHostedInstallerAttempt(InstallerHandoffResult::Failed);
             return;
         }
 
         reply->deleteLater();
 
-        if (*downloadTooLarge) {
+        if (state->downloadTooLarge) {
             logger.error() << "Self-hosted installer download exceeded manifest size for" << m_selectedArtifact.url.toString();
-            file->cancelWriting();
-            cleanup();
+            state->file.cancelWriting();
             finishSelfHostedInstallerAttempt(InstallerHandoffResult::Failed);
             return;
         }
 
-        if (*writeFailed) {
-            logger.error() << "Failed to write full self-hosted installer:" << installerPath << file->errorString();
-            file->cancelWriting();
-            cleanup();
+        if (state->writeFailed) {
+            logger.error() << "Failed to write full self-hosted installer:" << installerPath << state->file.errorString();
+            state->file.cancelWriting();
             finishSelfHostedInstallerAttempt(InstallerHandoffResult::Failed);
             return;
         }
 
-        const QString actualSha256 = QString::fromLatin1(hash->result().toHex());
+        const QString actualSha256 = QString::fromLatin1(state->hash.result().toHex());
         if (actualSha256 != normalizeSha256(m_selectedArtifact.sha256)) {
             logger.error() << "Self-hosted installer sha256 verification failed for" << m_selectedArtifact.url.toString();
-            file->cancelWriting();
-            cleanup();
+            state->file.cancelWriting();
             finishSelfHostedInstallerAttempt(InstallerHandoffResult::Failed);
             return;
         }
-        if (m_selectedArtifact.size >= 0 && *bytesWritten != m_selectedArtifact.size) {
+        if (m_selectedArtifact.size >= 0 && state->bytesWritten != m_selectedArtifact.size) {
             logger.error() << "Self-hosted installer size differs from manifest:"
-                             << *bytesWritten << "expected" << m_selectedArtifact.size;
-            file->cancelWriting();
-            cleanup();
+                             << state->bytesWritten << "expected" << m_selectedArtifact.size;
+            state->file.cancelWriting();
             finishSelfHostedInstallerAttempt(InstallerHandoffResult::Failed);
             return;
         }
 
-        if (!file->commit()) {
+        if (!state->file.commit()) {
             logger.error() << "Failed to atomically commit verified self-hosted installer:"
-                           << installerPath << file->errorString();
-            cleanup();
+                           << installerPath << state->file.errorString();
             finishSelfHostedInstallerAttempt(InstallerHandoffResult::Failed);
             return;
         }
 
-        cleanup();
         finishSelfHostedInstallerAttempt(launchDownloadedArtifact(installerPath));
     });
     return true;

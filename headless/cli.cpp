@@ -7,11 +7,22 @@
 #include <QJsonParseError>
 #include <QLocalSocket>
 #include <QSaveFile>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QTextStream>
 #include <QUuid>
+#include <cstring>
 
-#include "daemon.h"
+#include "headlessProtocol.h"
 #include "cliResponse.h"
+#include "headless_fs_dispatch.h"
+#include "rollbackCoordinator.h"
+#include "rollbackCliResponse.h"
+
+#if defined(Q_OS_LINUX)
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 namespace
 {
@@ -97,10 +108,54 @@ bool readJsonObject(const QString &path, QJsonObject &object, QString &error)
     return true;
 }
 
+bool fixedRootDaemonPeer(QLocalSocket &socket, const QString &path)
+{
+#if defined(Q_OS_LINUX)
+    if (::geteuid() != 0 || path != QStringLiteral("/run/amnezia/amneziad.sock")
+        || socket.socketDescriptor() < 0) return false;
+    struct ucred peer {};
+    socklen_t size = sizeof(peer);
+    if (::getsockopt(static_cast<int>(socket.socketDescriptor()), SOL_SOCKET,
+                     SO_PEERCRED, &peer, &size) != 0 || peer.uid != 0 || peer.pid <= 0) return false;
+    QProcess process;
+    QProcessEnvironment environment;
+    environment.insert(QStringLiteral("PATH"), QStringLiteral("/usr/bin:/bin"));
+    environment.insert(QStringLiteral("LC_ALL"), QStringLiteral("C"));
+    process.setProcessEnvironment(environment);
+    process.start(QStringLiteral("/usr/bin/systemctl"),
+                  {QStringLiteral("show"), QStringLiteral("--property=MainPID"),
+                   QStringLiteral("--value"), QStringLiteral("amneziad.service")});
+    if (!process.waitForFinished(2000)) {
+        process.kill();
+        process.waitForFinished(1000);
+        return false;
+    }
+    bool ok = false;
+    const qlonglong pid = QString::fromLatin1(process.readAllStandardOutput()).trimmed().toLongLong(&ok);
+    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0
+        && ok && pid == peer.pid;
+#else
+    Q_UNUSED(socket);
+    Q_UNUSED(path);
+    return false;
+#endif
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
 {
+    // Provisioning uses only the already-authenticated CLI executable. Dispatch
+    // before Qt can consume argv or the normal client can create an IPC socket.
+    if (argc >= 2 && std::strcmp(argv[1], "--provisioning-fs") == 0) {
+        return headless_fs::dispatch(argc - 1, argv + 1);
+    }
+    if (argc >= 2 && std::strcmp(argv[1], "--rollback-coordinator") == 0) {
+        QStringList commands;
+        for (int index = 2; index < argc; ++index) commands.append(QString::fromLocal8Bit(argv[index]));
+        QCoreApplication application(argc, argv);
+        return amnezia::headless::RollbackCoordinator::dispatch(commands);
+    }
     QCoreApplication application(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("amnezia-cli"));
     QCoreApplication::setApplicationVersion(QStringLiteral(AMNEZIA_HEADLESS_VERSION));
@@ -202,6 +257,26 @@ int main(int argc, char *argv[])
                             << ": " << socket.errorString() << Qt::endl;
         return 1;
     }
+    const bool coordinatedRollback = command == amnezia::headless::Command::UpdateRollback;
+    if (coordinatedRollback) {
+        if (!fixedRootDaemonPeer(socket, socketPath)) {
+            QTextStream(stderr) << "amnezia-cli: coordinated rollback requires the fixed root system service" << Qt::endl;
+            return 1;
+        }
+        // Preparation may exceed the daemon's request-frame timeout. Drop this
+        // authenticated preflight socket, then authenticate a fresh connection.
+        socket.abort();
+        const auto prepared = amnezia::headless::RollbackCoordinator().prepare();
+        if (!prepared.ok) {
+            QTextStream(stderr) << prepared.code << ": " << prepared.message << Qt::endl;
+            return 1;
+        }
+        socket.connectToServer(socketPath, QIODevice::ReadWrite);
+        if (!socket.waitForConnected(1000) || !fixedRootDaemonPeer(socket, socketPath)) {
+            QTextStream(stderr) << "amnezia-cli: root service identity changed after rollback preparation" << Qt::endl;
+            return 1;
+        }
+    }
     if (socket.write(amnezia::headless::encodeRequest(request)) < 0) {
         QTextStream(stderr) << "amnezia-cli: daemon request failed: "
                             << socket.errorString() << Qt::endl;
@@ -210,12 +285,34 @@ int main(int argc, char *argv[])
 
     QString responseError;
     const int responseBudget = command == amnezia::headless::Command::Connect
-            || command == amnezia::headless::Command::Disconnect ? 120000 : 2000;
+            || command == amnezia::headless::Command::Disconnect ? 120000
+            : coordinatedRollback ? 60000 : 2000;
     const QByteArray responseFrame = amnezia::headless::readCliResponseFrame(socket, responseError, responseBudget);
     if (responseFrame.isEmpty()) {
+        // A scheduled restart may close the daemon connection. The installed
+        // CLI process still runs14 and can non-blockingly wake its retained
+        // worker, but only a genuine pending product journal authorizes it.
+        if (coordinatedRollback) {
+            const auto scheduled = amnezia::headless::RollbackCoordinator().rollbackRequested();
+            const auto pending = amnezia::headless::acceptedPendingRollbackResponse(
+                    request.requestId, responseError, scheduled);
+            if (!pending.isEmpty()) {
+                return printResponse(pending, parser.isSet(QStringLiteral("json")),
+                                     parser.value(QStringLiteral("output")));
+            }
+        }
         QTextStream(stderr) << "amnezia-cli: daemon response failed: "
                             << responseError << Qt::endl;
         return 1;
+    }
+    if (coordinatedRollback && QJsonDocument::fromJson(responseFrame).object()
+            .value(QStringLiteral("ok")).toBool(false)
+            && !amnezia::headless::daemonScheduledRollback(responseFrame)) {
+        const auto requested = amnezia::headless::RollbackCoordinator().rollbackRequested();
+        if (!requested.ok) {
+            QTextStream(stderr) << requested.code << ": " << requested.message << Qt::endl;
+            return 1;
+        }
     }
     return printResponse(responseFrame, parser.isSet(QStringLiteral("json")),
                          parser.value(QStringLiteral("output")));

@@ -8,13 +8,23 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.amnezia.awg.GoBackend
 import org.amnezia.vpn.protocol.Protocol
+import org.amnezia.vpn.protocol.NativeSessionGuard
+import org.amnezia.vpn.protocol.NativeSessionIdentity
+import org.amnezia.vpn.protocol.NativeSessionDescriptor
+import org.amnezia.vpn.protocol.NativeSessionBinding
 import org.amnezia.vpn.protocol.ProtocolState
 import org.amnezia.vpn.protocol.ProtocolState.CONNECTED
 import org.amnezia.vpn.protocol.ProtocolState.DISCONNECTED
 import org.amnezia.vpn.protocol.ProtocolState.UNKNOWN
 import org.amnezia.vpn.protocol.Statistics
+import org.amnezia.vpn.protocol.LargeRouteEstablishment
+import org.amnezia.vpn.protocol.bootstrapRouteSubset
+import org.amnezia.vpn.protocol.routeDestinationParcelExceedsRecommendation
 import org.amnezia.vpn.protocol.VpnException
 import org.amnezia.vpn.protocol.VpnStartException
 import org.amnezia.vpn.util.LibraryLoader.loadSharedLibrary
@@ -55,19 +65,34 @@ internal fun shouldRetryHandshakeRead(lastHandshake: Long, unreadableReads: Int)
 
 open class Wireguard : Protocol() {
 
+    private val nativeSessionGuard = NativeSessionGuard()
     @Volatile private var tunnelHandle: Int = -1
     private var config: WireguardConfig? = null // save config for reconnect
     protected open val ifName: String = "amn0"
     private lateinit var scope: CoroutineScope
     private var statusJob: Job? = null
+    private var statusJobGeneration = 0L
     private var migrationConnectionNonce: String = ""
     private var cleanedNonce: String = ""
+    private var pendingStart: Any? = null
+    private var pendingStartJob: Job? = null
+    private var pendingCleanupUnconfirmed = false
+    private var pendingStartCancelled = false
     override val migrationCleanupObservation: String?
-        get() = cleanedNonce.takeIf { it.isNotEmpty() }?.let {
-            JSONObject().put("connectionNonce", it).put("nativeCleanupConfirmed", true).toString()
+        get() = nativeSessionGuard.locked {
+            if (tunnelHandle >= 0) return@locked null
+            cleanedNonce.takeIf { it.isNotEmpty() }?.let {
+                JSONObject().put("connectionNonce", it).put("nativeCleanupConfirmed", true).apply {
+                    nativeSessionGuard.cleanupIdentity()?.let { identity ->
+                        put("serviceInstanceId", identity.serviceInstanceId)
+                        put("serviceActivationId", identity.serviceActivationId)
+                    }
+                }.toString()
+            }
         }
     override val migrationObservation: String?
         get() {
+        return nativeSessionGuard.locked {
             val active = config ?: return null
             if (tunnelHandle < 0) return null
             val native = GoBackend.awgGetConfig(tunnelHandle) ?: return null
@@ -114,10 +139,13 @@ open class Wireguard : Protocol() {
                         .digest(raw).joinToString("") { "%02x".format(it) })
                 }
             }.toString()
+        
         }
+    }
 
     override val statistics: Statistics
         get() {
+        return nativeSessionGuard.locked {
             if (tunnelHandle == -1) return Statistics.EMPTY_STATISTICS
             val config = GoBackend.awgGetConfig(tunnelHandle) ?: return Statistics.EMPTY_STATISTICS
             return Statistics.build {
@@ -133,7 +161,9 @@ open class Wireguard : Protocol() {
                     if (optsCount == 2) return@forEach
                 }
             }
+        
         }
+    }
 
     override fun internalInit() {
         if (!isInitialized) loadSharedLibrary(context, "wg-go")
@@ -144,11 +174,96 @@ open class Wireguard : Protocol() {
     }
 
     override suspend fun startVpn(config: JSONObject, vpnBuilder: Builder, protect: (Int) -> Boolean) {
-        migrationConnectionNonce = config.optString("migrationConnectionNonce", "")
-        cleanedNonce = ""
         val wireguardConfig = parseConfig(config)
-        start(wireguardConfig, vpnBuilder, protect)
-        this.config = wireguardConfig
+        val descriptor = NativeSessionDescriptor(
+            NativeSessionIdentity(config.optString("nativeServiceInstanceId", ""), config.optString("nativeServiceActivationId", ""), config.optString("migrationConnectionNonce", "")),
+            config.optString("nativeSessionServerId", ""), config.optString("protocol", "").uppercase(java.util.Locale.ROOT))
+        val routes = interfaceRoutes(wireguardConfig)
+        val subset = bootstrapRouteSubset(routes)
+        val job = currentCoroutineContext()[Job]
+        val token = Any()
+        val staged = nativeSessionGuard.locked {
+            if (pendingStart != null || pendingCleanupUnconfirmed) throw VpnStartException("VPN establishment or cleanup pending")
+            migrationConnectionNonce = config.optString("migrationConnectionNonce", "")
+            cleanedNonce = ""
+            if (tunnelHandle >= 0 || subset == null || !routeDestinationParcelExceedsRecommendation(routes)) {
+                start(wireguardConfig, vpnBuilder, protect)
+                this.config = wireguardConfig
+                nativeSessionGuard.activate(descriptor)
+                false
+            } else {
+                pendingStart = token
+                pendingStartCancelled = false
+                pendingStartJob = job
+                // Record ownership while exposing UNKNOWN, never a live handle
+                // or an idle grant while the unconsumed interface is pending.
+                nativeSessionGuard.activate(descriptor)
+                nativeSessionGuard.beginCleanup()
+                true
+            }
+        }
+        if (!staged) return
+        var descriptorFd: ParcelFileDescriptor? = null
+        val establishment = LargeRouteEstablishment(context)
+        var activationAttempted = false
+        var completed = false
+        var primaryFailure: Throwable? = null
+        try {
+            descriptorFd = establishment.establish(vpnBuilder, wireguardConfig.addresses, routes,
+                configureSmall = { buildVpnInterfaceWithRoutes(wireguardConfig, vpnBuilder, subset!!) },
+                appendFinal = { applyInterfaceRoutes(routes, vpnBuilder) },
+                ensureOwner = { nativeSessionGuard.locked {
+                    if (pendingStart !== token || pendingStartCancelled || job?.isActive == false)
+                        throw kotlinx.coroutines.CancellationException("VPN establishment owner cancelled")
+                } })
+            currentCoroutineContext().ensureActive()
+            nativeSessionGuard.locked {
+                if (pendingStart !== token || pendingStartCancelled || job?.isActive == false || tunnelHandle >= 0)
+                    throw VpnStartException("VPN establishment superseded")
+                activationAttempted = true
+                start(wireguardConfig, vpnBuilder, protect, establishedTun = descriptorFd)
+                // Cancellation can arrive during synchronous native TurnOn.
+                // Retire only this reservation's new handle before publishing.
+                if (pendingStartCancelled || job?.isActive == false) {
+                    if (tunnelHandle >= 0) turnOffVpn()
+                    throw kotlinx.coroutines.CancellationException("VPN establishment cancelled during native activation")
+                }
+                this.config = wireguardConfig
+                nativeSessionGuard.activate(descriptor)
+                completed = true
+            }
+        } catch (error: Throwable) {
+            primaryFailure = error
+            try { nativeSessionGuard.locked {
+                if (pendingStart === token && tunnelHandle >= 0) turnOffVpn()
+            } } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            throw error
+        } finally {
+            var descriptorClosed = false
+            var closeFailure: Throwable? = null
+            try { descriptorFd?.close(); descriptorClosed = true }
+            catch (error: Throwable) { closeFailure = error }
+            finally { nativeSessionGuard.locked {
+                if (pendingStart === token) {
+                    val nativeRetired = completed || !activationAttempted ||
+                        nativeSessionGuard.idleObservation(false).state == org.amnezia.vpn.protocol.NativeIdleState.VERIFIED_RETIRED
+                    pendingCleanupUnconfirmed = !descriptorClosed || !establishment.cleanupConfirmed || !nativeRetired
+                    if (pendingCleanupUnconfirmed) {
+                        cleanedNonce = ""
+                        nativeSessionGuard.beginCleanup()
+                    }
+                    pendingStart = null
+                    pendingStartJob = null
+                    pendingStartCancelled = false
+                    if (tunnelHandle < 0 && !pendingCleanupUnconfirmed) {
+                        cleanedNonce = migrationConnectionNonce
+                        nativeSessionGuard.confirmedCleanup()
+                        state.value = DISCONNECTED
+                    }
+                }
+            } }
+            closeFailure?.let { if (primaryFailure != null) primaryFailure.addSuppressed(it) else throw it }
+        }
     }
 
     protected open fun parseConfig(config: JSONObject): WireguardConfig {
@@ -243,7 +358,8 @@ open class Wireguard : Protocol() {
         config: WireguardConfig,
         vpnBuilder: Builder,
         protect: (Int) -> Boolean,
-        stopExistingVpn: Boolean = false
+        stopExistingVpn: Boolean = false,
+        establishedTun: ParcelFileDescriptor? = null
     ) {
         if (!stopExistingVpn && tunnelHandle != -1) {
             Log.w(TAG, "Tunnel already up")
@@ -256,9 +372,9 @@ open class Wireguard : Protocol() {
         val unionPolicy = if (unionCallbacks == null) "" else
             JSONObject().put("sites", org.json.JSONArray(config.includedAddresses.map { it.toString() }))
                 .put("dns", org.json.JSONArray(config.dnsServers.map { it.hostAddress })).toString()
-        buildVpnInterface(config, vpnBuilder)
+        if (establishedTun == null) buildVpnInterface(config, vpnBuilder)
 
-        vpnBuilder.establish().use { tunFd ->
+        (establishedTun ?: vpnBuilder.establish()).use { tunFd ->
             if (stopExistingVpn && tunnelHandle != -1) {
                 turnOffVpn()
             }
@@ -267,6 +383,8 @@ open class Wireguard : Protocol() {
             }
             Log.i(TAG, "awg-go backend ${GoBackend.awgVersion()}")
             val fd = tunFd.detachFd()
+            cleanedNonce = ""
+            nativeSessionGuard.replacedNativeHandle()
             tunnelHandle = try {
                 if (unionCallbacks == null) GoBackend.awgTurnOn(ifName, fd, settings)
                 else GoBackend.awgTurnOnUnion(ifName, fd, settings, unionCallbacks, unionPolicy)
@@ -284,8 +402,7 @@ open class Wireguard : Protocol() {
 
         val sockets = listOf(GoBackend.awgGetSocketV4(tunnelHandle), GoBackend.awgGetSocketV6(tunnelHandle)).filter { it >= 0 }
         if (sockets.isEmpty() || sockets.any { !protect(it) }) {
-            GoBackend.awgTurnOff(tunnelHandle)
-            tunnelHandle = -1
+            turnOffVpn()
             throw VpnStartException("Protect VPN interface: permission not granted or revoked")
         }
         launchStatusJob()
@@ -293,14 +410,21 @@ open class Wireguard : Protocol() {
 
     private fun launchStatusJob() {
         Log.d(TAG, "Launch status job")
+        val expectedStatusGeneration = ++statusJobGeneration
         statusJob = scope.launch {
             var unreadableHandshakeReads = 0
             while (true) {
-                val lastHandshake = getLastHandshake()
+                val lastHandshake = nativeSessionGuard.locked {
+                    if (!isActive || expectedStatusGeneration != statusJobGeneration) return@launch
+                    getLastHandshake()
+                }
                 Log.v(TAG, "lastHandshake=$lastHandshake")
                 if (lastHandshake == -2L) {
                     unreadableHandshakeReads++
-                    state.value = UNKNOWN
+                    nativeSessionGuard.locked {
+                        if (!isActive || expectedStatusGeneration != statusJobGeneration) return@launch
+                        state.value = UNKNOWN
+                    }
                     if (shouldRetryHandshakeRead(lastHandshake, unreadableHandshakeReads)) {
                         delay(1000)
                         continue
@@ -314,8 +438,11 @@ open class Wireguard : Protocol() {
                         if (nextState == UNKNOWN) {
                             Log.w(TAG, "Unable to determine WireGuard handshake state")
                         }
-                        state.value = nextState
-                        statusJob = null
+                        nativeSessionGuard.locked {
+                            if (!isActive || expectedStatusGeneration != statusJobGeneration) return@launch
+                            state.value = nextState
+                            statusJob = null
+                        }
                         break
                     }
                 }
@@ -324,6 +451,7 @@ open class Wireguard : Protocol() {
     }
 
     private fun getLastHandshake(): Long {
+        return nativeSessionGuard.locked {
         if (tunnelHandle == -1) {
             Log.e(TAG, "Trying to get config of a non-existent tunnel")
             return -1
@@ -339,12 +467,16 @@ open class Wireguard : Protocol() {
             return -2
         }
         return lastHandshake
+    
+        }
     }
 
     private fun turnOffVpn() {
+        ++statusJobGeneration
         statusJob?.cancel()
         statusJob = null
         val handleToClose = tunnelHandle
+        nativeSessionGuard.beginCleanup()
         tunnelHandle = -1
         GoBackend.awgTurnOff(handleToClose)
         // TurnOff closes the native device synchronously; additionally require
@@ -352,20 +484,41 @@ open class Wireguard : Protocol() {
         if (handleToClose >= 0 && GoBackend.awgGetConfig(handleToClose) == null
             && GoBackend.awgGetSocketV4(handleToClose) < 0 && GoBackend.awgGetSocketV6(handleToClose) < 0) {
             cleanedNonce = migrationConnectionNonce
+            nativeSessionGuard.confirmedCleanup()
         }
     }
 
+    override fun readNativeIdleObservation(): org.amnezia.vpn.protocol.NativeIdleObservation = nativeSessionGuard.locked {
+        nativeSessionGuard.idleObservation(tunnelHandle >= 0)
+    }
+
+    override fun readRestoredSessionBinding(): NativeSessionBinding? = nativeSessionGuard.locked {
+        val observation = migrationObservation ?: return@locked null
+        val objectValue = JSONObject(observation)
+        nativeSessionGuard.binding(objectValue.optString("peerPublicKey", ""), objectValue.optString("deviceIpv4Address", ""))
+    }
+
+    override fun stopVpnIfBound(expected: NativeSessionIdentity): Boolean = nativeSessionGuard.stopIfBound(expected) { stopVpn() }
+
     override fun stopVpn() {
+        return nativeSessionGuard.locked {
+        if (pendingStart != null) pendingStartCancelled = true
+        pendingStartJob?.cancel()
         if (tunnelHandle == -1) {
             Log.w(TAG, "Tunnel already down")
             return
         }
         turnOffVpn()
         state.value = DISCONNECTED
+    
+        }
     }
 
     override fun reconnectVpn(vpnBuilder: Builder, protect: (Int) -> Boolean) {
+        return nativeSessionGuard.locked {
         val config = this.config ?: throw VpnException("Reconnect config is empty")
         start(config, vpnBuilder, protect, true)
+    
+        }
     }
 }

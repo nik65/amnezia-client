@@ -18,6 +18,7 @@ import android.os.Message
 import android.os.Messenger
 import android.os.PowerManager
 import android.os.Process
+import android.os.SystemClock
 import androidx.annotation.MainThread
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -37,6 +38,7 @@ import kotlin.LazyThreadSafetyMode.NONE
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,6 +53,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
+import org.amnezia.vpn.protocol.Protocol
+import org.amnezia.vpn.protocol.NativeSessionIdentity
+import org.amnezia.vpn.protocol.NativeSessionDescriptor
+import org.amnezia.vpn.protocol.NativeSessionWire
+import org.amnezia.vpn.protocol.RestoreStatusGate
 import org.amnezia.vpn.protocol.BadConfigException
 import org.amnezia.vpn.protocol.ProtocolState.CONNECTED
 import org.amnezia.vpn.protocol.ProtocolState.CONNECTING
@@ -234,6 +242,7 @@ private data class RemoteLogCursor(
     val sanitizerRecoveryNonce: String = "",
     val sanitizerSecretTransitionEndOffset: Int = 0,
     val sanitizerAwaitingStableSource: Boolean = false,
+    val sanitizerTransitionPrefixSha256: String = "",
     val pendingEndOffset: Int = 0,
     val pendingBodySha256: String = "",
     val pendingBatchId: String = "",
@@ -357,11 +366,46 @@ open class AmneziaVpnService : VpnService() {
     private lateinit var mainScope: CoroutineScope
     private lateinit var connectionScope: CoroutineScope
     private var isServiceBound = false
+    private var observationGroupBound = false
+    private var controlGroupBound = false
+    private var controlLifecycleStarted = false
+    private val discoveryRequestTickets = mutableMapOf<Messenger, Any>()
+    private val admissionRequests = mutableMapOf<Messenger, String>()
+    private val discoveryProbeJobs = mutableMapOf<Messenger, Job>()
+    private val admissionProbeJobs = mutableMapOf<Messenger, Job>()
+    private var discoveryLifecycleEpoch = 1L
+    private val observationClients = mutableSetOf<Messenger>()
+    private data class DiscoveryGrant(val requester: Messenger, val requestId: String,
+        val generation: String, val epoch: Long, val token: String)
+    private val discoveryGrants = mutableMapOf<Messenger, DiscoveryGrant>()
+    private fun invalidateDiscoveryGrants() {
+        discoveryLifecycleEpoch++
+        discoveryGrants.clear()
+        discoveryRequestTickets.clear()
+    }
+    private fun updateControlBinding() {
+        isServiceBound = controlGroupBound || clientMessengers.keys.any { it !in observationClients }
+    }
+    private fun discoveryJobsIdle(): Boolean {
+        return (connectionJob == null || connectionJob?.isCompleted == true)
+            && (disconnectionJob == null || disconnectionJob?.isCompleted == true)
+    }
+    private fun discoveryStateIdle() = (isUnknown || isDisconnected) && discoveryJobsIdle()
+
     private var vpnProto: VpnProto? = null
     private var protocolState = MutableStateFlow(UNKNOWN)
     private var serverName: String? = null
     private var serverIndex: Int = -1
     private var activeVpnConfig: JSONObject? = null
+    private data class ActiveNativeSession(val protocol: Protocol, val descriptor: NativeSessionDescriptor)
+    private data class RemoteLogTrafficSample(val session: ActiveNativeSession,
+        val sampledAtElapsedMs: Long, val rxBytes: Long, val txBytes: Long)
+    @Volatile private var remoteLogTrafficSample: RemoteLogTrafficSample? = null
+    private var remoteLogHeartbeatAtElapsedMs: Long? = null
+    private val nativeServiceInstanceId = UUID.randomUUID().toString()
+    private var activeNativeSession: ActiveNativeSession? = null
+    private val restoreStatusGate = RestoreStatusGate<ActiveNativeSession>()
+
 
     private val isConnected
         get() = protocolState.value == CONNECTED
@@ -386,6 +430,8 @@ open class AmneziaVpnService : VpnService() {
     private var remoteLogActiveConnection: HttpURLConnection? = null
     private var remoteLogInstallationIdCache: String? = null
     // Only reduced health metadata crosses the existing private service Messenger.
+    private var remoteLogRedactionReason = 0
+    private var remoteLogRedactionCount = 0L
     private var remoteLogHealthState = 4
     private var remoteLogHealthError = 0
     private var remoteLogHealthHttp = 0
@@ -409,6 +455,7 @@ open class AmneziaVpnService : VpnService() {
         get() = clientMessengers.any { it.value.name == ACTIVITY_MESSENGER_NAME }
 
     private val connectionExceptionHandler = CoroutineExceptionHandler { _, e ->
+        restoreStatusGate.invalidate()
         connectionJob?.cancel()
         connectionJob = null
         disconnectionJob?.cancel()
@@ -439,27 +486,58 @@ open class AmneziaVpnService : VpnService() {
                     Action.REGISTER_CLIENT -> {
                         val clientName = msg.data.getString(MSG_CLIENT_NAME)
                         val messenger = IpcMessenger(msg.replyTo, clientName)
+                        if (!clientMessengers.containsKey(msg.replyTo) && clientMessengers.size >= 64) return
                         clientMessengers[msg.replyTo] = messenger
+                        if (msg.data.getBoolean("discoveryObserver", false)) observationClients.add(msg.replyTo)
+                        else observationClients.remove(msg.replyTo)
+                        updateControlBinding()
+                        invalidateDiscoveryGrants()
                         Log.d(TAG, "Messenger client '$clientName' was registered")
                         // if (clientName == ACTIVITY_MESSENGER_NAME && isConnected) launchSendingStatistics()
                     }
 
                     Action.UNREGISTER_CLIENT -> {
+                        val retiringControl = clientMessengers.containsKey(msg.replyTo) && msg.replyTo !in observationClients
+                        restoreStatusGate.removeRequester(msg.replyTo)
+                        discoveryGrants.remove(msg.replyTo)
+                        observationClients.remove(msg.replyTo)
+                        invalidateDiscoveryGrants()
                         clientMessengers.remove(msg.replyTo)?.let {
                             Log.d(TAG, "Messenger client '${it.name}' was unregistered")
                             // if (it.name == ACTIVITY_MESSENGER_NAME) stopSendingStatistics()
                         }
+                        admissionRequests.remove(msg.replyTo)
+                        updateControlBinding()
+                        if (retiringControl && !isServiceBound && discoveryStateIdle()) stopService()
                     }
 
                     Action.CONNECT -> {
-                        connect(msg.data.getString(MSG_VPN_CONFIG))
+                        if (msg.data.containsKey("admissionRequestId")) {
+                            acceptDiscoveryConnect(msg)
+                        } else if (msg.replyTo !in observationClients) {
+                            connect(msg.data.getString(MSG_VPN_CONFIG))
+                        }
                     }
 
                     Action.DISCONNECT -> {
-                        disconnect()
+                        if (msg.data.containsKey("expectedNativeSession")) {
+                            val expected = msg.data.get("expectedNativeSession") as? String
+                            if (expected != null) disconnect(expected)
+                        } else disconnect()
                     }
 
                     Action.REQUEST_STATUS -> {
+                        if (msg.data.containsKey("discoveryRequestId")) {
+                            requestDiscoveryStatus(msg.replyTo, msg.data.getString("discoveryRequestId"),
+                                msg.data.getString("discoveryBindingGeneration"))
+                            return
+                        }
+                        if (msg.data.containsKey("restoreRequestId")) {
+                            val requestId = msg.data.get("restoreRequestId") as? String
+                            val generation = msg.data.get("restoreBindingGeneration") as? String
+                            if (requestId != null && generation != null) requestBoundRestoreStatus(msg.replyTo, requestId, generation)
+                            return
+                        }
                         clientMessengers[msg.replyTo]?.let { clientMessenger ->
                             clientMessenger.send {
                                 ServiceEvent.STATUS.packToMessage {
@@ -467,11 +545,20 @@ open class AmneziaVpnService : VpnService() {
                                     putStatus(this@AmneziaVpnService.protocolState.value)
                                 }
                             }
-                            clientMessenger.send {
-                                ServiceEvent.STATISTICS_UPDATE.packToMessage {
-                                    putString("remoteLogHealth", remoteLogHealthSnapshot())
-                                    putStatistics(this@AmneziaVpnService.vpnProto?.protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
-                                    this@AmneziaVpnService.vpnProto?.protocol?.migrationObservation?.let { putString("migrationObservation", it) }
+                            val capturedSession = activeNativeSession
+                            val capturedProtocol = capturedSession?.protocol ?: vpnProto?.protocol
+                            mainScope.launch {
+                                val sample = withContext(Dispatchers.IO) {
+                                    Pair(capturedProtocol?.statistics ?: Statistics.EMPTY_STATISTICS, capturedProtocol?.migrationObservation)
+                                }
+                                if (activeNativeSession === capturedSession && clientMessengers.containsKey(msg.replyTo)) {
+                                    clientMessenger.send {
+                                        ServiceEvent.STATISTICS_UPDATE.packToMessage {
+                                            putString("remoteLogHealth", remoteLogHealthSnapshot())
+                                            putStatistics(sample.first)
+                                            sample.second?.let { putString("migrationObservation", it) }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -516,11 +603,13 @@ open class AmneziaVpnService : VpnService() {
         loadServerData()
         launchProtocolStateHandler()
         networkState = NetworkState(this, ::reconnect)
-        trafficStats = TrafficStats()
+        trafficStats = TrafficStats(this)
         registerBroadcastReceivers()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        invalidateDiscoveryGrants()
+        controlLifecycleStarted = true
         val isAlwaysOn = intent != null && intent.action == SERVICE_INTERFACE
 
         if (isAlwaysOn) {
@@ -544,15 +633,25 @@ open class AmneziaVpnService : VpnService() {
     override fun onBind(intent: Intent?): IBinder? {
         Log.d(TAG, "onBind by $intent")
         if (intent?.action == SERVICE_INTERFACE) return super.onBind(intent)
-        isServiceBound = true
+        invalidateDiscoveryGrants()
+        if (intent?.action == "org.amnezia.vpn.RESTORE_OBSERVATION") observationGroupBound = true
+        else controlGroupBound = true
+        updateControlBinding()
         return vpnServiceMessenger.binder
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         Log.d(TAG, "onUnbind by $intent")
+        invalidateDiscoveryGrants()
+        if (intent?.action == "org.amnezia.vpn.RESTORE_OBSERVATION") {
+            observationGroupBound = false
+            updateControlBinding()
+            return true
+        }
         if (intent?.action != SERVICE_INTERFACE) {
-            if (clientMessengers.isEmpty()) {
-                isServiceBound = false
+            controlGroupBound = false
+            updateControlBinding()
+            if (!isServiceBound) {
                 if (isUnknown || isDisconnected) stopService()
             }
         }
@@ -561,9 +660,10 @@ open class AmneziaVpnService : VpnService() {
 
     override fun onRebind(intent: Intent?) {
         Log.d(TAG, "onRebind by $intent")
-        if (intent?.action != SERVICE_INTERFACE) {
-            isServiceBound = true
-        }
+        invalidateDiscoveryGrants()
+        if (intent?.action == "org.amnezia.vpn.RESTORE_OBSERVATION") observationGroupBound = true
+        else if (intent?.action != SERVICE_INTERFACE) controlGroupBound = true
+        updateControlBinding()
         super.onRebind(intent)
     }
 
@@ -577,12 +677,14 @@ open class AmneziaVpnService : VpnService() {
 
     override fun onDestroy() {
         Log.d(TAG, "Destroy service")
+        invalidateDiscoveryGrants()
         stopRemoteLogUploader()
         unregisterBroadcastReceivers()
         runBlocking {
             disconnect()
             disconnectionJob?.join()
         }
+        restoreStatusGate.activate(null)
         connectionScope.cancel()
         mainScope.cancel()
         super.onDestroy()
@@ -671,12 +773,16 @@ open class AmneziaVpnService : VpnService() {
         mainScope.launch {
             // drop first default UNKNOWN state
             protocolState.drop(1).collect { protocolState ->
+                val stateLifecycleEpoch = discoveryLifecycleEpoch
                 Log.d(TAG, "Protocol state changed: $protocolState")
 
                 serviceNotification.updateNotification(serverName, vpnProto?.label, protocolState)
 
                 if (protocolState == DISCONNECTED) {
-                    this@AmneziaVpnService.vpnProto?.protocol?.migrationCleanupObservation?.let { receipt ->
+                    val capturedSession = activeNativeSession
+                    val capturedProtocol = capturedSession?.protocol ?: vpnProto?.protocol
+                    val receipt = withContext(Dispatchers.IO) { capturedProtocol?.migrationCleanupObservation }
+                    if (activeNativeSession === capturedSession && this@AmneziaVpnService.protocolState.value == DISCONNECTED) receipt?.let { receipt ->
                         clientMessengers.send {
                             ServiceEvent.STATISTICS_UPDATE.packToMessage {
                                 putString("remoteLogHealth", remoteLogHealthSnapshot())
@@ -711,7 +817,7 @@ open class AmneziaVpnService : VpnService() {
                         activeVpnConfig = null
                         stopTrafficStatsUpdateJob()
                         // stopSendingStatistics()
-                        if (!isServiceBound) stopService()
+                        if (stateLifecycleEpoch == discoveryLifecycleEpoch && controlLifecycleStarted && !isServiceBound) stopService()
                     }
 
                     DISCONNECTING -> {
@@ -772,7 +878,6 @@ open class AmneziaVpnService : VpnService() {
         stopTrafficStatsUpdateJob()
         if (isConnected) {
             Log.v(TAG, "Launch traffic stats update")
-            trafficStats.reset()
             startTrafficStatsUpdateJob()
         }
     }
@@ -782,20 +887,36 @@ open class AmneziaVpnService : VpnService() {
         if (trafficStatsUpdateJob == null) {
             Log.d(TAG, "Start traffic stats update")
             trafficStatsUpdateJob = mainScope.launch {
+                withContext(Dispatchers.IO) { trafficStats.reset() }
                 while (true) {
                     if (isConnected) {
-                        clientMessengers.values.toList().forEach { messenger ->
+                        val capturedSession = activeNativeSession
+                        val capturedProtocol = capturedSession?.protocol ?: vpnProto?.protocol
+                        val sampleStartedAtElapsedMs = SystemClock.elapsedRealtime()
+                        val sample = withContext(Dispatchers.IO) {
+                            Pair(capturedProtocol?.statistics ?: Statistics.EMPTY_STATISTICS, capturedProtocol?.migrationObservation)
+                        }
+                        if (isConnected && capturedSession != null && activeNativeSession === capturedSession) {
+                            remoteLogTrafficSample = if (remoteLogSampleCountersAvailable(
+                                    sample.first.rxBytes, sample.first.txBytes)) {
+                                RemoteLogTrafficSample(capturedSession,
+                                    sampleStartedAtElapsedMs, sample.first.rxBytes, sample.first.txBytes)
+                            } else null
+                        }
+                        if (isConnected && activeNativeSession === capturedSession) clientMessengers.values.toList().forEach { messenger ->
                             messenger.send {
                                 ServiceEvent.STATISTICS_UPDATE.packToMessage {
                                     putString("remoteLogHealth", remoteLogHealthSnapshot())
-                                    putStatistics(this@AmneziaVpnService.vpnProto?.protocol?.statistics ?: Statistics.EMPTY_STATISTICS)
-                                    this@AmneziaVpnService.vpnProto?.protocol?.migrationObservation?.let { putString("migrationObservation", it) }
+                                    putStatistics(sample.first)
+                                    sample.second?.let { putString("migrationObservation", it) }
                                 }
                             }
                         }
                     }
-                    trafficStats.getSpeed().let { speed ->
-                        if (isConnected) {
+                    val speedSession = activeNativeSession
+                    val speedProtocol = vpnProto?.protocol
+                    withContext(Dispatchers.IO) { trafficStats.getSpeed() }.let { speed ->
+                        if (isConnected && activeNativeSession === speedSession && vpnProto?.protocol === speedProtocol) {
                             serviceNotification.updateSpeed(speed)
                         }
                     }
@@ -813,6 +934,153 @@ open class AmneziaVpnService : VpnService() {
     }
 
     @MainThread
+    private fun requestBoundRestoreStatus(requester: Messenger, requestId: String, bindingGeneration: String) {
+        if (!isConnected || !clientMessengers.containsKey(requester)) return
+        val ticket = restoreStatusGate.begin(requester, requestId, bindingGeneration) ?: return
+        mainScope.launch {
+            val binding = try {
+                withTimeout(2000) { withContext(Dispatchers.IO) { ticket.owner.protocol.readRestoredSessionBinding() } }
+            } catch (_: TimeoutCancellationException) { null }
+              catch (_: IllegalArgumentException) { null }
+              catch (_: JSONException) { null }
+            val snapshot = binding?.snapshot(requestId, bindingGeneration) ?: return@launch
+            restoreStatusGate.commit(ticket, {
+                isConnected && activeNativeSession === ticket.owner && clientMessengers.containsKey(requester)
+                    && binding.descriptor == ticket.owner.descriptor
+            }) {
+                clientMessengers[requester]?.send {
+                    ServiceEvent.STATUS.packToMessage {
+                        putString("restoreRequestId", requestId)
+                        putString("restoreBindingGeneration", bindingGeneration)
+                        putString("restoreSnapshot", snapshot)
+                    }
+                }
+            }
+        }
+    }
+
+    // The service Main dispatcher owns grants and lifecycle epoch. Native reads never block Main.
+    private suspend fun nativeDiscoveryResult(session: ActiveNativeSession?, legacyConnected: Boolean): String = withContext(Dispatchers.IO) {
+        if (this@AmneziaVpnService !is AwgService) return@withContext if (legacyConnected) "ACTIVE" else "IDLE"
+        val owners = listOfNotNull(VpnProto.AWG.peekProtocol(), VpnProto.WIREGUARD.peekProtocol()).distinct()
+        val observations = owners.map { it.readNativeIdleObservation() }
+        when {
+            observations.any { it.state.name == "ACTIVE" } -> "ACTIVE"
+            observations.all { it.isAbsent } && (session == null || owners.indices.any {
+                owners[it] === session.protocol && observations[it].state.name == "VERIFIED_RETIRED"
+                    && observations[it].retiredIdentity == session.descriptor.identity
+            }) -> "IDLE"
+            else -> "UNKNOWN"
+        }
+    }
+
+    private fun requestDiscoveryStatus(requester: Messenger, requestId: String?, generation: String?) {
+        if (!clientMessengers.containsKey(requester) || requestId == null || !NativeSessionWire.uuid(requestId)
+            || generation == null || !Regex("[1-9][0-9]{0,18}").matches(generation)
+            || generation.toLongOrNull() == null) return
+        discoveryProbeJobs.entries.removeAll { it.value.isCompleted }
+        if (discoveryProbeJobs[requester]?.isCompleted == false || discoveryProbeJobs.size >= 64) return
+        discoveryGrants.remove(requester)
+        val queryTicket = Any()
+        discoveryRequestTickets[requester] = queryTicket
+        val epoch = discoveryLifecycleEpoch
+        val session = activeNativeSession
+        val pendingConnection = connectionJob
+        val pendingDisconnection = disconnectionJob
+        val probe = mainScope.launch(start = CoroutineStart.LAZY) {
+            val result = try {
+                withTimeout(2000) {
+                    // DISCONNECTED/cleanup receipt can precede the teardown coroutine's completion.
+                    // Await only the captured jobs; final epoch/owner checks still reject replacement work.
+                    pendingConnection?.join()
+                    pendingDisconnection?.join()
+                    nativeDiscoveryResult(session, isConnected)
+                }
+            } catch (_: Exception) { "UNKNOWN" }
+            if (!clientMessengers.containsKey(requester)) return@launch
+            val current = epoch == discoveryLifecycleEpoch && discoveryRequestTickets[requester] === queryTicket
+                && activeNativeSession === session
+            if (current) discoveryRequestTickets.remove(requester)
+            val resolved = when {
+                !current -> "UNKNOWN"
+                result == "ACTIVE" -> "ACTIVE"
+                discoveryStateIdle() && result == "IDLE" -> "IDLE"
+                else -> "UNKNOWN"
+            }
+            val token = if (resolved == "IDLE") UUID.randomUUID().toString() else ""
+            if (resolved == "IDLE") discoveryGrants[requester] = DiscoveryGrant(requester, requestId, generation, epoch, token)
+            clientMessengers[requester]?.send {
+                ServiceEvent.STATUS.packToMessage {
+                    putString("discoveryRequestId", requestId)
+                    putString("discoveryBindingGeneration", generation)
+                    putString("discoveryResult", resolved)
+                    putString("discoveryGrant", token)
+                }
+            }
+        }
+        discoveryProbeJobs[requester] = probe
+        probe.start()
+    }
+
+    private fun discoveryConfigMatchesService(config: String): Boolean {
+        val protocol = try { JSONObject(config).getString("protocol").uppercase(Locale.ROOT) } catch (_: Exception) { return false }
+        return when (this) {
+            is AwgService -> protocol == "AWG" || protocol == "WIREGUARD"
+            is OpenVpnService -> protocol == "OPENVPN"
+            is XrayService -> protocol == "XRAY" || protocol == "SSXRAY"
+            else -> false
+        }
+    }
+
+    private fun acceptDiscoveryConnect(msg: Message) {
+        val requester = msg.replyTo ?: return
+        val requestId = msg.data.getString("admissionRequestId") ?: return
+        val generation = msg.data.getString("admissionGeneration") ?: return
+        val token = msg.data.getString("discoveryGrant") ?: return
+        val config = msg.data.getString(MSG_VPN_CONFIG) ?: return
+        if (!NativeSessionWire.uuid(requestId) || !clientMessengers.containsKey(requester)
+            || admissionRequests[requester] == requestId) return
+        fun respond(accepted: Boolean) {
+            clientMessengers[requester]?.send {
+                ServiceEvent.STATUS.packToMessage {
+                    putString("admissionRequestId", requestId)
+                    putString("admissionGeneration", generation)
+                    putBoolean("admissionAccepted", accepted)
+                }
+            }
+        }
+        admissionProbeJobs.entries.removeAll { it.value.isCompleted }
+        if (admissionProbeJobs[requester]?.isCompleted == false || admissionProbeJobs.size >= 64) {
+            respond(false)
+            return
+        }
+        admissionRequests[requester] = requestId
+        val grant = discoveryGrants.remove(requester)
+        val valid = grant != null && grant.requester == requester && grant.generation == generation
+            && grant.token == token && grant.epoch == discoveryLifecycleEpoch
+            && clientMessengers.containsKey(requester) && discoveryStateIdle() && discoveryConfigMatchesService(config)
+        if (!valid) { respond(false); return }
+        val epoch = discoveryLifecycleEpoch
+        val session = activeNativeSession
+        val probe = mainScope.launch(start = CoroutineStart.LAZY) {
+            val idle = try { withTimeout(2000) { nativeDiscoveryResult(session, isConnected) == "IDLE" } } catch (_: Exception) { false }
+            if (!idle || epoch != discoveryLifecycleEpoch || activeNativeSession !== session
+                || !clientMessengers.containsKey(requester) || admissionRequests[requester] != requestId || !discoveryStateIdle()) {
+                respond(false)
+                return@launch
+            }
+            // No suspension from exact grant acceptance/promotion through command reservation.
+            observationClients.remove(requester)
+            updateControlBinding()
+            invalidateDiscoveryGrants()
+            connect(config)
+            respond(true)
+        }
+        admissionProbeJobs[requester] = probe
+        probe.start()
+    }
+
+    @MainThread
     private fun connect(vpnConfig: String? = null) {
         if (vpnConfig == null) {
             connectToVpn(Prefs.load(PREFS_CONFIG_KEY))
@@ -827,6 +1095,8 @@ open class AmneziaVpnService : VpnService() {
     private fun connectToVpn(vpnConfig: String) {
         if (!isDisconnected && !isUnknown) return
 
+        invalidateDiscoveryGrants()
+        controlLifecycleStarted = true
         Log.d(TAG, "Start VPN connection")
 
         val config = parseConfigToJson(vpnConfig)
@@ -861,23 +1131,36 @@ open class AmneziaVpnService : VpnService() {
         activeVpnConfig = JSONObject(config.toString())
         configureRemoteLogUploader(activeVpnConfig)
 
+        val protocol = vpnProto?.protocol ?: return
+        val privateConfig = JSONObject(config.toString()).apply {
+            put("nativeServiceInstanceId", nativeServiceInstanceId)
+            put("nativeServiceActivationId", UUID.randomUUID().toString())
+        }
+        val session = ActiveNativeSession(protocol, NativeSessionDescriptor(
+            NativeSessionIdentity(privateConfig.optString("nativeServiceInstanceId", ""), privateConfig.optString("nativeServiceActivationId", ""), privateConfig.optString("migrationConnectionNonce", "")),
+            privateConfig.optString("nativeSessionServerId", ""), privateConfig.optString("protocol", "").uppercase(Locale.ROOT)))
+        activeNativeSession = session
+        restoreStatusGate.activate(session)
         connectionJob = connectionScope.launch {
             disconnectionJob?.join()
             disconnectionJob = null
-
-            vpnProto?.protocol?.let { protocol ->
-                protocol.initialize(applicationContext, protocolState, ::onError)
-                protocol.startVpn(config, Builder(), ::protect)
-            }
+            protocol.initialize(applicationContext, protocolState, ::onError)
+            protocol.startVpn(privateConfig, Builder(), ::protect)
         }
     }
 
     @MainThread
-    private fun disconnect() {
+    private fun disconnect(expectedSessionJson: String? = null) {
+        val expected = if (expectedSessionJson != null) NativeSessionIdentity.parseExpected(expectedSessionJson) ?: return else null
+        val retiringSession = activeNativeSession
+        if (expected != null && retiringSession?.descriptor?.identity != expected) return
         if (isUnknown || isDisconnected || protocolState.value == DISCONNECTING) return
 
+        invalidateDiscoveryGrants()
         Log.d(TAG, "Stop VPN connection")
 
+        restoreStatusGate.invalidate()
+        val retiringProtocol = retiringSession?.protocol ?: vpnProto?.protocol
         stopRemoteLogUploader()
         protocolState.value = DISCONNECTING
 
@@ -885,7 +1168,9 @@ open class AmneziaVpnService : VpnService() {
             connectionJob?.cancelAndJoin()
             connectionJob = null
 
-            vpnProto?.protocol?.stopVpn()
+            if (expected != null) {
+                if (retiringProtocol?.stopVpnIfBound(expected) != true) return@launch
+            } else retiringProtocol?.stopVpn()
 
             try {
                 withTimeout(DISCONNECT_TIMEOUT) {
@@ -909,10 +1194,14 @@ open class AmneziaVpnService : VpnService() {
         Log.d(TAG, "ReconnectDecision cause=validated_new_network epoch=$decisionEpoch outcome=accepted")
         Log.d(TAG, "Reconnect VPN")
 
+        val session = activeNativeSession
+        val protocol = session?.protocol ?: vpnProto?.protocol ?: return
+        invalidateDiscoveryGrants()
+        restoreStatusGate.invalidate()
         protocolState.value = RECONNECTING
 
         connectionJob = connectionScope.launch {
-            vpnProto?.protocol?.reconnectVpn(Builder(), ::protect)
+            protocol.reconnectVpn(Builder(), ::protect)
         }
     }
 
@@ -935,6 +1224,7 @@ open class AmneziaVpnService : VpnService() {
                 remoteLogHealthHttp = 0
                 remoteLogHealthPending = 0L
                 remoteLogHealthRetry = 0L
+                remoteLogHeartbeatAtElapsedMs = null
                 remoteLogHealthSuccess = runCatching { Prefs.load<Long>(remoteLogHealthSuccessKey(parsedTarget)) }.getOrDefault(0L)
                     .takeIf { it in 1..System.currentTimeMillis() } ?: 0L
                 if (remoteLogHealthSuccess > 0 && System.currentTimeMillis() - remoteLogHealthSuccess <= 15 * 60 * 1000)
@@ -1066,6 +1356,20 @@ open class AmneziaVpnService : VpnService() {
                 }
             }
         }
+    }
+
+    private fun recordRemoteLogServiceHeartbeat(attempt: RemoteLogAttempt) {
+        val line = synchronized(remoteLogTargetLock) {
+            if (!isRemoteLogAttemptActive(attempt)) return@synchronized null
+            val now = SystemClock.elapsedRealtime()
+            if (!remoteLogHeartbeatDue(remoteLogHeartbeatAtElapsedMs, now)) return@synchronized null
+            val sample = remoteLogTrafficSample?.takeIf { it.session === activeNativeSession }
+            remoteLogHeartbeatAtElapsedMs = now
+            remoteLogServiceHeartbeatLine(now, sample?.sampledAtElapsedMs, sample?.rxBytes, sample?.txBytes)
+        }
+        // The existing bounded/rotating file and sanitizer own this real service
+        // observation. Unlike Activity statistics, it exists while UI is absent.
+        line?.let { Log.i(TAG, it) }
     }
 
     private fun stopRemoteLogUploader() {
@@ -1260,6 +1564,7 @@ open class AmneziaVpnService : VpnService() {
             }
             if (!isRemoteLogAttemptActive(attempt)) return RemoteLogUploadOutcome(RemoteLogUploadResult.IDLE)
 
+            recordRemoteLogServiceHeartbeat(attempt)
             val logBytes = Log.getAppLogs(CLIENT_LOGS_MAX_PAYLOAD_BYTES).toByteArray(Charsets.UTF_8)
             val payloadSecrets = remoteLogSanitizerSecretsForAttempt(
                 inheritedSecrets = sanitizerExplicitSecrets,
@@ -1654,6 +1959,25 @@ open class AmneziaVpnService : VpnService() {
         armedSecretsSha256 == explicitSecretsSha256 &&
         capturedSize == cursorOffset && cursorOffset == transitionHighWater
 
+    private fun remoteLogAcknowledgedPrefixCanConfirm(
+        awaitingStableSource: Boolean,
+        pendingEndOffset: Int,
+        cursorOffset: Int,
+        transitionEndOffset: Int,
+        capturedSize: Int,
+        armedSecretsSha256: String,
+        explicitSecretsSha256: String,
+        storedPrefixSha256: String,
+        currentPrefixSha256: String,
+        completeRecord: Boolean
+    ): Boolean = awaitingStableSource && pendingEndOffset == 0 &&
+        transitionEndOffset > 0 && cursorOffset == transitionEndOffset &&
+        capturedSize >= transitionEndOffset && completeRecord &&
+        SHA256_HEX_PATTERN.matches(armedSecretsSha256) &&
+        armedSecretsSha256 == explicitSecretsSha256 &&
+        SHA256_HEX_PATTERN.matches(storedPrefixSha256) &&
+        storedPrefixSha256 == currentPrefixSha256
+
     private fun advanceRemoteLogRecoveryCheckpoint(
         target: RemoteLogTarget,
         logBytes: ByteArray,
@@ -1776,6 +2100,42 @@ open class AmneziaVpnService : VpnService() {
             }
         }
 
+        // Independently re-read the complete ACKed extent, including its middle.
+        // Appended records cannot starve confirmation, and never reset streaming state.
+        val prefixEnd = cursor.sanitizerSecretTransitionEndOffset
+        val currentPrefixSha256 = if (prefixEnd in 1..logBytes.size) {
+            sha256Hex(logBytes.copyOfRange(0, prefixEnd))
+        } else ""
+        if (cursor.sanitizerTransitionPrefixSha256.isNotEmpty() &&
+            cursor.sanitizerTransitionPrefixSha256 != currentPrefixSha256) {
+            // A full-prefix discontinuity must never fall through to the legacy
+            // short fingerprint/anchor confirmation, even at an unchanged EOF.
+            beginRemoteLogRecovery(
+                target, logBytes, explicitSecretsSha256,
+                cursor.sanitizerAcceptedSecretsSha256.takeIf { SHA256_HEX_PATTERN.matches(it) }
+                    ?: explicitSecretsSha256
+            )
+            return null
+        }
+        val prefixCanConfirm = remoteLogAcknowledgedPrefixCanConfirm(
+            cursor.sanitizerAwaitingStableSource, cursor.pendingEndOffset,
+            cursor.offset, prefixEnd, logBytes.size,
+            cursor.sanitizerExplicitSecretsSha256, explicitSecretsSha256,
+            cursor.sanitizerTransitionPrefixSha256,
+            currentPrefixSha256,
+            prefixEnd in 1..logBytes.size && isRemoteLogRecordDelimiter(logBytes[prefixEnd - 1])
+        )
+        if (prefixCanConfirm) {
+            val confirmed = cursor.copy(
+                sanitizerSecretTransitionEndOffset = 0,
+                sanitizerAwaitingStableSource = false,
+                sanitizerTransitionPrefixSha256 = "",
+                sanitizerAcceptedSecretsSha256 = explicitSecretsSha256
+            )
+            if (!saveRemoteLogCursor(target, confirmed)) return null
+            cursor = confirmed
+        }
+
         var transitionEndOffset = remoteLogSecretTransitionHighWater(
             acceptedSecretsSha256 = cursor.sanitizerAcceptedSecretsSha256,
             explicitSecretsSha256 = explicitSecretsSha256,
@@ -1799,7 +2159,8 @@ open class AmneziaVpnService : VpnService() {
             }
             return null
         }
-        val stableSourceConfirmed = remoteLogStableSourceCanConfirm(
+        val stableSourceConfirmed = cursor.sanitizerTransitionPrefixSha256.isEmpty() &&
+            remoteLogStableSourceCanConfirm(
             awaitingStableSource = cursor.sanitizerAwaitingStableSource,
             sourceIdentityMatches = cursorFingerprintMatches,
             cursorAnchorMatches = cursorOffsetMatches,
@@ -1815,6 +2176,7 @@ open class AmneziaVpnService : VpnService() {
             val confirmedCursor = cursor.copy(
                 sanitizerSecretTransitionEndOffset = 0,
                 sanitizerAwaitingStableSource = false,
+                sanitizerTransitionPrefixSha256 = "",
                 sanitizerAcceptedSecretsSha256 = explicitSecretsSha256
             )
             if (!saveRemoteLogCursor(target, confirmedCursor)) {
@@ -1835,7 +2197,10 @@ open class AmneziaVpnService : VpnService() {
                 // phase two and keeps whole-redaction enabled.
                 cursor = cursor.copy(
                     sanitizerSecretTransitionEndOffset = transitionEndOffset,
-                    sanitizerAwaitingStableSource = stablePhaseStillArmed
+                    sanitizerAwaitingStableSource = stablePhaseStillArmed,
+                    sanitizerTransitionPrefixSha256 = if (
+                        transitionEndOffset == cursor.sanitizerSecretTransitionEndOffset
+                    ) cursor.sanitizerTransitionPrefixSha256 else ""
                 )
             }
         }
@@ -1844,7 +2209,9 @@ open class AmneziaVpnService : VpnService() {
             logBytes = logBytes,
             offset = offset,
             pendingEndOffset = if (retryingPendingPayload) cursor.pendingEndOffset else 0,
-            preferCompleteRecord = cursor.sanitizerRecoveryQuarantine
+            // Splitting an ordinary record would persist terminal fail-closed
+            // state and redact every later batch, even after its ACK succeeds.
+            preferCompleteRecord = true
         )
         if (offset >= batchEndOffset) return null
 
@@ -1870,6 +2237,25 @@ open class AmneziaVpnService : VpnService() {
                 pendingSecretSetChanged || explicitSecrets.overflowed
         )
         val uploadBody = sanitizedPayload.data
+        val redactionReason = if (
+            uploadBody.contentEquals("$CLIENT_LOGS_REDACTED_LINE\n".toByteArray(Charsets.UTF_8)) ||
+            uploadBody.contentEquals(CLIENT_LOGS_REDACTED_LINE.toByteArray(Charsets.UTF_8))
+        ) {
+            when {
+                cursor.sanitizerRecoveryQuarantine -> 1
+                transitionQuarantine -> 2
+                pendingSecretSetChanged -> 3
+                explicitSecrets.overflowed -> 4
+                else -> 5
+            }
+        } else 0
+        if (redactionReason != 0) remoteLogRedactionCount =
+            (remoteLogRedactionCount + 1).coerceAtMost(Int.MAX_VALUE.toLong())
+        if (redactionReason != remoteLogRedactionReason) {
+            remoteLogRedactionReason = redactionReason
+            // Bounded scalar categories only: no source bytes, IDs, hashes or secrets.
+            Log.i(TAG, "RemoteLogRedaction reason=$redactionReason count=$remoteLogRedactionCount")
+        }
         val bodyBoundFingerprint = "${cursor.fingerprint}:$rawBodySha256:${sha256Hex(uploadBody)}"
         val candidateBatchId = remoteLogBatchId(
             target = target,
@@ -1918,11 +2304,16 @@ open class AmneziaVpnService : VpnService() {
                 cursor.sanitizerRecoveryCheckpointAttempts
             },
             sanitizerRecoveryNonce = if (recoveryComplete) "" else cursor.sanitizerRecoveryNonce,
-            // The receipt is phase one only. Keep the high-water marker and
-            // arm a stable-source scan; do not accept the new secret hash in
-            // the ACK callback.
+            // The receipt is phase one only. Bind the complete acknowledged
+            // extent so an independent full-prefix scan can confirm it even
+            // while new records append. Never accept the secret hash in ACK.
             sanitizerSecretTransitionEndOffset = transitionEndOffset,
             sanitizerAwaitingStableSource = transitionEndOffset > 0,
+            sanitizerTransitionPrefixSha256 = if (transitionEndOffset > 0 &&
+                batchEndOffset == transitionEndOffset &&
+                isRemoteLogRecordDelimiter(logBytes[batchEndOffset - 1])) {
+                sha256Hex(logBytes.copyOfRange(0, transitionEndOffset))
+            } else "",
             sanitizerBlockEndMarker = sanitizedPayload.state.blockEndMarker,
             sanitizerBlockEndPrefixChars = sanitizedPayload.state.blockEndPrefixChars,
             sanitizerSecretMode = sanitizedPayload.state.secretMode,
@@ -2598,6 +2989,22 @@ open class AmneziaVpnService : VpnService() {
             cursorOffset = 140,
             transitionHighWater = appendedTransitionHighWater
         )
+        val acknowledgedPrefix = sha256Hex("contract complete prefix\n")
+        fun prefixConfirmation(
+            pending: Int = 0,
+            secret: String = newSecretHash,
+            proof: String = acknowledgedPrefix,
+            observed: String = acknowledgedPrefix,
+            complete: Boolean = true
+        ) = remoteLogAcknowledgedPrefixCanConfirm(
+            true, pending, 100, 100, 140, newSecretHash, secret, proof, observed, complete
+        )
+        val acknowledgedAppendCanConfirm = prefixConfirmation() &&
+            !prefixConfirmation(pending = 120) &&
+            !prefixConfirmation(secret = oldSecretHash) &&
+            !prefixConfirmation(proof = "") &&
+            !prefixConfirmation(observed = sha256Hex("changed middle")) &&
+            !prefixConfirmation(complete = false)
         val acceptedAfterStableScan =
             if (stableNextScanCloses) newSecretHash else acceptedDuringTransition
         val inheritedRetrySecrets = normalizedRemoteLogExplicitSecrets(
@@ -2889,6 +3296,7 @@ open class AmneziaVpnService : VpnService() {
             firstTransitionHighWater == 100 &&
             acceptedDuringTransition == oldSecretHash &&
             appendedTransitionHighWater == 140 &&
+            acknowledgedAppendCanConfirm &&
             ackOnlyArms &&
             appendPreservesQuarantine &&
             stableNextScanCloses &&
@@ -3126,6 +3534,7 @@ open class AmneziaVpnService : VpnService() {
                 value.optLong("sanitizerSecretTransitionEndOffset", 0L)
             val sanitizerAwaitingStableSource =
                 value.optBoolean("sanitizerAwaitingStableSource", false)
+            val sanitizerTransitionPrefixSha256 = value.optString("sanitizerTransitionPrefixSha256")
             val pendingEndOffsetLong = value.optLong("pendingEndOffset", 0L)
             val pendingBodySha256 = value.optString("pendingBodySha256")
             val pendingBatchId = value.optString("pendingBatchId")
@@ -3190,6 +3599,8 @@ open class AmneziaVpnService : VpnService() {
             if (!offsetIsValid || !recoveryOriginOffsetIsValid || !transitionOffsetIsValid ||
                 !pendingOffsetIsValid || !fingerprintIsValid || !anchorIsValid ||
                 !pendingIsValid || !recoveryIsValid || !transitionIsValid ||
+                (sanitizerTransitionPrefixSha256.isNotEmpty() &&
+                    !SHA256_HEX_PATTERN.matches(sanitizerTransitionPrefixSha256)) ||
                 !SHA256_HEX_PATTERN.matches(sanitizerExplicitSecretsSha256) ||
                 !SHA256_HEX_PATTERN.matches(sanitizerAcceptedSecretsSha256) ||
                 !isValidRemoteLogSanitizerState(sanitizerState)
@@ -3211,6 +3622,7 @@ open class AmneziaVpnService : VpnService() {
                     sanitizerRecoveryNonce = sanitizerRecoveryNonce,
                     sanitizerSecretTransitionEndOffset = sanitizerSecretTransitionEndOffset,
                     sanitizerAwaitingStableSource = sanitizerAwaitingStableSource,
+                    sanitizerTransitionPrefixSha256 = sanitizerTransitionPrefixSha256,
                     pendingEndOffset = pendingEndOffset,
                     pendingBodySha256 = pendingBodySha256,
                     pendingBatchId = pendingBatchId,
@@ -3265,6 +3677,7 @@ open class AmneziaVpnService : VpnService() {
                     cursor.sanitizerSecretTransitionEndOffset
                 )
                 put("sanitizerAwaitingStableSource", cursor.sanitizerAwaitingStableSource)
+                put("sanitizerTransitionPrefixSha256", cursor.sanitizerTransitionPrefixSha256)
                 put("pendingEndOffset", cursor.pendingEndOffset)
                 put("pendingBodySha256", cursor.pendingBodySha256)
                 put("pendingBatchId", cursor.pendingBatchId)

@@ -457,7 +457,7 @@ void AwgProtocolConfig::clearClientConfig()
 
 bool AwgServerConfig::hasEqualServerSettings(const AwgServerConfig& other) const
 {
-    if (subnetAddress != other.subnetAddress || port != other.port || 
+    if (subnetAddress != other.subnetAddress || subnetCidr != other.subnetCidr || port != other.port || 
         junkPacketCount != other.junkPacketCount ||
         junkPacketMinSize != other.junkPacketMinSize || junkPacketMaxSize != other.junkPacketMaxSize ||
         initPacketJunkSize != other.initPacketJunkSize || responsePacketJunkSize != other.responsePacketJunkSize ||
@@ -502,10 +502,10 @@ bool AwgProtocolConfig::isHeadersEqual(const QString &h1, const QString &h2, con
 
 bool AwgProtocolConfig::isPacketSizeEqual(int s1, int s2, int s3, int s4)
 {
-    int initSize = AwgConstant::messageInitiationSize + s1;
-    int responseSize = AwgConstant::messageResponseSize + s2;
-    int cookieSize = AwgConstant::messageCookieReplySize + s3;
-    int transportSize = AwgConstant::messageTransportSize + s4;
+    const qint64 initSize = qint64(AwgConstant::messageInitiationSize) + s1;
+    const qint64 responseSize = qint64(AwgConstant::messageResponseSize) + s2;
+    const qint64 cookieSize = qint64(AwgConstant::messageCookieReplySize) + s3;
+    const qint64 transportSize = qint64(AwgConstant::messageTransportSize) + s4;
 
     return (initSize == responseSize || initSize == cookieSize || initSize == transportSize || responseSize == cookieSize
             || responseSize == transportSize || cookieSize == transportSize);

@@ -2664,7 +2664,7 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn('Join-Path $RepoRoot "deploy\\build-android-arm64-v8a"', local_release)
         self.assertIn('$env:CONAN_NO_REMOTE = "1"', local_release)
         self.assertIn('export AWG_ANDROID_GRADLE_USER_HOME="$HOME/.cache/amnezia/awg-android-gradle"', local_release)
-        self.assertIn('find "$HOME/.conan2/p/t" -mindepth 1 -maxdepth 1 -exec rm -rf {} +', local_release)
+        self.assertNotIn('find "$HOME/.conan2/p/t" -mindepth 1 -maxdepth 1 -exec rm -rf {} +', local_release)
         self.assertIn("rename_artifact()", local_release)
         self.assertIn("Missing fresh Android artifact", local_release)
         self.assertIn("AmneziaVPN_*_android9+_arm64-v8a.apk", local_release)
@@ -3179,7 +3179,7 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        version_fixture = json.loads((REPO_ROOT / "deploy/selfhosted_updates/fixtures/release_version_5.0.3.11.json").read_text(encoding="utf-8"))
+        version_fixture = json.loads((REPO_ROOT / "deploy/selfhosted_updates/fixtures/release_version_5.0.3.14.json").read_text(encoding="utf-8"))
         version = re.search(r"set\(AMNEZIAVPN_VERSION\s+([0-9.]+)", cmake).group(1)
         android_code = int(re.search(r"set\(APP_ANDROID_VERSION_CODE\s+(\d+)\)", cmake).group(1))
         self.assertEqual(version, version_fixture["candidateVersion"])

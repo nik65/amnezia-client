@@ -13,6 +13,11 @@ object QtAndroidController {
     fun onStatus(protocolState: ProtocolState, serverIndex: Int) = onStatus(protocolState.ordinal, serverIndex)
 
     external fun onStatus(stateCode: Int, serverIndex: Int)
+    external fun onRestoreServiceReady(bindingGeneration: Long)
+    external fun onRestoreStatus(snapshot: String)
+    external fun onServiceDiscovery(json: String)
+    external fun onStartAdmission(json: String)
+    external fun onNativeSessionObserved()
     external fun onServiceDisconnected()
     external fun onServiceError(reasonCode: Int)
 

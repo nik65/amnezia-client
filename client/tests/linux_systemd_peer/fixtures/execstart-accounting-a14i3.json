@@ -1,0 +1,23 @@
+{
+  "schema": "reconstructed-execstart-wire-from-retained-systemctl-v1",
+  "provenance": "NOT a captured typed GetAll reply; typed tuple reconstructed from retained systemctl formatting and official systemd signature",
+  "sourcePath": "dist\\diagnostics\\acceptance-50314-20261022\\tcg-per-target-controller\\third-inputs\\IPC_CHECKED_RUNTIME_DIAGNOSTIC\\IPC_CANDIDATE_RESULT.json",
+  "sourceSha256": "3bf360d99ff6cb1eed568f57f52f9da202120a746a9bc3d8009cb8d84e9c77f4",
+  "sourceUnitStdout": "MainPID=1029\nExecStart={ path=/opt/AmneziaVPN/bin/AmneziaVPN-service ; argv[]=/opt/AmneziaVPN/bin/AmneziaVPN-service ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=active\nSubState=running\nFragmentPath=/etc/systemd/system/AmneziaVPN.service\n",
+  "actualConnectedPeerPid": 1029,
+  "signature": "a(sasbttttuii)",
+  "tuple": [
+    "/opt/AmneziaVPN/bin/AmneziaVPN-service",
+    [
+      "/opt/AmneziaVPN/bin/AmneziaVPN-service"
+    ],
+    false,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ]
+}

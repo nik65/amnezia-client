@@ -30,6 +30,48 @@ if not p.exists() or p.is_symlink() or not p.is_file(): raise SystemExit(4)
 b=p.read_bytes(); s=p.stat()
 print(json.dumps({'origin':'guest','transport':'qga','path':logical,'bytes_b64':base64.b64encode(b).decode(),'sha256':hashlib.sha256(b).hexdigest(),'size':len(b),'uid':s.st_uid,'gid':s.st_gid,'mode':format(stat.S_IMODE(s.st_mode),'04o')},separators=(',',':')))
 '''
+READ_SET = r'''import base64,hashlib,json,os,pathlib,stat,sys
+spec=json.loads(sys.argv[1]); records={}; identities=[]; total=0
+if not isinstance(spec,dict) or set(spec)!={'files','absent'} or len(spec['files'])+len(spec['absent'])>6:raise SystemExit('observation spec')
+def valid_identity(value):
+ if not stat.S_ISREG(value.st_mode) or value.st_uid!=0 or value.st_mode&0o022 or value.st_size>262144:raise SystemExit('observation file identity')
+try:
+ for logical,path in spec['files'].items():
+  p=pathlib.Path(path)
+  try:fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+  except FileNotFoundError:
+   print(json.dumps({'not_ready':'required-file-absent'}));raise SystemExit(0)
+  with os.fdopen(fd,'rb') as stream:
+   before=os.fstat(stream.fileno())
+   valid_identity(before)
+   data=stream.read(262145);after=os.fstat(stream.fileno());total+=len(data)
+   if len(data)>262144 or total>262144:raise SystemExit('observation bound')
+   key=lambda v:(v.st_dev,v.st_ino,v.st_size,v.st_mtime_ns,v.st_uid,v.st_gid,stat.S_IMODE(v.st_mode))
+   try:named=p.lstat()
+   except FileNotFoundError:
+    print(json.dumps({'not_ready':'file-retired-during-observation'}));raise SystemExit(0)
+   valid_identity(after);valid_identity(named)
+   if key(before)!=key(after) or key(after)!=key(named):
+    print(json.dumps({'not_ready':'file-transition-during-observation'}));raise SystemExit(0)
+   identities.append((p,key(after)))
+   records[logical]={'origin':'guest','transport':'qga','path':path,'bytes_b64':base64.b64encode(data).decode(),'sha256':hashlib.sha256(data).hexdigest(),'size':len(data),'uid':after.st_uid,'gid':after.st_gid,'mode':format(stat.S_IMODE(after.st_mode),'04o')}
+ for logical,path in spec['absent'].items():
+  try:pathlib.Path(path).lstat()
+  except FileNotFoundError:pass
+  else:
+   print(json.dumps({'not_ready':'journal-not-retired'}));raise SystemExit(0)
+  data=b'{"exists":false}'
+  records[logical]={'origin':'guest','transport':'qga','path':path+'.absence','bytes_b64':base64.b64encode(data).decode(),'sha256':hashlib.sha256(data).hexdigest(),'size':len(data),'uid':0,'gid':0,'mode':'0600'}
+ for p,expected in identities:
+  try:current=p.lstat()
+  except FileNotFoundError:
+   print(json.dumps({'not_ready':'file-retired-after-observation'}));raise SystemExit(0)
+  valid_identity(current)
+  if key(current)!=expected:
+   print(json.dumps({'not_ready':'file-transition-after-observation'}));raise SystemExit(0)
+ print(json.dumps({'records':records},separators=(',',':')))
+except OSError:raise
+'''
 ABSENCE = r'''import base64,hashlib,json,pathlib,sys
 p=pathlib.Path(sys.argv[1]); logical=sys.argv[2]; data=json.dumps({'exists':p.exists()},separators=(',',':')).encode()
 print(json.dumps({'origin':'guest','transport':'qga','path':logical,'bytes_b64':base64.b64encode(data).decode(),'sha256':hashlib.sha256(data).hexdigest(),'size':len(data),'uid':0,'gid':0,'mode':'0600'},separators=(',',':')))
@@ -75,15 +117,18 @@ STAGE = r'''import hashlib,json,os,pathlib,stat,sys
 store=pathlib.Path(sys.argv[1]); key=pathlib.Path(sys.argv[2]); profile=json.loads(sys.argv[3]); expected=sys.argv[4]
 if key.is_symlink() or not key.is_file() or hashlib.sha256(key.read_bytes()).hexdigest()!=expected: raise SystemExit('key mismatch')
 if key.stat().st_uid!=0 or stat.S_IMODE(key.stat().st_mode)&0o022: raise SystemExit('key ownership')
-items=[]
+value={'version':1,'profiles':[]}
 if store.exists():
- if store.is_symlink() or not store.is_file(): raise SystemExit('store identity')
- value=json.loads(store.read_bytes()); items=value.get('profiles',[]) if isinstance(value,dict) else value
- if not isinstance(items,list): raise SystemExit('store shape')
-items=[x for x in items if not isinstance(x,dict) or x.get('id')!=profile['id']]; items.append(profile)
+ if store.is_symlink() or not store.is_file() or store.stat().st_size>1024*1024: raise SystemExit('store identity')
+ value=json.loads(store.read_bytes())
+ if not isinstance(value,dict) or type(value.get('version')) is not int or value['version']!=1 or not isinstance(value.get('profiles'),list): raise SystemExit('store shape')
+items=value['profiles']
+if any(not isinstance(x,dict) or not isinstance(x.get('id'),str) for x in items): raise SystemExit('store entries')
+items=[x for x in items if x.get('id')!=profile['id']]; items.append(profile)
+value['profiles']=items
 store.parent.mkdir(parents=True,exist_ok=True); tmp=store.with_name(store.name+'.native-new')
 fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-with os.fdopen(fd,'wb') as f: f.write(json.dumps(items,separators=(',',':')).encode()); f.flush(); os.fsync(f.fileno())
+with os.fdopen(fd,'wb') as f: f.write(json.dumps(value,separators=(',',':')).encode()); f.flush(); os.fsync(f.fileno())
 os.chown(tmp,0,0); os.replace(tmp,store); os.chmod(store,0o600)
 print(json.dumps({'stored':len(items)},separators=(',',':')))
 '''
@@ -95,7 +140,7 @@ class HeadlessNativeQgaAdapter:
     def _check(self):
         if self.snapshot()!=self.plan.outer_binding: raise HeadlessNativeQgaError("outer ownership changed")
     def _exec(self,path,args,timeout=30):
-        self._check(); result=self.qga.guest_exec_wait(path,args,timeout=timeout)
+        self._check(); result=self.qga.guest_exec_wait(path,args,timeout=timeout); self._check()
         code = result.get("exitcode", result.get("exit_code")) if isinstance(result, Mapping) else None
         if not isinstance(code, int) or isinstance(code, bool) or code != 0: raise HeadlessNativeQgaError("guest command failed")
         return result
@@ -137,12 +182,25 @@ class HeadlessNativeQgaAdapter:
         self._exec("/usr/bin/systemctl",["restart","amneziad.service"],120)
         after=self._json_record(UNIT_PREFLIGHT,[*expected,"post"],"systemd:amneziad.service:baseline-after-restart")
         return {"baseline_preflight":before,"baseline_after_restart":after,"profile_store":self.raw_file(FIXED_STORE),"key":self.raw_file(FIXED_KEY),"list_profiles":self.cli_json(["/usr/local/bin/amnezia-cli","--socket",FIXED_SOCKET,"--json","list-profiles"],"cli:list-profiles")}
-    def collect_update_pending(self): return {"pending_state":self.raw_file(UPDATE_STATE),"pending_journal":self.raw_file(UPDATE_JOURNAL)}
-    def collect_update_stable(self): return {"stable_state":self.raw_file(UPDATE_STATE),"rollback_receipt":self.raw_file(ROLLBACK_RECEIPT),"retired_journal":self.raw_absence(UPDATE_JOURNAL),"after_doctor":self.cli_json(["/usr/local/bin/amnezia-cli","--socket",FIXED_SOCKET,"--json","doctor"],"cli:doctor")}
+    def _read_set(self,files,absent=None):
+        value=self._json('/usr/bin/python3',['-c',READ_SET,json.dumps({'files':files,'absent':absent or {}},separators=(',',':'))])
+        if not isinstance(value,dict):raise HeadlessNativeQgaError('observation set shape')
+        if set(value)=={'not_ready'} and value['not_ready'] in {'required-file-absent','file-retired-during-observation','file-transition-during-observation','journal-not-retired','file-retired-after-observation','file-transition-after-observation'}:return {}
+        records=value.get('records')
+        if set(value)!={'records'} or not isinstance(records,dict) or set(records)!=set(files)|set(absent or {}):raise HeadlessNativeQgaError('observation set records')
+        return records
+    def collect_update_pending(self): return self._read_set({'pending_state':UPDATE_STATE,'pending_journal':UPDATE_JOURNAL})
+    def collect_update_stable(self):
+        value=self._read_set({'stable_state':UPDATE_STATE,'rollback_receipt':ROLLBACK_RECEIPT},{'retired_journal':UPDATE_JOURNAL})
+        if value:value['after_doctor']=self.cli_json(['/usr/local/bin/amnezia-cli','--socket',FIXED_SOCKET,'--json','doctor'],'cli:doctor')
+        return value
     def trigger_rollback(self):
         return {"cli_response":self.cli_json(["/usr/local/bin/amnezia-cli","--socket",FIXED_SOCKET,"--json","update-rollback"],"cli:update-rollback")}
-    def collect_rollback_pending(self): return {"pending_state":self.raw_file(UPDATE_STATE),"pending_journal":self.raw_file(UPDATE_JOURNAL)}
-    def collect_rollback_stable(self): return {"stable_state":self.raw_file(UPDATE_STATE),"retired_journal":self.raw_absence(UPDATE_JOURNAL),"after_doctor":self.cli_json(["/usr/local/bin/amnezia-cli","--socket",FIXED_SOCKET,"--json","doctor"],"cli:doctor")}
+    def collect_rollback_pending(self): return self._read_set({'pending_state':UPDATE_STATE,'pending_journal':UPDATE_JOURNAL})
+    def collect_rollback_stable(self):
+        value=self._read_set({'stable_state':UPDATE_STATE},{'retired_journal':UPDATE_JOURNAL})
+        if value:value['after_doctor']=self.cli_json(['/usr/local/bin/amnezia-cli','--socket',FIXED_SOCKET,'--json','doctor'],'cli:doctor')
+        return value
     def reboot(self,boot_id_before:str,timeout=180):
         self._check(); self.qga.guest_exec("/usr/bin/systemctl",["reboot"]); deadline=self.clock()+timeout
         while self.clock()<deadline:
@@ -167,10 +225,17 @@ class HeadlessNativeQgaAdapter:
         while self.clock() < deadline:
             self._check()
             value = collect()
+            self._check()
+            if self.clock() >= deadline:
+                raise HeadlessNativeQgaError(f"bounded wait expired for {label}; collector exceeded deadline")
             if not isinstance(value, Mapping):
                 raise HeadlessNativeQgaError(f"{label} collector returned no mapping")
             last = value
-            if ready(value):
+            is_ready = ready(value)
+            self._check()
+            if self.clock() >= deadline:
+                raise HeadlessNativeQgaError(f"bounded wait expired for {label}; readiness exceeded deadline")
+            if is_ready:
                 return value
             self.sleep(min(1.0, max(0.0, deadline - self.clock())))
         raise HeadlessNativeQgaError(f"bounded wait expired for {label}; last observation was not ready")

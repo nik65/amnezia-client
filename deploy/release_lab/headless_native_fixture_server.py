@@ -26,6 +26,7 @@ def artifact_path(doc,expected,expected_size,expected_path=None):
  if not isinstance(row,dict) or row.get('sha256')!=expected or row.get('size')!=expected_size or isinstance(row.get('size'),bool) or row.get('format')!='amnezia-headless-tar-v1' or not p or not (absolute or relative) or p.query or p.fragment or (expected_path is not None and path!=expected_path) or (expected_path is None and not path.startswith(f'/files/artifacts/{expected}/')):raise SystemExit('headless artifact URL or identity')
  return path
 class H(BaseHTTPRequestHandler):
+ protocol_version="HTTP/1.0"
  def log_message(self,*_):pass
  def do_GET(self):self.serve(True)
  def do_HEAD(self):self.serve(False)
@@ -43,20 +44,25 @@ class H(BaseHTTPRequestHandler):
     if not f['reset']:self.send_error(409);return
     data=f['log'].read_bytes()
    self.reply(data,'application/jsonl',body);return
-  if p.path=='/healthz':self.reply(json.dumps({'status':'ok','run_id':f['run'],'role':'headless-native-fixture'},separators=(',',':')).encode(),'application/json',body);return
+  if p.path=='/healthz':self.reply(json.dumps({'status':'ok','run_id':f['run'],'role':'headless-native-fixture'},separators=(',',':')).encode(),'application/json',body,record=True);return
   if p.path==f['manifest_path']:source=f['manifest'];ctype='application/json'
   elif p.path==f['artifact_path']:source=f['artifact'];ctype='application/gzip'
   else:self.send_error(404);self.record(404,0,0,'');return
-  length=source.stat().st_size;digest=sha(source);self.send_response(200);self.send_header('Content-Type',ctype);self.send_header('Content-Length',str(length));self.send_header('Cache-Control','no-store');self.send_header('X-Amnezia-Run-Id',f['run']);self.send_header('X-Amnezia-Sha256',digest);self.end_headers()
+  length=source.stat().st_size;digest=sha(source);self.send_response(200);self.send_header('Content-Type',ctype);
+  if not body:self.send_header('Content-Length',str(length))
+  self.send_header('Connection','close');self.close_connection=True;self.send_header('Cache-Control','no-store');self.send_header('X-Amnezia-Run-Id',f['run']);self.send_header('X-Amnezia-Sha256',digest);self.end_headers()
   sent=0
   if body:
    with source.open('rb') as stream:
     for chunk in iter(lambda:stream.read(1<<20),b''):
      self.wfile.write(chunk);sent+=len(chunk)
   self.record(200,sent,length,digest)
- def reply(self,data,ctype,body):
-  self.send_response(200);self.send_header('Content-Type',ctype);self.send_header('Content-Length',str(len(data)));self.send_header('X-Amnezia-Run-Id',self.server.fixture['run']);self.end_headers()
+ def reply(self,data,ctype,body,record=False):
+  self.send_response(200);self.send_header('Content-Type',ctype);
+  if not record or not body:self.send_header('Content-Length',str(len(data)))
+  self.send_header('Connection','close');self.close_connection=True;self.send_header('X-Amnezia-Run-Id',self.server.fixture['run']);self.end_headers()
   if body:self.wfile.write(data)
+  if record:self.record(200,len(data) if body else 0,len(data),hashlib.sha256(data).hexdigest())
  def record(self,status,size,length,digest):
   f=self.server.fixture
   with f['lock']:

@@ -1,0 +1,27 @@
+cmake_minimum_required(VERSION 3.25)
+project(AndroidWrapperFactoryContract LANGUAGES CXX)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+get_filename_component(CLIENT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+set(AUDIT_VPN_SOURCE "${CLIENT_ROOT}/vpnConnection.cpp" CACHE FILEPATH "Actual source to extract")
+set(FIXTURE "${CMAKE_CURRENT_BINARY_DIR}/factory_fixture.cpp")
+execute_process(COMMAND "${Python3_EXECUTABLE}" -B
+    "${CMAKE_CURRENT_SOURCE_DIR}/generate_fixture.py" "${AUDIT_VPN_SOURCE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixture.cpp.in" "${FIXTURE}"
+    COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${AUDIT_VPN_SOURCE}" generate_fixture.py fixture.cpp.in)
+add_executable(android_wrapper_factory_test "${FIXTURE}")
+target_compile_features(android_wrapper_factory_test PRIVATE cxx_std_17)
+if(MSVC)
+    target_compile_options(android_wrapper_factory_test PRIVATE /W4 /WX)
+else()
+    target_compile_options(android_wrapper_factory_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+option(WRAPPER_FACTORY_SANITIZERS "Enable address/undefined/leak checks" OFF)
+if(WRAPPER_FACTORY_SANITIZERS AND NOT MSVC)
+    target_compile_options(android_wrapper_factory_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(android_wrapper_factory_test PRIVATE -fsanitize=address,undefined)
+endif()
+include(CTest)
+add_test(NAME android_wrapper_factory COMMAND android_wrapper_factory_test)
+set_tests_properties(android_wrapper_factory PROPERTIES TIMEOUT 20)

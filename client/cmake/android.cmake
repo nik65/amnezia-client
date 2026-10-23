@@ -144,7 +144,14 @@ endforeach()
 # by Android's network-security policy.
 set(APP_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR}/android-package-source)
 file(REMOVE_RECURSE ${APP_ANDROID_PACKAGE_SOURCE_DIR})
-file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/android/ DESTINATION ${APP_ANDROID_PACKAGE_SOURCE_DIR})
+# Gradle may leave outputs in the source modules. Never expose these as Qt
+# package sources or copy stale compiled classes into another build tree.
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/android/ DESTINATION ${APP_ANDROID_PACKAGE_SOURCE_DIR}
+    PATTERN "build" EXCLUDE
+    PATTERN ".gradle" EXCLUDE
+    PATTERN ".kotlin" EXCLUDE
+    PATTERN ".cxx" EXCLUDE
+)
 set(_amnezia_network_security_config
     ${APP_ANDROID_PACKAGE_SOURCE_DIR}/res/xml/network_security_config.xml)
 configure_file(

@@ -1437,7 +1437,7 @@ if (-not $SkipBuild) {
         $androidScript = @(
             $androidExportScript,
             "cd $(Quote-Sh $repoWsl)",
-            'mkdir -p "$AWG_ANDROID_GRADLE_USER_HOME" "$HOME/.conan2/p/t" && find "$HOME/.conan2/p/t" -mindepth 1 -maxdepth 1 -exec rm -rf {} +',
+            'mkdir -p "$AWG_ANDROID_GRADLE_USER_HOME" "$HOME/.conan2/p/t"',
             'rename_artifact() { src="$1"; dst="$2"; if [ ! -f "$src" ]; then echo "Missing fresh Android artifact: $src" >&2; return 1; fi; rm -f "$dst"; mv -f "$src" "$dst"; }',
             'if [ -n "${JAVA_HOME:-}" ] && [ -f "$JAVA_HOME/bin/java.exe" ]; then windows_java_home="$JAVA_HOME"; java_shim_dir="$PWD/deploy/build/java-home-shim"; mkdir -p "$java_shim_dir/bin"; for tool in java javac keytool jar; do printf ''#!/bin/sh\nexec "%s/bin/%s.exe" "$@"\n'' "$windows_java_home" "$tool" > "$java_shim_dir/bin/$tool"; chmod +x "$java_shim_dir/bin/$tool"; done; export JAVA_HOME="$java_shim_dir"; export PATH="$JAVA_HOME/bin:$PATH"; fi',
             'sed -i ''s/\r$//'' client/android/gradlew && chmod +x client/android/gradlew',

@@ -1,5 +1,11 @@
 """Typed namespace policy and MTU fixtures; never invokes networking tools."""
 import unittest
+import json
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+import policy
 from policy import mtu, validate_hooks, namespace_snapshot, standard_filter, docker_dns_rules, server_dns_proxy_rules, firewall_script
 
 INTERFACE = {'Address': '10.8.1.1/24', 'MTU': '1280'}
@@ -180,6 +186,70 @@ class PolicyTests(unittest.TestCase):
             if 'rule' in args: return self.run_fixture(*args) + b'100: from all to 1.2.3.0/24 lookup 100\n'
             return self.run_fixture(*args)
         with self.assertRaises(ValueError): namespace_snapshot(custom, 'source', INTERFACE, 'wg0')
+
+
+class PolicyEpochFileTests(unittest.TestCase):
+    def test_owned_regular_and_unsafe_files(self):
+        with tempfile.TemporaryDirectory(prefix='awg-policy-files-') as temporary:
+            root = Path(temporary)
+            directory = root / 'source'
+            self.assertIsNone(policy.client_policy_epoch(directory))
+            directory.mkdir()
+            with self.assertRaisesRegex(ValueError, 'managed_client_policy_not_ready'):
+                policy.client_policy_epoch(directory)
+            path = directory / 'rules.json'
+            good = json.dumps({'policy': {'revision': 7, 'contentSha256': 'sha256:' + 'a' * 64}})
+            path.write_text(good)
+            self.assertEqual(7, policy.client_policy_epoch(directory)['revision'])
+            path.unlink()
+            outside = root / 'original'
+            outside.write_text(good)
+            for setup in (lambda: path.symlink_to(outside),
+                          lambda: os.link(outside, path),
+                          lambda: os.mkfifo(path),
+                          lambda: path.write_text(' ' * (1024 * 1024) + good)):
+                setup()
+                with self.assertRaisesRegex(ValueError, 'policy_source_untrusted'):
+                    policy.client_policy_epoch(directory)
+                path.unlink()
+            path.write_text(good)
+            alias = root / 'alias'
+            alias.symlink_to(directory, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'policy_source_untrusted'):
+                policy.client_policy_epoch(alias)
+
+    def test_source_replacement_mutation_and_parent_swap_during_read(self):
+        for action in ('replace', 'mutate', 'parent'):
+            with self.subTest(action=action), tempfile.TemporaryDirectory(prefix='awg-policy-race-') as temporary:
+                root = Path(temporary)
+                directory = root / 'source'
+                directory.mkdir()
+                path = directory / 'rules.json'
+                good = json.dumps({'policy': {'revision': 7, 'contentSha256': 'sha256:' + 'a' * 64}})
+                path.write_text(good)
+                real_read = os.read
+                changed = False
+
+                def read_and_change(descriptor, size):
+                    nonlocal changed
+                    data = real_read(descriptor, size)
+                    if data and not changed:
+                        changed = True
+                        if action == 'replace':
+                            replacement = directory / 'replacement'
+                            replacement.write_text(good)
+                            replacement.replace(path)
+                        elif action == 'mutate':
+                            path.write_text(good.replace('7', '8'))
+                        else:
+                            directory.rename(root / 'old')
+                            directory.mkdir()
+                            path.write_text(good)
+                    return data
+
+                with patch.object(policy.os, 'read', side_effect=read_and_change):
+                    with self.assertRaisesRegex(ValueError, 'policy_source_untrusted'):
+                        policy.client_policy_epoch(directory)
 
 
 if __name__ == '__main__': unittest.main()

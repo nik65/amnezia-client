@@ -2,6 +2,7 @@
 #define VPNCONNECTION_H
 
 #include <QObject>
+#include <functional>
 #include <QElapsedTimer>
 #include <QMetaObject>
 #include <QString>
@@ -29,6 +30,7 @@ using namespace amnezia;
 
 class QThread;
 class MigrationTeardownContext;
+#include "core/utils/nativeSessionRestore.h"
 
 class VpnConnection : public QObject
 {
@@ -83,6 +85,21 @@ public:
                                                              const QVariantMap &localSites);
 
 #ifdef Q_OS_ANDROID
+    void registerServiceDiscovery(const QString &requestId);
+    void serviceDiscoveryTimedOut(const QString &requestId);
+    void serviceDiscoveryChanged(const QJsonObject &snapshot);
+    void handleStartAdmission(const QJsonObject &snapshot);
+    void refuseServiceDiscovery();
+    void armStartAdmission(const AndroidServiceDiscovery::Grant &grant);
+    void awaitReconnectDiscovery(std::function<void()> continuation);
+    void refreshReconnectDiscovery();
+    void registerNativeRestore(const QString &requestId, const QString &generation);
+    void invalidateNativeRestore();
+    bool rejectNativeRestoreConnect();
+    void observeUnboundNativeSession(quint64 observationTicket);
+    void observeEmptyNativeServiceState(Vpn::ConnectionState state);
+    void adoptNativeRestore(const QJsonObject &snapshot, const QString &serverId, int serverIndex,
+                            DockerContainer container, const QJsonObject &configuration);
     void restoreConnection(const QString &serverId, int serverIndex,
                            DockerContainer container, const QJsonObject &vpnConfiguration,
                            Vpn::ConnectionState state);
@@ -123,6 +140,14 @@ public slots:
     void setConnectionState(Vpn::ConnectionState state);
 
 signals:
+#ifdef Q_OS_ANDROID
+    void serviceDiscoveryRegistered(const QString &requestId, bool accepted);
+    void serviceDiscoveryRefreshRequested();
+    void serviceDiscoveryConnectRefused(amnezia::ErrorCode error, Vpn::ConnectionState retainedState);
+    void nativeRestoreRegistered(const QString &requestId, const QString &generation, bool accepted);
+    void nativeRestoreAccepted(const QString &requestId, const QString &generation);
+    void nativeRestoreConnectRefused(Vpn::ConnectionState retainedState);
+#endif
     void migrationPeerObservation(const QString &serverId, quint64 connectionEpoch,
                                   const QJsonObject &observation);
     void migrationTeardownObserved(const QString &serverId, quint64 connectionEpoch, bool confirmed);
@@ -165,6 +190,10 @@ protected:
 
 private:
     QJsonObject m_vpnConfiguration;
+    // The AWG/WG native endpoint belongs to this activation, before the
+    // asynchronous wrapper status supplies its gateway.
+    bool m_usesPreparedNativeGateway = false;
+    QString m_preparedNativeGateway;
     QJsonObject m_routeMode;
     QString m_remoteAddress;
     int m_serverIndex = -1;
@@ -176,6 +205,21 @@ private:
     quint64 m_latestManagedRouteReconcileGeneration = 0;
     quint64 m_latestPreparedManagedRouteSnapshotGeneration = 0;
     bool m_connectionRestoredWithoutStartup = false;
+#ifdef Q_OS_ANDROID
+    QString m_discoveryRegisteredId;
+    AndroidServiceDiscovery::Ledger m_startAdmissionLedger;
+    std::function<void()> m_discoveryReconnectStart;
+    bool m_manualDiscoveryResuming = false;
+    quint64 m_manualDiscoveryRequestSerial = 0;
+    quint64 m_discoveryReconnectEpoch = 0;
+    quint64 m_discoveryReconnectSerial = 0;
+    unsigned m_discoveryReconnectAttempts = 0;
+    QString m_discoveryReconnectServerId;
+    NativeSessionRestore::Pending m_pendingNativeRestore;
+    QString m_nativeRestoreProbe;
+    QJsonObject m_restoredNativeIdentity;
+    bool m_unboundNativeSessionObserved = false;
+#endif
     bool m_hasAuthoritativeManagedRouteBase = false;
     bool m_managedRouteTransitionPending = true;
     RouteMode m_authoritativeManagedRouteMode = RouteMode::VpnAllSites;
@@ -258,6 +302,7 @@ private:
    void startIosVpnWithCurrentConfig();
 #endif
 
+   void prepareNativeWireGuardGateway();
    void appendSplitTunnelingConfig();
    void appendKillSwitchConfig();
 };

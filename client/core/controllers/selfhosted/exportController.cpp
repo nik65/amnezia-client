@@ -16,6 +16,7 @@
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/constants/protocolConstants.h"
 #include "core/utils/selfhosted/clientLogsUtils.h"
+#include "core/utils/selfhosted/serverNativeBundle.h"
 #include "core/models/selfhosted/selfHostedAdminServerConfig.h"
 #include "core/models/containerConfig.h"
 #include "core/models/protocolConfig.h"
@@ -132,7 +133,8 @@ RECEIPT_DB = os.path.join(ROOT, "batch-receipts.sqlite3")
 MAX_UPLOAD_BYTES = __MAX_UPLOAD_BYTES__
 MAX_BOOTSTRAP_BYTES = 1024
 MAX_CLIENT_BYTES = __MAX_CLIENT_BYTES__
-MAX_FILES_PER_CLIENT = 512
+# Observed Windows cadence reaches about 1700 small log chunks per day.
+MAX_FILES_PER_CLIENT = 4096
 MAX_TOTAL_BYTES = 512 * 1024 * 1024
 MAX_TOTAL_FILES = 8192
 MAX_LOG_AGE_SECONDS = 30 * 24 * 60 * 60
@@ -1230,20 +1232,53 @@ ErrorCode publishClientLogCollector(const ServerCredentials &credentials,
 
     SshSession sshSession;
     ErrorCode errorCode = ErrorCode::NoError;
+    const auto nativeBundle = serverNative::loadResourceBundle();
+    std::optional<serverNative::Binary> nativeCollector, nativeRoute;
+    if (nativeBundle.present) {
+        if (!nativeBundle.valid)
+            return ErrorCode::InternalError;
+        QString machine;
+        bool machineOverflow = false;
+        auto captureMachine = [&machine, &machineOverflow](const QString &data, libssh::Client &) {
+            // Bound both stdout/stderr accumulation before accepting a remote architecture.
+            if (machineOverflow || data.size() > 128 - machine.size()
+                    || data.toUtf8().size() > 128 - machine.toUtf8().size()) {
+                machineOverflow = true;
+                return ErrorCode::ServerCheckFailed;
+            }
+            machine += data;
+            return ErrorCode::NoError;
+        };
+        errorCode = sshSession.runScript(credentials, QStringLiteral("uname -m"), captureMachine, captureMachine);
+        if (errorCode != ErrorCode::NoError)
+            return errorCode;
+        if (machineOverflow)
+            return ErrorCode::ServerCheckFailed;
+        const auto architecture = serverNative::parseArchitecture(machine.trimmed());
+        if (!architecture)
+            return ErrorCode::ServerCheckFailed;
+        nativeCollector = nativeBundle.find(QStringLiteral("collector"), *architecture);
+        nativeRoute = nativeBundle.find(QStringLiteral("collector-route"), *architecture);
+        if (!nativeCollector || !nativeRoute)
+            return ErrorCode::ServerCheckFailed;
+    }
+    const bool useNative = nativeCollector.has_value();
 
-    const QString scriptTmpFileName = QStringLiteral("/tmp/%1.py").arg(Utils::getRandomString(16));
-    errorCode = sshSession.uploadFileToHost(credentials, clientLogsCollectorScript(), scriptTmpFileName);
+    const QString scriptTmpFileName = QStringLiteral("/tmp/%1.%2")
+            .arg(Utils::getRandomString(16), useNative ? QStringLiteral("bin") : QStringLiteral("py"));
+    errorCode = sshSession.uploadFileToHost(credentials, useNative ? nativeCollector->bytes : clientLogsCollectorScript(), scriptTmpFileName);
     if (errorCode != ErrorCode::NoError) {
         return errorCode;
     }
 
-    const QString routeTmpFileName = QStringLiteral("/tmp/%1.py").arg(Utils::getRandomString(16));
+    const QString routeTmpFileName = QStringLiteral("/tmp/%1.%2")
+            .arg(Utils::getRandomString(16), useNative ? QStringLiteral("bin") : QStringLiteral("py"));
     QFile routeResource(QStringLiteral(":/server_scripts/client_logs/collector_route.py"));
-    if (!routeResource.open(QIODevice::ReadOnly)) {
+    if (!useNative && !routeResource.open(QIODevice::ReadOnly)) {
         sshSession.runScript(credentials, QStringLiteral("sudo rm -f '%1'").arg(scriptTmpFileName));
         return ErrorCode::InternalError;
     }
-    errorCode = sshSession.uploadFileToHost(credentials, routeResource.readAll(), routeTmpFileName);
+    errorCode = sshSession.uploadFileToHost(credentials, useNative ? nativeRoute->bytes : routeResource.readAll(), routeTmpFileName);
     if (errorCode != ErrorCode::NoError) {
         sshSession.runScript(credentials, QStringLiteral("sudo rm -f '%1' '%2'").arg(scriptTmpFileName, routeTmpFileName));
         return errorCode;
@@ -1291,7 +1326,7 @@ ErrorCode publishClientLogCollector(const ServerCredentials &credentials,
 if [ '__PUBLISH_TUNNEL__' = '1' ]; then command -v python3 >/dev/null && command -v systemctl >/dev/null && [ -d /run/systemd/system ] && [ ! -L '__HOST_DIRECTORY__' ] || { echo __ERROR_MARKER__:route_runtime; exit 0; }; if [ -e '__HOST_DIRECTORY__' ]; then [ "$(sudo stat -c '%u:%a' '__HOST_DIRECTORY__')" = '0:700' ] || { echo __ERROR_MARKER__:route_directory; exit 0; }; fi; fi
 if [ '__PUBLISH_TUNNEL__' = '1' ]; then
 sudo python3 - <<'ROUTE_GUARD' || { echo __ERROR_MARKER__:previous_collector_ownership; exit 0; }
-import json,subprocess
+import hashlib,json,re,subprocess
 def inspect(name):
     return json.loads(subprocess.run(['docker','inspect',name],check=True,capture_output=True,timeout=15).stdout)[0]
 source=inspect('__VPN_CONTAINER__')
@@ -1305,26 +1340,61 @@ if '__TUNNEL_CONTAINER__' in names:
     if (collector['Name']!='/__TUNNEL_CONTAINER__' or config['Image']!='__COLLECTOR_IMAGE__'
         or collector['HostConfig']['NetworkMode']!='container:'+source['Id']
         or len(mount)!=1 or mount[0]['Source']!='__HOST_DIRECTORY__' or not mount[0]['RW']
-        or config.get('Entrypoint')!=['python'] or config.get('Cmd')!=['/data/collector.py']
         or 'AMNEZIA_CLIENT_LOGS_SCOPE=__CONTAINER_SCOPE__' not in env
         or labels.get('org.amnezia.client-logs.route','__CONTAINER_SCOPE__')!='__CONTAINER_SCOPE__'):
         raise ValueError('previous collector ownership')
+    legacy=(config.get('Entrypoint')==['python'] and config.get('Cmd')==['/data/collector.py']
+            and not labels.get('org.amnezia.client-logs.native-sha256'))
+    native=(config.get('Entrypoint')==['/data/amnezia-client-logs-collector'] and config.get('Cmd')==['--root','/data']
+            and re.fullmatch('[0-9a-f]{64}',labels.get('org.amnezia.client-logs.native-sha256','')))
+    if not legacy and not native: raise ValueError('previous collector process identity')
+    if native:
+        if '__USE_NATIVE__'!='1': raise ValueError('native collector downgrade requires native bundle')
+        pid=collector['State']['Pid']
+        if collector['State']['Running'] and pid>0:
+            with open('/proc/%d/exe'%pid,'rb') as stream:
+                digest=hashlib.sha256()
+                for block in iter(lambda:stream.read(65536),b''): digest.update(block)
+                if digest.hexdigest()!=labels['org.amnezia.client-logs.native-sha256']:
+                    raise ValueError('previous collector loaded binary')
 ROUTE_GUARD
 fi
 sudo install -d -m 0700 '__HOST_DIRECTORY__' '__HOST_DIRECTORY__/logs' '__HOST_DIRECTORY__/legacy' || echo __ERROR_MARKER__:mkdir
-sudo install -m 0755 '__SCRIPT_TMP_FILE__' '__HOST_DIRECTORY__/collector.py' || echo __ERROR_MARKER__:script_install
+__NATIVE_VERIFY__
+sudo install -m 0755 '__SCRIPT_TMP_FILE__' '__HOST_DIRECTORY__/__COLLECTOR_FILE__' || { echo __ERROR_MARKER__:script_install; exit 0; }
+__NATIVE_INSTALLED_VERIFY__
 sudo touch '__HOST_DIRECTORY__/tokens.tsv' || echo __ERROR_MARKER__:tokens_touch
 if [ '__UPSERT_TOKEN__' = '1' ]; then sudo sh -c "i=0; while ! mkdir '__HOST_DIRECTORY__/tokens.lock' 2>/dev/null; do if [ -d '__HOST_DIRECTORY__/tokens.lock' ] && find '__HOST_DIRECTORY__/tokens.lock' -maxdepth 0 -mmin +1 -print -quit | grep -q .; then rmdir '__HOST_DIRECTORY__/tokens.lock' 2>/dev/null || true; fi; i=\$((i + 1)); [ \$i -lt 30 ] || { echo __ERROR_MARKER__:tokens_lock; exit 0; }; sleep 1; done; trap 'rm -rf \"__HOST_DIRECTORY__/tokens.lock\" \"__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp\"' EXIT; grep -v '^__CLIENT_LOG_ID__[[:space:]]' '__HOST_DIRECTORY__/tokens.tsv' 2>/dev/null > '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp' || true; cat '__TOKEN_TMP_FILE__' >> '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp' || { echo __ERROR_MARKER__:token_append; exit 0; }; install -m 0600 '__HOST_DIRECTORY__/tokens.tsv.__CLIENT_LOG_ID__.tmp' '__HOST_DIRECTORY__/tokens.tsv' || echo __ERROR_MARKER__:tokens_install"; fi
 sudo rm -f '__SCRIPT_TMP_FILE__' '__TOKEN_TMP_FILE__' || true
 if sudo docker network inspect amnezia-dns-net >/dev/null 2>&1; then if ! sudo docker network inspect amnezia-dns-net --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' | grep -qw '172.29.172.0/24'; then echo __ERROR_MARKER__:network_subnet; fi; else sudo docker network create --driver bridge --subnet=172.29.172.0/24 --opt com.docker.network.bridge.name=amn0 amnezia-dns-net || echo __ERROR_MARKER__:network_create; fi
 if ! sudo docker image inspect '__COLLECTOR_IMAGE__' >/dev/null 2>&1; then sudo docker pull '__COLLECTOR_IMAGE__' >/dev/null || echo __ERROR_MARKER__:image_pull; fi
 sudo docker rm -f '__BRIDGE_CONTAINER__' >/dev/null 2>&1 || true
-sudo docker run -d --log-driver none --restart always --memory=96m --cpus=0.5 --pids-limit=64 --cap-drop ALL --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777 --network amnezia-dns-net --ip=__BRIDGE_HOST__ --name '__BRIDGE_CONTAINER__' -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1 -e AMNEZIA_CLIENT_LOGS_BOOTSTRAP=0 -v __HOST_DIRECTORY__:/data:rw --entrypoint python '__COLLECTOR_IMAGE__' /data/collector.py || echo __ERROR_MARKER__:bridge_run
-if [ '__PUBLISH_TUNNEL__' = '1' ]; then if sudo docker ps --format '{{.Names}}' | grep -qx '__VPN_CONTAINER__'; then if [ '__ALLOW_LEGACY_BOOTSTRAP__' = '1' ]; then __LEGACY_MAP_REFRESH__ fi; sudo docker rm -f '__TUNNEL_CONTAINER__' >/dev/null 2>&1 || true; sudo docker exec -i '__VPN_CONTAINER__' sh -c 'while iptables -t nat -D PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__ 2>/dev/null; do :; done; iptables -t nat -A PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__' >/dev/null 2>&1 || echo __ERROR_MARKER__:tunnel_redirect; sudo docker run -d --log-driver none --restart always --memory=96m --cpus=0.5 --pids-limit=64 --cap-drop ALL --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777 --network container:__VPN_CONTAINER__ --name '__TUNNEL_CONTAINER__' -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1 -e AMNEZIA_CLIENT_LOGS_BOOTSTRAP=__ALLOW_LEGACY_BOOTSTRAP__ -e AMNEZIA_CLIENT_LOGS_SCOPE='__CONTAINER_SCOPE__' -v __HOST_DIRECTORY__:/data:rw --entrypoint python '__COLLECTOR_IMAGE__' /data/collector.py || echo __ERROR_MARKER__:tunnel_run; else echo __ERROR_MARKER__:missing_vpn_container; fi; fi
+sudo docker run -d --log-driver none --restart always --memory=96m --cpus=0.5 --pids-limit=64 --cap-drop ALL --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777 --network amnezia-dns-net --ip=__BRIDGE_HOST__ --name '__BRIDGE_CONTAINER__' __COLLECTOR_RUNTIME_FLAGS__ -e AMNEZIA_CLIENT_LOGS_BOOTSTRAP=0 -v __HOST_DIRECTORY__:/data:rw --entrypoint '__COLLECTOR_ENTRYPOINT__' '__COLLECTOR_IMAGE__' __COLLECTOR_COMMAND__ || echo __ERROR_MARKER__:bridge_run
+if [ '__PUBLISH_TUNNEL__' = '1' ]; then if sudo docker ps --format '{{.Names}}' | grep -qx '__VPN_CONTAINER__'; then if [ '__ALLOW_LEGACY_BOOTSTRAP__' = '1' ]; then __LEGACY_MAP_REFRESH__ fi; sudo docker rm -f '__TUNNEL_CONTAINER__' >/dev/null 2>&1 || true; sudo docker exec -i '__VPN_CONTAINER__' sh -c 'while iptables -t nat -D PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__ 2>/dev/null; do :; done; iptables -t nat -A PREROUTING -i __TUNNEL_IFACE__ -d __BRIDGE_HOST__/32 -p tcp --dport __SYNC_PORT__ -j REDIRECT --to-ports __SYNC_PORT__' >/dev/null 2>&1 || echo __ERROR_MARKER__:tunnel_redirect; sudo docker run -d --log-driver none --restart always --memory=96m --cpus=0.5 --pids-limit=64 --cap-drop ALL --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777 --network container:__VPN_CONTAINER__ --name '__TUNNEL_CONTAINER__' __COLLECTOR_RUNTIME_FLAGS__ -e AMNEZIA_CLIENT_LOGS_BOOTSTRAP=__ALLOW_LEGACY_BOOTSTRAP__ -e AMNEZIA_CLIENT_LOGS_SCOPE='__CONTAINER_SCOPE__' -v __HOST_DIRECTORY__:/data:rw --entrypoint '__COLLECTOR_ENTRYPOINT__' '__COLLECTOR_IMAGE__' __COLLECTOR_COMMAND__ || echo __ERROR_MARKER__:tunnel_run; else echo __ERROR_MARKER__:missing_vpn_container; fi; fi
 sleep 1
 sudo docker ps --format '{{.Names}}' | grep -qx '__BRIDGE_CONTAINER__' || echo __ERROR_MARKER__:missing_bridge_container
 if [ '__PUBLISH_TUNNEL__' = '1' ]; then sudo docker ps --format '{{.Names}}' | grep -qx '__TUNNEL_CONTAINER__' || echo __ERROR_MARKER__:missing_tunnel_container; fi
 )SH");
+
+    if (useNative) {
+        script.replace(QStringLiteral("command -v python3 >/dev/null && "), QString());
+        const auto guardStart = script.indexOf(QStringLiteral("sudo python3 - <<'ROUTE_GUARD'"));
+        const auto guardEnd = script.indexOf(QStringLiteral("ROUTE_GUARD\n"), guardStart);
+        if (guardStart < 0 || guardEnd < guardStart) {
+            cleanupTmpFiles();
+            return ErrorCode::InternalError;
+        }
+        const QString preflight = QStringLiteral(R"PREFLIGHT(
+native_stage=$(sudo mktemp -d /tmp/amnezia-collector-preflight.XXXXXXXXXX) || { echo __ERROR_MARKER__:native_stage; exit 0; }
+trap 'sudo rm -rf "$native_stage"' EXIT
+sudo install -m 0700 '__ROUTE_TMP_FILE__' "$native_stage/route" && sudo install -m 0700 '__SCRIPT_TMP_FILE__' "$native_stage/collector" || { echo __ERROR_MARKER__:native_stage_install; exit 0; }
+printf '%1  %s/route\n%2  %s/collector\n' "$native_stage" "$native_stage" | sudo sha256sum -c - >/dev/null || { echo __ERROR_MARKER__:native_stage_hash; exit 0; }
+sudo "$native_stage/route" '__CONTAINER_SCOPE__' --publication-preflight || { echo __ERROR_MARKER__:previous_collector_ownership; exit 0; }
+sudo rm -rf "$native_stage"
+trap - EXIT
+)PREFLIGHT").arg(nativeRoute->sha256, nativeCollector->sha256);
+        script.replace(guardStart, guardEnd - guardStart + QStringLiteral("ROUTE_GUARD\n").size(), preflight);
+    }
 
     // The timer belongs to this publication flow and may restart only its bound collector.
     const auto routeBegin = script.indexOf(QStringLiteral("sudo docker exec -i '__VPN_CONTAINER__' sh -c 'while iptables"));
@@ -1338,15 +1408,16 @@ if [ '__PUBLISH_TUNNEL__' = '1' ]; then sudo docker ps --format '{{.Names}}' | g
                    QStringLiteral("--network container:__VPN_CONTAINER__ --label org.amnezia.client-logs.route=__CONTAINER_SCOPE__ --name '__TUNNEL_CONTAINER__'"));
     const QString routeInstall = QStringLiteral(R"ROUTE(
 if [ '__PUBLISH_TUNNEL__' = '1' ]; then
-sudo install -m 0700 '__ROUTE_TMP_FILE__' '__HOST_DIRECTORY__/collector_route.py' || { echo __ERROR_MARKER__:route_install; exit 0; }
-sudo python3 '__HOST_DIRECTORY__/collector_route.py' '__CONTAINER_SCOPE__' --bind || { echo __ERROR_MARKER__:route_binding; exit 0; }
+sudo install -m 0700 '__ROUTE_TMP_FILE__' '__HOST_DIRECTORY__/__ROUTE_FILE__' || { echo __ERROR_MARKER__:route_install; exit 0; }
+__NATIVE_ROUTE_VERIFY__
+sudo __ROUTE_PREFIX__'__HOST_DIRECTORY__/__ROUTE_FILE__' '__CONTAINER_SCOPE__' --bind || { echo __ERROR_MARKER__:route_binding; exit 0; }
 sudo tee '/etc/systemd/system/amnezia-client-logs-route-__CONTAINER_SCOPE__.service' >/dev/null <<'UNIT'
 [Unit]
 Description=Reconcile publication-bound Amnezia collector route
 After=docker.service
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 __HOST_DIRECTORY__/collector_route.py __CONTAINER_SCOPE__
+ExecStart=__ROUTE_SERVICE_PREFIX____HOST_DIRECTORY__/__ROUTE_FILE__ __CONTAINER_SCOPE__
 TimeoutStartSec=60
 UMask=0077
 UNIT
@@ -1365,6 +1436,27 @@ sudo rm -f '__ROUTE_TMP_FILE__'
 )ROUTE");
     script += routeInstall;
 
+    const QString nativeVerify = useNative
+            ? QStringLiteral("printf '%1  %2\\n%3  %4\\n' | sudo sha256sum -c - >/dev/null || { echo __ERROR_MARKER__:native_hash; exit 0; }")
+                      .arg(nativeCollector->sha256, scriptTmpFileName, nativeRoute->sha256, routeTmpFileName)
+            : QString();
+    script.replace("__NATIVE_VERIFY__", nativeVerify);
+    script.replace("__NATIVE_INSTALLED_VERIFY__", useNative
+                           ? QStringLiteral("printf '%1  __HOST_DIRECTORY__/amnezia-client-logs-collector\\n' | sudo sha256sum -c - >/dev/null || { echo __ERROR_MARKER__:installed_native_hash; exit 0; }").arg(nativeCollector->sha256)
+                           : QString());
+    script.replace("__NATIVE_ROUTE_VERIFY__", useNative
+                           ? QStringLiteral("printf '%1  __HOST_DIRECTORY__/amnezia-client-logs-route\\n' | sudo sha256sum -c - >/dev/null || { echo __ERROR_MARKER__:installed_route_hash; exit 0; }").arg(nativeRoute->sha256)
+                           : QString());
+    script.replace("__USE_NATIVE__", useNative ? QStringLiteral("1") : QStringLiteral("0"));
+    script.replace("__COLLECTOR_FILE__", useNative ? QStringLiteral("amnezia-client-logs-collector") : QStringLiteral("collector.py"));
+    script.replace("__COLLECTOR_RUNTIME_FLAGS__", useNative
+                           ? QStringLiteral("--label org.amnezia.client-logs.native-sha256=%1").arg(nativeCollector->sha256)
+                           : QStringLiteral("-e PYTHONDONTWRITEBYTECODE=1 -e PYTHONUNBUFFERED=1"));
+    script.replace("__COLLECTOR_ENTRYPOINT__", useNative ? QStringLiteral("/data/amnezia-client-logs-collector") : QStringLiteral("python"));
+    script.replace("__COLLECTOR_COMMAND__", useNative ? QStringLiteral("--root /data") : QStringLiteral("/data/collector.py"));
+    script.replace("__ROUTE_FILE__", useNative ? QStringLiteral("amnezia-client-logs-route") : QStringLiteral("collector_route.py"));
+    script.replace("__ROUTE_PREFIX__", useNative ? QString() : QStringLiteral("python3 "));
+    script.replace("__ROUTE_SERVICE_PREFIX__", useNative ? QString() : QStringLiteral("/usr/bin/python3 "));
     script.replace("__LEGACY_MAP_REFRESH__", clientLogsLegacyMapRefreshScript());
     script.replace("__HOST_DIRECTORY__", QString::fromLatin1(protocols::clientLogs::hostDirectory));
     script.replace("__SCRIPT_TMP_FILE__", scriptTmpFileName);
