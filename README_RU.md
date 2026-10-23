@@ -1,39 +1,137 @@
-# Amnezia VPN
+# Amnezia VPN — self-hosted fork
 
-### _Лучший клиент для создания VPN на собственном сервере_
+[English](README.md) | **Русский**
 
-[![Build Status](https://github.com/amnezia-vpn/amnezia-client/actions/workflows/deploy.yml/badge.svg?branch=dev)](https://github.com/amnezia-vpn/amnezia-client/actions/workflows/deploy.yml?query=branch:dev)
-[![Gitpod ready-to-code](https://img.shields.io/badge/Gitpod-ready--to--code-blue?logo=gitpod)](https://gitpod.io/#https://github.com/amnezia-vpn/amnezia-client)
+Наш форк [AmneziaVPN](https://github.com/amnezia-vpn/amnezia-client) для собственного
+VPN-сервера и управления клиентами Windows, Android и Linux. Он сохраняет базовые
+возможности Amnezia и добавляет серверные правила маршрутизации, Fleet Center,
+диагностику, собственный подписанный канал обновлений и Linux-клиент без GUI.
 
-### [English](https://github.com/amnezia-vpn/amnezia-client/blob/dev/README.md) | Русский
-[AmneziaVPN](https://amnezia.org?utm_source=github&utm_campaign=amnezia_website-readme-ru) — это open source VPN-клиент, ключевая особенность которого заключается в возможности развернуть собственный VPN на вашем сервере.
+**Выпуск 5.0.3.14 / Android versionCode 2200 опубликован 23 октября 2026 года.**
+Файлы проверены через рабочий self-hosted канал: подпись Ed25519, полное скачивание,
+размеры и SHA-256. [Отчёт о выпуске и контрольные суммы](docs/releases/5.0.3.14.md).
 
-[![Image](https://github.com/amnezia-vpn/amnezia-client/blob/dev/metadata/img-readme/uipic4.png)](https://amnezia.org)
+| Платформа выпуска | Пакет |
+|---|---|
+| Windows x64 | Обычный EXE и self-hosted клиент администратора |
+| Android 9+, arm64-v8a | APK, versionCode 2200 |
+| Linux x64 с GUI | Установщик `.run` |
+| Linux x64 headless | Пакет обновления и отдельный пакет первоначальной установки |
 
-### [Сайт](https://amnezia.org?utm_source=github&utm_campaign=amnezia_website-readme-ru) | [Зеркало сайта](https://storage.googleapis.com/amnezia/amnezia.org?utm_source=github&utm_campaign=amnezia_website-readme-ru-mirror) | [Документация](https://docs.amnezia.org) | [Решение проблем](https://docs.amnezia.org/troubleshooting)
+Обновления нашего форка распространяет настроенный self-hosted сервер. Загрузки
+с официального сайта Amnezia относятся к upstream-проекту. Исходники для Apple
+сохранены, но macOS, iOS и другие архитектуры не входят в манифест этого выпуска.
 
-> [!TIP]
-> Если [сайт Amnezia](https://amnezia.org?utm_source=github&utm_campaign=amnezia_website-readme-ru) заблокирован в вашем регионе, вы можете воспользоваться [ссылкой на зеркало](https://storage.googleapis.com/amnezia/amnezia.org?utm_source=github&utm_campaign=amnezia_website-readme-ru-mirror).
-
-<a href="https://storage.googleapis.com/amnezia/amnezia.org?m-path=/ru/downloads&utm_source=github&utm_campaign=amnezia_button-readme-ru-mirror"><img src="https://github.com/amnezia-vpn/amnezia-client/blob/dev/metadata/img-readme/download-website-ru.svg" width="150" style="max-width: 100%; margin-right: 10px"></a>
-
-
-[Все релизы](https://github.com/amnezia-vpn/amnezia-client/releases)
-
-<br/>
-
-<a href="https://www.testiny.io"><img src="https://github.com/amnezia-vpn/amnezia-client/blob/dev/metadata/img-readme/testiny.png" height="28px"></a>
-
-## Особенности
+## Базовые возможности Amnezia
 
 - Простой в использовании — введите IP-адрес, SSH-логин и пароль, и Amnezia автоматически установит VPN-контейнеры Docker на ваш сервер и подключится к VPN.
 - Классические VPN-протоколы: OpenVPN, WireGuard и IKEv2.
 - Протоколы с маскировкой трафика (обфускацией): OpenVPN с плагином [Cloak](https://github.com/cbeuw/Cloak), Shadowsocks (OpenVPN over Shadowsocks), [AmneziaWG](https://docs.amnezia.org/documentation/amnezia-wg/) и XRay.
 - Поддержка Split Tunneling — добавляйте любые сайты или приложения в список, чтобы включить VPN только для них.
-- Поддерживает платформы: Windows, macOS, Linux, Android, iOS.
+- Базовая кодовая база поддерживает Windows, macOS, Linux, Android и iOS; состав нашего выпуска указан выше.
 - Поддержка конфигурации протокола AmneziaWG на [бета-прошивке Keenetic](https://docs.keenetic.com/ua/air/kn-1611/en/6319-latest-development-release.html#UUID-186c4108-5afd-c10b-f38a-cdff6c17fab3_section-idm33192196168192-improved).
 
-## Ссылки
+## Что добавлено и улучшено в нашем клиенте
+
+### Серверные правила и split tunneling
+
+- **Server Routing rules**: централизованные правила для доменов, IP и CIDR,
+  которые клиент объединяет со своими настройками split tunneling.
+- Серверный список обхода VPN позволяет отправлять выбранный трафик напрямую.
+  Списки адресов конкретного сервера не встроены как универсальное правило для всех пользователей.
+- **Route Inspector** объясняет решение для сайта или IP: локальное правило,
+  серверная политика, правило защиты туннеля или маршрут по умолчанию. При наличии
+  используется подтверждённая квитанция клиента; без неё показывается прогноз
+  сохранённой политики. Это не просмотр таблицы маршрутов ОС.
+- Усилены нормализация IP/CIDR, сопоставление доменов, обработка ревизий политики
+  и сохранение контекста уже применённых маршрутов. Отдельно учитываются маршруты
+  доступа к серверу, диагностике и обновлениям.
+
+### Fleet Center и диагностика
+
+- **Fleet Center** объединяет состояние текущего устройства, соединения,
+  наблюдаемого здоровья туннеля, событий восстановления и политики обновления.
+- Статус отправителя логов показывает подтверждённую доставку, очередь, ответ
+  коллектора, ошибку и время следующей попытки, когда эти сведения доступны.
+  Отсутствие данных отображается явно и не считается успешной доставкой.
+- Улучшены отправка и обработка логов Windows, Android и headless-клиента:
+  ограничение размеров, подтверждение передачи, повторные попытки и heartbeat.
+- Android-санитайзер скрывает ключи, пароли и токены, включая записи, разорванные
+  границей пакетов. Добавлены проверки полноты и состояния источника логов.
+- Для серверной диагностики добавлен helper с systemd timer, восстанавливающий
+  перенаправление в актуальное сетевое пространство контейнера без перезапуска VPN.
+
+### Windows и Android
+
+- **Windows:** исправления жизненного цикла службы туннеля и восстановления после
+  ошибки запуска WinTun; усилены проверки контекста при согласовании маршрутов.
+- **Android:** восстановление связи Activity, VPN-службы и native backend после
+  пересоздания интерфейса; проверка идентичности сеанса и результата очистки,
+  защита от создания второго туннеля и более точные состояния ошибок.
+- Большие наборы маршрутов передаются с учётом ограничений Binder; добавлены
+  компактное представление маршрутов и проверки, сохраняющие множество адресов.
+- Исправлены обработка отмены coroutine, лишнее создание backend и выбор источника
+  счётчиков трафика. Полные логи после подключения проверены на реальном телефоне.
+- В исходниках есть объединение включённых сайтов и приложений по условию «ИЛИ»
+  для Android 10+; его отдельная матрица маршрутизации на телефоне ещё требует
+  приёмки. [Контракт и ограничения](docs/android-included-union.md).
+
+### Linux desktop и headless
+
+- Linux GUI получил проверку привилегированного IPC-партнёра через идентичность
+  процесса и защищённую systemd-службу, а также исправления post-install и упаковки.
+- **`amneziad` и `amnezia-cli`** обеспечивают работу без графического интерфейса:
+  профили, VPN, серверные правила, диагностику и подписанные обновления.
+- C++-координатор headless управляет откатом, удержанием предыдущей версии после
+  перезагрузки и явным возобновлением обновления. Состояние и журнал проверяются
+  перед переходами; ошибки не превращаются в подтверждение успешного отката.
+- Разделены пакеты первоначальной установки и обычного обновления; усилены
+  ограничения чтения профилей, проверка зависимостей и файловые операции.
+
+### AWG 3.1 и перенос рабочих компонентов на C++
+
+- Для административных профилей добавлены поиск возможностей сервера, подготовка
+  параллельного AWG endpoint, выбор свободного UDP-порта, проверка закреплённого
+  образа и повторное использование совместимого поколения.
+- Подписанное предложение миграции доставляется клиенту через существующий
+  туннель. Готовность сервера и переход каждого клиента учитываются отдельно.
+  [Сценарий AWG 3.1](docs/automatic-awg31-migration.md).
+- Реализованы C++-модули сборщика логов и route-helper, feed/config runtime,
+  планирования, policy/epoch, topology, readiness/attestation, control operations
+  и транзакционного журнала. Native adapters подключены к выбранным путям;
+  для серверных модулей предусмотрен проверяемый optional bundle.
+- **Полный отказ от Python не завершён.** Default/legacy delivery, часть
+  orchestration, maintenance и control HTTP/PID1 остаются на Python. Наличие
+  C++-модуля не означает его активацию на каждом сервере. Conan, сборочные
+  инструменты, лаборатория и тесты также сохраняют Python.
+  [Подробный статус переноса](docs/python-runtime-migration.md).
+
+### Импорт, интерфейс и устойчивость
+
+- Усилен разбор конфигураций, QR-данных и URI: повреждённые JSON, пустые host,
+  недопустимые адреса и ошибки импорта получают явный отказ.
+- Исправлены начальные значения портов и переполнение при расчёте размеров
+  AWG-пакетов; ограничены объёмы читаемых профилей и сетевых ответов.
+- Исправлены время жизни асинхронных проверок/загрузок обновлений, уведомления
+  моделей интерфейса и открытие ссылок/каталога логов.
+- Улучшены выбор Windows toolchain, имя ARM64-пакета и сокрытие пароля в выводе
+  notarization. Наличие этих исправлений не означает публикацию ARM64/Apple-сборок.
+
+## Собственный канал обновлений
+
+Манифест подписывается Ed25519, а каждый файл проверяется по размеру и SHA-256.
+Артефакты размещаются по адресам с хешем содержимого. Публикация выполняется
+self-hosted клиентом администратора с проверкой SSH host key; предусмотрены
+подготовка, подтверждение, чтение результата и восстановление при сбое.
+Политики обновления учитывают версию, поколение, срок действия, канал, группу
+устройств и паузу выпуска, если соответствующая политика предоставлена сервером.
+
+Обычный установщик предназначен для клиентского обновления; self-hosted пакет
+дополнительно содержит комплект для публикации. Доступность обновления на сервере
+и его установка на каждом устройстве — отдельные результаты.
+[Описание канала](deploy/selfhosted_updates/README.md).
+
+## Ссылки upstream-проекта
 
 - [https://amnezia.org](https://amnezia.org/?utm_source=github&utm_campaign=amnezia_website-read) - Веб-сайт проекта | [Альтернативная ссылка (зеркало)](https://storage.googleapis.com/amnezia/amnezia.org?utm_source=github&utm_campaign=amnezia_website-read)
 - [https://docs.amnezia.org](https://docs.amnezia.org/?utm_source=github&utm_campaign=amnezia_website-read) - Документация | [Альтернативная ссылка (зеркало)](https://storage.googleapis.com/amnezia/docs?utm_source=github&utm_campaign=amnezia_website-read)
@@ -57,42 +155,29 @@ AmneziaVPN использует несколько проектов с откр�
 - [Conan](https://conan.io/)
 - и другие...
 
-## Предрелизная песочница
+## Приёмка и проверенный выпуск
 
-Перед выпуском self-hosted релиза используется отдельная лаборатория в Ubuntu
-24 WSL с четырьмя продуктовыми направлениями: Windows x64 и Linux через
-QEMU/KVM, Android arm64-v8a через отдельный защищённый эмуляторный адаптер.
-Изолированный server-router используется как вспомогательный consumer-fixture.
-Инсталляция, обновление и проверка сервиса выполняются только внутри
-одноразовых гостевых overlay-дисков через QGA/QMP или Android-адаптер. План
-лаборатории и команды описаны в
-[`deploy/release_lab/README.md`](deploy/release_lab/README.md). По умолчанию
-release-обёртка останавливается на preflight, если обязательное направление
-не готово.
+Windows и Linux проверяются в принадлежащих release-lab одноразовых гостях
+Hyper-V или QEMU через PowerShell Direct либо QGA/QMP. Проверяются владение гостем,
+точные байты пакета, результаты операций и очистка. Android проверяется на
+реальном смартфоне; Android-эмуляторы и CVD в текущем процессе отключены.
 
-Состояние на 08.09.2026 разделяет готовность ОС и продуктовые доказательства.
-Linux headless v2 и Linux GUI v9 имеют готовые OS/QGA golden; строгая сессия
-GNOME/X11 для GUI подтверждена. Свежая установка baseline `5.0.1.37`
-прошла, сервис активен и каноническая версия runtime подтверждена; обновление
-candidate `5.0.1.38` завершилось ошибкой legacy maintenance tool (exit 6), при
-этом baseline и сервис остались активны. Android:
-реальный system-installer
-`5.0.1.37` → `5.0.1.38` прошёл, lavapipe дал чистый UI-скриншот, но x86-гость
-не выбирает arm64 APK, поэтому настоящее обновление приложения не доказано.
-Отдельный Windows OS baseline Hyper-V запечатан и независимо прочитан:
-Windows 11 EnterpriseEval 25H2/build 26200, self-contained VHDX 128 GiB,
-VM Off, 0 DVD/0 NIC/0 automatic checkpoints, Secure Boot
-`MicrosoftWindows`, первый boot с owned VHD; SHA-256 marker/VHD
-`8ded92f7c7a2f522dd6609f6afbb9e023515055ac3cd3db1309df9214e7275cb`.
-SHA-256 backend —
-`A31969B917C3C6CC243D177C5EEFADCD1D4D3D723285EE3F38240E5C321F5146`.
-Этот OS baseline остаётся отдельным от QEMU product lane `lab.py`;
-доказательства thin/outer Windows installer, интерактивного UI/UAC,
-перезагрузки/отката и self-hosted publication ещё ожидаются. Проверка
-server-router `/healthz` и `/manifest.json` не является публикацией.
-Сценарии перезагрузки и отката не завершены. Полный release остаётся
-fail-closed до receipts установки/обновления, перезагрузки/отката и
-self-hosted publication по каждому обязательному lane.
+Для **5.0.3.14 / 2200** завершены семь Windows-сценариев установки/обновления/UI,
+Linux GUI с наблюдением рабочего окна, headless update → reboot → rollback →
+held reboot → resume и проверка Android-подключения с доставкой логов.
+Подписанная публикация всех пяти файлов подтверждена полным HTTP-чтением.
+Это не утверждение о проверке Windows VPN-трафика или об обновлении всех устройств.
+
+Остаются отдельные вопросы: причина исторического Linux GUI SIGSEGV и двух
+стартовых Android-пакетов-заглушек не установлена; проверка пересоздания рабочего
+контейнера ради тестирования восстановления диагностического правила не проводилась.
+Подробности и границы — в [отчёте выпуска](docs/releases/5.0.3.14.md),
+устройство лаборатории — в [release-lab](deploy/release_lab/README.md).
+
+Сборки и публикации выполняются отдельным решением владельца. Ежедневное
+сопровождение проверяет официальный стабильный upstream-релиз; при отсутствии
+нового релиза анализирует логи и исправляет подтверждённые ошибки без выпуска
+новой версии. Обычные коммиты upstream/dev не считаются новым релизом.
 
 ## Помощь с переводами
 
