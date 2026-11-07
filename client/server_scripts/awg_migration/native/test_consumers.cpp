@@ -3,6 +3,7 @@
 // unchanged legacy Python / legacy native-feed semantics. Docker/process/sleep are
 // inert at the Ops boundary; the journal, filesystem and JSON are the real ones.
 #include "maintenance_runtime.h"
+#include "client_operation.h"
 #include <openssl/evp.h>
 #include <algorithm>
 #include <cstdio>
@@ -71,6 +72,7 @@ struct Fixture {
     bool migrationRW = true;
     std::map<std::string, int> restarted;
     std::set<std::string> stopped;
+    std::set<std::string> removed;
 
     static void mkdir(const fs::path& p) { fs::create_directories(p); chmod(p.c_str(), 0700); }
     explicit Fixture(bool nativeMode, bool feedMode = false) : native(nativeMode), legacyFeed(feedMode) {
@@ -121,6 +123,7 @@ struct Fixture {
         return "\"AMNEZIA_CONTROL_NATIVE_SHA256=" + envSha + "\",\"AMNEZIA_MIGRATION_ROLE=" + role + envRoleSuffix + "\",\"AMNEZIA_MIGRATION_SCOPE=" + (envScope.empty() ? "amnezia-awg" : envScope) + "\"";
     }
     std::string inspectFor(const std::string& id) const {
+        if (removed.count(id)) return "null";
         std::string name, role, parent, epoch;
         if (id == sourceId) return "{\"Id\":\"" + sourceId + "\",\"Name\":\"/amnezia-awg\",\"State\":{\"Running\":true,\"StartedAt\":\"t-source\"}}";
         if (id == targetId) { name = "amnezia-awg-migration-1"; parent = sourceId; epoch = "t-target"; }
@@ -151,6 +154,9 @@ struct FakeOps : Ops {
     std::vector<std::vector<std::string>> calls;
     bool failNative = false, failRestart = false, failAllDocker = false, stopTarget = false;
     std::string rejectHash;
+    std::string ownerOverride;
+    std::string ownerOverrideId;
+    bool failRules = false, retainRemoved = false;
     explicit FakeOps(Fixture& fixture) : f(fixture) {}
     std::uint32_t euid() override { return 0; }
     void sleepSeconds(unsigned) override {}
@@ -158,7 +164,10 @@ struct FakeOps : Ops {
         calls.push_back(a);
         if (failAllDocker) throw std::runtime_error("external boundary disabled");
         if (a.size() == 3 && a[0] == "docker" && a[1] == "inspect") {
+            if (f.removed.count(a[2])) throw std::runtime_error("No such object");
             std::string raw = f.inspectFor(a[2]);
+            if (!ownerOverride.empty() && (ownerOverrideId.empty() || ownerOverrideId == a[2])
+                && raw.find(f.owner) != std::string::npos) replaceOnce(raw, f.owner, ownerOverride);
             if (stopTarget && a[2] == f.targetId) {
                 auto p = raw.find("\"Running\":true"); if (p != std::string::npos) raw.replace(p, 14, "\"Running\":false");
             }
@@ -179,15 +188,22 @@ struct FakeOps : Ops {
                 return "Jc = 4\n";
             }
             if (cmd == "awg" && a.size() >= 6 && a[4] == "showconf") return "Jc = 4\n";
-            if (cmd == "sh") return "6d96502ebd9ed6f9d17bdecd637cba7502c9960fed1b6922b3882784417a036d  /proc/123/exe\n";
+            if (cmd == "sh") {
+                if (failRules && a.back().find("iptables ") != std::string::npos) throw std::runtime_error("inert rule cleanup failed");
+                return "6d96502ebd9ed6f9d17bdecd637cba7502c9960fed1b6922b3882784417a036d  /proc/123/exe\n";
+            }
             (void)id; return "";
         }
         if (a.size() >= 3 && a[0] == "docker" && a[1] == "restart") {
             if (failRestart) throw std::runtime_error("restart failed");
             ++f.restarted[a[2]]; return "";
         }
-        if (a.size() == 3 && a[0] == "docker" && a[1] == "start") { f.stopped.erase(a[2]); return ""; }
-        if (a.size() >= 4 && a[0] == "docker" && a[1] == "rm") return "";
+        if (a.size() == 3 && a[0] == "docker" && a[1] == "start") {
+            f.stopped.erase(a[2]);
+            if (a[2] == f.targetId) stopTarget = false;
+            return "";
+        }
+        if (a.size() >= 4 && a[0] == "docker" && a[1] == "rm") { if (!retainRemoved) f.removed.insert(a.back()); return ""; }
         throw std::runtime_error("unexpected external command in inert consumer fixture");
     }
     bool saw(const std::string& sub) const {
@@ -238,7 +254,8 @@ static void testNativePositives() {
       auto r = runMaintenance(f.request(Mode::Recover), ops);
       CHECK(r.ok && r.phase == "ready" && r.controlHashes.at("awg-feed") == f.nativeSha);
       CHECK(ops.count("python") == 0);
-      CHECK(ops.count("/app/awg-feed", "--verify-control-live") == 1);
+      CHECK(r.liveVerified);
+      CHECK(ops.count("/app/awg-feed", "--verify-control-live") == 3);
       CHECK(ops.saw("start")); }
     { Fixture f(true); FakeOps ops(f);
       const auto before = read(f.directory / "transaction.json");
@@ -253,6 +270,158 @@ static void testNativePositives() {
       CHECK(c.ok && c.phase == "aborted" && c.controlHashes.at("awg-feed") == f.nativeSha);
       CHECK(std::count_if(ops.calls.begin(), ops.calls.end(), [](const auto& a){ return a.size() > 2 && a[1] == "rm"; }) == 3);
       CHECK(ops.count("python") == 0); }
+}
+
+// Deferred native regression: added during a source-only/no-build turn.
+static void testNativeReadOnlyVerify() {
+    { Fixture f(true); FakeOps ops(f);
+      const auto beforeJournal = read(f.directory / "transaction.json");
+      const auto beforeReady = read(f.directory / "ready.json");
+      Request request = f.request(Mode::Verify);
+      request.recipeDirectory.clear(); // read-only proof must not need a recipe
+      auto result = runMaintenance(request, ops);
+      CHECK(result.ok && result.native && result.liveVerified && !result.pendingRecovery);
+      CHECK(result.mode == "verify" && result.phase == "ready");
+      CHECK(result.controlHashes.at("awg-feed") == f.nativeSha);
+      CHECK(ops.count("/app/awg-feed", "--verify-control-live") == 2);
+      CHECK(!ops.mutatingBoundary() && ops.count("python") == 0);
+      CHECK(read(f.directory / "transaction.json") == beforeJournal);
+      CHECK(read(f.directory / "ready.json") == beforeReady);
+      const auto parsed = parseRequest({"--maintenance-verify", "--source", "amnezia-awg",
+          "--generation", "1", "--expected-journal-sha256", sha(beforeJournal),
+          "--native-control-sha256", f.nativeSha});
+      CHECK(parsed.mode == Mode::Verify && parsed.recipeDirectory.empty()); }
+    { Fixture f(false); FakeOps ops(f);
+      CHECK_THROW(runMaintenance(f.request(Mode::Verify), ops), "native verification required");
+      CHECK(ops.calls.empty()); }
+    { Fixture f(true); FakeOps ops(f); Request request = f.request(Mode::Verify);
+      request.nativeControlSha256 = std::string(64, '8');
+      CHECK_THROW(runMaintenance(request, ops), "native_control_sha256_mismatch");
+      CHECK(ops.calls.empty()); }
+    { Fixture f(true); FakeOps ops(f); ops.stopTarget = true;
+      CHECK_THROW(runMaintenance(f.request(Mode::Verify), ops), "control maintenance parent drift");
+      CHECK(!ops.mutatingBoundary()); }
+    { Fixture f(true); FakeOps ops(f); ops.failNative = true;
+      CHECK_THROW(runMaintenance(f.request(Mode::Verify), ops), "native control rejected");
+      CHECK(!ops.mutatingBoundary()); }
+    { Fixture f(true); FakeOps ops(f);
+      f.rewrite([](std::string& j) { replaceOnce(j, "\"phase\":\"ready\"", "\"phase\":\"aborted\""); });
+      CHECK_THROW(runMaintenance(f.request(Mode::Verify), ops), "maintenance scope binding");
+      CHECK(!ops.mutatingBoundary()); }
+}
+
+// Causal UUID is supplied independently, then checked against both persisted
+// request and the owner labels observed by the real live target/helper gates.
+static void testClientOperationBinding() {
+    const std::string operation = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    CHECK(validClientOperationId(operation));
+    CHECK(clientOperationOwner(operation) == std::string(32, 'a'));
+    for (const auto& invalid : {std::string(), operation + "\n", std::string(36, 'a'),
+            std::string("AAAAAAAA-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            std::string("00000000-0000-0000-0000-000000000000")}) {
+        CHECK(!validClientOperationId(invalid));
+        CHECK(clientOperationOwner(invalid).empty());
+    }
+    auto bind = [&](Fixture& f) {
+        f.rewrite([&](std::string& value) {
+            replaceOnce(value, "\"request\":{", "\"request\":{\"clientOperationId\":\"" + operation + "\",");
+            value.insert(value.size() - 1, ",\"nativeFeedSha256\":\"" + f.nativeSha + "\"");
+        });
+    };
+    { Fixture f(true); bind(f); FakeOps ops(f); auto request = f.request(Mode::Verify);
+      request.clientOperationId = operation;
+      const auto result = runMaintenance(request, ops);
+      CHECK(result.ok && result.liveVerified && result.clientOperationId == operation);
+      CHECK(resultJson(result).find(operation) != std::string::npos);
+      CHECK(!ops.mutatingBoundary());
+      request.mode = Mode::Status;
+      const auto metadata = runMaintenance(request, ops);
+      CHECK(metadata.ok && !metadata.liveVerified && metadata.clientOperationId == operation); }
+    { Fixture f(true); FakeOps ops(f); auto request = f.request(Mode::Verify);
+      request.clientOperationId = operation;
+      CHECK_THROW(runMaintenance(request, ops), "maintenance client operation binding");
+      CHECK(ops.calls.empty()); }
+    { Fixture f(true); bind(f); FakeOps ops(f); auto request = f.request(Mode::Verify);
+      request.clientOperationId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+      CHECK_THROW(runMaintenance(request, ops), "maintenance client operation binding");
+      CHECK(ops.calls.empty()); }
+    { Fixture f(true); bind(f);
+      f.rewrite([](std::string& value) { replaceOnce(value, "\"owner\":\"" + std::string(32, 'a'), "\"owner\":\"" + std::string(32, 'b')); });
+      FakeOps ops(f); auto request = f.request(Mode::Verify); request.clientOperationId = operation;
+      CHECK_THROW(runMaintenance(request, ops), "journal client operation binding");
+      CHECK(ops.calls.empty()); }
+    { Fixture f(true); bind(f); FakeOps ops(f); ops.ownerOverride = std::string(32, 'b');
+      auto request = f.request(Mode::Verify); request.clientOperationId = operation;
+      bool refused = false;
+      try { runMaintenance(request, ops); } catch (const std::exception&) { refused = true; }
+      CHECK(refused && !ops.mutatingBoundary()); }
+}
+
+// Real partial journal/owned-container validation with an inert Docker boundary.
+static void testPartialPrepareAbort() {
+    const std::string operation = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    auto partial = [&](Fixture& f, bool rules = false) {
+        json_object* value = json_tokener_parse(read(f.directory / "transaction.json").c_str());
+        if (!value) throw std::runtime_error("partial fixture JSON");
+        json_object_object_del(value, "nativeControl");
+        json_object_object_add(value, "phase", json_object_new_string("creating"));
+        json_object_object_add(value, "sourceRules", json_object_new_boolean(rules));
+        json_object_object_add(value, "nativeFeedSha256", json_object_new_string(f.nativeSha.c_str()));
+        json_object_object_add(json_object_object_get(value, "request"), "clientOperationId", json_object_new_string(operation.c_str()));
+        write(f.directory / "transaction.json", json_object_to_json_string_ext(value, JSON_C_TO_STRING_PLAIN));
+        json_object_put(value);
+    };
+    auto request = [&](const Fixture& f, Mode mode) {
+        auto value = f.request(mode); value.clientOperationId = operation; value.recipeDirectory.clear(); return value;
+    };
+    { Fixture f(true); partial(f); FakeOps ops(f);
+      const auto before = read(f.directory / "transaction.json");
+      const auto inspected = runMaintenance(request(f, Mode::InspectPrepare), ops);
+      CHECK(inspected.ok && inspected.native && !inspected.liveVerified && !inspected.retiredVerified);
+      CHECK(inspected.mode == "inspect-prepare" && inspected.phase == "creating");
+      CHECK(inspected.clientOperationId == operation && inspected.controlHashes.at("awg-feed") == f.nativeSha);
+      CHECK(!ops.mutatingBoundary() && read(f.directory / "transaction.json") == before);
+      const auto retired = runMaintenance(request(f, Mode::AbortPrepare), ops);
+      CHECK(retired.ok && retired.native && retired.retiredVerified && !retired.liveVerified);
+      CHECK(retired.mode == "abort-prepare" && retired.phase == "aborted" && retired.clientOperationId == operation);
+      CHECK(retired.journalSha256 == sha(read(f.directory / "transaction.json")));
+      CHECK(read(f.directory / "transaction.json").find("\"sourceRules\":false") != std::string::npos);
+      CHECK(read(f.directory / "transaction.json").find(operation) != std::string::npos);
+      CHECK(ops.count("python") == 0);
+      ops.calls.clear();
+      const auto again = runMaintenance(request(f, Mode::AbortPrepare), ops);
+      CHECK(again.ok && again.retiredVerified && again.phase == "aborted" && !ops.mutatingBoundary());
+      const auto metadata = runMaintenance(request(f, Mode::InspectPrepare), ops);
+      CHECK(metadata.ok && !metadata.retiredVerified && metadata.phase == "aborted");
+      const auto parsed = parseRequest({"--maintenance-abort-prepare", "--source", "amnezia-awg", "--generation", "1",
+          "--expected-journal-sha256", again.journalSha256, "--native-control-sha256", f.nativeSha,
+          "--client-operation-id", operation});
+      CHECK(parsed.mode == Mode::AbortPrepare && parsed.clientOperationId == operation); }
+    { Fixture f(true); partial(f); FakeOps ops(f); auto wrong = request(f, Mode::AbortPrepare);
+      wrong.nativeControlSha256 = std::string(64, '8');
+      CHECK_THROW(runMaintenance(wrong, ops), "partial prepare authority binding"); CHECK(!ops.mutatingBoundary()); }
+    { Fixture f(true); partial(f); FakeOps ops(f); auto wrong = request(f, Mode::AbortPrepare);
+      wrong.clientOperationId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+      CHECK_THROW(runMaintenance(wrong, ops), "partial prepare authority binding"); CHECK(!ops.mutatingBoundary()); }
+    { Fixture f(true); FakeOps ops(f); // finalized/ready is never a partial-abort target
+      CHECK_THROW(runMaintenance(request(f, Mode::AbortPrepare), ops), "partial prepare authority binding");
+      CHECK(ops.calls.empty()); }
+    { Fixture f(true); partial(f); FakeOps ops(f); ops.ownerOverride = std::string(32, 'b');
+      ops.ownerOverrideId = f.sourceControlId; // later foreign entry must preflight before first rm
+      bool rejected = false;
+      try { runMaintenance(request(f, Mode::AbortPrepare), ops); } catch (const std::exception&) { rejected = true; }
+      CHECK(rejected && !ops.mutatingBoundary()); }
+    { Fixture f(true); partial(f, true); FakeOps ops(f); ops.failRules = true;
+      CHECK_THROW(runMaintenance(request(f, Mode::AbortPrepare), ops), "journal command unavailable");
+      const auto failed = read(f.directory / "transaction.json");
+      CHECK(failed.find("\"phase\":\"aborted\"") == std::string::npos);
+      CHECK(failed.find("\"sourceRules\":true") != std::string::npos);
+      ops.failRules = false;
+      const auto retry = runMaintenance(request(f, Mode::AbortPrepare), ops);
+      CHECK(retry.ok && retry.retiredVerified); }
+    { Fixture f(true); partial(f); FakeOps ops(f); ops.retainRemoved = true;
+      CHECK_THROW(runMaintenance(request(f, Mode::AbortPrepare), ops), "cleanup owned component remains");
+      CHECK(read(f.directory / "transaction.json").find("\"phase\":\"aborted\"") == std::string::npos); }
 }
 
 static void testNativeChangedPayload() {
@@ -388,6 +557,9 @@ static void testRecoveryAndFaultOrdering() {
 
 int main(int argc, char** argv) {
     try { testNativePositives(); } catch (const std::exception& e) { std::cerr << "EX native positives: " << e.what() << "\n"; ++failures; }
+    try { testNativeReadOnlyVerify(); } catch (const std::exception& e) { std::cerr << "EX read-only verify: " << e.what() << "\n"; ++failures; }
+    try { testClientOperationBinding(); } catch (const std::exception& e) { std::cerr << "EX client operation: " << e.what() << "\n"; ++failures; }
+    try { testPartialPrepareAbort(); } catch (const std::exception& e) { std::cerr << "EX partial prepare: " << e.what() << "\n"; ++failures; }
     try { testNativeChangedPayload(); } catch (const std::exception& e) { std::cerr << "EX native changed: " << e.what() << "\n"; ++failures; }
     try { testVariantGuards(); } catch (const std::exception& e) { std::cerr << "EX variant guards: " << e.what() << "\n"; ++failures; }
     try { testNativeHelperGuards(); } catch (const std::exception& e) { std::cerr << "EX helper guards: " << e.what() << "\n"; ++failures; }

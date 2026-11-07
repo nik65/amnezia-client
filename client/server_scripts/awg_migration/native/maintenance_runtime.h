@@ -10,13 +10,15 @@
 namespace amnezia::awgMigration::maintenance {
 // Explicit maintenance surface selected by the reviewed native argv dispatcher.
 // Existing feed argv and legacy generation semantics retain their meaning.
-enum class Mode { Status, Cleanup, Recover, RestartControls, Maintain };
+enum class Mode { Status, Cleanup, Recover, RestartControls, Maintain, Verify, InspectPrepare, AbortPrepare };
 
 struct Request {
     Mode mode = Mode::Maintain;
     std::string source;
     std::int64_t generation = 0;
     std::string expectedJournalSha256;
+    // Optional independently persisted client PREPARE nonce; never journal-derived.
+    std::string clientOperationId;
     // Trusted image/meta authority for the native control executable. Required
     // iff the journal is a native generation. Never read from a receipt/self.
     // This is ALWAYS the authenticated CURRENT payload; its meaning is unchanged
@@ -52,6 +54,12 @@ struct Result {
     std::string journalSha256;
     bool native = false;
     bool pendingRecovery = false;
+    // True only after native recovery/verification checks both live controls and target state.
+    bool liveVerified = false;
+    // Partial PREPARE retirement only: verified owned absence, never live acceptance.
+    bool retiredVerified = false;
+    // Emitted only after the explicit caller nonce matches request and owner.
+    std::string clientOperationId;
     std::string phase;
     std::map<std::string, std::string> controlHashes;
 };

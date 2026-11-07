@@ -115,17 +115,33 @@ public:
 
     void cancelInstallation();
 
+    // Drain the PREPARE-only sidecar without changing migration authority pins.
+    static ErrorCode cleanupAwgMigrationPrepareInputs(const ServerCredentials &credentials,
+            DockerContainer source, amnezia::awgControlAuthority::Store *authority, QJsonObject &result);
+
     // Administrator action only. Creates a parallel endpoint, retains the old Device.
     static ErrorCode prepareAwgMigration(const ServerCredentials &credentials, DockerContainer source,
             const QString &endpointHost, int targetPort, const QString &immutableAwgImage,
             qint64 generation, QJsonObject &result, bool automatic = false,
             amnezia::awgControlAuthority::Store *authority = nullptr);
 
+    // Remove only exact recorded root-owned inputs after a verified native transition.
+    static ErrorCode cleanupAwgMigrationControlInputs(const ServerCredentials &credentials,
+            DockerContainer source, amnezia::awgControlAuthority::Store *authority, QJsonObject &result,
+            bool probeOnly = false);
+
     // Explicit selected existing migration only; never provisions VPN or collectors.
     static ErrorCode maintainAwgMigrationControls(const ServerCredentials &credentials,
             DockerContainer source, qint64 generation, const QString &expectedJournalSha256,
             const AwgMaintenance::Selection &selection, QJsonObject &result,
             amnezia::awgControlAuthority::Store *authority = nullptr);
+
+    // Reconcile only a previously authorized local pending intent. Journal
+    // hashes are CAS locators, never executable authority. No replacement here.
+    static ErrorCode reconcileAwgMigrationControls(const ServerCredentials &credentials,
+            DockerContainer source, qint64 generation, const QString &expectedJournalSha256,
+            amnezia::awgControlAuthority::Store *authority, QJsonObject &result,
+            const QString &explicitCurrentPin = QString());
 
     void clearCachedProfile(const QString &serverId, DockerContainer container);
 

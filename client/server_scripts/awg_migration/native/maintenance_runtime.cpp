@@ -1,4 +1,5 @@
 #include "maintenance_runtime.h"
+#include "client_operation.h"
 #include <json-c/json.h>
 #include <openssl/evp.h>
 #include <algorithm>
@@ -947,6 +948,9 @@ Request parseRequest(const std::vector<std::string>& argv) {
     if (argv[0] == "--maintenance-status") request.mode = Mode::Status;
     else if (argv[0] == "--maintenance-cleanup") request.mode = Mode::Cleanup;
     else if (argv[0] == "--maintenance-recover") request.mode = Mode::Recover;
+    else if (argv[0] == "--maintenance-verify") request.mode = Mode::Verify;
+    else if (argv[0] == "--maintenance-inspect-prepare") request.mode = Mode::InspectPrepare;
+    else if (argv[0] == "--maintenance-abort-prepare") request.mode = Mode::AbortPrepare;
     else if (argv[0] == "--maintenance-restart-controls") request.mode = Mode::RestartControls;
     else if (argv[0] == "--maintenance") request.mode = Mode::Maintain;
     else fail("maintenance request");
@@ -960,6 +964,7 @@ Request parseRequest(const std::vector<std::string>& argv) {
             request.generation = std::stoll(value);
         }
         else if (flag == "--expected-journal-sha256") request.expectedJournalSha256 = value;
+        else if (flag == "--client-operation-id") request.clientOperationId = value;
         else if (flag == "--native-control-sha256") request.nativeControlSha256 = value;
         else if (flag == "--native-control-replacement-sha256") request.nativeControlReplacementSha256 = value;
         else if (flag == "--control-staging-directory") request.controlStagingDirectory = value;
@@ -969,12 +974,19 @@ Request parseRequest(const std::vector<std::string>& argv) {
     if (request.source != "amnezia-awg" && request.source != "amnezia-awg2") fail("maintenance request");
     if (request.generation < 1 || static_cast<std::uint64_t>(request.generation) > kMaxGeneration) fail("maintenance request");
     if (!hex64(request.expectedJournalSha256)) fail("maintenance request");
+    if (seen.count("--client-operation-id") && (!validClientOperationId(request.clientOperationId)
+        || (request.mode != Mode::Status && request.mode != Mode::Verify && request.mode != Mode::Recover && request.mode != Mode::Maintain
+            && request.mode != Mode::InspectPrepare && request.mode != Mode::AbortPrepare)))
+        fail("maintenance client operation id");
     if (!request.nativeControlSha256.empty() && !hex64(request.nativeControlSha256)) fail("maintenance request");
     if (!request.nativeControlReplacementSha256.empty() && !hex64(request.nativeControlReplacementSha256)) fail("maintenance request");
     if (!request.controlStagingDirectory.empty() && !request.controlStagingDirectory.is_absolute()) fail("maintenance request");
     if (request.mode != Mode::Maintain
         && (!request.nativeControlReplacementSha256.empty() || !request.controlStagingDirectory.empty()))
         fail("maintenance request");
+    if ((request.mode == Mode::InspectPrepare || request.mode == Mode::AbortPrepare)
+        && (!validClientOperationId(request.clientOperationId) || !hex64(request.nativeControlSha256)
+            || !request.recipeDirectory.empty())) fail("partial prepare authority required");
     return request;
 }
 
@@ -987,6 +999,10 @@ std::string resultJson(const Result& result) {
     json_object_object_add(root.get(), "journalSha256", json_object_new_string(result.journalSha256.c_str()));
     json_object_object_add(root.get(), "native", json_object_new_boolean(result.native));
     json_object_object_add(root.get(), "pendingRecovery", json_object_new_boolean(result.pendingRecovery));
+    json_object_object_add(root.get(), "liveVerified", json_object_new_boolean(result.liveVerified));
+    json_object_object_add(root.get(), "retiredVerified", json_object_new_boolean(result.retiredVerified));
+    if (!result.clientOperationId.empty())
+        json_object_object_add(root.get(), "clientOperationId", json_object_new_string(result.clientOperationId.c_str()));
     json_object_object_add(root.get(), "phase", json_object_new_string(result.phase.c_str()));
     Json hashes = adopt(json_object_new_object());
     for (const auto& item : result.controlHashes) json_object_object_add(hashes.get(), item.first.c_str(), json_object_new_string(item.second.c_str()));
@@ -1008,6 +1024,9 @@ std::string modeName(Mode mode) {
         case Mode::Status: return "status";
         case Mode::Cleanup: return "cleanup";
         case Mode::Recover: return "recover";
+        case Mode::Verify: return "verify";
+        case Mode::InspectPrepare: return "inspect-prepare";
+        case Mode::AbortPrepare: return "abort-prepare";
         case Mode::RestartControls: return "restart-controls";
         case Mode::Maintain: return "maintain";
     }
@@ -1198,15 +1217,79 @@ Result runMaintenance(const Request& request, Ops& ops) {
     auto expectedBytes = readBytes(directory / "transaction.json", "maintenance state");
     if (sha256(expectedBytes) != request.expectedJournalSha256) fail("maintenance journal changed");
     Json value = parseJson(journal.snapshot());
+    if (request.mode == Mode::InspectPrepare || request.mode == Mode::AbortPrepare) {
+        // A partial native PREPARE has no finalized nativeControl object yet.
+        // Admit it only through the independently saved nonce + payload pin,
+        // never through the legacy-control fallback used by ordinary modes.
+        auto validatePartial = [&](json_object* snapshot) {
+            const auto phase = text(snapshot, "phase");
+            if (!validClientOperationId(request.clientOperationId) || !hex64(request.nativeControlSha256)
+                || !request.nativeControlReplacementSha256.empty() || !request.controlStagingDirectory.empty()
+                || !request.recipeDirectory.empty()
+                || (phase != "preparing" && phase != "creating" && phase != "activating" && phase != "aborted")
+                || has(snapshot, "nativeControl") || has(snapshot, "controlMaintenance")
+                || text(snapshot, "source") != request.source
+                || integerAt(need(snapshot, "request", json_type_object), "generation") != request.generation
+                || optionalText(need(snapshot, "request", json_type_object), "clientOperationId") != request.clientOperationId
+                || text(snapshot, "owner") != clientOperationOwner(request.clientOperationId)
+                || optionalText(snapshot, "nativeFeedSha256") != request.nativeControlSha256)
+                fail("partial prepare authority binding");
+        };
+        validatePartial(value.get());
+        // Preflight the complete set even for inspection. Missing owned entries
+        // are normal after interruption; mixed/foreign components are not.
+        Json entries = adopt(json_object_get(need(value.get(), "containers", json_type_object)));
+        std::vector<std::string> componentNames;
+        json_object_object_foreach(entries.get(), name, entry) {
+            (void)entry;
+            componentNames.emplace_back(name);
+            (void)journal.ownedSnapshot(name);
+        }
+        Result partial;
+        partial.mode = modeName(request.mode); partial.source = request.source;
+        partial.generation = request.generation; partial.native = true;
+        partial.clientOperationId = request.clientOperationId;
+        partial.controlHashes = {{"awg-feed", request.nativeControlSha256}};
+        partial.phase = text(value.get(), "phase");
+        if (request.mode == Mode::AbortPrepare) {
+            // cleanup revalidates all ownership before any mutation and requires
+            // exact rule/container absence before saving the aborted phase.
+            journal.cleanup();
+            Json retired = parseJson(journal.snapshot());
+            validatePartial(retired.get());
+            if (text(retired.get(), "phase") != "aborted" || booleanAt(retired.get(), "sourceRules"))
+                fail("partial prepare retirement unverified");
+            for (const auto& name : componentNames)
+                if (journal.ownedSnapshot(name) != "null") fail("partial prepare component remains");
+            partial.phase = "aborted";
+        }
+        const auto persisted = readBytes(directory / "transaction.json", "maintenance state");
+        if (persisted != journal.snapshot()) fail("partial prepare state changed");
+        partial.journalSha256 = sha256(persisted);
+        partial.retiredVerified = request.mode == Mode::AbortPrepare;
+        partial.ok = true;
+        return partial;
+    }
     // The journal variant is authoritative. The explicit nativeControl object and
     // the legacy nativeFeedSha256 flag are never merged or inferred from each other.
     const ControlBinding binding = controlBinding(journal, request.nativeControlSha256);
     const bool native = binding.mode == ControlMode::NativeHttp;
+    // The generation and unsigned journal are locators only. Causal recovery
+    // requires the independent client nonce to match the immutable live-owner
+    // label checked by the existing helpers/target gates below.
+    if (!request.clientOperationId.empty()) {
+        if (!native || !validClientOperationId(request.clientOperationId)
+            || (request.mode != Mode::Status && request.mode != Mode::Verify && request.mode != Mode::Recover && request.mode != Mode::Maintain)
+            || optionalText(need(value.get(), "request", json_type_object), "clientOperationId") != request.clientOperationId
+            || text(value.get(), "owner") != clientOperationOwner(request.clientOperationId))
+            fail("maintenance client operation binding");
+    }
     if (binding.nativeFeedFlag && request.mode != Mode::Status && !hex64(request.nativeControlSha256))
         fail("native_control_sha256_required");
     if (request.mode != Mode::Status) rejectSymlink(directory / "ready.json", "maintenance state");
     Result result; result.mode = modeName(request.mode); result.source = request.source; result.generation = request.generation;
     result.native = native || binding.nativeFeedFlag;
+    result.clientOperationId = request.clientOperationId;
     json_object* pendingRaw = nullptr;
     result.pendingRecovery = json_object_object_get_ex(value.get(), "controlMaintenance", &pendingRaw) && !json_object_is_type(pendingRaw, json_type_null);
     result.phase = text(value.get(), "phase");
@@ -1224,6 +1307,23 @@ Result runMaintenance(const Request& request, Ops& ops) {
         result.controlHashes = native ? nativePayloadHashes(binding) : controlHashes(directory); result.ok = true; return result;
     }
     if (request.mode == Mode::Recover) {
+        Json nativeReady;
+        std::map<std::string,std::string> nativeProtected;
+        if (native) {
+            nativeReady = parseJson(readBytes(directory / "ready.json", "maintenance required state"));
+            if (text(value.get(), "phase") != "ready" || text(value.get(), "source") != request.source
+                || integerAt(need(value.get(), "request", json_type_object), "generation") != request.generation
+                || text(nativeReady.get(), "containerId") != request.source
+                || integerAt(nativeReady.get(), "generation") != request.generation
+                || text(nativeReady.get(), "targetContainer") != text(value.get(), "target"))
+                fail("maintenance scope binding");
+            nativeProtected = protectedState(directory, true);
+            // A pending replacement always rolls back. A replacement pin must
+            // never authorize rollback to a journal-supplied unknown old payload.
+            if (result.pendingRecovery
+                && readNativeTransaction(journal).oldPayload != request.nativeControlSha256)
+                fail("native_control_sha256_mismatch");
+        }
         if (result.pendingRecovery) {
             if (native) {
                 // Real native recovery: transaction-driven restore of the captured
@@ -1255,10 +1355,33 @@ Result runMaintenance(const Request& request, Ops& ops) {
             };
             journal.recoverReady(attest);
         }
+        if (native) {
+            Json latest = parseJson(journal.snapshot());
+            json_object* pending = nullptr;
+            if (text(latest.get(), "phase") != "ready"
+                || text(latest.get(), "source") != request.source
+                || integerAt(need(latest.get(), "request", json_type_object), "generation") != request.generation
+                || text(nativeReady.get(), "containerId") != request.source
+                || integerAt(nativeReady.get(), "generation") != request.generation
+                || text(nativeReady.get(), "targetContainer") != text(latest.get(), "target")
+                || (json_object_object_get_ex(latest.get(), "controlMaintenance", &pending)
+                    && !json_object_is_type(pending, json_type_null)))
+                fail("control maintenance recovery required");
+            // Reuse the independently supplied CURRENT, never a value discovered
+            // in the server journal. It must still name the final active payload.
+            const ControlBinding recovered = controlBinding(journal, request.nativeControlSha256);
+            controlHelpers(journal, recovered);
+            checkControlState(journal, directory, ops, nativeProtected);
+            checkLoadedControls(journal, recovered, nativePayloadHashes(recovered), request.nativeControlSha256, ops);
+            validateExistingTarget(journal, request.source, latest.get(), nativeReady.get(), ops);
+            result.controlHashes = nativePayloadHashes(recovered);
+            result.liveVerified = true;
+        } else {
+            result.controlHashes = controlHashes(directory);
+        }
         result.phase = text(parseJson(journal.snapshot()).get(), "phase");
         result.journalSha256 = sha256(readBytes(directory / "transaction.json", "maintenance state"));
         result.pendingRecovery = false;
-        result.controlHashes = native ? nativePayloadHashes(binding) : controlHashes(directory);
         result.ok = true; return result;
     }
     if (result.pendingRecovery) fail("control maintenance recovery required");
@@ -1284,6 +1407,9 @@ Result runMaintenance(const Request& request, Ops& ops) {
         result.journalSha256 = sha256(readBytes(directory / "transaction.json", "maintenance state"));
         return result;
     }
+    // Verify shares the existing ready/scope/target prelude with Maintain,
+    // but never consumes a replacement recipe or mutates product state.
+    if (request.mode == Mode::Verify && !native) fail("native verification required");
     // Mode::Maintain: the same ordered gates as maintenance.py.
     auto readyRaw = readBytes(directory / "ready.json", "maintenance required state");
     Json ready = parseJson(readyRaw);
@@ -1303,6 +1429,21 @@ Result runMaintenance(const Request& request, Ops& ops) {
     controlHelpers(journal, binding);
     auto protectedHashes = protectedState(directory, true);
     validateExistingTarget(journal, request.source, value.get(), ready.get(), ops);
+    if (request.mode == Mode::Verify) {
+        // The digest is independently caller-authorized. Journal/generation are
+        // only locators until both live helpers and the target have been checked.
+        checkLoadedControls(journal, binding, nativePayloadHashes(binding), request.nativeControlSha256, ops);
+        checkControlState(journal, directory, ops, protectedHashes);
+        validateExistingTarget(journal, request.source, value.get(), ready.get(), ops);
+        controlHelpers(journal, binding);
+        if (!sameMap(protectedState(directory, true), protectedHashes)
+            || sha256(readBytes(directory / "transaction.json", "maintenance state")) != request.expectedJournalSha256)
+            fail("native verification state changed");
+        result.controlHashes = nativePayloadHashes(binding);
+        result.liveVerified = true;
+        result.ok = true;
+        return result;
+    }
     std::map<std::string,std::string> candidate;
     if (!native) {
         for (const auto& name : std::vector<std::string>{"service.py","target.py"})

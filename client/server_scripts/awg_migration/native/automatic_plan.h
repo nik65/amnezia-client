@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <set>
+#include <vector>
 namespace amnezia::awgMigration
 {
     using UdpPorts = std::set<unsigned>;
@@ -16,7 +17,7 @@ namespace amnezia::awgMigration
     };
     AutomaticRequest automaticPlan(const std::filesystem::path &root, const std::string &source,
                                    const std::string &host, const std::string &image, std::string_view rawSource,
-                                   unsigned sourcePort, const UdpPorts &);
+                                   unsigned sourcePort, const UdpPorts &, const std::vector<std::uint64_t>& verifiedRetired = {});
     std::string automaticRequestJson(const AutomaticRequest &);
     enum class UdpFamily {
         V4,

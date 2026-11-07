@@ -141,10 +141,11 @@ class InstallerStaticElfTests(unittest.TestCase):
     def test_readelf_remains_mandatory_before_runtime_and_cli_activation(self):
         requirements = SOURCE[SOURCE.index("for required in "):SOURCE.index("TRANSACTION_ROOT=")]
         self.assertIn("readelf", requirements)
-        self.assertIn("python3", requirements)  # Bootstrap/recovery dependency is deliberately not removed.
+        self.assertNotIn("python3", requirements)  # Native paths do not require an interpreter.
+        self.assertIn("type -P python3", SOURCE)  # Explicit legacy requirement remains enforced.
         self.assertLess(START, STOP)
         self.assertLess(STOP, SOURCE.index('if ! version_output='))
-        self.assertLess(SOURCE.index('if ! version_output='), SOURCE.index('NATIVE_HELPER="$PACKAGE_ROOT/amnezia-cli"'))
+        self.assertLess(SOURCE.index('if ! version_output='), SOURCE.index('NATIVE_HELPER="${BOOTSTRAP_HELPERS[amnezia-cli]}"'))
         self.assertIn('run_native_helper verify-elf64-x86-64 "$PACKAGE_ROOT/$binary"', FRAGMENT)
         self.assertIn("Class:[[:space:]]*ELF64", FRAGMENT)
         self.assertIn("Machine:[[:space:]]*Advanced Micro Devices X86-64", FRAGMENT)

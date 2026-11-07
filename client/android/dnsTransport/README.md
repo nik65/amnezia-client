@@ -66,8 +66,12 @@ compiler, not a Linux executable renamed to a library.
 `-DAMNEZIA_DNSTT_ANDROID_CLIENT=<absolute path to libdnstt.so>` or the identically
 named environment variable for that ABI. `client/cmake/android.cmake` invokes
 the actual packaging admission module, which verifies hash, ABI, API and pinned
-source identity before adding it to `QT_ANDROID_EXTRA_LIBS`. Gradle's existing
-legacy JNI packaging extracts the executable into `nativeLibraryDir`.
+source identity, stages and rehashes the exact bytes, and adds its directory to
+`QT_ANDROID_EXTRA_PLUGINS`. That Qt deployment path copies the executable into
+the ABI's `libs` directory without adding it to the startup `System.load` list.
+It must never use `QT_ANDROID_EXTRA_LIBS`: a PIE executable cannot be loaded as
+a JNI shared library. Gradle's existing legacy JNI packaging extracts it into
+`nativeLibraryDir` and preserves its pinned bytes.
 
 Component preparation is currently explicit, not a default download/build step
 of every ordinary Android build. Without that build input the package omits

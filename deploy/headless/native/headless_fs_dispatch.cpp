@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include "journal/journal.hpp"
 #include "headless_fs_dispatch.h"
+#include "anchor_storage.hpp"
 
 namespace {
 struct Fd {
@@ -95,6 +96,18 @@ void tree(int parent, const char* name, bool root, unsigned depth) {
 }
 int headless_fs::dispatch(int argc, char** argv) {
     try {
+        if (argc >= 2 && std::string(argv[1]) == "anchor-install") {
+            require(argc == 4, "usage: anchor-install SOURCE EXPECTED_SHA256");
+            // Fixed production policy only. No test paths/UID/environment override.
+            headless_anchor::install(headless_anchor::Policy{}, argv[2], argv[3]);
+            return 0;
+        }
+        if (argc >= 2 && std::string(argv[1]) == "journal-protocol") {
+            require(argc == 2, "journal-protocol accepts no arguments");
+            // Pure capability query: no journal read, root gate or mutation.
+            std::cout << "headless-journal-v1\n";
+            return 0;
+        }
         if (argc >= 2 && std::string(argv[1]).rfind("journal-",0) == 0) {
             QStringList args;
             for (int i=1;i<argc;++i) args.append(QString::fromLocal8Bit(argv[i]));

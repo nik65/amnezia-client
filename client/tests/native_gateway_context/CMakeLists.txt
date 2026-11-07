@@ -15,9 +15,12 @@ execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tes
 if(NOT generation_result EQUAL 0)
     message(FATAL_ERROR "Production source extraction/order validation failed")
 endif()
+get_filename_component(NATIVE_GATEWAY_VPN_SOURCE
+    "${NATIVE_GATEWAY_SOURCE_ROOT}/client/vpnConnection.cpp" REALPATH)
+get_filename_component(NATIVE_GATEWAY_GENERATOR
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_native_gateway_context.py" REALPATH)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${NATIVE_GATEWAY_SOURCE_ROOT}/client/vpnConnection.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/test_native_gateway_context.py")
+    "${NATIVE_GATEWAY_VPN_SOURCE}" "${NATIVE_GATEWAY_GENERATOR}")
 add_executable(native_gateway_context_tests "${CMAKE_CURRENT_BINARY_DIR}/generated/test_gateway_context.cpp")
 target_link_libraries(native_gateway_context_tests PRIVATE Qt6::Core)
 target_compile_definitions(native_gateway_context_tests PRIVATE AMNEZIA_DESKTOP)

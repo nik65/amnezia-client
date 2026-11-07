@@ -60,6 +60,51 @@ def main():
         run('valid', canonical(good), expected=True)
         run('valid-lf', canonical(good) + '\n', expected=True)
         assert '&amp;' in (out / 'serverNativeBundle.qrc').read_text(encoding='utf-8')
+
+        # A real reconfigure must not invalidate AUTORCC's potentially large
+        # generated C++ when the resource list has not changed.
+        project = out / 'configure-project'
+        configure_build = out / 'configure-build'
+        project.mkdir()
+        (project / 'CMakeLists.txt').write_text(
+            'cmake_minimum_required(VERSION 3.21)\nproject(NativeImport NONE)\n'
+            'include([=[' + module.as_posix() + ']=])\n'
+            'amnezia_import_server_native_bundle(result)\n', encoding='utf-8')
+
+        def configure(name):
+            process = subprocess.run(
+                [args.cmake, '-S', str(project), '-B', str(configure_build),
+                 '-DAMNEZIA_SERVER_NATIVE_BUNDLE_DIR=' + str(root)],
+                capture_output=True, text=True, timeout=10)
+            (evidence / (name + '.log')).write_text(
+                process.stdout + process.stderr, encoding='utf-8')
+            results.append(dict(name=name, expected=True, exit=process.returncode,
+                                passed=process.returncode == 0))
+            if process.returncode:
+                raise AssertionError(name + ': ' + process.stdout + process.stderr)
+
+        configure('configure-first')
+        qrc = configure_build / 'serverNativeBundle.qrc'
+        initial_content = qrc.read_bytes()
+        # A fixed older timestamp proves preservation without sleeping or
+        # depending on the filesystem's timestamp granularity.
+        old_timestamp = 1_600_000_000_000_000_000
+        os.utime(qrc, ns=(old_timestamp, old_timestamp))
+        initial_mtime = qrc.stat().st_mtime_ns
+        configure('configure-unchanged')
+        assert qrc.read_bytes() == initial_content
+        assert qrc.stat().st_mtime_ns == initial_mtime
+        second_exe = root / 'x86_64/collector-route'
+        second_exe.write_bytes(binary)
+        second_row = dict(row, path='x86_64/collector-route', role='collector-route')
+        (root / 'manifest.json').write_text(
+            canonical(dict(binaries=[row, second_row], schema=1)), encoding='utf-8')
+        configure('configure-changed')
+        assert qrc.read_bytes() != initial_content
+        assert b'alias="x86_64/collector-route"' in qrc.read_bytes()
+        assert qrc.stat().st_mtime_ns != initial_mtime
+        second_exe.unlink()
+
         run('unknown', canonical(dict(good, extra=1)))
         run('duplicate-key', canonical(good).replace('"schema":1', '"schema":1,"schema":1'))
         run('duplicate-identity', canonical(dict(binaries=[row, row], schema=1)))

@@ -312,7 +312,7 @@ private slots:
 
         const QString testOrg = "AmneziaVPN-Test-" + QUuid::createUuid().toString();
         m_settings = new SecureQSettings(testOrg, "amnezia-client", nullptr, false);
-        auto vpnConnection = QSharedPointer<VpnConnection>::create(nullptr, nullptr);
+        auto vpnConnection = QSharedPointer<VpnConnection>::create();
         m_coreController = new TestCoreController(vpnConnection, m_settings, nullptr, this);
         ssh_init();
 

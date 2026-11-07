@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -25,6 +26,10 @@ def function_body(source: str, signature: str) -> str:
     raise AssertionError(f"unterminated function: {signature}")
 
 
+def compact(source: str) -> str:
+    return re.sub(r"\s+", "", source)
+
+
 class WindowsErrorAndRouteContracts(unittest.TestCase):
     def test_wlan_diagnostics_use_api_return_not_thread_last_error(self) -> None:
         source = read_source("client/platforms/windows/windowsnetworkwatcher.cpp")
@@ -40,27 +45,96 @@ class WindowsErrorAndRouteContracts(unittest.TestCase):
         self.assertNotIn("GetLastError(", wlan_body)
 
     def test_route_delete_policy_accepts_only_idempotent_results(self) -> None:
+        constants = {"NO_ERROR": 0, "ERROR_NOT_FOUND": 1168,
+                     "ERROR_FILE_NOT_FOUND": 2}
+        for filename in ("windowsroutemonitor.cpp", "wireguardutilswindows.cpp"):
+            with self.subTest(filename=filename):
+                source = read_source("client/platforms/windows/daemon/" + filename)
+                helper = function_body(source, "bool isSuccessfulRouteDelete(DWORD result)")
+                expression = re.fullmatch(r"\{return(.+);\}", compact(helper))
+                self.assertIsNotNone(expression)
+                clauses = expression.group(1).split("||")
+                accepted = set()
+                for clause in clauses:
+                    match = re.fullmatch(r"result==([A-Z_]+)", clause)
+                    self.assertIsNotNone(match, clause)
+                    self.assertIn(match.group(1), constants)
+                    accepted.add(constants[match.group(1)])
+                self.assertEqual(len(clauses), 3)
+                self.assertEqual(accepted, {0, 1168, 2})
+                self.assertTrue(accepted.isdisjoint({5, 87, 1234}))
+
+    def route_monitor_body(self, signature: str) -> str:
         source = read_source("client/platforms/windows/daemon/windowsroutemonitor.cpp")
-        helper = function_body(source, "bool isSuccessfulRouteDelete(DWORD result)")
+        return compact(function_body(source, signature))
 
-        accepted = {0, 1168, 2}
-        rejected = {5, 87, 1234}
-        policy = lambda result: result in accepted
-        self.assertTrue(all(policy(code) for code in accepted))
-        self.assertTrue(all(not policy(code) for code in rejected))
-        for name in ("NO_ERROR", "ERROR_NOT_FOUND", "ERROR_FILE_NOT_FOUND"):
-            self.assertIn(name, helper)
-        self.assertEqual(source.count("if (!isSuccessfulRouteDelete(result))"), 4)
+    def test_route_replacement_requires_delete_success_and_absence(self) -> None:
+        body = self.route_monitor_body("bool WindowsRouteMonitor::updateExclusionRoute(")
+        deletion = function_body(body, "if(data->InterfaceLuid.Value!=0)")
+        self.assertIn("DeleteIpForwardEntry2(data)", deletion)
+        for guard in ("if(!isSuccessfulRouteDelete(result))", "if(!isRouteAbsent(*data))"):
+            self.assertIn("returnfalse;", function_body(deletion, guard))
+        self.assertLess(body.index(deletion), body.index("data->InterfaceLuid.Value=bestLuid;"))
 
-        wireguard = read_source(
-            "client/platforms/windows/daemon/wireguardutilswindows.cpp"
+    def test_captured_route_cleanup_retains_failed_deletions(self) -> None:
+        body = self.route_monitor_body(
+            "bool WindowsRouteMonitor::updateCapturedRoutes(int family, void* ptable)"
         )
-        self.assertIn("bool isSuccessfulRouteDelete(DWORD result)", wireguard)
-        delete_body = function_body(
-            wireguard, "bool WireguardUtilsWindows::deleteRoutePrefix"
-        )
-        self.assertIn("return isSuccessfulRouteDelete(result);", delete_body)
-        self.assertNotIn("return result == NO_ERROR;", delete_body)
+        deletion = body[body.index("DeleteIpForwardEntry2(data)"):]
+        for guard in ("if(!isSuccessfulRouteDelete(result))", "if(!isRouteAbsent(*data))"):
+            failure = function_body(deletion, guard)
+            for action in ("updated=false;", "++i;", "continue;"):
+                self.assertIn(action, failure)
+            self.assertNotIn("deletedata;", failure)
+            self.assertNotIn(".erase(", failure)
+            self.assertLess(deletion.index(failure), deletion.index("deletedata;"))
+        self.assertIn("i=m_clonedRoutes.erase(i);", deletion)
+        self.assertTrue(deletion.endswith("returnupdated;}"))
+
+    def test_exclusion_cleanup_preserves_ownership_until_confirmed(self) -> None:
+        body = self.route_monitor_body("bool WindowsRouteMonitor::deleteExclusionRoute(")
+        self.assertIn("data->InterfaceLuid.Value==0?NO_ERROR:DeleteIpForwardEntry2(data)", body)
+        for guard in ("if(!isSuccessfulRouteDelete(result))",
+                      "if(data->InterfaceLuid.Value!=0&&!isRouteAbsent(*data))"):
+            failure = function_body(body, guard)
+            self.assertIn("returnfalse;", failure)
+            self.assertLess(body.index(failure), body.index("m_exclusionRoutes.remove(prefix);"))
+        self.assertIn("constboolcaptured=updateCapturedRoutes(data->DestinationPrefix.Prefix.si_family);", body)
+        self.assertTrue(body.endswith("deletedata;returncaptured;}"))
+
+    def test_bulk_cleanup_keeps_unconfirmed_routes_for_retry(self) -> None:
+        body = self.route_monitor_body("bool WindowsRouteMonitor::flushRouteTable(")
+        self.assertIn("data->InterfaceLuid.Value==0?NO_ERROR:DeleteIpForwardEntry2(data)", body)
+        guard = "if(!isSuccessfulRouteDelete(result)||(data->InterfaceLuid.Value!=0&&!isRouteAbsent(*data)))"
+        failure = function_body(body, guard)
+        for action in ("cleaned=false;", "++i;", "continue;"):
+            self.assertIn(action, failure)
+        self.assertNotIn("deletedata;", failure)
+        self.assertNotIn(".erase(", failure)
+        self.assertLess(body.index(failure), body.index("deletedata;"))
+        self.assertIn("i=table.erase(i);", body)
+        self.assertTrue(body.endswith("returncleaned;}"))
+
+        disable = self.route_monitor_body("bool WindowsRouteMonitor::setDetaultRouteCapture(")
+        self.assertIn("returnflushRouteTable(m_clonedRoutes);",
+                      function_body(disable, "if(!m_defaultRouteCapture)"))
+
+    def test_wireguard_cleanup_propagates_captured_route_failure(self) -> None:
+        wireguard = read_source("client/platforms/windows/daemon/wireguardutilswindows.cpp")
+        body = compact(function_body(
+            wireguard, "bool WireguardUtilsWindows::deleteRoutePrefix("
+        ))
+        self.assertIn("boolcapturedRoutesClean=true;", body)
+        capture = function_body(body, "if(m_routeMonitor&&(prefix.prefixLength()==0))")
+        self.assertIn("capturedRoutesClean=m_routeMonitor->setDetaultRouteCapture(false);", capture)
+        self.assertLess(body.index(capture), body.index("DeleteIpForwardEntry2(&entry)"))
+        self.assertIn("logger.error()", function_body(
+            body, "if(!isSuccessfulRouteDelete(result))"
+        ))
+        self.assertTrue(body.endswith(
+            "returncapturedRoutesClean&&isSuccessfulRouteDelete(result);}"
+        ))
+        self.assertNotIn("returnresult==NO_ERROR;", body)
 
     def test_windows_error_message_is_unicode_and_has_safe_fallback(self) -> None:
         source = read_source("client/platforms/windows/windowsutils.cpp")

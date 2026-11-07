@@ -96,6 +96,22 @@ set_tests_properties(
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         TIMEOUT 900
 )
+add_test(
+    NAME focused_test_cmake_graph
+    COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/test_cmake_suite_graph.py"
+            --cmake "${CMAKE_COMMAND}"
+            --work-dir "${CMAKE_CURRENT_BINARY_DIR}/cmake-suite-graph"
+            --qt-dir "${Qt6_DIR}"
+            --prefix "${CMAKE_PREFIX_PATH}"
+)
+set_tests_properties(focused_test_cmake_graph PROPERTIES TIMEOUT 180)
+
+# The standalone focused aggregate has no application source/link variables.
+# Legacy app tests are added once, from client/CMakeLists.txt, only on request.
+if(NOT AMNEZIA_BUILD_TESTS)
+    return()
+endif()
+
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
 include(CTest)

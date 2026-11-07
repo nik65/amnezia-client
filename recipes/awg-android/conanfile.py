@@ -8,6 +8,7 @@ from conan.tools.scm import Git
 import os
 import platform
 import shutil
+import tempfile
 import hashlib
 import json
 from pathlib import Path
@@ -110,22 +111,37 @@ class AwgAndroid(ConanFile):
                 raise ConanInvalidConfiguration(str(error)) from error
             shutil.copytree(source_dir, self.source_folder, dirs_exist_ok=True, symlinks=True)
         else:
-            git = Git(self)
-            git.clone(
-                url="https://github.com/amnezia-vpn/amneziawg-android.git",
-                target=".",
-                args=["--recurse-submodules", "--branch", f"v{self.version}"]
-            )
-            if git.run("rev-parse HEAD").strip() != UPSTREAM_COMMIT:
-                raise ConanInvalidConfiguration("AWG Android tag changed from the approved immutable commit")
-            for path, commit in UPSTREAM_SUBMODULES.items():
-                if git.run(f"-C {path} rev-parse HEAD").strip() != commit:
-                    raise ConanInvalidConfiguration("AWG Android submodule differs from the approved immutable commit")
+            # Conan places exports_sources in source_folder before source().
+            # Clone into an empty checkout, then move it alongside the overlay
+            # without replacing any existing source or exported patch files.
+            with tempfile.TemporaryDirectory(prefix=".awg-upstream-", dir=self.source_folder) as checkout:
+                git = Git(self, folder=checkout)
+                git.clone(
+                    url="https://github.com/amnezia-vpn/amneziawg-android.git",
+                    target=".",
+                    args=["--recurse-submodules", "--branch", f"v{self.version}"]
+                )
+                self._verify_upstream_git_pins(git)
+                entries = list(Path(checkout).iterdir())
+                if any(os.path.lexists(Path(self.source_folder) / entry.name) for entry in entries):
+                    raise ConanInvalidConfiguration("AWG upstream checkout collides with existing source or overlay")
+                for entry in entries:
+                    shutil.move(str(entry), str(Path(self.source_folder) / entry.name))
+            # Relative submodule gitdir/worktree links must remain valid after
+            # relocation, as must the exact immutable source identities.
+            self._verify_upstream_git_pins(Git(self))
         import importlib.util
         spec = importlib.util.spec_from_file_location("awg_union_patch", os.path.join(self.export_sources_folder, "patch_union.py"))
         patch = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(patch)
         patch.install_union(Path(self.source_folder) / "tunnel/tools/libwg-go", Path(self.export_sources_folder) / "union")
+
+    def _verify_upstream_git_pins(self, git):
+        if git.run("rev-parse HEAD").strip() != UPSTREAM_COMMIT:
+            raise ConanInvalidConfiguration("AWG Android tag changed from the approved immutable commit")
+        for path, commit in UPSTREAM_SUBMODULES.items():
+            if git.run(f"-C {path} rev-parse HEAD").strip() != commit:
+                raise ConanInvalidConfiguration("AWG Android submodule differs from the approved immutable commit")
 
     def generate(self):
         VirtualBuildEnv(self).generate()

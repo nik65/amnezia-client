@@ -357,6 +357,9 @@ private:
                                 bool *entryNotFound = nullptr);
     bool setSecTag(const QString &tag, const QByteArray &data) const;
 
+    // The Android path selector fills this during m_settings construction.
+    // It must be initialized before that member and must gate all access.
+    bool m_storageAvailable = true;
     QSettings m_settings;
 
     mutable QHash<QString, QVariant> m_cache;

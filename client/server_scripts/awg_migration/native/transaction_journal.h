@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <json-c/json.h>
+#include "retired_predecessors.h"
 
 namespace amnezia::awgMigration {
 struct CommandResult { int status = 0; std::string output, error; };
@@ -17,7 +18,7 @@ class JournalError : public std::runtime_error { public: using std::runtime_erro
 class TransactionJournal final {
 public:
     TransactionJournal(const std::filesystem::path& directory, JournalRunner runner,
-                       const std::string& initial = {}, JournalFault fault = {});
+                       const std::string& initial = {}, JournalFault fault = {}, int borrowedLockFd = -1);
     ~TransactionJournal();
     TransactionJournal(const TransactionJournal&) = delete;
     TransactionJournal& operator=(const TransactionJournal&) = delete;
@@ -35,6 +36,9 @@ public:
     void verifyRequest(const std::string& requestJson, const std::string& sourceBytes) const;
     std::string snapshot() const;
     const std::filesystem::path& directory() const;
+    // Internal only: non-owning descriptor, duplicated/validated by child journals.
+    int borrowedLockFd() const { return lockFd_; }
+    void verifyRetired(const std::string& source, const RetiredPredecessor&) const;
     std::string ownedSnapshot(const std::string& name) const;
     std::string inspectSnapshot(const std::string& id) const;
     void replaceValue(const std::string& json);

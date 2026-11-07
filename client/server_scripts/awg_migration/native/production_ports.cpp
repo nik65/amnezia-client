@@ -1,6 +1,7 @@
 // Concrete production prepare adapters. They compose the already-reviewed
 // bounded native primitives; they do not add a second process/network layer.
 #include "production_ports.h"
+#include "docker_absence.h"
 #include "bounded_docker.h"
 #include "network_observer.h"
 #include "network_topology_runtime.h"
@@ -318,7 +319,14 @@ prepare::CommandResult ProductionPorts::command(const std::vector<std::string> &
         }
         return {0, output, ""};
     } catch (const BoundedDockerError &error) {
-        if (error.kind == BoundedDockerFailureKind::Exit) return {1, "", "bounded_docker_exit"};
+        if (error.kind == BoundedDockerFailureKind::Exit) {
+            try {
+                if (verifiedDockerInspectAbsence(argv, [](const auto& inventory) {
+                        return runBoundedDockerWithBudget(inventory,kOneMiB,10);
+                    })) return {1,"","No such object"};
+            } catch (...) { return {124,"","bounded_docker_unavailable"}; }
+            return {1, "", "bounded_docker_exit"};
+        }
         return {124, "", "bounded_docker_unavailable"};
     }
 }
@@ -546,8 +554,12 @@ void ProductionPorts::planAutomatic(const std::filesystem::path &root,
     try {
         const std::string image = resolveTrustedImage(runner);
         const UdpPorts occupied = occupiedUdpPorts(runner);
+        std::vector<std::uint64_t> retired;
+        for (const auto& proof : request.retiredPredecessors) retired.push_back(proof.generation);
         const AutomaticRequest plan = automaticPlan(root, request.source, request.host, image,
-                                                    source.rawConfig, sourcePort, occupied);
+                                                    source.rawConfig, sourcePort, occupied, retired);
+        resolved.retiredPredecessors = request.retiredPredecessors;
+        resolved.clientOperationId = request.clientOperationId;
         resolved.image = plan.image;
         resolved.port = plan.port;
         resolved.generation = plan.generation;

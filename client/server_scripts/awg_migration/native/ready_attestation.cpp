@@ -1,4 +1,6 @@
 #include "ready_attestation.h"
+#include "client_operation.h"
+#include "retired_predecessors.h"
 #include <rapidjson/encodings.h>
 #include <rapidjson/memorystream.h>
 #include <openssl/sha.h>
@@ -149,6 +151,18 @@ void validateExistingTarget(const std::string &directory,json_object *value,json
  auto source=str(member(value,"source"));if(source!="amnezia-awg"&&source!="amnezia-awg2")drift();
  auto target=str(member(value,"target"));auto targetId=str(member(member(member(value,"containers"),target.c_str()),"id"));
  auto request=member(value,"request");
+ json_object *operationRaw=nullptr,*retiredRaw=nullptr;
+ if(json_object_object_get_ex(request,"retiredPredecessors",&retiredRaw)
+    &&!json_object_object_get_ex(request,"clientOperationId",&operationRaw))drift();
+ if(json_object_object_get_ex(request,"clientOperationId",&operationRaw)){
+  const auto operation=str(operationRaw);
+  auto native=member(value,"nativeControl");
+  try{validateBoundRetiredRequest(request,str(member(value,"owner")),true);}catch(...){drift();}
+  if(!validClientOperationId(operation)
+      ||str(member(value,"owner"))!=clientOperationOwner(operation)
+      ||str(member(native,"variant"))!="native-control-http-v1"
+      ||str(member(native,"protocol"))!="control-http-v1")drift();
+ }
  if(targetId.empty()||str(member(ready,"containerId"))!=source||str(member(ready,"targetContainer"))!=target||
     generation(member(ready,"generation"))!=generation(member(request,"generation"))||
     str(member(ready,"endpoint"))!=scalar(member(request,"host"))+":"+scalar(member(request,"port")))drift();

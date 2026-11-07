@@ -22,6 +22,17 @@ an INTERFACE-only CMake fixture with the real admission module. It admits the
 prepared pinned Android component and rejects changed hash, ABI, source commit
 and minimum API. It never configures/builds Amnezia or creates an APK.
 
+`run_qt_packaging_tests.py --component <libdnstt.so> --qt-host <host-kit>
+--qt-android <android-kit> --sdk <sdk> --ndk <ndk> --output <directory>` builds
+a tiny ARM64 Qt fixture and invokes the real `androiddeployqt --aux-mode`.
+It uses the actual product library-list template and checks exact component
+bytes, executable permission and exclusion from extra JNI libraries/startup lists.
+The optional `--module <preserved-module>` checks the former JNI classification;
+`--qt-default-template` additionally exposes Qt's automatic-loading behavior.
+The product template currently suppresses extra-library list insertion; the
+module must preserve executable-only packaging independently of that template.
+This fixture creates no APK or Android process and establishes no device acceptance.
+
 Existing native-session restore, activity/service discovery and native-idle
 suites must remain green when the wrapper/service ownership wiring changes.
 

@@ -108,7 +108,12 @@ install -m 0644 "$STAGE_DIR/usr/local/lib/systemd/system/amneziad.service" "$PAC
 cat > "$PACKAGE_DIR/package-manifest.json" <<EOF
 {"schema":2,"version":"$VERSION","platform":"linux-headless-x64","installModes":["fresh","upgrade"],"artifacts":["amneziad","amnezia-cli","amneziad.service"],"service":"amneziad.service","servicePaths":["/etc/systemd/system/amneziad.service","/run/systemd/system/amneziad.service","/usr/local/lib/systemd/system/amneziad.service","/usr/lib/systemd/system/amneziad.service","/lib/systemd/system/amneziad.service"],"trustAnchor":"external-ed25519-sha256-receipt","runtimeManifest":"runtime-dependencies.json","checksums":"SHA256SUMS","runtimeText":"runtime-dependencies.txt","nativeHelper":"amnezia-cli"$NATIVE_VERIFIER_FIELD}
 EOF
-cat > "$PACKAGE_DIR/runtime-dependencies.json" <<'EOF'
+# This canonical producer declares nativeHelper=amnezia-cli above. Native
+# verifier + CLI + persisted native recovery need no runtime Python; older
+# packages retain the explicit requirement for their compatibility paths.
+RUNTIME_PYTHON_COMMAND='"python3",'
+if [[ -n "$NATIVE_VERIFIER_FIELD" ]]; then RUNTIME_PYTHON_COMMAND=''; fi
+cat > "$PACKAGE_DIR/runtime-dependencies.json" <<EOF
 {"schema":2,"distribution":"ubuntu","architectures":["amd64"],"releases":[
  {"versionId":"24.04","codenames":["noble"],"packages":[
   {"alternatives":["libc6"],"minimum":"2.39","reason":"glibc runtime used by the Ubuntu 24.04 headless build"},
@@ -119,7 +124,7 @@ cat > "$PACKAGE_DIR/runtime-dependencies.json" <<'EOF'
   {"alternatives":["iproute2"],"minimum":"6.1","reason":"policy routing"},
   {"alternatives":["tar"],"minimum":"1.34","reason":"update extraction"}
  ]}
-] ,"commands":{"required":["systemctl","systemd-run","getent","ip","resolvectl","readlink","readelf","ldd","sha256sum","openssl","python3","dpkg-query","dpkg","groupadd","groupdel","install","chown","chmod","mktemp","grep","awk","cmp","flock"],"backendModes":[{"mode":"native-tunnel","alternatives":["wg-quick","awg-quick","openvpn"]},{"mode":"proxy","alternatives":["xray"]}]}}
+] ,"commands":{"required":["systemctl","systemd-run","getent","ip","resolvectl","readlink","readelf","ldd","sha256sum","openssl",${RUNTIME_PYTHON_COMMAND}"dpkg-query","dpkg","groupadd","groupdel","install","chown","chmod","mktemp","grep","awk","cmp","flock"],"backendModes":[{"mode":"native-tunnel","alternatives":["wg-quick","awg-quick","openvpn"]},{"mode":"proxy","alternatives":["xray"]}]}}
 EOF
 cat > "$PACKAGE_DIR/runtime-dependencies.txt" <<'EOF'
 # Runtime requirements for dynamically linked headless binaries.

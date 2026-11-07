@@ -86,6 +86,39 @@ std::string strippedVersion(const std::string &raw) {
     }
     return end ? raw.substr(begin,end-begin) : std::string();
 }
+std::string asciiJson(std::string_view raw) {
+    // RapidJSON already validated the complete input below. Escape its literal
+    // Unicode characters before the second parser: json-c 0.18's UTF-8 check
+    // can consume the same leading byte twice when peeking between states.
+    // Keep that check enabled, preserve numeric spellings, and represent the
+    // identical strings/keys through standard JSON escapes instead.
+    std::string result;
+    result.reserve(raw.size());
+    const auto maximumSize = raw.size() * 6; // parse() already caps raw at 8 MiB
+    rapidjson::MemoryStream stream(raw.data(),raw.size());
+    const auto appendUnit = [&](unsigned unit) {
+        static constexpr char hex[] = "0123456789abcdef";
+        if (result.size() > maximumSize - 6) reject();
+        result += "\\u";
+        for (int shift = 12; shift >= 0; shift -= 4) result.push_back(hex[(unit >> shift) & 15]);
+    };
+    while (stream.Tell() < raw.size()) {
+        if (static_cast<unsigned char>(stream.Peek()) < 0x80) {
+            result.push_back(stream.Take());
+            continue;
+        }
+        unsigned codepoint = 0;
+        if (!rapidjson::UTF8<>::Decode(stream,&codepoint) || codepoint > 0x10ffff
+            || (codepoint >= 0xd800 && codepoint <= 0xdfff)) reject();
+        if (codepoint <= 0xffff) appendUnit(codepoint);
+        else {
+            codepoint -= 0x10000;
+            appendUnit(0xd800 + (codepoint >> 10));
+            appendUnit(0xdc00 + (codepoint & 0x3ff));
+        }
+    }
+    return result;
+}
 void validateVersion(const std::string &raw) {
     const auto version = strippedVersion(raw);
     std::size_t at = 0;
@@ -181,7 +214,8 @@ Json parse(std::string_view raw, std::size_t limit) {
     auto tok = std::unique_ptr<json_tokener,decltype(&json_tokener_free)>(json_tokener_new_ex(32),json_tokener_free);
     if (!tok) reject();
     json_tokener_set_flags(tok.get(),JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
-    Json value(json_tokener_parse_ex(tok.get(),raw.data(),static_cast<int>(raw.size())));
+    const auto ascii = asciiJson(raw);
+    Json value(json_tokener_parse_ex(tok.get(),ascii.data(),static_cast<int>(ascii.size())));
     if (!value || json_tokener_get_error(tok.get()) != json_tokener_success) reject();
     return value;
 }

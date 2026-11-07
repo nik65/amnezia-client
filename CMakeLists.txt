@@ -26,7 +26,15 @@ project(${PROJECT} VERSION ${AMNEZIAVPN_VERSION}
 if(MSVC)
     add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/MP>)
 endif()
+# Test options must be visible before the client decides which suites to add.
 option(AMNEZIA_BUILD_TESTS "Build test executables" OFF)
+option(AMNEZIAVPN_BUILD_FOCUSED_TESTS "Build the native focused regression suite" OFF)
+if(AMNEZIAVPN_BUILD_FOCUSED_TESTS AND (CMAKE_CROSSCOMPILING OR ANDROID OR IOS OR MACOS_NE))
+    message(FATAL_ERROR "AMNEZIAVPN_BUILD_FOCUSED_TESTS requires a native desktop build")
+endif()
+if(AMNEZIA_BUILD_TESTS OR AMNEZIAVPN_BUILD_FOCUSED_TESTS)
+    enable_testing()
+endif()
 
 # trigger conan to kick off `conan install` globally
 find_package(OpenSSL REQUIRED)
@@ -107,16 +115,9 @@ if ((LINUX AND NOT ANDROID) OR (APPLE AND NOT IOS AND NOT MACOS_NE) OR (WIN32))
     include(${CMAKE_SOURCE_DIR}/cmake/CPack.cmake)
 endif()
 
-# Focused regression targets intentionally remain opt-in so normal desktop and
-# cross-platform release packaging is unchanged.  A native maintainer build can
-# enable one aggregate CTest surface instead of configuring every standalone
-# test directory by hand.
-option(AMNEZIAVPN_BUILD_FOCUSED_TESTS "Build the native focused regression suite" OFF)
-if(AMNEZIAVPN_BUILD_FOCUSED_TESTS)
-    if(CMAKE_CROSSCOMPILING OR ANDROID OR IOS OR MACOS_NE)
-        message(FATAL_ERROR "AMNEZIAVPN_BUILD_FOCUSED_TESTS requires a native desktop build")
-    endif()
-    enable_testing()
+# Register focused-only tests here. Legacy app tests already add this directory
+# from the client scope, where their SOURCES/HEADERS/LIBS are available.
+if(AMNEZIAVPN_BUILD_FOCUSED_TESTS AND NOT AMNEZIA_BUILD_TESTS)
     add_subdirectory(client/tests)
 endif()
 

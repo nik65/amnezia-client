@@ -6,9 +6,12 @@ find_package(Python3 QUIET COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME awg_authority_source_contract
         COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_LIST_DIR}/test_authority_source_contract.py")
+    foreach(contract IN ITEMS cleanup probe_cleanup reconcile)
+        add_test(NAME awg_${contract}_source_contract
+            COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_LIST_DIR}/test_${contract}_source_contract.py")
+    endforeach()
 endif()
 
-# Deferred native validation: this target was added during a no-build turn.
 # Linux exercises the actual encrypted-file store; other platform storage needs
 # its SecureQSettings/keychain integration lane rather than a fake backend.
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")

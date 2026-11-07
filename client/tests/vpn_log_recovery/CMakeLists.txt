@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.25)
 project(VpnLogRecoveryTests LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
+# These isolated daemon/logger fixtures use the service-side logger. The full
+# client adds its IPC-backed logger definition to the parent directory.
+remove_definitions(-DAMNEZIA_DESKTOP)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Network Test)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 enable_testing()
@@ -13,8 +16,13 @@ add_custom_command(OUTPUT "${GENERATED_METHODS}"
     DEPENDS "${REPO}/client/vpnConnection.cpp" "${REPO}/client/core/utils/networkUtilities.cpp"
             "${REPO}/client/tests/managed_route_semantic_context/production_helpers.py" extract_worker_methods.py
     VERBATIM)
-add_executable(vpn_route_recovery_tests test_worker.cpp "${GENERATED_METHODS}")
-set_source_files_properties("${GENERATED_METHODS}" PROPERTIES SKIP_AUTOMOC ON)
+add_custom_target(vpn_route_recovery_methods DEPENDS "${GENERATED_METHODS}")
+add_executable(vpn_route_recovery_tests test_worker.cpp)
+# MOC learns this include as a dependency. Generate it before MOC through a
+# separate target so its generator never acquires a reverse autogen dependency.
+add_dependencies(vpn_route_recovery_tests vpn_route_recovery_methods)
+set_property(TARGET vpn_route_recovery_tests APPEND PROPERTY
+    AUTOGEN_TARGET_DEPENDS vpn_route_recovery_methods)
 target_include_directories(vpn_route_recovery_tests PRIVATE "${REPO}/client" "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(vpn_route_recovery_tests PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME vpn_route_recovery COMMAND vpn_route_recovery_tests)

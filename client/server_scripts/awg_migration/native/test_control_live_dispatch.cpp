@@ -48,15 +48,15 @@ int main() {
         pointers.clear();
         for (const char *arg : args) own.emplace_back(arg);
         for (auto &arg : own) pointers.push_back(&arg[0]);
-        return pointers;
     };
     std::vector<std::string> own;
-    std::vector<char *> ptrs = argv({"prog", "--serve"}, own, ptrs);
+    std::vector<char *> ptrs;
+    argv({"prog", "--serve"}, own, ptrs);
     if (runVerifyControlLiveArgv(static_cast<int>(ptrs.size()), ptrs.data(), status) || status != 99) {
         std::cerr << "not-live argv was consumed\n";
         ++failures;
     }
-    ptrs = argv({"prog", "--verify-control-live"}, own, ptrs);
+    argv({"prog", "--verify-control-live"}, own, ptrs);
     if (!runVerifyControlLiveArgv(static_cast<int>(ptrs.size()), ptrs.data(), status) || status != 2) {
         std::cerr << "invalid live argv not rejected with 2\n";
         ++failures;

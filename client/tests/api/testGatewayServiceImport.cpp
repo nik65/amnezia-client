@@ -142,7 +142,7 @@ private slots:
     {
         const QString testOrg = "AmneziaVPN-Test-" + QUuid::createUuid().toString();
         m_settings = new SecureQSettings(testOrg, "amnezia-client", nullptr, false);
-        auto vpnConnection = QSharedPointer<VpnConnection>::create(nullptr, nullptr);
+        auto vpnConnection = QSharedPointer<VpnConnection>::create();
         m_coreController = new TestCoreController(vpnConnection, m_settings, nullptr, this);
     }
 
@@ -429,7 +429,8 @@ int main(int argc, char *argv[])
 {
     // CoreController reaches the gateway through amnApp->networkManager(), so the
     // application instance has to really be an AmneziaApplication.
-    AmneziaApplication app(argc, argv);
+    const auto operatorArguments = operatorMode::parseArguments(argc, argv);
+    AmneziaApplication app(argc, argv, operatorArguments, false);
     TestGatewayServiceImport tc;
     QTEST_SET_MAIN_SOURCE_PATH
     return QTest::qExec(&tc, argc, argv);

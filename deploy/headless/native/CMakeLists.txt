@@ -4,7 +4,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
   message(FATAL_ERROR "This helper implements Linux provisioning filesystem checks")
 endif()
 add_subdirectory(journal)
-add_library(headless_fs_core STATIC headless_fs_dispatch.cpp)
+add_library(headless_fs_core STATIC headless_fs_dispatch.cpp anchor_storage.cpp)
 target_include_directories(headless_fs_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(headless_fs_core PUBLIC headless_journal)
 set_target_properties(headless_fs_core PROPERTIES AUTOMOC OFF)
@@ -19,5 +19,18 @@ target_compile_options(amnezia-headless-fs PRIVATE -Wall -Wextra -Wpedantic -Wer
 include(CTest)
 if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_executable(headless_anchor_tests test_anchor_storage.cpp)
+  target_link_libraries(headless_anchor_tests PRIVATE headless_fs_core)
+  target_compile_features(headless_anchor_tests PRIVATE cxx_std_17)
+  target_compile_options(headless_anchor_tests PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+  add_test(NAME headless_anchor_owned_fixtures COMMAND headless_anchor_tests)
+  add_test(NAME headless_installer_anchor
+    COMMAND ${Python3_EXECUTABLE} -B ${CMAKE_CURRENT_SOURCE_DIR}/../test_installer_anchor.py
+      --fixture-root ${CMAKE_CURRENT_BINARY_DIR})
   add_test(NAME headless_fs COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_headless_fs.py $<TARGET_FILE:amnezia-headless-fs>)
+  if(TARGET amnezia-cli)
+    add_test(NAME headless_cli_fs COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/test_headless_fs.py
+      $<TARGET_FILE:amnezia-cli> --provisioning-fs)
+  endif()
 endif()

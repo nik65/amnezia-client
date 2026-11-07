@@ -1,4 +1,5 @@
 #include "transaction_journal.h"
+#include "client_operation.h"
 #include <openssl/evp.h>
 #include <fcntl.h>
 #include <sys/file.h>
@@ -86,7 +87,7 @@ int openDirectoryWithoutSymlinks(const std::filesystem::path& path) {
 }
 }
 TransactionJournal::TransactionJournal(const std::filesystem::path& directory, JournalRunner runner,
-    const std::string& initial,JournalFault fault):directory_(directory),runner_(std::move(runner)),fault_(std::move(fault)) {
+    const std::string& initial,JournalFault fault,int borrowedLockFd):directory_(directory),runner_(std::move(runner)),fault_(std::move(fault)) {
     try {
         if(!runner_)throw JournalError("journal runner required");
         directory_=std::filesystem::absolute(directory);
@@ -110,10 +111,31 @@ TransactionJournal::TransactionJournal(const std::filesystem::path& directory, J
             directoryFd_=openat(scopeFd,generation.c_str(),O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);
             if(directoryFd_<0||!privateDirectory(directoryFd_))throw JournalError("unsafe journal directory");
             // Same global lock as prepare.py/maintenance.py, across all sources.
-            lockFd_=openat(rootFd,".prepare.lock",O_RDWR|O_CREAT|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC,0600);
-            if(lockFd_<0 || fstat(lockFd_,&st)<0 || !S_ISREG(st.st_mode)||st.st_nlink!=1
-                || st.st_uid!=geteuid() || (st.st_mode&0077) || flock(lockFd_,LOCK_EX|LOCK_NB)<0)
-                throw JournalError("journal lock unavailable");
+            if(borrowedLockFd<0){
+                lockFd_=openat(rootFd,".prepare.lock",O_RDWR|O_CREAT|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC,0600);
+                if(lockFd_<0||fstat(lockFd_,&st)<0||!S_ISREG(st.st_mode)||st.st_nlink!=1
+                    ||st.st_uid!=geteuid()||(st.st_mode&07077)||flock(lockFd_,LOCK_EX|LOCK_NB)<0)
+                    throw JournalError("journal lock unavailable");
+            }else{
+                const int named=openat(rootFd,".prepare.lock",O_RDWR|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
+                if(named<0)throw JournalError("borrowed journal lock unavailable");
+                try{
+                    struct stat expected{},borrowed{};
+                    if(fstat(named,&expected)!=0||fstat(borrowedLockFd,&borrowed)!=0
+                        ||!S_ISREG(expected.st_mode)||expected.st_nlink!=1||expected.st_uid!=geteuid()
+                        ||(expected.st_mode&07077)||borrowed.st_dev!=expected.st_dev||borrowed.st_ino!=expected.st_ino)
+                        throw JournalError("borrowed journal lock identity");
+                    if(flock(named,LOCK_EX|LOCK_NB)==0){(void)flock(named,LOCK_UN);throw JournalError("borrowed journal lock is not held");}
+                    if(errno!=EWOULDBLOCK&&errno!=EAGAIN)throw JournalError("borrowed journal lock unavailable");
+                    lockFd_=fcntl(borrowedLockFd,F_DUPFD_CLOEXEC,3);
+                    if(lockFd_<0||fstat(lockFd_,&st)!=0||st.st_dev!=expected.st_dev||st.st_ino!=expected.st_ino
+                        ||flock(lockFd_,LOCK_EX|LOCK_NB)!=0)throw JournalError("borrowed journal lock unavailable");
+                    struct stat namedAfter{};
+                    if(fstatat(rootFd,".prepare.lock",&namedAfter,AT_SYMLINK_NOFOLLOW)!=0
+                        ||namedAfter.st_dev!=st.st_dev||namedAfter.st_ino!=st.st_ino)throw JournalError("borrowed journal lock changed");
+                }catch(...){close(named);throw;}
+                close(named);
+            }
             close(scopeFd);close(rootFd);
         }catch(...){if(scopeFd>=0)close(scopeFd);close(rootFd);throw;}
         if(initial.empty()) {
@@ -145,6 +167,22 @@ void TransactionJournal::validate() const {
     boolean(value_.get(),"sourceRules");
     if(!match(str(value_.get(),"sourceDigest"),"[a-f0-9]{64}"))throw JournalError("journal source digest");
     auto* request=field(value_.get(),"request",json_type_object);
+    const bool operationBound=has(request,"clientOperationId");
+    try{validateBoundRetiredRequest(request,str(value_.get(),"owner"),operationBound);}
+    catch(...){throw JournalError("journal client operation binding or request shape");}
+    if(operationBound){
+        const auto operation=str(request,"clientOperationId");
+        if(!validClientOperationId(operation)||str(value_.get(),"owner")!=clientOperationOwner(operation)
+            ||!match(str(value_.get(),"nativeFeedSha256"),"[a-f0-9]{64}"))
+            throw JournalError("journal client operation binding");
+        // During an interrupted PREPARE the native-control object is finalized
+        // only at ready. Earlier/aborted native intents still need owned cleanup.
+        if(phase=="ready"){
+            auto* native=field(value_.get(),"nativeControl",json_type_object);
+            if(str(native,"variant")!="native-control-http-v1"||str(native,"protocol")!="control-http-v1")
+                throw JournalError("journal client operation variant");
+        }
+    }
     auto generation=json_object_get_int64(field(request,"generation",json_type_int));
     if(generation<1||generation>9007199254740991LL||directory_.filename()!=std::to_string(generation))throw JournalError("journal generation");
     if(str(value_.get(),"target")!=sourceName+"-migration-"+std::to_string(generation))throw JournalError("journal target generation");
@@ -163,6 +201,31 @@ void TransactionJournal::validate() const {
 void TransactionJournal::checkpoint(const std::string& point)const {if(fault_)fault_(point);}
 std::string TransactionJournal::snapshot()const{return json_object_to_json_string_ext(value_.get(),JSON_C_TO_STRING_PLAIN);}
 const std::filesystem::path& TransactionJournal::directory() const { return directory_; }
+void TransactionJournal::verifyRetired(const std::string& source,const RetiredPredecessor& proof)const {
+    try{validateRetiredPredecessors({proof});}catch(...){throw JournalError("retired predecessor binding");}
+    const int fd=openat(directoryFd_,"transaction.json",O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC);
+    if(fd<0)throw JournalError("retired predecessor unavailable");
+    std::string raw;
+    try{
+        struct stat before{},after{};
+        if(fstat(fd,&before)!=0||!S_ISREG(before.st_mode)||before.st_nlink!=1||before.st_uid!=geteuid()||(before.st_mode&07077))
+            throw JournalError("retired predecessor metadata");
+        raw=readFd(fd);
+        if(fstat(fd,&after)!=0||before.st_dev!=after.st_dev||before.st_ino!=after.st_ino||before.st_size!=after.st_size
+            ||before.st_mtim.tv_sec!=after.st_mtim.tv_sec||before.st_mtim.tv_nsec!=after.st_mtim.tv_nsec
+            ||before.st_ctim.tv_sec!=after.st_ctim.tv_sec||before.st_ctim.tv_nsec!=after.st_ctim.tv_nsec)
+            throw JournalError("retired predecessor changed");
+    }catch(...){close(fd);throw;}
+    if(close(fd)!=0||raw!=snapshot()||sha256(raw)!=proof.journalSha256)throw JournalError("retired predecessor changed");
+    auto* request=field(value_.get(),"request",json_type_object);
+    if(str(value_.get(),"phase")!="aborted"||str(value_.get(),"source")!=source
+        ||json_object_get_int64(field(request,"generation",json_type_int))!=static_cast<std::int64_t>(proof.generation)
+        ||str(request,"clientOperationId")!=proof.operationId||str(value_.get(),"owner")!=clientOperationOwner(proof.operationId)
+        ||str(value_.get(),"nativeFeedSha256")!=proof.sha256||has(value_.get(),"nativeControl")
+        ||has(value_.get(),"controlMaintenance")||boolean(value_.get(),"sourceRules"))throw JournalError("retired predecessor binding");
+    for(const auto& name:names(field(value_.get(),"containers",json_type_object)))
+        if(owned(name))throw JournalError("retired predecessor component remains");
+}
 void TransactionJournal::replaceValue(const std::string& raw) { value_=parse(raw); validate(); save(); }
 std::string TransactionJournal::ownedSnapshot(const std::string& name) const {
     auto observed=owned(name);
@@ -242,8 +305,15 @@ void TransactionJournal::sourceRules(bool remove) {
         {"-I INPUT 1","-i "+iface+" -p tcp --dport 18082 -m comment --comment "+owner+" -j ACCEPT"},
         {"-t nat -A PREROUTING","-i "+iface+" -d 172.29.172.251/32 -p tcp --dport 18082 -m comment --comment "+owner+" -j REDIRECT --to-ports 18082"}};
     for(const auto& rule:rules){auto check=rule.first=="-I INPUT 1"?"-C INPUT":"-t nat -C PREROUTING";
-        auto shell=remove?"iptables "+std::string(rule.first=="-I INPUT 1"?"-D INPUT":"-t nat -D PREROUTING")+" "+rule.second+" 2>/dev/null || true":
-            "iptables "+std::string(check)+" "+rule.second+" 2>/dev/null || iptables "+rule.first+" "+rule.second;
+        const auto exactCheck="iptables "+std::string(check)+" "+rule.second;
+        const auto exactDelete="iptables "+std::string(rule.first=="-I INPUT 1"?"-D INPUT":"-t nat -D PREROUTING")+" "+rule.second;
+        // A check exit of 1 alone means absence. Other check/delete errors and
+        // duplicate/still-present rules must never become a cleanup success.
+        // One bounded deletion per exact rule: no unbounded retry loop.
+        auto shell=remove?"set -eu; if "+exactCheck+"; then "+exactDelete+
+            "; else rc=$?; [ \"$rc\" -eq 1 ] || exit \"$rc\"; fi; if "+exactCheck+
+            "; then exit 1; else rc=$?; [ \"$rc\" -eq 1 ] || exit \"$rc\"; fi":
+            exactCheck+" 2>/dev/null || iptables "+rule.first+" "+rule.second;
         command({"docker","exec",str(value_.get(),"sourceId"),"sh","-c",shell});
         if(!remove)command({"docker","exec",str(value_.get(),"sourceId"),"sh","-c","iptables "+std::string(check)+" "+rule.second});}
 }
@@ -286,6 +356,10 @@ void TransactionJournal::cleanup() {
     }
     for(const auto& name:entries){auto observed=owned(name);if(observed)command({"docker","rm","-f",str(observed.get(),"Id")});checkpoint("cleanup-container");}
     if(boolean(value_.get(),"sourceRules"))sourceRules(true);
+    // A successful rm response is not an absence proof. Reinspect the exact
+    // recorded IDs (or owned planned name) before committing the aborted phase.
+    for(const auto& name:entries)if(owned(name))throw JournalError("cleanup owned component remains");
+    json_object_object_add(value_.get(),"sourceRules",json_object_new_boolean(0));
     save("aborted");
 }
 void TransactionJournal::recoverReady(const std::function<void(const std::string&)>& attestListener) {

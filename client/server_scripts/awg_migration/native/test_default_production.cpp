@@ -5,6 +5,7 @@
 #include "prepare_entry.h"
 #include "prepare_sequencer.h"
 #include "production_ports.h"
+#include "transaction_journal.h"
 #include "test_default_transport.h"
 #include <openssl/evp.h>
 #include <openssl/sha.h>
@@ -108,6 +109,14 @@ fs::path makeFeed(const fs::path &directory, const std::string &bytes, unsigned 
 bool anyCall(const defaultFixture::State &state, const std::string &needle) {
     for (auto &call : state.calls) if (call.find(needle) != std::string::npos) return true;
     return false;
+}
+std::string retiredInitial(const std::string& pin) {
+    return "{\"owner\":\"00112233445546778899aabbccddeeff\",\"phase\":\"aborted\",\"source\":\"amnezia-awg\","
+        "\"sourceId\":\"" + defaultFixture::kSourceId + "\",\"sourceIface\":\"wg0\",\"sourceRules\":false,"
+        "\"sourceDigest\":\"" + sha256Hex(defaultFixture::rawConfig()) + "\",\"sourceEpoch\":\"" + defaultFixture::kStartedAt
+        + "\",\"targetEpoch\":\"" + defaultFixture::kStartedAt + "\",\"target\":\"amnezia-awg-migration-1\",\"containers\":{},"
+        "\"nativeFeedSha256\":\"" + pin + "\",\"request\":{\"generation\":1,\"port\":51821,\"host\":\"example.invalid\","
+        "\"image\":\"" + TrustedImage + "\",\"clientOperationId\":\"00112233-4455-4677-8899-aabbccddeeff\"}}";
 }
 } // namespace
 
@@ -225,7 +234,15 @@ int main(int argc, char **argv) {
         paths.feedOwner = self;
         prepareProduction::ProductionPorts ports(root, feed, staticSha, paths, collector, collectorSha);
         defaultFixture::state().configPath = (root / "amnezia-awg" / "1" / "awg0.conf").string();
-        const auto parsed = parse(automaticArgs(feed, staticSha, false, true, collector, collectorSha));
+        const std::string clientOperationId = "00112233-4455-4677-8899-aabbccddeeff";
+        auto values = automaticArgs(feed, staticSha, false, true, collector, collectorSha);
+        values.insert(values.end(), {"--client-operation-id", clientOperationId});
+        const auto parsed = parse(values);
+        CHECK(parsed.valid && parsed.request.clientOperationId == clientOperationId);
+        auto invalidOperation = values; invalidOperation.back() = clientOperationId + "\n";
+        CHECK(!parse(invalidOperation).valid);
+        invalidOperation.back().clear();
+        CHECK(!parse(invalidOperation).valid);
         std::string output;
         const int status = invoke(parsed, root, ports, output);
         CHECK(status == 0);
@@ -239,6 +256,10 @@ int main(int argc, char **argv) {
         CHECK(!fs::exists(root / "amnezia-awg" / "0"));
         const std::string journal = readAll(generation / "transaction.json");
         CHECK(journal.find("\"phase\":\"ready\"") != std::string::npos);
+        CHECK(journal.find("\"owner\":\"00112233445546778899aabbccddeeff\"") != std::string::npos);
+        CHECK(journal.find("\"clientOperationId\":\"" + clientOperationId + "\"") != std::string::npos);
+        CHECK(output.find(clientOperationId) != std::string::npos);
+        CHECK(anyCall(defaultFixture::state(), "amnezia.migration.owner=00112233445546778899aabbccddeeff"));
         CHECK(journal.find("\"generation\":1") != std::string::npos);
         CHECK(journal.find("\"port\":51821") != std::string::npos);
         CHECK(journal.find("\"variant\":\"native-control-http-v1\"") != std::string::npos);
@@ -263,7 +284,77 @@ int main(int argc, char **argv) {
                   << " output=" << output;
     }
 
-    // F. Native payload validation on the actual write/stage path. Each case
+    // F. Retry requires an independently saved retirement proof. The actual
+    // producer retains the old evidence and uses a higher generation/new ID.
+    // Faults stay at inert Docker/ss boundaries, never a live container.
+    for (const std::string fault : {"none", "hash", "pin", "nonce", "running", "foreign", "rules", "unknown", "changed-after-plan"}) {
+        resetTransport(base);
+        defaultFixture::state().twoFeeds = true;
+        const auto root = base / ("retired-" + fault), oldDir = root / "amnezia-awg" / "1";
+        fs::create_directories(oldDir);
+        for (auto path : {root, oldDir.parent_path(), oldDir}) fs::permissions(path, fs::perms::owner_all, fs::perm_options::replace);
+        const auto feed = makeFeed(base / ("retired-feed-" + fault), staticElf, 0755);
+        const auto collector = makeFeed(base / ("retired-collector-" + fault), collectorElf, 0755);
+        {
+            TransactionJournal old(oldDir, [](const auto&) { return CommandResult{1,"","Error: No such object"}; }, retiredInitial(staticSha));
+            old.plan("amnezia-awg-migration-1", TrustedImageId);old.save("aborted");
+            if (fault == "rules") {
+                auto raw = old.snapshot();const auto at = raw.find("\"sourceRules\":false");raw.replace(at,19,"\"sourceRules\":true");old.replaceValue(raw);
+            }
+        }
+        const auto oldRaw = readAll(oldDir / "transaction.json");
+        RetiredPredecessor proof{1,staticSha,"00112233-4455-4677-8899-aabbccddeeff",sha256Hex(oldRaw)};
+        if (fault == "hash") proof.journalSha256 = std::string(64,'d');
+        if (fault == "pin") proof.sha256 = std::string(64,'d');
+        if (fault == "nonce") proof.operationId = "11223344-5566-4788-99aa-bbccddeeff00";
+        if (fault == "running" || fault == "foreign") {
+            defaultFixture::Container live;live.name="amnezia-awg-migration-1";live.id=std::string(64,'7');live.image=TrustedImageId;
+            live.owner=fault=="running"?"00112233445546778899aabbccddeeff":std::string(32,'f');live.running=true;live.startedAt=defaultFixture::kStartedAt;
+            defaultFixture::state().containers[live.name]=live;
+        }
+        if (fault == "unknown") fs::create_directory(oldDir.parent_path()/"7");
+        if (fault == "changed-after-plan") defaultFixture::state().onFirstCommand = [oldDir] {
+            std::ofstream stream(oldDir/"transaction.json",std::ios::app);stream << '\n';
+        };
+        prepareProduction::ProductionPorts::DataPaths paths;paths.policyRoot=base/"policy";paths.updatesRoot=base/"updates";paths.feedOwner=self;
+        const auto wire=encodeRetiredPredecessors({proof});
+        if (fault == "none") {
+            auto values=automaticArgs(feed,staticSha,true,true,collector,collectorSha);
+            values.insert(values.end(),{"--retired-predecessors",wire});
+            const auto parsed=parse(values);CHECK(parsed.valid && parsed.request.clientOperationId.empty());
+            prepareProduction::ProductionPorts preflight(root,feed,staticSha,paths,collector,collectorSha);
+            std::string output;CHECK(invoke(parsed,root,preflight,output)==0);
+            CHECK(output.find("\"eligible\":true")!=std::string::npos && !fs::exists(oldDir.parent_path()/"2"));
+            CHECK(readAll(oldDir/"transaction.json")==oldRaw);
+        }
+        auto values=automaticArgs(feed,staticSha,false,true,collector,collectorSha);
+        values.insert(values.end(),{"--client-operation-id","11223344-5566-4788-99aa-bbccddeeff00","--retired-predecessors",wire});
+        // The nonce fault also checks that a new attempt cannot reuse the ID
+        // in the retirement history, independently of the server journal.
+        const auto parsed=parse(values);
+        if (fault == "nonce") {CHECK(!parsed.valid);continue;}
+        CHECK(parsed.valid && parsed.request.retiredPredecessors.size()==1);
+        defaultFixture::state().configPath=(oldDir.parent_path()/"2"/"awg0.conf").string();
+        prepareProduction::ProductionPorts ports(root,feed,staticSha,paths,collector,collectorSha);
+        std::string output;const auto status=invoke(parsed,root,ports,output);
+        if (fault == "none") {
+            CHECK(status==0 && output.find("\"prepared\":true")!=std::string::npos);
+            const auto next=readAll(oldDir.parent_path()/"2"/"transaction.json");
+            CHECK(next.find("\"generation\":2")!=std::string::npos && next.find("\"phase\":\"ready\"")!=std::string::npos);
+            CHECK(next.find("\"retiredPredecessors\":[")!=std::string::npos);
+            CHECK(next.find("112233445566478899aabbccddeeff00")!=std::string::npos);
+            CHECK(readAll(oldDir/"transaction.json")==oldRaw);
+        } else {
+            CHECK(status==23 && output.find("\"prepared\":true")==std::string::npos);
+            CHECK(!fs::exists(oldDir.parent_path()/"2"/"awg0.conf"));
+            CHECK(!anyCall(defaultFixture::state(),"--name amnezia-awg-migration-2 "));
+            CHECK(!anyCall(defaultFixture::state(),"iptables -I"));
+        }
+        CHECK(!defaultFixture::state().fatal);
+        std::cout << "RETIRED_RETRY fault=" << fault << " status=" << status << " output=" << output;
+    }
+
+    // G. Native payload validation on the actual write/stage path. Each case
     // must fail closed as native_feed_invalid and leave no generation behind.
     {
         struct Bad { const char *name; std::string bytes; unsigned mode; uid_t owner; std::string digest; };

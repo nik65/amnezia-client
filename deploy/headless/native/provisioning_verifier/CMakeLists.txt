@@ -20,4 +20,9 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} -I -B ${CMAKE_CURRENT_SOURCE_DIR}/test_file_types.py
       $<TARGET_FILE:amnezia-verify-provisioning-native> ${CMAKE_CURRENT_BINARY_DIR}/test-attempts)
   set_tests_properties(provisioning_verifier_file_types PROPERTIES TIMEOUT 20)
+  add_test(NAME provisioning_verifier_native_roles
+    COMMAND ${Python3_EXECUTABLE} -I -B ${CMAKE_CURRENT_SOURCE_DIR}/test_native_roles.py
+      --binary $<TARGET_FILE:amnezia-verify-provisioning-native>
+      --evidence-root ${CMAKE_CURRENT_BINARY_DIR}/test-attempts)
+  set_tests_properties(provisioning_verifier_native_roles PROPERTIES TIMEOUT 90)
 endif()

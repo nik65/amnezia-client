@@ -158,6 +158,13 @@ def corpus():
         v['container'][0]['NetworkSettings']['Networks']['bridge']['NetworkID'] = 'fixture-café-😀'
         v['networks']['bridge'][0]['Id'] = 'fixture-café-😀'
     change('unicode-id-preserved', unicode_id)
+    unicode_values = fixture()
+    unicode_id(unicode_values)
+    escaped_unicode = request(unicode_values)
+    escaped_unicode['container'] = escaped_unicode['container'].replace('é', '\\u00e9').replace('😀', '\\ud83d\\ude00')
+    escaped_unicode['networks'] = {name: raw.replace('é', '\\u00e9').replace('😀', '\\ud83d\\ude00')
+                                   for name, raw in escaped_unicode['networks'].items()}
+    cases.append(('escaped-unicode-id-preserved', 'compat', escaped_unicode))
     invalid = {
         'extra-network': lambda v: v['container'][0]['NetworkSettings']['Networks'].__setitem__('other', {}),
         'empty-endpoints': lambda v: v['container'][0]['NetworkSettings'].__setitem__('Networks', {}),

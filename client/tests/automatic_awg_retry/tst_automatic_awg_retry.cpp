@@ -15,7 +15,75 @@ class RetryTests : public QObject
         QVERIFY(timer);
         QVERIFY(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection));
     }
+    static QJsonObject retirementReceipt()
+    {
+        return {{"ok", true}, {"native", true}, {"reconciled", true}, {"retired", true},
+            {"retiredVerified", true}, {"liveVerified", false}, {"pendingRecovery", false},
+            {"mode", "abort-prepare"}, {"phase", "aborted"}, {"source", "amnezia-awg"},
+            {"generation", 7}, {"clientOperationId", "11111111-2222-4333-8444-555555555555"},
+            {"journalSha256", QString(64, 'a')},
+            {"controlHashes", QJsonObject{{"awg-feed", QString(64, 'b')}}}};
+    }
 private slots:
+    void retirementRequiresVerifiedCausalReceiptAndNoCleanupFailure()
+    {
+        const auto receipt = retirementReceipt();
+        QVERIFY(AutomaticAwgRetry::verifiedRetirement(ErrorCode::NoError, receipt, "amnezia-awg"));
+        QVERIFY(!AutomaticAwgRetry::verifiedRetirement(ErrorCode::SshTimeoutError, receipt, "amnezia-awg"));
+        QVERIFY(!AutomaticAwgRetry::verifiedRetirement(ErrorCode::NoError, receipt, "amnezia-awg2"));
+        for (const QString &field : {QStringLiteral("ok"), QStringLiteral("native"), QStringLiteral("reconciled"),
+                QStringLiteral("retired"), QStringLiteral("retiredVerified"), QStringLiteral("journalSha256"),
+                QStringLiteral("clientOperationId"), QStringLiteral("generation")}) {
+            auto changed = receipt;
+            changed.remove(field);
+            QVERIFY(!AutomaticAwgRetry::verifiedRetirement(ErrorCode::NoError, changed, "amnezia-awg"));
+        }
+        for (const QString &field : {QStringLiteral("pendingRecovery"), QStringLiteral("cleanupRequired"),
+                QStringLiteral("liveVerified")}) {
+            auto changed = receipt;
+            changed.insert(field, true);
+            QVERIFY(!AutomaticAwgRetry::verifiedRetirement(ErrorCode::NoError, changed, "amnezia-awg"));
+        }
+        for (const QString &mode : {QStringLiteral("inspect-prepare"), QStringLiteral("status"), QStringLiteral("verify")}) {
+            auto changed = receipt;
+            changed.insert("mode", mode);
+            QVERIFY(!AutomaticAwgRetry::verifiedRetirement(ErrorCode::NoError, changed, "amnezia-awg"));
+        }
+    }
+    void verifiedRetirementHasFiniteBudgetAcrossCancellation()
+    {
+        AutomaticAwgRetry retry;
+        int attempts = 0;
+        const auto receipt = retirementReceipt();
+        for (int delay : {1000, 3000, 10000}) {
+            QVERIFY(retry.scheduleAfterRetirement(ErrorCode::NoError, receipt, "amnezia-awg",
+                [] { return true; }, [&] { ++attempts; }));
+            QCOMPARE(retry.delayMs(), delay);
+            advanceClock(retry);
+            retry.cancel(); // an unrelated failure must not recreate the budget
+        }
+        QCOMPARE(attempts, 3);
+        QVERIFY(!retry.scheduleAfterRetirement(ErrorCode::NoError, receipt, "amnezia-awg",
+            [] { return true; }, [&] { ++attempts; }));
+        advanceClock(retry);
+        QCOMPARE(attempts, 3);
+    }
+    void retirementNeverRetriesChangedBindingOrUnprovedAbsence()
+    {
+        AutomaticAwgRetry retry;
+        int attempts = 0;
+        QString binding = "exact-credentials-endpoint-source";
+        QVERIFY(retry.scheduleAfterRetirement(ErrorCode::NoError, retirementReceipt(), "amnezia-awg",
+            [&] { return binding == "exact-credentials-endpoint-source"; }, [&] { ++attempts; }));
+        binding = "changed";
+        advanceClock(retry);
+        QCOMPARE(attempts, 0);
+        const QJsonObject absent{{"retired", true}, {"reason", "journal_absent"}};
+        QVERIFY(!retry.scheduleAfterRetirement(ErrorCode::NoError, absent, "amnezia-awg",
+            [] { return true; }, [&] { ++attempts; }));
+        advanceClock(retry);
+        QCOMPARE(attempts, 0);
+    }
     void transportAndDependencyClassification()
     {
         QVERIFY(AutomaticAwgRetry::transient(ErrorCode::SshTimeoutError, {}));

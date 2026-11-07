@@ -39,7 +39,16 @@ if [[ "$(id -u)" -ne 0 ]]; then
     echo "run this provisioning step as root" >&2
     exit 2
 fi
-for required in python3 sha256sum awk openssl readelf readlink groupdel groupadd getent stat cmp mktemp id install flock cp touch rm rmdir mv chown chmod grep ldd dpkg dpkg-query systemctl dirname; do
+require_legacy_python() {
+    # Compatibility/recovery paths check an actual executable only when needed;
+    # a declared native failure must never reach this fallback requirement.
+    if ! type -P python3 >/dev/null 2>&1; then
+        echo "python3 is required for the selected legacy provisioning/recovery path" >&2
+        return 3
+    fi
+    return 0
+}
+for required in sha256sum awk openssl readelf readlink groupdel groupadd getent stat cmp mktemp id install flock cp touch rm rmdir mv chown chmod grep ldd dpkg dpkg-query systemctl dirname; do
     if ! command -v "$required" >/dev/null 2>&1; then
         echo "required bootstrap command is missing: $required" >&2
         exit 3
@@ -125,12 +134,14 @@ verify_transaction_root() {
     [[ "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
     mode_bits=$((0$mode))
     (( mode_bits & 0022 )) && return 1
+    return 0
 }
 fsync_path_directory() {
     if [[ -n "$NATIVE_HELPER" ]]; then
         run_native_helper fsync-directory "$1"
         return $?
     fi
+    require_legacy_python || return 3
     python3 - "$1" <<'PY'
 import os
 import sys
@@ -147,6 +158,7 @@ fsync_regular_path() {
         run_native_helper fsync-file "$1"
         return $?
     fi
+    require_legacy_python || return 3
     python3 - "$1" <<'PY'
 import os
 import sys
@@ -181,6 +193,7 @@ write_transaction_journal() {
             "${GROUP_WAS_PRESENT:-false}" "${GROUP_CREATED:-false}"
         return $?
     fi
+    require_legacy_python || return 3
     python3 - "$TRANSACTION_JOURNAL" "$phase" "${MODE:-}" "${BACKUP_DIR:-}" \
         "${SERVICE_TARGET:-/etc/systemd/system/amneziad.service}" \
         "${SERVICE_WAS_ENABLED:-not-found}" "${SERVICE_WAS_ACTIVE:-inactive}" \
@@ -322,6 +335,7 @@ verify_recovery_backup() {
         run_native_helper journal-validate-backup
         return $?
     fi
+    require_legacy_python || return 3
     python3 - "$TRANSACTION_JOURNAL" "$backup_dir" <<'PY'
 import hashlib
 import json
@@ -387,6 +401,7 @@ read_transaction_journal() {
         run_native_helper journal-recovery-read
         return $?
     fi
+    require_legacy_python || return 3
     python3 - "$TRANSACTION_JOURNAL" <<'PY'
 import json
 import re
@@ -583,6 +598,94 @@ recover_transaction() {
     echo "headless provisioning transaction recovered exactly" >&2
     return 0
 }
+verify_native_anchor_file() {
+    local path="$1" mode="$2" size_limit="$3" size
+    [[ -f "$path" && ! -L "$path" ]] || return 1
+    [[ "$(stat -c '%u:%a:%h' -- "$path" 2>/dev/null || true)" == "0:$mode:1" ]] || return 1
+    size="$(stat -c '%s' -- "$path" 2>/dev/null || true)"
+    [[ "$size" =~ ^(0|[1-9][0-9]*)$ && ${#size} -le 9 ]] || return 1
+    [[ "$size" -gt 0 && "$size" -le "$size_limit" ]] || return 1
+}
+load_native_recovery_anchor() {
+    # These roots are fixed product policy, never source-package/env/argv input.
+    local anchor_root=/var/lib/amnezia-headless-provisioning/native-anchor
+    local lock_path=/var/lib/amnezia/updates/update.lock
+    local directory_root candidate mode owner current_identity pin_identity worker_identity digest worker protocol_record
+    local protocol_valid=0
+    local -a current_lines=() pin_lines=()
+    [[ "$#" -eq 0 ]] || return 5
+    NATIVE_HELPER=""
+    NATIVE_HELPER_ARGS=()
+    if [[ ! -e "$anchor_root" && ! -L "$anchor_root" ]]; then
+        return 0 # Explicit legacy absence only; a partial/present anchor refuses.
+    fi
+    [[ -f "$lock_path" && ! -L "$lock_path" && "$(stat -c '%u:%a:%h:%s' -- "$lock_path" 2>/dev/null || true)" == 0:600:1:0 ]] || return 5
+    [[ -f /proc/self/fd/9 ]] || return 5
+    [[ "$(stat -Lc '%u:%a:%h' -- /proc/self/fd/9 2>/dev/null || true)" == "0:600:1" ]] || return 5
+    [[ "$(stat -Lc '%d:%i' -- /proc/self/fd/9 2>/dev/null || true)"         == "$(stat -c '%d:%i' -- "$lock_path" 2>/dev/null || true)" ]] || return 5
+    flock -n 9 || return 5 # Borrow the inherited OFD; never close or unlock it.
+    for directory_root in "$anchor_root" "${lock_path%/*}"; do
+        candidate="$directory_root"
+        while :; do
+            [[ -d "$candidate" && ! -L "$candidate" ]] || return 5
+            owner="$(stat -c '%u' -- "$candidate" 2>/dev/null || true)"
+            mode="$(stat -c '%a' -- "$candidate" 2>/dev/null || true)"
+            [[ "$owner" == 0 && "$mode" =~ ^[0-7]{3,4}$ ]] || return 5
+            (( (0$mode & 07022) == 0 )) || return 5
+            if [[ "$candidate" == "$anchor_root" || "$candidate" == "${anchor_root%/*}" || "$candidate" == "${lock_path%/*}" ]]; then
+                [[ "$mode" == 700 ]] || return 5
+            fi
+            [[ "$candidate" != / ]] || break
+            candidate="${candidate%/*}"
+            [[ -n "$candidate" ]] || candidate=/
+        done
+    done
+    verify_native_anchor_file "$anchor_root/CURRENT" 600 85 || return 5
+    [[ "$(stat -c '%s' -- "$anchor_root/CURRENT")" == 85 ]] || return 5
+    current_identity="$(stat -c '%d:%i:%s:%u:%a:%h' -- "$anchor_root/CURRENT")"
+    mapfile -t current_lines < "$anchor_root/CURRENT" || return 5
+    [[ "${#current_lines[@]}" -eq 2 && "${current_lines[0]}" == headless-journal-v1         && "${current_lines[1]}" =~ ^[0-9a-f]{64}$ ]] || return 5
+    [[ "$(stat -c '%d:%i:%s:%u:%a:%h' -- "$anchor_root/CURRENT")" == "$current_identity" ]] || return 5
+    digest="${current_lines[1]}"
+    # Bash line reads discard NULs; canonicality must be a byte comparison.
+    cmp -s "$anchor_root/CURRENT" <(printf 'headless-journal-v1\n%s\n' "$digest") || return 5
+    candidate="$anchor_root/payload-$digest"
+    [[ -d "$candidate" && ! -L "$candidate"         && "$(stat -c '%u:%a' -- "$candidate")" == 0:700 ]] || return 5
+    verify_native_anchor_file "$candidate/PIN" 600 65 || return 5
+    [[ "$(stat -c '%s' -- "$candidate/PIN")" == 65 ]] || return 5
+    pin_identity="$(stat -c '%d:%i:%s:%u:%a:%h' -- "$candidate/PIN")"
+    mapfile -t pin_lines < "$candidate/PIN" || return 5
+    [[ "${#pin_lines[@]}" -eq 1 && "${pin_lines[0]}" == "$digest" ]] || return 5
+    cmp -s "$candidate/PIN" <(printf '%s\n' "$digest") || return 5
+    [[ "$(stat -c '%d:%i:%s:%u:%a:%h' -- "$candidate/PIN")" == "$pin_identity" ]] || return 5
+    worker="$candidate/worker"
+    verify_native_anchor_file "$worker" 700 8388608 || return 5
+    worker_identity="$(stat -c '%d:%i:%s:%u:%a:%h' -- "$worker")"
+    [[ "$(sha256sum -- "$worker" | awk '{print $1}')" == "$digest" ]] || return 5
+    [[ "$(stat -c '%d:%i:%s:%u:%a:%h' -- "$worker")" == "$worker_identity" ]] || return 5
+    # Only independently pinned root-private bytes can execute this query.
+    # Capture bytes in a protected bounded file: Bash substitution discards NULs.
+    protocol_record="$(mktemp "$anchor_root/.protocol-check.XXXXXX")" || return 5
+    if (ulimit -f 1 && "$worker" --provisioning-fs journal-protocol) > "$protocol_record"; then
+        if verify_native_anchor_file "$protocol_record" 600 1024 \
+            && cmp -s "$protocol_record" <(printf 'headless-journal-v1\n'); then
+            protocol_valid=1
+        fi
+    fi
+    rm -f -- "$protocol_record" || return 5
+    [[ "$protocol_valid" -eq 1 ]] || return 5
+    NATIVE_HELPER="$worker"
+    NATIVE_HELPER_ARGS=(--provisioning-fs)
+}
+if [[ "$RECOVER_ONLY" -eq 1 || -e "$TRANSACTION_JOURNAL" || -L "$TRANSACTION_JOURNAL" ]]; then
+    if ! load_native_recovery_anchor; then
+        echo "persisted native recovery anchor is invalid or unavailable; refusing legacy fallback" >&2
+        exit 5
+    fi
+    if [[ -z "$NATIVE_HELPER" ]] && ! require_legacy_python; then
+        exit 5
+    fi
+fi
 if [[ "$RECOVER_ONLY" -eq 1 ]]; then
     if ! verify_transaction_root; then
         echo "headless provisioning transaction root is not a root-owned directory" >&2
@@ -640,6 +743,7 @@ trap cleanup_pretransaction EXIT
 # authority (Ed25519-verified signed manifest -> release-lab runner -> argv[5]);
 # only bootstrap OS primitives (sha256sum/awk/install) are used here.
 declare -A BOOTSTRAP_HELPERS=()
+declare -A BOOTSTRAP_HELPER_DIGESTS=()
 BOOTSTRAP_HELPER_DIR="$PRIVATE_INPUTS_ROOT/bootstrap-helper"
 NATIVE_VERIFIER_NAME="amnezia-verify-provisioning-native"
 BOOTSTRAP_VERIFIER=""
@@ -669,6 +773,7 @@ bootstrap_stage_helper() {
     }
     install -o root -g root -m 0755 "$SOURCE_PACKAGE_ROOT/$name" "$BOOTSTRAP_HELPER_DIR/$name" || return 1
     [[ "$(sha256sum "$BOOTSTRAP_HELPER_DIR/$name" | awk '{print tolower($1)}')" == "$digest" ]] || return 1
+    BOOTSTRAP_HELPER_DIGESTS["$name"]="$digest"
     BOOTSTRAP_HELPERS["$name"]="$BOOTSTRAP_HELPER_DIR/$name"
 }
 if ! bootstrap_stage_helper amnezia-headless-fs; then
@@ -804,6 +909,9 @@ y_consume_metadata() {
         exit 3
     fi
 }
+if [[ -z "$BOOTSTRAP_VERIFIER" ]]; then
+    require_legacy_python || exit 3
+fi
 if [[ -n "$BOOTSTRAP_VERIFIER" ]]; then
     y_consume_stage_inputs
 elif ! python3 - "$SOURCE_PACKAGE_ROOT" "$PRIVATE_INPUTS_ROOT" "$PUBLIC_KEY" "$VERIFIED_RECEIPT" <<'PY'
@@ -965,6 +1073,7 @@ verify_root_private_tree() {
         run_native_helper verify-root-private-tree "$1"
         return $?
     fi
+    require_legacy_python || return 3
     python3 - "$1" <<'PY'
 import os
 import stat
@@ -1302,6 +1411,9 @@ if [[ "$NATIVE_HELPER_KIND" == "amnezia-cli" ]]; then
     NATIVE_HELPER="${BOOTSTRAP_HELPERS[amnezia-cli]}"
     NATIVE_HELPER_ARGS=(--provisioning-fs)
 fi
+if [[ -z "$NATIVE_HELPER" ]]; then
+    require_legacy_python || exit 3
+fi
 if [[ "$MODE" == "upgrade" ]]; then
     for candidate in /var/lib/amnezia /run/amnezia /etc/amnezia /etc/amnezia/profiles; do
         verify_root_private_tree "$candidate" || exit 4
@@ -1353,6 +1465,20 @@ if [[ -L "$TRANSACTION_ROOT" || ! -d "$TRANSACTION_ROOT" \
     || "$(stat -c '%u' -- "$TRANSACTION_ROOT" 2>/dev/null || true)" != "0" ]]; then
     echo "transaction root must be a root-owned regular directory: $TRANSACTION_ROOT" >&2
     exit 4
+fi
+install_native_recovery_anchor() {
+    # Legacy/no-helper/standalone packages retain their explicit compatibility
+    # behavior. The canonical CLI role installs a stable copy before journaling.
+    [[ "$NATIVE_HELPER_KIND" == amnezia-cli ]] || return 0
+    local digest="${BOOTSTRAP_HELPER_DIGESTS[amnezia-cli]:-}"
+    [[ "$digest" =~ ^[0-9a-f]{64}$         && -n "${BOOTSTRAP_HELPERS[amnezia-cli]:-}"         && "$NATIVE_HELPER" == "${BOOTSTRAP_HELPERS[amnezia-cli]}"         && "${#NATIVE_HELPER_ARGS[@]}" -eq 1         && "${NATIVE_HELPER_ARGS[0]}" == --provisioning-fs ]] || return 3
+    # The expected digest is retained from the caller-pinned SHA256SUMS row,
+    # never recomputed from this worker as a source of execution authority.
+    run_native_helper anchor-install "$NATIVE_HELPER" "$digest" || return 3
+}
+if ! install_native_recovery_anchor; then
+    echo "authenticated native recovery anchor could not be installed before the transaction" >&2
+    exit 3
 fi
 install -d -o root -g root -m 0700 "$TRANSACTION_BASE"
 BACKUP_DIR="$(mktemp -d "$TRANSACTION_BASE/transaction.XXXXXX")"

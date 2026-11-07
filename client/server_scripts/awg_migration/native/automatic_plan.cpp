@@ -1,4 +1,6 @@
 #include "automatic_plan.h"
+#include "client_operation.h"
+#include "retired_predecessors.h"
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -212,7 +214,7 @@ namespace amnezia::awgMigration
     }
     AutomaticRequest automaticPlan(const std::filesystem::path &root, const std::string &source,
                                    const std::string &host, const std::string &image, std::string_view raw,
-                                   unsigned sourcePort, const UdpPorts &occupied)
+                                   unsigned sourcePort, const UdpPorts &occupied, const std::vector<std::uint64_t>& verifiedRetired)
     {
         endpoint(host);
         if (source != "amnezia-awg" && source != "amnezia-awg2")
@@ -233,12 +235,41 @@ namespace amnezia::awgMigration
                         && std::all_of(name.begin(), name.end(), [](unsigned char c) { return c >= '0' && c <= '9'; })) {
                         generation(name);
                         existing.push_back(entry.path());
+                    } else if (!verifiedRetired.empty() && (entry.is_directory() || name == "transaction.json")) {
+                        throw PlannerError("migration_journal_conflict");
                     }
                 }
             }
             std::sort(existing.begin(), existing.end(), [](const auto &a, const auto &b) {
                 return generation(a.filename().string()) < generation(b.filename().string());
             });
+            if (!verifiedRetired.empty()) {
+                if (verifiedRetired.size() > 32 || existing.size() != verifiedRetired.size())
+                    throw PlannerError("migration_journal_conflict");
+                std::uint64_t prior = 0;
+                for (std::size_t index = 0; index < existing.size(); ++index) {
+                    const auto selected = generation(existing[index].filename().string());
+                    if (verifiedRetired[index] <= prior || selected != verifiedRetired[index]) throw PlannerError("migration_journal_conflict");
+                    auto retired = plannerJson(readJournal(existing[index] / "transaction.json"));
+                    json_object* forbidden = nullptr;
+                    if (text(retired.get(), "phase") != "aborted"
+                        || json_object_get_boolean(member(retired.get(), "sourceRules", json_type_boolean))
+                        || json_object_object_get_ex(retired.get(), "nativeControl", &forbidden)
+                        || json_object_object_get_ex(retired.get(), "controlMaintenance", &forbidden))
+                        throw PlannerError("migration_journal_conflict");
+                    auto* priorRequest = member(retired.get(), "request", json_type_object);
+                    if (text(retired.get(), "source") != source
+                        || json_object_get_int64(member(priorRequest, "generation", json_type_int)) != static_cast<std::int64_t>(selected)
+                        || !validClientOperationId(text(priorRequest, "clientOperationId"))
+                        || !retiredDigest(text(retired.get(), "nativeFeedSha256")))
+                        throw PlannerError("migration_journal_conflict");
+                    try { validateBoundRetiredRequest(priorRequest, text(retired.get(), "owner"), true); }
+                    catch (...) { throw PlannerError("migration_journal_conflict"); }
+                    prior = selected;
+                }
+                if (prior >= 9007199254740991ULL) throw PlannerError("migration_journal_conflict");
+                return {host, image, selectUdpPort(occupied, sourcePort), prior + 1};
+            }
             std::vector<PlannerJson> ready;
             std::vector<std::uint64_t> readyGenerations;
             for (auto &dir : existing) {
@@ -258,8 +289,20 @@ namespace amnezia::awgMigration
                     throw PlannerError("migration_ready_drift");
                 auto port = json_object_get_int64(member(request, "port", json_type_int));
                 auto gen = json_object_get_int64(member(request, "generation", json_type_int));
+                json_object *operationRaw = nullptr;
+                const bool operationBound = json_object_object_get_ex(request, "clientOperationId", &operationRaw);
+                if (operationBound) {
+                    const auto operation = text(request, "clientOperationId");
+                    auto *native = member(j, "nativeControl", json_type_object);
+                    if (!validClientOperationId(operation) || text(j, "owner") != clientOperationOwner(operation)
+                        || text(native, "variant") != "native-control-http-v1"
+                        || text(native, "protocol") != "control-http-v1")
+                        throw PlannerError("migration_journal_conflict");
+                }
+                try { validateBoundRetiredRequest(request, operationBound ? text(j, "owner") : std::string(), operationBound); }
+                catch (...) { throw PlannerError("migration_journal_conflict"); }
                 if (port < 1024 || port > 65535 || gen < 1 || gen > 9007199254740991LL
-                    || json_object_object_length(request) != 4 || std::uint64_t(gen) != readyGenerations.front())
+                    || std::uint64_t(gen) != readyGenerations.front())
                     throw PlannerError("migration_journal_conflict");
                 return { host, image, unsigned(port), std::uint64_t(gen) };
             }

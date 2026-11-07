@@ -1,6 +1,8 @@
 #include "transaction_journal.h"
+#include "docker_absence.h"
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <fstream>
 #include <iostream>
@@ -27,13 +29,19 @@ struct FakeRunner {
     std::map<std::string,std::string> items;
     std::vector<std::vector<std::string>> commands;
     int failMutation=0,mutations=0;
+    bool retainRemoved=false;
     CommandResult operator()(const std::vector<std::string>& args){
         commands.push_back(args);
         if(args.size()==3&&args[0]=="docker"&&args[1]=="inspect"){
             auto found=items.find(args[2]);if(found==items.end())return {1,"","Error: No such object"};return {0,found->second,""};
         }
         ++mutations;if(failMutation&&mutations==failMutation)return {1,"","injected"};
-        if(args[1]=="rm")items.erase(args.back());
+        if(args[1]=="rm"&&!retainRemoved){
+            for(auto item=items.begin();item!=items.end();){
+                if(item->first==args.back()||item->second.find("\"Id\":"+quote(args.back()))!=std::string::npos)item=items.erase(item);
+                else ++item;
+            }
+        }
         if(args[1]=="start") {
             auto& s=items[args.back()];auto p=s.find("\"Running\":false");if(p!=std::string::npos)s.replace(p,15,"\"Running\":true");
         }
@@ -54,9 +62,19 @@ void core(){
         run.items[targetId]=observed(target,targetId,true,std::string(32,'c'));
         rejects([&]{j.cleanup();},"foreign owner refuses removal");require(run.mutations==0,"no foreign mutation");
         run.items[targetId]=observed(target,targetId);j.cleanup();require(run.mutations==1,"owned cleanup");
-        auto& last=run.commands[run.commands.size()-1];require(last==std::vector<std::string>({"docker","rm","-f",targetId}),"remove by immutable ID");}
+        require(run.commands[run.commands.size()-2]==std::vector<std::string>({"docker","rm","-f",targetId}),"remove by immutable ID");
+        require(run.commands.back()==std::vector<std::string>({"docker","inspect",targetId}),"absence readback follows removal");}
     TransactionJournal resumed(temp.dir,run.runner());require(resumed.snapshot().find("aborted")!=std::string::npos,"aborted durable");
     struct stat st{};require(stat((temp.dir/"transaction.json").c_str(),&st)==0&&(st.st_mode&0777)==0600,"private journal");
+}
+void retainedRemoval(){
+    Temp t;FakeRunner run;TransactionJournal j(t.dir,run.runner(),initial());
+    j.save();j.plan(target,image);run.items[target]=observed(target,targetId);j.record(target);run.items[targetId]=run.items[target];
+    run.retainRemoved=true;
+    rejects([&]{j.cleanup();},"rm success with surviving owned container must fail");
+    require(j.snapshot().find("\"phase\":\"aborted\"")==std::string::npos,"survivor cannot commit aborted");
+    run.retainRemoved=false;j.cleanup();
+    require(j.snapshot().find("\"phase\":\"aborted\"")!=std::string::npos,"verified absence commits aborted");
 }
 void faults(){
     for(const auto& point:{"save-created","save-written","save-file-synced","save-replaced","save-directory-synced"}){
@@ -155,6 +173,75 @@ void sizeBoundary(){
     Temp t;FakeRunner run;auto raw=initial();raw.append(limit+1-raw.size(),' ');
     rejects([&]{TransactionJournal j(t.dir,run.runner(),raw);},"oversized initial JSON rejected");
 }
+std::string boundInitial(std::uint64_t generation=1){
+    auto* value=json_tokener_parse(initial().c_str());require(value,"bound initial JSON");
+    const std::string operation="00112233-4455-4677-8899-aabbccddeeff";
+    json_object_object_add(value,"owner",json_object_new_string(clientOperationOwner(operation).c_str()));
+    json_object_object_add(value,"nativeFeedSha256",json_object_new_string(std::string(64,'c').c_str()));
+    json_object_object_add(value,"target",json_object_new_string(("amnezia-awg-migration-"+std::to_string(generation)).c_str()));
+    json_object* request=nullptr;require(json_object_object_get_ex(value,"request",&request),"request");
+    json_object_object_add(request,"generation",json_object_new_int64(generation));
+    json_object_object_add(request,"clientOperationId",json_object_new_string(operation.c_str()));
+    std::string raw=json_object_to_json_string_ext(value,JSON_C_TO_STRING_PLAIN);json_object_put(value);return raw;
+}
+void retiredProofsAndBorrowedLock(){
+    Temp t;FakeRunner run;const std::string operation="00112233-4455-4677-8899-aabbccddeeff";
+    TransactionJournal j(t.dir,run.runner(),boundInitial());j.plan(target,image);j.save("aborted");
+    const auto raw=j.snapshot();RetiredPredecessor proof{1,std::string(64,'c'),operation,TransactionJournal::sha256(raw)};
+    j.verifyRetired("amnezia-awg",proof);require(run.mutations==0,"retired proof read-only");
+    auto changed=proof;changed.journalSha256=std::string(64,'d');rejects([&]{j.verifyRetired("amnezia-awg",changed);},"physical hash required");
+    changed=proof;changed.sha256=std::string(64,'d');rejects([&]{j.verifyRetired("amnezia-awg",changed);},"independent feed pin required");
+    changed=proof;changed.operationId="11223344-5566-4788-99aa-bbccddeeff00";rejects([&]{j.verifyRetired("amnezia-awg",changed);},"causal operation required");
+    rejects([&]{j.verifyRetired("amnezia-awg2",proof);},"source scoped");
+    run.items[target]=observed(target,targetId,true,clientOperationOwner(operation));
+    rejects([&]{j.verifyRetired("amnezia-awg",proof);},"planned live component refuses retirement");
+    run.items[target]=observed(target,targetId,true,std::string(32,'f'));
+    rejects([&]{j.verifyRetired("amnezia-awg",proof);},"foreign planned name refuses retirement");
+    run.items.clear();
+    {std::ofstream out(t.dir/"transaction.json",std::ios::app);out<<'\n';}
+    rejects([&]{j.verifyRetired("amnezia-awg",proof);},"changed raw journal bytes refuse retirement");
+    {std::ofstream out(t.dir/"transaction.json",std::ios::trunc);out<<raw;}
+    auto next=t.dir.parent_path()/"2";fs::create_directory(next);chmod(next.c_str(),0700);
+    {
+        TransactionJournal borrowed(next,run.runner(),boundInitial(2),{},j.borrowedLockFd());borrowed.save();
+        TransactionJournal old(t.dir,run.runner(),{}, {},borrowed.borrowedLockFd());old.verifyRetired("amnezia-awg",proof);
+        rejects([&]{TransactionJournal exclusive(t.dir,run.runner());},"borrowed lock retains exclusivity");
+    }
+    rejects([&]{TransactionJournal exclusive(t.dir,run.runner());},"borrower destruction preserves owner lock");
+    const int independent=open((t.root/".prepare.lock").c_str(),O_RDWR|O_CLOEXEC);
+    require(independent>=0,"independent lock fixture");
+    rejects([&]{TransactionJournal unrelated(t.dir,run.runner(),{}, {},independent);},"same inode without same held OFD refused");close(independent);
+    const int foreign=open("/dev/null",O_RDWR|O_CLOEXEC);require(foreign>=0,"foreign fd fixture");
+    rejects([&]{TransactionJournal unrelated(t.dir,run.runner(),{}, {},foreign);},"foreign borrowed fd refused");close(foreign);
+    require(run.mutations==0,"all predecessor fault tests remain read-only");
+}
+void retiredCanonicalWire(){
+    const RetiredPredecessor proof{1,std::string(64,'c'),"00112233-4455-4677-8899-aabbccddeeff",std::string(64,'d')};
+    const auto raw=retiredPredecessorsJson({proof}),wire=encodeRetiredPredecessors({proof});
+    require(parseRetiredPredecessors(wire).front().operationId==proof.operationId,"canonical long-key wire roundtrip");
+    auto refuses=[](const std::string& encoded){try{(void)parseRetiredPredecessors(encoded);}catch(const std::runtime_error&){return;}throw JournalError("noncanonical retirement wire accepted");};
+    for(auto invalid:std::vector<std::string>{" "+raw,raw+"\n","[]",raw.substr(0,raw.size()-2)+",\"extra\":true}]"})refuses(retiredBase64(invalid));
+    for(const auto& replacement:std::vector<std::string>{"1.0","1e0","true","0","9007199254740992","\"1\"","1,\"generation\":1"}){
+        auto invalid=raw;const auto at=invalid.find("\"generation\":1");invalid.replace(at,14,"\"generation\":"+replacement);refuses(retiredBase64(invalid));
+    }
+    refuses(wire+"\n");refuses(wire.substr(1));
+    auto duplicate=raw;duplicate.insert(duplicate.size()-1,","+raw.substr(1,raw.size()-2));refuses(retiredBase64(duplicate));
+    auto missing=raw;const auto at=missing.find("journalSha256");missing.replace(at,13,"journalHashXX");refuses(retiredBase64(missing));
+}
+void verifiedAbsenceInventory(){
+    const std::vector<std::string> inspect={"docker","inspect",target};int calls=0;
+    auto check=[&](const std::string& raw){return verifiedDockerInspectAbsence(inspect,[&](const auto& argv){
+        ++calls;require(argv==std::vector<std::string>({"docker","ps","-a","--no-trunc","--format","{{.ID}}\t{{.Names}}"}),"fixed absence inventory");return raw;});};
+    require(check(""),"successful empty inventory proves absence");
+    require(check(sourceId+"\tamnezia-awg\n"),"complete unrelated inventory proves absence");
+    require(!check(targetId+"\t"+target+"\n"),"remaining name blocks absence");
+    require(!verifiedDockerInspectAbsence(std::vector<std::string>{"docker","inspect",targetId},[&](const auto&){return targetId+"\t"+target+"\n";}),"remaining ID blocks absence");
+    for(const auto& raw:std::vector<std::string>{targetId+"\t"+target,targetId+"\t"+target+"\n\n",targetId+"\t"+target+"\n"+targetId+"\tother\n","short\tname\n",sourceId+"\tbad name\n",std::string("\0",1)}){
+        bool failed=false;try{(void)check(raw);}catch(const BoundedDockerError&){failed=true;}require(failed,"malformed inventory cannot prove absence");
+    }
+    const auto before=calls;require(!verifiedDockerInspectAbsence(std::vector<std::string>{"docker","rm",target},[&](const auto&){++calls;return std::string();}),"mutation never classifies absence");require(calls==before,"invalid inspect never enumerates");
+    bool failed=false;try{(void)verifiedDockerInspectAbsence(inspect,[](const auto&)->std::string{throw BoundedDockerError(BoundedDockerFailureKind::Exit);});}catch(const BoundedDockerError&){failed=true;}require(failed,"failed inventory cannot prove absence");
+}
 
 }
-int main(){try{core();faults();recovery();helperRecovery();malformed();cleanupFailure();transitionFaults();pathSafety();sizeBoundary();std::cout<<"transaction journal: 9 groups passed; no live runner\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(){try{core();retainedRemoval();faults();recovery();helperRecovery();malformed();cleanupFailure();transitionFaults();pathSafety();sizeBoundary();retiredProofsAndBorrowedLock();retiredCanonicalWire();verifiedAbsenceInventory();std::cout<<"transaction journal: 13 groups passed; no live runner\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

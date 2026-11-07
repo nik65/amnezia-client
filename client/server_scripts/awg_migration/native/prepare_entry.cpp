@@ -1,4 +1,5 @@
 #include "prepare_entry.h"
+#include "client_operation.h"
 #include <json-c/json.h>
 #include <cerrno>
 #include <cstdlib>
@@ -61,7 +62,7 @@ Parsed parseArgv(int argc, char **argv) {
             && option != "--generation" && option != "--automatic" && option != "--preflight"
             && option != "--native-feed" && option != "--native-feed-sha256"
             && option != "--native-collector" && option != "--native-collector-sha256"
-            && option != "--native-control") {
+            && option != "--native-control" && option != "--client-operation-id" && option != "--retired-predecessors") {
             parsed.error = "unsupported option";
             return parsed;
         }
@@ -78,6 +79,11 @@ Parsed parseArgv(int argc, char **argv) {
         else if (option == "--native-feed-sha256") parsed.request.nativeFeedSha256 = value;
         else if (option == "--native-collector") parsed.nativeCollector = value;
         else if (option == "--native-collector-sha256") parsed.request.nativeCollectorSha256 = value;
+        else if (option == "--client-operation-id") parsed.request.clientOperationId = value;
+        else if (option == "--retired-predecessors") {
+            try { parsed.request.retiredPredecessors = parseRetiredPredecessors(value); }
+            catch (...) { parsed.error = "invalid retired predecessor proof"; return parsed; }
+        }
         else {
             unsigned long long number = 0;
             if (!unsignedValue(value, number)) { parsed.error = "invalid number"; return parsed; }
@@ -108,6 +114,19 @@ Parsed parseArgv(int argc, char **argv) {
                        " and --native-collector/--native-collector-sha256";
         return parsed;
     }
+    if (seen.count("--client-operation-id")
+        && (!parsed.request.nativeControl || !validClientOperationId(parsed.request.clientOperationId))) {
+        parsed.error = "invalid client operation id";
+        return parsed;
+    }
+    if (!parsed.request.retiredPredecessors.empty()
+        && (!parsed.request.nativeControl || (!parsed.request.preflight && !validClientOperationId(parsed.request.clientOperationId)))) {
+        parsed.error = "retired predecessor native authority required"; return parsed;
+    }
+    for (const auto& proof : parsed.request.retiredPredecessors)
+        if (proof.operationId == parsed.request.clientOperationId) {
+            parsed.error = "retired predecessor operation reused"; return parsed;
+        }
     parsed.valid = true;
     return parsed;
 }
@@ -126,7 +145,7 @@ int run(const Parsed &parsed, const std::filesystem::path &root,
     if (parsed.help) {
         std::cout << "usage: awg-native-prepare --source amnezia-awg|amnezia-awg2 --host HOST"
                      " --image IMAGE@sha256:DIGEST --port PORT --generation N"
-                     " [--automatic] [--preflight] [--native-control]"
+                     " [--automatic] [--preflight] [--native-control] [--client-operation-id UUID] [--retired-predecessors BASE64]"
                      " [--native-feed PATH --native-feed-sha256 DIGEST]"
                      " [--native-collector PATH --native-collector-sha256 DIGEST]\n";
         return 0;

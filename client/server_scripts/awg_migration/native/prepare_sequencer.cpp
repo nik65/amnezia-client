@@ -1,6 +1,7 @@
 // S1 sequencer: phase-ordered parity with prepare.prepare().
 // No OS boundary is crossed here; EffectPort/ObservationPort are injected.
 #include "prepare_sequencer.h"
+#include "client_operation.h"
 #include "config_generation.h"
 #include "transaction_journal.h"
 #include "trusted_image.h"
@@ -162,6 +163,10 @@ std::string journalInitial(const Request &request, const SourceObservation &obse
     json_object_object_add(entry, "host", json_object_new_string(request.host.c_str()));
     json_object_object_add(entry, "port", json_object_new_int64(request.port));
     json_object_object_add(entry, "generation", json_object_new_int64(static_cast<std::int64_t>(request.generation)));
+    if (!request.clientOperationId.empty())
+        json_object_object_add(entry, "clientOperationId", json_object_new_string(request.clientOperationId.c_str()));
+    if (!request.retiredPredecessors.empty())
+        json_object_object_add(entry, "retiredPredecessors", json_tokener_parse(retiredPredecessorsJson(request.retiredPredecessors).c_str()));
     json_object_object_add(root, "request", entry);
     return json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN);
 }
@@ -173,6 +178,10 @@ std::string requestJson(const Request &request) {
     json_object_object_add(root, "port", json_object_new_int64(request.port));
     json_object_object_add(root, "generation",
         json_object_new_int64(static_cast<std::int64_t>(request.generation)));
+    if (!request.clientOperationId.empty())
+        json_object_object_add(root, "clientOperationId", json_object_new_string(request.clientOperationId.c_str()));
+    if (!request.retiredPredecessors.empty())
+        json_object_object_add(root, "retiredPredecessors", json_tokener_parse(retiredPredecessorsJson(request.retiredPredecessors).c_str()));
     return json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN);
 }
 std::vector<std::string> namesOf(const std::filesystem::path &sourceRoot) {
@@ -202,6 +211,7 @@ Outcome run(const std::filesystem::path &root, const Request &requestInput, Obse
     static const std::regex hostPattern(R"([A-Za-z0-9.-]{1,253})");
     static const std::regex digestPattern(R"([a-f0-9]{64})");
     std::filesystem::path directory;
+    std::unique_ptr<TransactionJournal> predecessorGuard;
     std::unique_ptr<TransactionJournal> journal;
     bool mutationStarted = false;
     bool committed = false;
@@ -228,6 +238,9 @@ Outcome run(const std::filesystem::path &root, const Request &requestInput, Obse
             throw PrepareError("native_control_rejected");
         if (!request.nativeCollectorSha256.empty() && !request.nativeControl)
             throw PrepareError("native_control_rejected");
+        if (!request.clientOperationId.empty()
+            && (!request.nativeControl || !validClientOperationId(request.clientOperationId)))
+            throw PrepareError("client_operation_id_invalid");
         if (request.automatic && !request.preflight && !automatic)
             throw PrepareError("native_automatic_rejected");
         // Capture all selected executable payloads once, before any preflight
@@ -235,6 +248,33 @@ Outcome run(const std::filesystem::path &root, const Request &requestInput, Obse
         // therefore leaves no signer, generation, journal or container behind.
         effects.capturePayloads(request.nativeFeedSha256, request.nativeCollectorSha256);
 
+        validateRetiredPredecessors(request.retiredPredecessors);
+        if (!request.retiredPredecessors.empty() && (!request.nativeControl
+            || (!request.preflight && !validClientOperationId(request.clientOperationId))))
+            throw PrepareError("retired predecessor authority required");
+        for (const auto& proof : request.retiredPredecessors)
+            if (proof.operationId == request.clientOperationId) throw PrepareError("retired predecessor operation reused");
+        auto predecessorRunner = [&](const std::vector<std::string>& argv) {
+            const auto result = effects.command(argv);
+            return amnezia::awgMigration::CommandResult{result.status,result.output,result.error};
+        };
+        auto verifyPredecessors = [&](int borrowed) {
+            for (const auto& proof : request.retiredPredecessors) {
+                TransactionJournal old(root / request.source / std::to_string(proof.generation), predecessorRunner, {}, {}, borrowed);
+                old.verifyRetired(request.source, proof);
+            }
+        };
+        if (!request.retiredPredecessors.empty()) {
+            const auto& first = request.retiredPredecessors.front();
+            predecessorGuard = std::make_unique<TransactionJournal>(root / request.source / std::to_string(first.generation), predecessorRunner);
+            verifyPredecessors(predecessorGuard->borrowedLockFd());
+        }
+        auto verifiedRetiredEntry = [&](const std::filesystem::path& path) {
+            if (std::filesystem::is_symlink(path) || !std::filesystem::is_directory(path)) return false;
+            for (const auto& proof : request.retiredPredecessors)
+                if (path.filename() == std::to_string(proof.generation)) return true;
+            return false;
+        };
         SourceObservation observed;
         bool observedReady = false;
         if (request.automatic && !request.preflight) {
@@ -278,15 +318,20 @@ Outcome run(const std::filesystem::path &root, const Request &requestInput, Obse
             std::error_code preflightError;
             if (std::filesystem::is_directory(sourceRoot, preflightError)) {
                 for (const auto &entry : std::filesystem::directory_iterator(sourceRoot, preflightError)) {
+                    if (!request.nativeFeedSha256.empty() && (entry.is_symlink()
+                        || (entry.is_directory() && !verifiedRetiredEntry(entry.path()))))
+                        throw PrepareError("native_feed_existing_generation_requires_maintenance");
                     std::filesystem::path transaction;
                     if (entry.path().filename() == "transaction.json") transaction = entry.path();
                     else if (std::filesystem::is_directory(entry.path()))
                         transaction = entry.path() / "transaction.json";
                     if (!transaction.empty() && std::filesystem::exists(transaction)
-                        && !request.nativeFeedSha256.empty())
+                        && !request.nativeFeedSha256.empty() && !verifiedRetiredEntry(entry.path()))
                         throw PrepareError("native_feed_existing_generation_requires_maintenance");
                 }
             }
+            if (preflightError && preflightError != std::errc::no_such_file_or_directory)
+                throw PrepareError("native_feed_existing_generation_requires_maintenance");
             outcome.preflight = true;
             outcome.eligible = true;
             return outcome;
@@ -299,10 +344,13 @@ Outcome run(const std::filesystem::path &root, const Request &requestInput, Obse
         const auto sourceRoot = root / request.source;
         if (std::filesystem::exists(sourceRoot)) {
             for (const auto &entry : std::filesystem::directory_iterator(sourceRoot)) {
+                if (!request.nativeFeedSha256.empty() && (entry.is_symlink()
+                    || (entry.is_directory() && !verifiedRetiredEntry(entry.path()))))
+                    throw PrepareError("native_feed_existing_generation_requires_maintenance");
                 if (entry.path().filename() == "transaction.json")
                     throw PrepareError("native_feed_existing_generation_requires_maintenance");
                 if (std::filesystem::is_directory(entry.path()) &&
-                    std::filesystem::exists(entry.path() / "transaction.json"))
+                    std::filesystem::exists(entry.path() / "transaction.json") && !verifiedRetiredEntry(entry.path()))
                     throw PrepareError("native_feed_existing_generation_requires_maintenance");
             }
         }
@@ -324,16 +372,23 @@ Outcome run(const std::filesystem::path &root, const Request &requestInput, Obse
         std::filesystem::permissions(directory, std::filesystem::perms::owner_all,
                                      std::filesystem::perm_options::replace, error);
         if (error) throw PrepareError("migration_preparation_failed");
-        unsigned char ownerBytes[16];
-        if (RAND_priv_bytes(ownerBytes, sizeof(ownerBytes)) != 1) throw PrepareError("migration_preparation_failed");
-        const std::string ownership = hex(ownerBytes, sizeof(ownerBytes));
+        std::string ownership = clientOperationOwner(request.clientOperationId);
+        if (ownership.empty()) {
+            unsigned char ownerBytes[16];
+            if (RAND_priv_bytes(ownerBytes, sizeof(ownerBytes)) != 1) throw PrepareError("migration_preparation_failed");
+            ownership = hex(ownerBytes, sizeof(ownerBytes));
+        }
         const std::string sourceDigest = sha256(observed.rawConfig);
         journal = std::make_unique<TransactionJournal>(directory,
             [&](const std::vector<std::string> &argv) {
                 const CommandResult result = effects.command(argv);
                 return amnezia::awgMigration::CommandResult{result.status, result.output, result.error};
             },
-            journalInitial(request, observed, ownership, target, sourceDigest));
+            journalInitial(request, observed, ownership, target, sourceDigest), JournalFault{},
+            predecessorGuard ? predecessorGuard->borrowedLockFd() : -1);
+        // Revalidate under the exact same global lock/OFD after selection and
+        // before signing, source rules, Docker or any product mutation.
+        if (predecessorGuard) verifyPredecessors(journal->borrowedLockFd());
         mutationStarted = true;
 
         phase("signing");
@@ -589,6 +644,8 @@ Outcome run(const std::filesystem::path &root, const Request &requestInput, Obse
             json_object_object_add(root, "serverPublicKey", json_object_new_string(serverKey.c_str()));
             json_object_object_add(root, "signingPublicKey", json_object_new_string(publicKey.c_str()));
             json_object_object_add(root, "legacyRetained", json_object_new_boolean(1));
+            if (!request.clientOperationId.empty())
+                json_object_object_add(root, "clientOperationId", json_object_new_string(request.clientOperationId.c_str()));
             return std::string(json_object_to_json_string_ext(root, JSON_C_TO_STRING_PLAIN));
         }();
         json_object *native = json_object_new_object();

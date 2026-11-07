@@ -5,6 +5,7 @@
 // socket, starts a process, or mutates the host. Filesystem mutation is limited
 // to the explicitly supplied migration root and private generation directory.
 #include "policy.h"
+#include "retired_predecessors.h"
 #include "ready_config.h"
 #include <cstdint>
 #include <filesystem>
@@ -34,6 +35,9 @@ struct Request {
     // Exact captured native log collector digest. Required with
     // --native-control; empty keeps the legacy Python logs collector.
     std::string nativeCollectorSha256;
+    // Optional causal nonce from the independently persisted client intent.
+    std::string clientOperationId;
+    std::vector<RetiredPredecessor> retiredPredecessors;
 };
 
 struct SourceObservation {

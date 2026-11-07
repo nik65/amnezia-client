@@ -21,7 +21,8 @@ int maintenanceMain(int argc, char **argv) { ++maintains; capture(argc, argv); r
 int main() {
     using amnezia::awgMigration::orchestration::runOrchestrationArgv;
     const std::vector<std::string> modes{"--prepare", "--maintenance", "--maintenance-status",
-        "--maintenance-cleanup", "--maintenance-recover", "--maintenance-restart-controls"};
+        "--maintenance-cleanup", "--maintenance-recover", "--maintenance-restart-controls", "--maintenance-verify",
+        "--maintenance-inspect-prepare", "--maintenance-abort-prepare"};
     for (const auto &mode : modes) {
         std::vector<std::string> values{"/unchanged/awg-feed", mode, "--source", "amnezia-awg", "--opaque", "not-a-normalized token"};
         std::vector<char *> argv;

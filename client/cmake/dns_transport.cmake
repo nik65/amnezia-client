@@ -37,6 +37,18 @@ function(amnezia_bundle_android_dns_transport target_name)
        OR NOT _sha STREQUAL _actual_sha)
         message(FATAL_ERROR "DNS fallback native component identity/hash/ABI mismatch")
     endif()
-    set_property(TARGET ${target_name} APPEND PROPERTY QT_ANDROID_EXTRA_LIBS "${_binary}")
+    # This is a PIE process executable, not a JNI shared library. Qt registers
+    # QT_ANDROID_EXTRA_LIBS in bundled_libs and System.load()s every entry at
+    # startup. Copy this exact payload through the non-autoload resource path
+    # instead, while retaining its .so name for Android nativeLibraryDir.
+    set(_payload_directory "${CMAKE_CURRENT_BINARY_DIR}/android-dnstt/${CMAKE_ANDROID_ARCH_ABI}")
+    file(MAKE_DIRECTORY "${_payload_directory}")
+    set(_payload "${_payload_directory}/libdnstt.so")
+    configure_file("${_binary}" "${_payload}" COPYONLY USE_SOURCE_PERMISSIONS)
+    file(SHA256 "${_payload}" _payload_sha)
+    if(NOT _payload_sha STREQUAL _sha)
+        message(FATAL_ERROR "DNS fallback native component changed while staging")
+    endif()
+    set_property(TARGET ${target_name} APPEND PROPERTY QT_ANDROID_EXTRA_PLUGINS "${_payload_directory}")
     message(STATUS "Bundling pinned Android DNS transport for ${_abi}")
 endfunction()

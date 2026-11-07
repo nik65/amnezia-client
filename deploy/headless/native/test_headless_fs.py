@@ -9,7 +9,10 @@ import sys
 import tempfile
 import unittest
 
-HELPER = str(Path(sys.argv.pop(1)).resolve())
+HELPER = [str(Path(sys.argv.pop(1)).resolve())]
+# Optional production CLI dispatch; standalone helper invocation stays unchanged.
+if len(sys.argv) > 1 and sys.argv[1] == "--provisioning-fs":
+    HELPER.append(sys.argv.pop(1))
 
 
 class NativeFsTest(unittest.TestCase):
@@ -23,7 +26,7 @@ class NativeFsTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_check(self, command, path, success):
-        result = subprocess.run([HELPER, command, str(path)], capture_output=True, timeout=5)
+        result = subprocess.run([*HELPER, command, str(path)], capture_output=True, timeout=5)
         self.assertEqual(result.returncode == 0, success, result.stderr)
 
     def test_fsync_types_missing_symlink_fifo(self):
@@ -80,12 +83,39 @@ class NativeFsTest(unittest.TestCase):
         finally:
             sock.close()
 
+    def test_journal_protocol_is_exact_and_rejects_extra_arguments(self):
+        result = subprocess.run([*HELPER, "journal-protocol"], capture_output=True,
+                                text=True, timeout=5, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "headless-journal-v1\n")
+        self.assertEqual(result.stderr, "")
+        # This query is not a generic journal command or a configurable root.
+        for extra in ("extra", str(self.root)):
+            result = subprocess.run([*HELPER, "journal-protocol", extra],
+                                    capture_output=True, text=True, timeout=5, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("headless-journal-v1", result.stdout)
+
+    def test_anchor_storage_has_no_test_policy_or_arbitrary_root_argv(self):
+        # Invalid arity refuses before entering the fixed production operation.
+        for args in (["anchor-install"], ["anchor-install", "source"],
+                     ["anchor-install", "source", "0" * 64, "--root", str(self.root)],
+                     ["anchor-inspect", str(self.root)]):
+            result = subprocess.run([*HELPER, *args], capture_output=True, timeout=5, check=False)
+            self.assertNotEqual(result.returncode, 0)
+        if os.geteuid() != 0:
+            # The UID gate must fail before reading/creating production paths.
+            result = subprocess.run([*HELPER, "anchor-install", str(self.file), "0" * 64],
+                                    capture_output=True, timeout=5, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b"requires its fixed owner", result.stderr)
+
     def test_cli_fail_closed(self):
         self.run_check("unknown", self.file, False)
         self.run_check("journal-write", self.file, False)
         self.run_check("journal-unknown", self.file, False)
         for args in ([], ["fsync-file"], ["fsync-file", str(self.file), "extra"]):
-            self.assertNotEqual(subprocess.run([HELPER, *args], capture_output=True).returncode, 0)
+            self.assertNotEqual(subprocess.run([*HELPER, *args], capture_output=True).returncode, 0)
 
     def test_installer_authentication_precedes_native_activation(self):
         source = (Path(__file__).parents[1] / "install_headless.sh").read_text()

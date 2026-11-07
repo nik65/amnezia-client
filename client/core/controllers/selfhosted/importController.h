@@ -12,7 +12,7 @@
 #include "core/utils/routeModes.h"
 #include "core/utils/commonStructs.h"
 
-namespace
+namespace amnezia
 {
     enum class ConfigTypes {
         Amnezia,

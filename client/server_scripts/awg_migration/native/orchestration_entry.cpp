@@ -12,7 +12,8 @@ bool runOrchestrationArgv(int argc, char **argv, int &status) {
     }
     if (mode == "--maintenance" || mode == "--maintenance-status"
         || mode == "--maintenance-cleanup" || mode == "--maintenance-recover"
-        || mode == "--maintenance-restart-controls") {
+        || mode == "--maintenance-restart-controls" || mode == "--maintenance-verify"
+        || mode == "--maintenance-inspect-prepare" || mode == "--maintenance-abort-prepare") {
         status = maintenance::maintenanceMain(argc - 1, argv + 1);
         return true;
     }

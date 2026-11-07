@@ -233,6 +233,22 @@ int main()
     });
     test([] {
         Temp t;
+        const std::string retired="{\"phase\":\"aborted\",\"source\":\"amnezia-awg2\",\"sourceRules\":false,"
+            "\"owner\":\"00112233445546778899aabbccddeeff\",\"nativeFeedSha256\":\""+std::string(64,'c')+"\","
+            "\"request\":{\"host\":\"vpn.example\",\"image\":\"pinned\",\"port\":51822,\"generation\":1,"
+            "\"clientOperationId\":\"00112233-4455-4677-8899-aabbccddeeff\"}}";
+        t.journal("1",retired);
+        const auto selected=automaticPlan(t.root,"amnezia-awg2","vpn.example","pinned","source",51820,{51821},{1});
+        check(selected.generation==2 && selected.port==51822);
+        error([&]{automaticPlan(t.root,"amnezia-awg2","vpn.example","pinned","source",51820,{}, {2});},"migration_journal_conflict");
+        t.journal("2", "{\"phase\":\"creating\"}");
+        error([&]{automaticPlan(t.root,"amnezia-awg2","vpn.example","pinned","source",51820,{}, {1});},"migration_journal_conflict");
+        fs::remove_all(t.root/"amnezia-awg2"/"2");
+        auto changed=retired;const auto at=changed.find("\"sourceRules\":false");changed.replace(at,19,"\"sourceRules\":true");t.journal("1",changed);
+        error([&]{automaticPlan(t.root,"amnezia-awg2","vpn.example","pinned","source",51820,{}, {1});},"migration_journal_conflict");
+    });
+    test([] {
+        Temp t;
         t.journal("2", "{\"phase\":\"creating\"}");
         error([&] { automaticPlan(t.root, "amnezia-awg2", "vpn.example", "pinned", "source", 51820, {}); },
               "migration_journal_conflict");
@@ -447,6 +463,33 @@ int main()
         version.version = std::string("\xe2\x80\x8b") + version.version;
         error([&] { resolveTrustedImage(hash); }, "trusted_image_unavailable");
         error([&] { resolveTrustedImage(version); }, "trusted_image_unavailable");
+    });
+    // Existing native generations may carry exactly one optional causal UUID;
+    // extra request fields and mismatched ownership must remain hard failures.
+    test([] {
+        const std::string operation = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        auto nativeReady = [&](const std::string& operationId, const std::string& owner,
+                               const std::string& variant, bool extra) {
+            auto value = ready();
+            const std::string generation = "\"generation\":1";
+            const auto at = value.find(generation);
+            value.replace(at, generation.size(), generation + ",\"clientOperationId\":\"" + operationId + "\""
+                + (extra ? ",\"unrecognized\":true" : ""));
+            value.insert(value.size() - 1, ",\"owner\":\"" + owner + "\",\"nativeControl\":{\"variant\":\""
+                + variant + "\",\"protocol\":\"control-http-v1\"}");
+            return value;
+        };
+        { Temp t; t.journal("1", nativeReady(operation, std::string(32, 'a'), "native-control-http-v1", false));
+          check(automaticPlan(t.root, "amnezia-awg2", "vpn.example", "pinned", "source", 51820, {}).generation == 1); }
+        for (const auto& value : {
+                nativeReady(operation, std::string(32, 'b'), "native-control-http-v1", false),
+                nativeReady(operation, std::string(32, 'a'), "legacy", false),
+                nativeReady(operation, std::string(32, 'a'), "native-control-http-v1", true),
+                nativeReady("invalid", std::string(32, 'a'), "native-control-http-v1", false)}) {
+            Temp t; t.journal("1", value);
+            error([&] { automaticPlan(t.root, "amnezia-awg2", "vpn.example", "pinned", "source", 51820, {}); },
+                "migration_journal_conflict");
+        }
     });
     std::cout << "plannerCases=" << n << " passed=true liveProcesses=0 udpBindings=0\n";
 }

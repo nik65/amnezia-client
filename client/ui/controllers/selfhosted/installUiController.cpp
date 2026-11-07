@@ -43,6 +43,14 @@
 #include "core/models/protocols/xrayProtocolConfig.h"
 
 namespace {
+QString automaticAwgEndpointHost(const SelfHostedAdminServerConfig &admin, DockerContainer container)
+{
+    const auto config = admin.containers.value(container);
+    const auto awg = config.getAwgProtocolConfig();
+    return awg && awg->clientConfig && !awg->clientConfig->hostName.isEmpty()
+        ? awg->clientConfig->hostName : admin.hostName;
+}
+
 QString automaticAwgBinding(const SelfHostedAdminServerConfig &admin, DockerContainer container)
 {
     // Relevant credentials/source-profile changes invalidate queued retries.
@@ -50,7 +58,9 @@ QString automaticAwgBinding(const SelfHostedAdminServerConfig &admin, DockerCont
     const auto credentials = admin.credentials();
     const QJsonObject value{{"host", credentials.hostName}, {"user", credentials.userName},
         {"secret", credentials.secretData}, {"fingerprint", credentials.sshHostKeyFingerprint},
-        {"port", credentials.port}, {"container", admin.containers.value(container).toJson()}};
+        {"port", credentials.port}, {"source", static_cast<int>(container)},
+        {"endpointHost", automaticAwgEndpointHost(admin, container)},
+        {"container", admin.containers.value(container).toJson()}};
     return QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(value).toJson(QJsonDocument::Compact),
             QCryptographicHash::Sha256).toHex());
 }
@@ -401,7 +411,8 @@ void InstallUiController::runNextAutomaticAwgMigration()
         const bool bindingStillCurrent = currentAdmin && currentAdmin->hasCredentials()
                 && !currentAdmin->isReadOnly() && currentAdmin->containers.contains(container)
                 && automaticAwgBinding(*currentAdmin, container) == binding;
-        if (result.first == ErrorCode::NoError && result.second.value("prepared").toBool() && bindingStillCurrent) {
+        if (result.first == ErrorCode::NoError && result.second.value("prepared").toBool()
+                && !result.second.value("retired").toBool() && bindingStillCurrent) {
             retry->cancel();
             message = QStringLiteral("AWG 3.1 готов. Совместимые клиенты перейдут при следующем подключении. Текущие подключения сохранены.");
         } else {
@@ -423,16 +434,24 @@ void InstallUiController::runNextAutomaticAwgMigration()
                 message = QStringLiteral("Не удалось безопасно выбрать свободный UDP-порт.");
             else
                 message = QStringLiteral("Автоматический переход приостановлен: проверка доступа или совместимости сервера не завершена.");
-            if (retry->schedule(result.first, reason,
-                    [this, serverId, container, binding]() {
+            const auto guard = [this, serverId, container, binding]() {
                 const auto current = m_serversController->selfHostedAdminConfig(serverId);
                 return current && current->hasCredentials() && !current->isReadOnly()
                         && !current->sshHostKeyFingerprint.isEmpty() && current->containers.contains(container)
                         && automaticAwgBinding(*current, container) == binding;
-            }, [this, serverId, containerIndex, attempt]() {
+            };
+            const auto enqueue = [this, serverId, containerIndex, attempt]() {
                 m_automaticAwgAttempts.remove(attempt);
                 ensureAutomaticAwgMigration(serverId, containerIndex);
-            })) {
+            };
+            const QString source = ContainerUtils::containerToString(container);
+            if (bindingStillCurrent && AutomaticAwgRetry::verifiedRetirement(result.first, result.second, source)) {
+                if (retry->scheduleAfterRetirement(result.first, result.second, source, guard, enqueue))
+                    message = QStringLiteral("Незавершённая подготовка безопасно отменена. Новая попытка через %1 с.")
+                            .arg(retry->delayMs() / 1000);
+                else
+                    message = QStringLiteral("Незавершённая подготовка отменена. Лимит автоматических повторов исчерпан; требуется проверка сервера.");
+            } else if (retry->schedule(result.first, reason, guard, enqueue)) {
                 message = QStringLiteral("Временный сбой связи или подготовки. Повторная попытка автоматически через %1 с.")
                         .arg(retry->delayMs() / 1000);
             }

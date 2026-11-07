@@ -23,6 +23,19 @@ int main(int argc,char** argv) {
                 if(!json_object_object_get_ex(inspections,args[2].c_str(),&item))return CommandResult{1,"","No such object"};
                 return CommandResult{0,"["+std::string(json_object_to_json_string_ext(item,JSON_C_TO_STRING_PLAIN))+"]",""};
             }
+            if(args.size()>=4&&args[1]=="rm"){
+                std::vector<std::string> aliases;
+                json_object_object_foreach(inspections,key,item){
+                    json_object* id=nullptr;
+                    if(args.back()==key||(json_object_object_get_ex(item,"Id",&id)
+                        &&json_object_is_type(id,json_type_string)&&args.back()==json_object_get_string(id)))aliases.emplace_back(key);
+                }
+                for(const auto& alias:aliases)json_object_object_del(inspections,alias.c_str());
+            }
+            json_object* forcedShellStatus=nullptr;
+            if(args.size()==6&&args[1]=="exec"&&args[3]=="sh"
+                &&json_object_object_get_ex(scenario,"forcedShellStatus",&forcedShellStatus))
+                return CommandResult{json_object_get_int(forcedShellStatus),"","inert shell failure"};
             return CommandResult{};
         };
         const auto initial=std::string(json_object_to_json_string_ext(json_object_object_get(scenario,"initial"),JSON_C_TO_STRING_PLAIN));

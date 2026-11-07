@@ -10,6 +10,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QIODevice>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -453,8 +454,41 @@ namespace {
     }
 
 #if defined(Q_OS_ANDROID)
-    QString androidSettingsFilePath(SecureQSettings::StorageScope scope)
+    QString androidSettingsFilePath(SecureQSettings::StorageScope scope, bool *available)
     {
+        *available = true;
+        if (scope == SecureQSettings::StorageScope::ControlAuthority) {
+            // CURRENT cannot follow whichever directory happens to be writable
+            // today: a later relocation would look like a fresh empty store.
+            // Pin this backend to one app-private QStandardPaths location.
+            *available = false;
+            const QString base = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+            if (base.isEmpty() || !QDir::isAbsolutePath(base)) {
+                qCritical() << "SecureQSettings: Android authority config location is unavailable";
+                // QSettings must receive a nonempty filename even on failure.
+                // This inert name is never read/written: the availability flag
+                // gates constructor migration and every subsequent accessor.
+                return QStringLiteral("/__amnezia_control_authority_unavailable__/control-authority.ini");
+            }
+            const QString directory = QDir::cleanPath(base);
+            const QString fixedPath = QDir(directory).filePath(QStringLiteral("control-authority.ini"));
+            if (!QDir().mkpath(directory) || QFileInfo(directory).isSymLink()) {
+                qCritical() << "SecureQSettings: Android authority config directory is unavailable";
+                return fixedPath;
+            }
+            const QString probePath = QDir(directory).filePath(QStringLiteral(".amnezia-control-authority-write-probe"));
+            QFile probe(probePath);
+            if (!probe.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                qCritical() << "SecureQSettings: Android authority config directory is not writable";
+                return fixedPath;
+            }
+            const bool probeOk = probe.write("ok", 2) == 2 && probe.flush();
+            probe.close();
+            (void)QFile::remove(probePath);
+            *available = probeOk;
+            if (!probeOk) qCritical() << "SecureQSettings: Android authority storage probe failed";
+            return fixedPath;
+        }
         // Do not construct QSettings with an empty filename.  On Android the
         // NativeFormat fallback can resolve to a read-only/invalid location
         // and reports AccessError only when a durable value is written.  Pick
@@ -471,10 +505,7 @@ namespace {
             if (directory.isEmpty() || !QDir().mkpath(directory)) {
                 continue;
             }
-            const QString probePath = QDir(directory).filePath(
-                    scope == SecureQSettings::StorageScope::ControlAuthority
-                        ? QStringLiteral(".amnezia-control-authority-write-probe")
-                        : QStringLiteral(".amnezia-settings-write-probe"));
+            const QString probePath = QDir(directory).filePath(QStringLiteral(".amnezia-settings-write-probe"));
             QFile probe(probePath);
             if (!probe.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
                 continue;
@@ -483,27 +514,23 @@ namespace {
             probe.close();
             (void)QFile::remove(probePath);
             if (probeOk) {
-                return QDir(directory).filePath(scope == SecureQSettings::StorageScope::ControlAuthority
-                    ? QStringLiteral("control-authority.ini") : QStringLiteral("settings.ini"));
+                return QDir(directory).filePath(QStringLiteral("settings.ini"));
             }
         }
         qCritical() << "SecureQSettings: no writable app-private Android settings directory";
-        return QDir(QDir::tempPath()).filePath(
-                scope == SecureQSettings::StorageScope::ControlAuthority
-                    ? QStringLiteral("amnezia-control-authority-unavailable.ini")
-                    : QStringLiteral("amnezia-settings-unavailable.ini"));
+        return QDir(QDir::tempPath()).filePath(QStringLiteral("amnezia-settings-unavailable.ini"));
     }
 #endif
 }
 
 SecureQSettings::SecureQSettings(const QString &organization, const QString &application, QObject *parent,
                                  AccessMode accessMode, bool enableEncryption, StorageScope storageScope)
-    : QObject { parent },
+    : QObject { parent }, m_storageAvailable(true),
 #if defined(Q_OS_ANDROID)
       // Qt's Android NativeFormat backend can report AccessError for durable
       // writes on some Qt/device combinations. Keep the same encrypted-value
       // layer, but put the QSettings file explicitly in app-private storage.
-      m_settings(androidSettingsFilePath(storageScope), QSettings::IniFormat, parent),
+      m_settings(androidSettingsFilePath(storageScope, &m_storageAvailable), QSettings::IniFormat, parent),
 #else
       m_settings(organization, storageScope == StorageScope::ControlAuthority
           ? application + QStringLiteral("-ControlAuthority") : application, parent),
@@ -515,6 +542,7 @@ SecureQSettings::SecureQSettings(const QString &organization, const QString &app
           ? QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(QJsonArray{organization, application})
                 .toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex()) : QString())
 {
+    if (!m_storageAvailable) return;
 #if defined(Q_OS_ANDROID)
     // Some Android filesystems do not support QSettings' temporary rename
     // used for atomic sync even though direct writes to the app-private file
@@ -582,6 +610,7 @@ SecureQSettings::SecureQSettings(const QString &organization, const QString &app
 QVariant SecureQSettings::value(const QString &key, const QVariant &defaultValue) const
 {
     QMutexLocker locker(&m_mutex);
+    if (!m_storageAvailable) return defaultValue;
     if (!amnezia::secureSettingsPolicy::isValidSettingsKey(key)) {
         qWarning() << "SecureQSettings::value rejected invalid settings key";
         return defaultValue;
@@ -636,6 +665,7 @@ bool SecureQSettings::readFreshValue(const QString &key, QVariant &result)
 {
     QMutexLocker locker(&m_mutex);
     result = {};
+    if (!m_storageAvailable) return false;
     if (!amnezia::secureSettingsPolicy::isValidSettingsKey(key)) return false;
     const QString canonical = amnezia::secureSettingsPolicy::canonicalKey(key);
     if (canonical.isEmpty()) return false;
@@ -650,6 +680,7 @@ bool SecureQSettings::readFreshValue(const QString &key, QVariant &result)
 void SecureQSettings::setValue(const QString &key, const QVariant &value)
 {
     QMutexLocker locker(&m_mutex);
+    if (!m_storageAvailable) return;
     if (m_accessMode == AccessMode::ReadOnly) {
         qWarning() << "SecureQSettings::setValue rejected in read-only mode";
         return;
@@ -719,6 +750,7 @@ void SecureQSettings::setValue(const QString &key, const QVariant &value)
 void SecureQSettings::remove(const QString &key)
 {
     QMutexLocker locker(&m_mutex);
+    if (!m_storageAvailable) return;
     if (m_accessMode == AccessMode::ReadOnly) {
         qWarning() << "SecureQSettings::remove rejected in read-only mode";
         return;
@@ -749,6 +781,7 @@ void SecureQSettings::remove(const QString &key)
 QByteArray SecureQSettings::backupAppConfig() const
 {
     QMutexLocker locker(&m_mutex);
+    if (!m_storageAvailable) return {};
 
     QJsonObject cfg;
 
@@ -783,6 +816,7 @@ QByteArray SecureQSettings::backupAppConfig() const
 bool SecureQSettings::restoreAppConfig(const QByteArray &json)
 {
     QMutexLocker locker(&m_mutex);
+    if (!m_storageAvailable) return false;
     if (m_accessMode == AccessMode::ReadOnly) {
         qWarning() << "SecureQSettings::restoreAppConfig rejected in read-only mode";
         return false;
@@ -850,6 +884,7 @@ bool SecureQSettings::isExcludedFromBackup(const QString &key) const
 void SecureQSettings::clearSettings()
 {
     QMutexLocker locker(&m_mutex);
+    if (!m_storageAvailable) return;
     if (m_accessMode == AccessMode::ReadOnly) {
         qWarning() << "SecureQSettings::clearSettings rejected in read-only mode";
         return;

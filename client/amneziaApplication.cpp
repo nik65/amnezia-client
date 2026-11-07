@@ -1231,6 +1231,19 @@ bool AmneziaApplication::parseCommands()
                             admin->credentials(), ContainerUtils::containerToString(source)));
                     QString authorityError;
                     authorized = authority->lock(&authorityError);
+                    if (authorized) {
+                        const auto initial = authority->load();
+                        const QString state = initial.record.value("state").toString();
+                        if (initial.ok && !initial.missing
+                                && (state == QStringLiteral("pendingPrepare") || state == QStringLiteral("pendingMaintenance"))) {
+                            error = InstallController::reconcileAwgMigrationControls(admin->credentials(), source,
+                                generation, selected.value("expectedJournalSha256").toString(), authority.get(), receipt,
+                                selection.currentControlSha256);
+                            // Reconciliation is its own bounded operation; never
+                            // immediately replace controls with a new bundle here.
+                            authorized = false;
+                        }
+                    }
                     if (authorized && !selection.currentControlSha256.isEmpty())
                         authorized = authority->anchorCurrent(generation, selection.currentControlSha256, &authorityError);
                     if (authorized) {
@@ -1238,10 +1251,12 @@ bool AmneziaApplication::parseCommands()
                         authorized = saved.ok && !saved.missing
                             && saved.record.value("state").toString() == QStringLiteral("current")
                             && saved.record.value("generation").toInteger() == generation;
-                        if (authorized) selection.currentControlSha256 = saved.record.value("currentSha").toString();
-                        else authorityError = saved.ok ? QStringLiteral("authority_recovery_required") : saved.error;
+                        if (authorized) {
+                            selection.currentControlSha256 = saved.record.value("currentSha").toString();
+                            selection.clientOperationId = saved.record.value("prepareOperationId").toString();
+                        } else authorityError = saved.ok ? QStringLiteral("authority_recovery_required") : saved.error;
                     }
-                    if (!authorized) receipt.insert(QStringLiteral("reason"), authorityError);
+                    if (!authorized && !authorityError.isEmpty()) receipt.insert(QStringLiteral("reason"), authorityError);
                 }
                 if (authorized)
                     error = InstallController::maintainAwgMigrationControls(admin->credentials(), source,

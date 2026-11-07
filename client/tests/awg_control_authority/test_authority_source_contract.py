@@ -23,14 +23,20 @@ def between(text, start, end):
     return text[begin:text.index(end, begin + len(start))]
 
 
+def controller_method(text, name):
+    start = text.index("ErrorCode InstallController::" + name + "(")
+    following = re.search(r"\n(?:ErrorCode|ServerRoutingRulesPublishResult) InstallController::", text[start + 1:])
+    if following is None:
+        raise AssertionError("missing next controller method after " + name)
+    return text[start:start + 1 + following.start()]
+
+
 class AuthoritySourceContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         controller = source("client/core/controllers/selfhosted/installController.cpp")
-        cls.prepare = between(controller, "ErrorCode InstallController::prepareAwgMigration(",
-                              "ServerRoutingRulesPublishResult InstallController::publishVersionedServerRoutingRules(")
-        cls.maintenance = between(controller, "ErrorCode InstallController::maintainAwgMigrationControls(",
-                                  "ErrorCode InstallController::prepareAwgMigration(")
+        cls.prepare = controller_method(controller, "prepareAwgMigration")
+        cls.maintenance = controller_method(controller, "maintainAwgMigrationControls")
         cls.store = source("client/core/utils/awgControlAuthorityStore.h")
         cls.app = source("client/amneziaApplication.cpp")
 
@@ -39,8 +45,8 @@ class AuthoritySourceContract(unittest.TestCase):
         bundle = prepare.index("amnezia::serverNative::loadResourceBundle()")
         invalid = prepare.index("nativeBundle.present && !nativeBundle.valid", bundle)
         find = prepare.index('nativeFeed = nativeBundle.find(QStringLiteral("awg-feed"), *architecture)')
-        begin = prepare.index("authority->beginPrepare(nativeFeed->sha256, &authorityError)")
-        commit = prepare.index("authority->commitPrepare(number.toInteger(), nativeFeed->sha256, &authorityError)")
+        begin = prepare.index("authority->beginPrepare(nativeFeed->sha256, &authorityError")
+        commit = prepare.index("authority->commitPrepare(")
         self.assertLess(bundle, invalid)
         self.assertLess(invalid, find)
         self.assertLess(find, begin)
@@ -61,26 +67,64 @@ class AuthoritySourceContract(unittest.TestCase):
         self.assertIn("return finish(ErrorCode::ServerCheckFailed);", rejected_intent)
         self.assertIn("authority->matches(credentials, ContainerUtils::containerToString(source))", prepare)
         self.assertIn("!authority->lock(&authorityError)", prepare)
-        self.assertIn("if (!saved.ok || !saved.missing)", prepare)
+        self.assertIn("if (!saved.ok)", prepare)
+        self.assertIn("if (!saved.missing)", prepare)
+        store_begin = between(self.store, "bool beginPrepare(", "bool commitPrepare(")
+        self.assertIn('const bool retired = !previous.missing && previous.record.value("state") == "retiredPrepare";', store_begin)
+        self.assertIn('if (!previous.missing && !retired) return fail(error, "authority_already_exists")', store_begin)
+        self.assertIn('predecessors.size() >= 32', store_begin)
+        self.assertIn('value.insert(QStringLiteral("minimumGeneration"), retiredGeneration + 1)', store_begin)
+        self.assertIn('value.insert(QStringLiteral("retiredPredecessors"), predecessors)', store_begin)
 
     def test_prepare_receipt_is_strict_and_commit_precedes_cleanup(self):
-        receipt = between(self.prepare, "if (outcome == ErrorCode::NoError && nativeFeed)",
-                          "} else if (outcome == ErrorCode::NoError")
+        controller_receipt = between(self.prepare, "if (outcome == ErrorCode::NoError && nativeFeed)",
+                                     "} else if (outcome == ErrorCode::NoError")
+        self.assertIn("AwgMaintenance::nativePrepareReceipt(result, prepareOperationId,", controller_receipt)
+        self.assertIn("generation, automatic, &preparedReceipt)", controller_receipt)
+        self.assertIn('commitPrepare(preparedReceipt.value("generation").toInteger(),', controller_receipt)
+        self.assertIn("nativeFeed->sha256, &authorityError)", controller_receipt)
+        receipt = between(source("client/core/controllers/selfhosted/awgMaintenanceReceipt.h"),
+                          "inline bool nativePrepareReceipt(", "inline bool validNativeOperationReceipt(")
         for expected in (
-            'result.value(QStringLiteral("prepared")).isBool()',
-            'result.value(QStringLiteral("prepared")).toBool()',
-            'result.value(QStringLiteral("legacyRetained")).isBool()',
-            'result.value(QStringLiteral("legacyRetained")).toBool()',
-            "number.isDouble()", "generationValue >= 1", "generationValue <= 9007199254740991.0",
-            "generationValue == static_cast<double>(number.toInteger())",
-            "(automatic || number.toInteger() == generation)",
-            "if (!prepared || !authority->commitPrepare(",
+            '*receipt = {};', 'envelope.value("prepared").isBool()',
+            '!envelope.value("receipt").isString()', 'expectedOperationId.isEmpty()',
+            'envelope.value("receipt").toString().toUtf8()', 'bytes.size() > 16384',
+            'QJsonDocument::fromJson(bytes)', 'if (!parsed.isObject()) return false;',
+            'const auto value = parsed.object();',
+            'value.value("prepared").isBool()', 'value.value("prepared").toBool()',
+            'value.value("legacyRetained").isBool()', 'value.value("legacyRetained").toBool()',
+            'const auto number = value.value("generation");',
+            "number.isDouble()", "generation < 1", "generation > 9007199254740991.0",
+            "generation != static_cast<double>(number.toInteger())",
+            "(!automatic && number.toInteger() != requestedGeneration)",
+            'value.value("clientOperationId").toString() != expectedOperationId',
         ):
             self.assertIn(expected, receipt)
+        self.assertNotIn('envelope.value("generation")', receipt)
+        self.assertNotIn('envelope.value("clientOperationId")', receipt)
         commit = self.prepare.index("authority->commitPrepare(")
-        cleanup = self.prepare.index("const ErrorCode cleanupError = cleanup();", commit)
+        cleanup = self.prepare.index("return finish(outcome);", commit)
         self.assertLess(commit, cleanup)
-        self.assertIn("if (outcome != ErrorCode::NoError) return outcome;", self.prepare[cleanup:])
+        finish = between(self.prepare, "auto finish =", "auto directoryIdentity =")
+        self.assertIn("const ErrorCode cleanupError = cleanup(details);", finish)
+        self.assertIn("primary != ErrorCode::NoError ? primary : cleanupError", finish)
+        self.assertIn("result.insert(it.key(), it.value())", finish)
+
+    def test_prepare_nonce_is_created_by_local_intent_before_remote_command(self):
+        store_begin = between(self.store, "bool beginPrepare(", "bool commitPrepare(")
+        self.assertIn('value.insert(QStringLiteral("operationId"), QUuid::createUuid().toString(QUuid::WithoutBraces))', store_begin)
+        self.assertIn("return write(value, error);", store_begin)
+        begin = self.prepare.index("authority->beginPrepare(")
+        execute = self.prepare.index("error = session.runScript(credentials, script,", begin)
+        intent = self.prepare[begin:execute]
+        load = intent.index("const auto intent = authority->load();")
+        nonce = intent.index('prepareOperationId = intent.record.value(QStringLiteral("operationId")).toString();')
+        verify = intent.index("operation.toString(QUuid::WithoutBraces) != prepareOperationId")
+        argument = intent.index('script += QStringLiteral(" --client-operation-id')
+        self.assertLess(load, nonce)
+        self.assertLess(nonce, verify)
+        self.assertLess(verify, argument)
+        self.assertNotRegex(intent, r'prepareOperationId\s*=\s*(?:result|receipt)\.')
 
     def test_maintenance_replacement_is_from_bundle_and_intent_is_at_exec_boundary(self):
         maintenance = self.maintenance
@@ -94,7 +138,7 @@ class AuthoritySourceContract(unittest.TestCase):
         intent_to_exec = maintenance[begin:execute]
         self.assertIn("generation, selection.currentControlSha256,", intent_to_exec)
         self.assertIn("selectedControl->sha256, expectedJournalSha256, &authorityError", intent_to_exec)
-        self.assertIn("&authorityError, directory)", intent_to_exec)
+        self.assertIn("&authorityError, directory, rootIdentity, upload)", intent_to_exec)
         self.assertIn("return finish(ErrorCode::ServerCheckFailed, false);", intent_to_exec)
         # No intervening remote mutation may slip outside durable pending state.
         self.assertNotIn("session.runScript(", intent_to_exec)
@@ -117,17 +161,19 @@ class AuthoritySourceContract(unittest.TestCase):
 
     def test_lost_reply_does_not_clear_or_reanchor_pending_authority(self):
         for operation in (self.prepare, self.maintenance):
-            self.assertNotIn("resolvePendingMaintenance(", operation)
             self.assertNotIn("anchorCurrent(", operation)
             self.assertNotRegex(operation, r"authority\s*->\s*(?:remove|clear|reset|abort|cancel)\s*\(")
+        self.assertNotIn("resolvePendingPrepare(", self.prepare)
         self.assertIn("if (error != ErrorCode::NoError || pending", self.maintenance)
         failed = between(self.maintenance, "if (error != ErrorCode::NoError || pending",
                          "if (!authority->commitMaintenance(")
         self.assertIn("return finish(validationError, true);", failed)
-        finish = between(self.maintenance, "auto finish =", "if (selection.native()) {")
-        retained = between(finish, "if (retainRecoveryInputs)", "const ErrorCode cleanupError = cleanupOwned();")
+        self.assertNotIn("resolvePendingMaintenance(", failed)
+        self.assertNotIn("resolvePendingPrepare(", failed)
+        finish = between(self.maintenance, "auto finish =", "};\n")
+        retained = between(finish, "if (retainRecoveryInputs)", "ErrorCode cleanupError = cleanupOwned();")
         self.assertIn("return primary;", retained)
-        self.assertNotIn("authority->", finish)
+        self.assertNotIn("authority->", retained)
 
     def test_omitted_pin_is_parsed_then_resolved_only_from_local_current(self):
         parser = source("client/core/utils/awgMaintenanceCommand.h")
@@ -157,11 +203,49 @@ class AuthoritySourceContract(unittest.TestCase):
         ])
         for operation in (self.prepare, self.maintenance):
             self.assertNotRegex(operation, r"(?:currentControlSha256|currentSha)\s*=\s*(?:result|receipt)\.")
-            self.assertNotRegex(operation, r"selection\.currentControlSha256\s*=(?!=)")
+            local_assignments = re.findall(r"selection\.currentControlSha256\s*=\s*([^;]+);", operation)
+            for assignment in local_assignments:
+                self.assertEqual(assignment, 'current.record.value("currentSha").toString()')
         commit = between(self.store, "bool commitMaintenance(", "bool resolvePendingMaintenance(")
         self.assertIn('previous.record.value("currentSha") != oldSha', commit)
         self.assertIn('previous.record.value("replacementSha") != newSha', commit)
-        self.assertIn("write(current(number, newSha), error)", commit)
+        self.assertIn("writeMaintenanceCurrent(previous.record, number, newSha, error)", commit)
+
+    def test_current_commit_preserves_cleanup_obligation_and_prepare_operation(self):
+        current = between(self.store, "bool writeMaintenanceCurrent(", "bool validRecord(")
+        self.assertIn("auto value = current(number, sha);", current)
+        self.assertIn('value.insert(QStringLiteral("prepareOperationId"), pending.value(QStringLiteral("prepareOperationId")))', current)
+        self.assertIn('if (pending.contains(QStringLiteral("retainedDirectory")))', current)
+        self.assertIn('!pending.contains(QStringLiteral("retainedIdentity"))', current)
+        self.assertIn('return fail(error, "authority_recovery_identity_required")', current)
+        for source_field in ("retainedDirectory", "retainedIdentity", "replacementSha", "retainedUpload"):
+            self.assertIn(f'pending.value(QStringLiteral("{source_field}"))', current)
+        self.assertIn('value.insert(QStringLiteral("cleanup"), cleanup)', current)
+        self.assertIn("return write(value, error);", current)
+
+    def test_status_receipts_are_distinct_from_live_recovery_authorization(self):
+        receipt = between(source("client/core/controllers/selfhosted/awgMaintenanceReceipt.h"),
+                          "inline bool validNativeOperationReceipt(", "inline bool validNativeReceipt(")
+        self.assertIn('return mode == QStringLiteral("status")', receipt)
+        self.assertIn('mode == QStringLiteral("recover") || mode == QStringLiteral("verify")', receipt)
+        self.assertIn('!receipt.value("pendingRecovery").toBool()', receipt)
+        self.assertIn('receipt.value("phase").toString() == QStringLiteral("ready")', receipt)
+        self.assertIn('receipt.value("liveVerified").isBool() && receipt.value("liveVerified").toBool()', receipt)
+        self.assertIn('receipt.value("clientOperationId").toString() != clientOperationId', receipt)
+        # A successfully parsed status is still read-only. Only the explicitly
+        # selected, validated live operation may settle its corresponding intent.
+        parsed = self.maintenance.index("result = QJsonDocument::fromJson(output.trimmed()).object();")
+        validate = self.maintenance.index("!AwgMaintenance::validNativeOperationReceipt(", parsed)
+        recover = self.maintenance.index("authority->resolvePendingMaintenance(", validate)
+        verify = self.maintenance.index("authority->resolvePendingPrepare(", validate)
+        self.assertLess(validate, recover)
+        self.assertLess(validate, verify)
+        self.assertRegex(self.maintenance[validate:],
+                         r"if \(selection\.operation == AwgMaintenance::Operation::Recover\s*"
+                         r"&& !authority->resolvePendingMaintenance\(")
+        self.assertRegex(self.maintenance[validate:],
+                         r"if \(selection\.operation == AwgMaintenance::Operation::VerifyPrepare\s*"
+                         r"&& !authority->resolvePendingPrepare\(")
 
     def test_ui_worker_owns_authority_for_the_entire_prepare_operation(self):
         ui = source("client/ui/controllers/selfhosted/installUiController.cpp")
@@ -199,12 +283,12 @@ class AuthoritySourceContract(unittest.TestCase):
         settings = source("client/secureQSettings.cpp")
         android = between(settings, "QString androidSettingsFilePath(", "SecureQSettings::SecureQSettings(")
         self.assertIn("scope == SecureQSettings::StorageScope::ControlAuthority", android)
-        self.assertIn('? QStringLiteral("control-authority.ini") : QStringLiteral("settings.ini")', android)
+        self.assertIn('const QString fixedPath = QDir(directory).filePath(QStringLiteral("control-authority.ini"));', android)
         self.assertIn('QStringLiteral(".amnezia-control-authority-write-probe")', android)
-        self.assertIn('QStringLiteral("amnezia-control-authority-unavailable.ini")', android)
+        self.assertIn('QStringLiteral("/__amnezia_control_authority_unavailable__/control-authority.ini")', android)
         constructor = between(settings, "SecureQSettings::SecureQSettings(const QString &organization, const QString &application, QObject *parent,",
                               "SecureQSettings::SecureQSettings(const QString &organization, const QString &application,\n")
-        self.assertIn("m_settings(androidSettingsFilePath(storageScope), QSettings::IniFormat, parent)", constructor)
+        self.assertIn("m_settings(androidSettingsFilePath(storageScope, &m_storageAvailable), QSettings::IniFormat, parent)", constructor)
         self.assertIn('m_settings(organization, storageScope == StorageScope::ControlAuthority\n'
                       '          ? application + QStringLiteral("-ControlAuthority") : application, parent)', constructor)
         self.assertIn("if (storageScope == StorageScope::Application", constructor)
@@ -216,6 +300,55 @@ class AuthoritySourceContract(unittest.TestCase):
                       '        ? QStringLiteral("controlAuthorityKeyTag-v1-") + m_keychainScope', settings)
         self.assertIn('m_storageScope == StorageScope::ControlAuthority\n'
                       '        ? QStringLiteral("controlAuthorityIvTag-v1-") + m_keychainScope', settings)
+
+    def test_android_authority_never_moves_to_a_different_writable_backend(self):
+        settings = source("client/secureQSettings.cpp")
+        helper = between(settings, "QString androidSettingsFilePath(", "SecureQSettings::SecureQSettings(")
+        authority = between(helper, "if (scope == SecureQSettings::StorageScope::ControlAuthority)",
+                            "// Do not construct QSettings with an empty filename.")
+        self.assertEqual(authority.count("QStandardPaths::writableLocation("), 1)
+        self.assertIn("QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)", authority)
+        for alternative in ("AppLocalDataLocation", "AppDataLocation", "TempLocation", "QDir::tempPath", "candidates"):
+            self.assertNotIn(alternative, authority)
+        self.assertIn("*available = false;", authority)
+        self.assertIn("base.isEmpty() || !QDir::isAbsolutePath(base)", authority)
+        self.assertIn("*available = probeOk;", authority)
+        self.assertEqual(authority.count("return fixedPath;"), 3)
+        # The existing application backend keeps its heuristic locations.
+        application = helper[helper.index("// Do not construct QSettings with an empty filename."):]
+        for location in ("AppConfigLocation", "AppLocalDataLocation", "AppDataLocation", "TempLocation"):
+            self.assertIn("QStandardPaths::" + location, application)
+        self.assertIn('QStringLiteral("settings.ini")', application)
+        self.assertIn('QStringLiteral("amnezia-settings-unavailable.ini")', application)
+
+    def test_unavailable_authority_never_becomes_fresh_missing_or_writes_keys(self):
+        settings = source("client/secureQSettings.cpp")
+        declaration = source("client/secureQSettings.h")
+        self.assertLess(declaration.index("bool m_storageAvailable = true;"), declaration.index("QSettings m_settings;"))
+        constructor = between(settings, "SecureQSettings::SecureQSettings(const QString &organization, const QString &application, QObject *parent,",
+                              "SecureQSettings::SecureQSettings(const QString &organization, const QString &application,\n")
+        self.assertLess(constructor.index("m_storageAvailable(true)"), constructor.index("m_settings("))
+        unavailable = constructor.index("if (!m_storageAvailable) return;")
+        self.assertLess(unavailable, constructor.index("m_settings.allKeys()"))
+        self.assertLess(unavailable, constructor.index("migrateEncryptedSettings()"))
+        fresh = between(settings, "bool SecureQSettings::readFreshValue(", "void SecureQSettings::setValue(")
+        self.assertLess(fresh.index("if (!m_storageAvailable) return false;"), fresh.index("m_settings.sync();"))
+        for start, end, guard in (
+            ("QVariant SecureQSettings::value(", "bool SecureQSettings::readFreshValue(", "return defaultValue;"),
+            ("void SecureQSettings::setValue(", "void SecureQSettings::remove(", "return;"),
+            ("void SecureQSettings::remove(", "QByteArray SecureQSettings::backupAppConfig(", "return;"),
+            ("QByteArray SecureQSettings::backupAppConfig(", "bool SecureQSettings::restoreAppConfig(", "return {};"),
+            ("bool SecureQSettings::restoreAppConfig(", "bool SecureQSettings::isExcludedFromBackup(", "return false;"),
+            ("void SecureQSettings::clearSettings(", "QByteArray SecureQSettings::encryptText(", "return;"),
+        ):
+            method = between(settings, start, end)
+            gate = method.index("if (!m_storageAvailable) " + guard)
+            if "m_settings." in method:
+                self.assertLess(gate, method.index("m_settings."))
+        load = between(self.store, "LoadResult load() const", "bool beginPrepare(")
+        failure = load.index("if (!m_settings->readFreshValue(settingsKey(), value))")
+        missing = load.index("if (!value.isValid()) return {true, true", failure)
+        self.assertIn('return {false, false, {}, QStringLiteral("authority_read_failed")};', load[failure:missing])
 
     def test_backend_lock_precedes_settings_construction_and_outlives_it(self):
         lock = between(self.store, "bool lock(", "LoadResult load() const")
@@ -237,7 +370,8 @@ class AuthoritySourceContract(unittest.TestCase):
         write = begin.index("return write(value, error);")
         self.assertLess(validate, save)
         self.assertLess(save, write)
-        self.assertIn("auto value = current(number, currentSha);", begin)
+        self.assertIn("!currentMatches(previous.record, number, currentSha)", begin)
+        self.assertIn("auto value = previous.record;", begin)
         self.assertIn('value.insert(QStringLiteral("state"), QStringLiteral("pendingMaintenance"))', begin)
 
     def test_failed_operator_output_keeps_only_strict_safe_recovery_details(self):

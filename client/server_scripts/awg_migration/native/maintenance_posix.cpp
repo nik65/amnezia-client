@@ -1,5 +1,6 @@
 #include "maintenance_runtime.h"
 #include "bounded_docker.h"
+#include "docker_absence.h"
 #include <iostream>
 #include <stdexcept>
 #include <unistd.h>
@@ -11,7 +12,14 @@ class PosixOps final : public Ops {
 public:
     std::string run(const std::vector<std::string>& argv) override {
         if (argv.empty() || argv[0] != "docker") throw std::runtime_error("maintenance command rejected");
-        return runBoundedDockerWithBudget(argv, 1024u * 1024u, 180);
+        try { return runBoundedDockerWithBudget(argv, 1024u * 1024u, 180); }
+        catch (const BoundedDockerError& error) {
+            if (error.kind == BoundedDockerFailureKind::Exit
+                && verifiedDockerInspectAbsence(argv, [](const auto& inventory) {
+                    return runBoundedDockerWithBudget(inventory,1024u*1024u,10);
+                })) throw std::runtime_error("No such object");
+            throw;
+        }
     }
     std::uint32_t euid() override { return static_cast<std::uint32_t>(geteuid()); }
     void sleepSeconds(unsigned seconds) override { ::sleep(seconds); }

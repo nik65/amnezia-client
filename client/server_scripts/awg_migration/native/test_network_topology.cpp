@@ -188,7 +188,28 @@ void stoppedCases() {
     }
 }
 }
-int main() {
+int main() try {
+    {
+        const auto unicode = topologyDetail::parse(
+            u8"{\"clé😀\":\"😀\",\"escaped\":\"\\ud83d\\ude00\",\"nul\":\"x\\u0000y\","
+            "\"integer\":9007199254740993,\"fraction\":1.0}",16*1024);
+        auto *literal = json_object_object_get(unicode.get(),u8"clé😀");
+        auto *escaped = json_object_object_get(unicode.get(),"escaped");
+        check(std::string(json_object_get_string(literal)) == u8"😀");
+        check(std::string(json_object_get_string(escaped)) == u8"😀");
+        auto *nul = json_object_object_get(unicode.get(),"nul");
+        check(json_object_get_string_len(nul) == 3
+            && std::string(json_object_get_string(nul),3) == std::string("x\0y",3));
+        auto *integer = json_object_object_get(unicode.get(),"integer");
+        check(json_object_is_type(integer,json_type_int)
+            && json_object_get_int64(integer) == 9007199254740993LL);
+        check(json_object_is_type(json_object_object_get(unicode.get(),"fraction"),json_type_double));
+        ++cases;
+        rejects([] { topologyDetail::parse(u8"{\"é\":1,\"\\u00e9\":2}",16*1024); });
+        for (const auto &invalid : {std::string("\xc0\xaf",2),std::string("\xed\xa0\x80",3),
+                                    std::string("\xf4\x90\x80\x80",4)})
+            rejects([&] { topologyDetail::parse("{\"text\":\""+invalid+"\"}",16*1024); });
+    }
     valid(fixture()); valid(fixture(true,true)); valid(fixture(true,false));
     check(networkTopologyRuntimeRequest(request(fixture(true),true)) == "{\"result\":[\"amnezia-dns-net\",\"bridge\"]}"); ++cases;
     const auto dual = validateNetworkTopology(fixture(true));
@@ -263,4 +284,7 @@ int main() {
     stoppedCases();
     std::cout << cases << " pure network topology cases PASS (" << originalCases
               << " original, " << cases-originalCases << " stopped); no process/socket/network/file effects\n";
+} catch (const std::exception &error) {
+    std::cerr << "pure topology failed after " << cases << " completed cases: " << error.what() << '\n';
+    return 1;
 }

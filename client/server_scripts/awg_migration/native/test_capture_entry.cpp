@@ -6,6 +6,9 @@
 #include <openssl/evp.h>
 #include <cerrno>
 #include <fstream>
+#include <filesystem>
+#include <cstdlib>
+#include <unistd.h>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -43,11 +46,22 @@ std::string digestFile(const char *path) {
 }
 int main(int argc, char **argv) {
     if (argc != 3) return 2;
+    // Build outputs inherit the invoking umask; capture requires an explicit
+    // deployment mode. Stage only test-owned copies rather than chmod shared
+    // build artifacts or relaxing the production metadata checks.
+    std::string temporary = (std::filesystem::temp_directory_path() / "awg-capture-entry-XXXXXX").string();
+    if (!::mkdtemp(temporary.data())) return 2;
+    struct Cleanup { std::filesystem::path path; ~Cleanup() { std::error_code error; std::filesystem::remove_all(path, error); } } cleanup{temporary};
+    const auto feed = (std::filesystem::path(temporary) / "awg-feed").string();
+    const auto collector = (std::filesystem::path(temporary) / "collector").string();
+    std::filesystem::copy_file(argv[1], feed);
+    std::filesystem::copy_file(argv[2], collector);
+    if (::chmod(feed.c_str(), 0755) != 0 || ::chmod(collector.c_str(), 0755) != 0) return 2;
     auto &state = defaultFixture::state();
     state.mode = "first-io";
     std::vector<std::string> values{"awg-native-prepare", "--source", "amnezia-awg", "--host", "example.invalid",
-        "--automatic", "--native-control", "--native-feed", argv[1], "--native-feed-sha256", digestFile(argv[1]),
-        "--native-collector", argv[2], "--native-collector-sha256", digestFile(argv[2])};
+        "--automatic", "--native-control", "--native-feed", feed, "--native-feed-sha256", digestFile(feed.c_str()),
+        "--native-collector", collector, "--native-collector-sha256", digestFile(collector.c_str())};
     std::vector<char *> args;
     for (auto &value : values) args.push_back(value.data());
     std::ostringstream captured;

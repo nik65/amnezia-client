@@ -1,6 +1,8 @@
 #include "installController.h"
+#include <QUuid>
 #include "core/utils/awgControlAuthorityStore.h"
 #include "awgMaintenanceReceipt.h"
+#include "awgPrepareRecoveryLocator.h"
 #include "exportController.h"
 #include <QFile>
 #include <QTcpSocket>
@@ -18,6 +20,7 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QRegularExpression>
+#include <QSet>
 #include <QThread>
 #include <QtConcurrent>
 
@@ -963,6 +966,7 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
             || (source != DockerContainer::Awg && source != DockerContainer::Awg2)
             || generation < 1 || generation > 9007199254740991LL
             || !hashPattern.match(expectedJournalSha256).hasMatch()
+            || (!selection.native() && selection.operation != AwgMaintenance::Operation::Maintain)
             || (selection.native()
                 && (selection.nativeControlVariant != QStringLiteral("native-control-http-v1")
                     || !hashPattern.match(selection.currentControlSha256).hasMatch())))
@@ -984,6 +988,41 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
             result.insert(QStringLiteral("reason"), authorityError.isEmpty()
                 ? QStringLiteral("authority_store_required") : authorityError);
             return ErrorCode::ServerCheckFailed;
+        }
+        const ErrorCode prepareCleanup = cleanupAwgMigrationPrepareInputs(credentials, source, authority, result);
+        if (prepareCleanup != ErrorCode::NoError) return prepareCleanup;
+        const ErrorCode probeCleanup = cleanupAwgMigrationControlInputs(credentials, source, authority, result, true);
+        if (probeCleanup != ErrorCode::NoError) return probeCleanup;
+        {
+            const auto saved = authority->load();
+            const auto state = saved.record.value("state").toString();
+            bool allowed = saved.ok && !saved.missing;
+            if (selection.operation == AwgMaintenance::Operation::Maintain) {
+                allowed = allowed && state == QStringLiteral("current")
+                    && saved.record.value("generation").toInteger() == generation
+                    && saved.record.value("currentSha").toString() == selection.currentControlSha256;
+            } else if (selection.operation == AwgMaintenance::Operation::VerifyPrepare
+                    || selection.operation == AwgMaintenance::Operation::InspectPrepare
+                    || selection.operation == AwgMaintenance::Operation::AbortPrepare) {
+                allowed = allowed && state == QStringLiteral("pendingPrepare")
+                    && saved.record.value("currentSha").toString() == selection.currentControlSha256;
+            } else {
+                allowed = allowed && (state == QStringLiteral("pendingMaintenance") || state == QStringLiteral("current"))
+                    && saved.record.value("generation").toInteger() == generation
+                    && (saved.record.value("currentSha").toString() == selection.currentControlSha256
+                        || (state == QStringLiteral("pendingMaintenance")
+                            && saved.record.value("replacementSha").toString() == selection.currentControlSha256));
+            }
+            const QString operation = state == QStringLiteral("pendingPrepare")
+                ? saved.record.value("operationId").toString() : saved.record.value("prepareOperationId").toString();
+            if (!allowed || operation != selection.clientOperationId) {
+                result.insert(QStringLiteral("reason"), QStringLiteral("authority_recovery_conflict"));
+                return ErrorCode::ServerCheckFailed;
+            }
+        }
+        if (selection.operation == AwgMaintenance::Operation::Maintain) {
+            const ErrorCode cleanup = cleanupAwgMigrationControlInputs(credentials, source, authority, result);
+            if (cleanup != ErrorCode::NoError) return cleanup;
         }
         // The selected bundle is the only replacement-payload producer. It is
         // independent of the journal and of the operator's current pin; a
@@ -1030,6 +1069,8 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
     const QString recipe = recipeDirectory + QStringLiteral("/awg-feed");
     QString rootIdentity; // "uid gid mode dev inode" of the highest ancestor
     bool rootCreated = false;
+    bool authorityCleanupCommitted = false;
+    bool probeCleanupCommitted = false;
     auto statRoot = [&]() -> ErrorCode {
         QByteArray out;
         const ErrorCode error = session.runScript(credentials,
@@ -1079,7 +1120,8 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
                          context + QStringLiteral("/Dockerfile"), context + QStringLiteral("/image.iid"))
                     ) != ErrorCode::NoError)
                 cleanupError = ErrorCode::ServerCheckFailed;
-            if (selectedControl->sha256 != selection.currentControlSha256
+            if (selection.operation == AwgMaintenance::Operation::Maintain
+                    && selectedControl->sha256 != selection.currentControlSha256
                     && session.runScript(credentials, QStringLiteral("sudo rmdir -- '%1'").arg(context))
                     != ErrorCode::NoError)
                 cleanupError = ErrorCode::ServerCheckFailed;
@@ -1108,19 +1150,32 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
             if (primary == ErrorCode::NoError) return ErrorCode::ServerCheckFailed;
             return primary;
         }
-        const ErrorCode cleanupError = cleanupOwned();
-        if (primary != ErrorCode::NoError) return primary;
+        ErrorCode cleanupError = cleanupOwned();
+        if (cleanupError == ErrorCode::NoError && authorityCleanupCommitted) {
+            QString authorityError;
+            if (!authority->completeCleanup(directory, rootIdentity, &authorityError)) {
+                cleanupError = ErrorCode::ServerCheckFailed;
+                result.insert(QStringLiteral("reason"), authorityError);
+            }
+        }
+        if (cleanupError == ErrorCode::NoError && probeCleanupCommitted) {
+            QString probeError;
+            if (!authority->completeProbeCleanup(directory, rootIdentity, &probeError)) {
+                cleanupError = ErrorCode::ServerCheckFailed;
+                if (primary == ErrorCode::NoError) result.insert(QStringLiteral("reason"), probeError);
+            }
+        }
         if (cleanupError != ErrorCode::NoError) {
-            result.insert(QStringLiteral("reason"), QStringLiteral("native_cleanup_failed"));
+            if (primary == ErrorCode::NoError)
+                result.insert(QStringLiteral("reason"), QStringLiteral("native_cleanup_failed"));
             result.insert(QStringLiteral("retainedDirectory"), directory);
             result.insert(QStringLiteral("cleanupRequired"), true);
         }
-        return cleanupError;
+        return primary != ErrorCode::NoError ? primary : cleanupError;
     };
     if (selection.native()) {
-        ErrorCode error = session.runScript(credentials, QStringLiteral(
-                "sudo install -d -o 0 -g 0 -m 0700 -- '%1' '%2' '%3' '%4'")
-                .arg(directory, helperDirectory, recipeDirectory, stagingDirectory));
+        ErrorCode error = session.runScript(credentials,
+                QStringLiteral("sudo mkdir -m 0700 -- '%1'").arg(directory));
         if (error != ErrorCode::NoError) return error;
         rootCreated = true;
         error = statRoot();
@@ -1128,6 +1183,15 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
             result.insert(QStringLiteral("reason"), QStringLiteral("native_program_directory_trust_failed"));
             return finish(error, false);
         }
+        QString probeError;
+        if (!authority->beginProbeCleanup(directory, rootIdentity, selectedControl->sha256, upload, &probeError)) {
+            result.insert(QStringLiteral("reason"), probeError);
+            return finish(ErrorCode::ServerCheckFailed, false);
+        }
+        probeCleanupCommitted = true;
+        error = session.runScript(credentials, QStringLiteral("sudo mkdir -m 0700 -- '%1' '%2' '%3'")
+            .arg(helperDirectory, recipeDirectory, stagingDirectory));
+        if (error != ErrorCode::NoError) return finish(error, false);
         error = session.uploadFileToHost(credentials, selectedControl->bytes, upload);
         if (error != ErrorCode::NoError) return finish(error, false);
         // Install from the untrusted upload into the root-private tree, then
@@ -1161,24 +1225,71 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
         // Durable intent precedes the control mutation, after inert staging.
         // A lost reply retains the independently authorized old/new pair.
         QString authorityError;
-        if (!authority->beginMaintenance(generation, selection.currentControlSha256,
-                selectedControl->sha256, expectedJournalSha256, &authorityError, directory)) {
+        if (selection.operation == AwgMaintenance::Operation::Maintain
+                && !authority->beginMaintenance(generation, selection.currentControlSha256,
+                    selectedControl->sha256, expectedJournalSha256, &authorityError, directory, rootIdentity, upload)) {
             result.insert(QStringLiteral("reason"), authorityError);
-            return finish(ErrorCode::ServerCheckFailed, false);
+            return finish(ErrorCode::ServerCheckFailed, true);
         }
+        if (selection.operation == AwgMaintenance::Operation::Maintain) probeCleanupCommitted = false;
         QByteArray output;
-        const QString command = QStringLiteral(
+        QString command = QStringLiteral(
             "sudo '%1' --maintenance --source '%2' --generation %3 --expected-journal-sha256 '%4'"
             " --native-control-sha256 '%5' --native-control-replacement-sha256 '%6'"
             " --control-staging-directory '%7' --recipe-directory '%8'")
             .arg(helper, ContainerUtils::containerToString(source)).arg(generation)
             .arg(expectedJournalSha256, selection.currentControlSha256, selectedControl->sha256,
                  stagingDirectory, recipeDirectory);
+        QString operationMode = QStringLiteral("maintain");
+        if (selection.operation != AwgMaintenance::Operation::Maintain) {
+            operationMode = selection.operation == AwgMaintenance::Operation::Status ? QStringLiteral("status")
+                : selection.operation == AwgMaintenance::Operation::Recover ? QStringLiteral("recover")
+                : selection.operation == AwgMaintenance::Operation::InspectPrepare ? QStringLiteral("inspect-prepare")
+                : selection.operation == AwgMaintenance::Operation::AbortPrepare ? QStringLiteral("abort-prepare") : QStringLiteral("verify");
+            command = QStringLiteral("sudo '%1' --maintenance-%2 --source '%3' --generation %4 --expected-journal-sha256 '%5' --native-control-sha256 '%6'")
+                .arg(helper, operationMode, ContainerUtils::containerToString(source)).arg(generation)
+                .arg(expectedJournalSha256, selection.currentControlSha256);
+        }
+        if (!selection.clientOperationId.isEmpty()) {
+            // Canonical UUID only: this value is from local trusted intent.
+            const QUuid operation(selection.clientOperationId);
+            if (operation.isNull() || operation.toString(QUuid::WithoutBraces) != selection.clientOperationId)
+                return finish(ErrorCode::ServerCheckFailed, false);
+            command += QStringLiteral(" --client-operation-id '%1'").arg(selection.clientOperationId);
+        }
         error = session.runScript(credentials, command, capture(output, 16384),
-            [](const QString &, libssh::Client &) { return ErrorCode::NoError; }, 10 * 60 * 1000);
+            [](const QString &, libssh::Client &) { return ErrorCode::NoError; },
+            selection.operation == AwgMaintenance::Operation::Status ? 30000 : 10 * 60 * 1000);
         result = QJsonDocument::fromJson(output.trimmed()).object();
+        if (selection.operation != AwgMaintenance::Operation::Maintain) {
+            if (error != ErrorCode::NoError || !AwgMaintenance::validNativeOperationReceipt(result, operationMode,
+                    ContainerUtils::containerToString(source), generation, selection.currentControlSha256,
+                    selection.clientOperationId))
+                return finish(error != ErrorCode::NoError ? error : ErrorCode::ServerCheckFailed, false);
+            const ErrorCode cleaned = finish(ErrorCode::NoError, false);
+            if (cleaned != ErrorCode::NoError) return cleaned;
+            if (selection.operation == AwgMaintenance::Operation::Recover
+                    && !authority->resolvePendingMaintenance(generation, selection.currentControlSha256, &authorityError)) {
+                result.insert(QStringLiteral("reason"), authorityError);
+                return ErrorCode::ServerCheckFailed;
+            }
+            if (selection.operation == AwgMaintenance::Operation::AbortPrepare
+                    && !authority->retirePrepare(generation, selection.currentControlSha256,
+                        selection.clientOperationId, result.value("journalSha256").toString(), &authorityError)) {
+                result.insert(QStringLiteral("reason"), authorityError);
+                return ErrorCode::ServerCheckFailed;
+            }
+            if (selection.operation == AwgMaintenance::Operation::VerifyPrepare
+                    && !authority->resolvePendingPrepare(generation, selection.currentControlSha256, &authorityError)) {
+                result.insert(QStringLiteral("reason"), authorityError);
+                return ErrorCode::ServerCheckFailed;
+            }
+            return ErrorCode::NoError;
+        }
         const bool pending = result.value(QStringLiteral("pendingRecovery")).toBool();
         if (error != ErrorCode::NoError || pending
+                || (!selection.clientOperationId.isEmpty()
+                    && result.value("clientOperationId").toString() != selection.clientOperationId)
                 || !AwgMaintenance::validNativeReceipt(result, ContainerUtils::containerToString(source),
                         generation, selection.currentControlSha256, selectedControl->sha256)) {
             const ErrorCode validationError = error != ErrorCode::NoError ? error : ErrorCode::ServerCheckFailed;
@@ -1189,8 +1300,9 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
         if (!authority->commitMaintenance(generation, selection.currentControlSha256,
                 selectedControl->sha256, &authorityError)) {
             result.insert(QStringLiteral("reason"), authorityError);
-            return finish(ErrorCode::ServerCheckFailed, false);
+            return finish(ErrorCode::ServerCheckFailed, true);
         }
+        authorityCleanupCommitted = true;
         return finish(ErrorCode::NoError, false);
     }
     ErrorCode error = session.runScript(credentials, QStringLiteral("umask 077; mkdir '%1'").arg(directory));
@@ -1234,6 +1346,417 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
             : AwgMaintenance::validReceipt(result, ContainerUtils::containerToString(source), generation, expectedHashes)
                 ? ErrorCode::NoError : ErrorCode::ServerCheckFailed;
     return finishLegacy(validationError);
+}
+
+ErrorCode InstallController::cleanupAwgMigrationControlInputs(const ServerCredentials &credentials,
+        DockerContainer source, amnezia::awgControlAuthority::Store *authority, QJsonObject &result, bool probeOnly)
+{
+    result = {};
+    QString authorityError;
+    if (!credentials.isValid() || (source != DockerContainer::Awg && source != DockerContainer::Awg2)
+            || !authority || !authority->matches(credentials, ContainerUtils::containerToString(source))
+            || !authority->lock(&authorityError)) {
+        result.insert(QStringLiteral("reason"), authorityError.isEmpty()
+            ? QStringLiteral("authority_store_required") : authorityError);
+        return ErrorCode::ServerCheckFailed;
+    }
+    const auto saved = authority->load();
+    if (!saved.ok || saved.missing || (!probeOnly
+            && saved.record.value(QStringLiteral("state")) != QStringLiteral("current"))) {
+        result.insert(QStringLiteral("reason"), saved.ok
+            ? QStringLiteral("authority_cleanup_conflict") : saved.error);
+        return ErrorCode::ServerCheckFailed;
+    }
+    const QString cleanupKey = probeOnly ? QStringLiteral("probeCleanup") : QStringLiteral("cleanup");
+    if (!saved.record.contains(cleanupKey)) return ErrorCode::NoError;
+    const auto cleanup = saved.record.value(cleanupKey).toObject();
+    const QString directory = cleanup.value(QStringLiteral("directory")).toString();
+    const QString expectedIdentity = cleanup.value(QStringLiteral("identity")).toString();
+    const QString replacement = cleanup.value(QStringLiteral("replacementSha")).toString();
+    const QString upload = cleanup.value(QStringLiteral("upload")).toString();
+    const QRegularExpression directoryPattern(QStringLiteral(
+        "\\A/tmp/amnezia-migration-maintenance-[A-Za-z0-9]{24}\\z"));
+    const QRegularExpression uploadPattern(QStringLiteral(
+        "\\A/tmp/amnezia-migration-upload-[A-Za-z0-9]{24}\\z"));
+    const auto identityMatch = QRegularExpression(QStringLiteral(
+        "\\A0 0 700 (0|[1-9][0-9]{0,19}) (0|[1-9][0-9]{0,19})\\z")).match(expectedIdentity);
+    bool deviceOk = false, inodeOk = false;
+    const auto device = identityMatch.captured(1).toULongLong(&deviceOk);
+    const auto inode = identityMatch.captured(2).toULongLong(&inodeOk);
+    const bool hasUpload = cleanup.contains(QStringLiteral("upload"));
+    if (!saved.record.value(cleanupKey).isObject()
+            || cleanup.size() != 3 + int(hasUpload) || !directoryPattern.match(directory).hasMatch()
+            || !amnezia::awgControlAuthority::digest(replacement) || !identityMatch.hasMatch()
+            || !deviceOk || !inodeOk || QString::number(device) != identityMatch.captured(1)
+            || QString::number(inode) != identityMatch.captured(2)
+            || (hasUpload && !uploadPattern.match(upload).hasMatch())) {
+        result.insert(QStringLiteral("reason"), QStringLiteral("authority_cleanup_invalid"));
+        return ErrorCode::ServerCheckFailed;
+    }
+    // Only bounded identities and exact known paths enter remote shell text.
+    // The original root inode is the authority; a fresh stat cannot replace it.
+    SshSession session;
+    auto capture = [](QByteArray &bytes) {
+        return [&bytes](const QString &text, libssh::Client &) {
+            const QByteArray part = text.toUtf8();
+            if (bytes.size() + part.size() > 256) return ErrorCode::ServerCheckFailed;
+            bytes += part;
+            return ErrorCode::NoError;
+        };
+    };
+    auto readRoot = [&](QByteArray &observed) -> ErrorCode {
+        observed.clear();
+        return session.runScript(credentials, QStringLiteral(
+            "sudo sh -c 'if [ -e \"$1\" ] || [ -L \"$1\" ]; then "
+            "stat -c \"%u %g %a %d %i\" -- \"$1\"; else printf ABSENT; fi' sh '%1'").arg(directory),
+            capture(observed), [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+    };
+    auto sameRoot = [&]() {
+        QByteArray observed;
+        return readRoot(observed) == ErrorCode::NoError
+            && QString::fromLatin1(observed.trimmed()) == expectedIdentity;
+    };
+    QByteArray tmpStat;
+    const auto tmpError = session.runScript(credentials, QStringLiteral("stat -c '%u %g %a' /tmp"),
+        capture(tmpStat), [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+    QByteArray observed;
+    const bool rootRead = readRoot(observed) == ErrorCode::NoError;
+    const bool rootAbsent = rootRead && observed == QByteArrayLiteral("ABSENT");
+    bool rootTrusted = tmpError == ErrorCode::NoError && tmpStat.trimmed() == QByteArrayLiteral("0 0 1777")
+        && rootRead && (rootAbsent || QString::fromLatin1(observed.trimmed()) == expectedIdentity);
+    bool removed = rootTrusted;
+    const QString helperDirectory = directory + QStringLiteral("/helper");
+    const QString recipeDirectory = directory + QStringLiteral("/recipe");
+    const QString stagingDirectory = directory + QStringLiteral("/staging");
+    const QString context = stagingDirectory + QStringLiteral("/context-") + replacement;
+    const QStringList directories {context, helperDirectory, recipeDirectory, stagingDirectory};
+    QSet<QString> absentDirectories;
+    if (rootTrusted && !rootAbsent) {
+        // Inspect every ancestor before traversing it. In particular, the
+        // staging directory must be checked before its optional context child.
+        for (const QString &path : {helperDirectory, recipeDirectory, stagingDirectory, context}) {
+            if (!sameRoot()) { rootTrusted = false; removed = false; break; }
+            QByteArray child;
+            const auto error = session.runScript(credentials, QStringLiteral(
+                "sudo sh -c 'if [ ! -e \"$1\" ] && [ ! -L \"$1\" ]; then printf ABSENT; "
+                "elif [ -d \"$1\" ] && [ ! -L \"$1\" ]; then stat -c \"%u %g %a\" -- \"$1\"; "
+                "else exit 1; fi' sh '%1'").arg(path),
+                capture(child), [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+            if (error != ErrorCode::NoError || (child != QByteArrayLiteral("ABSENT")
+                    && child.trimmed() != QByteArrayLiteral("0 0 700"))) {
+                rootTrusted = false; removed = false; break;
+            }
+            if (child == QByteArrayLiteral("ABSENT")) absentDirectories.insert(path);
+        }
+    }
+    if (rootTrusted && !rootAbsent) {
+        const QStringList leaves {helperDirectory + QStringLiteral("/awg-feed"),
+            recipeDirectory + QStringLiteral("/awg-feed"),
+            stagingDirectory + QStringLiteral("/awg-feed-") + replacement + QStringLiteral(".bin"),
+            context + QStringLiteral("/awg-feed"), context + QStringLiteral("/Dockerfile"),
+            context + QStringLiteral("/image.iid")};
+        for (const QString &path : leaves) {
+            if (!sameRoot()) { removed = false; break; }
+            if (session.runScript(credentials, QStringLiteral("sudo rm -f -- '%1'").arg(path)) != ErrorCode::NoError)
+                removed = false;
+        }
+        // Keep independent return statuses: a later successful rmdir cannot
+        // erase an earlier unlink or ownership refusal.
+        for (const QString &path : directories) {
+            if (absentDirectories.contains(path)) continue;
+            if (!sameRoot()) { removed = false; break; }
+            if (session.runScript(credentials, QStringLiteral("sudo rmdir -- '%1'").arg(path)) != ErrorCode::NoError)
+                removed = false;
+        }
+        if (sameRoot()) {
+            if (session.runScript(credentials, QStringLiteral("sudo rmdir -- '%1'").arg(directory)) != ErrorCode::NoError)
+                removed = false;
+        } else removed = false;
+    }
+    // This is independent of privileged root cleanup, including root refusal.
+    if (hasUpload && session.runScript(credentials, QStringLiteral("rm -f -- '%1'").arg(upload)) != ErrorCode::NoError)
+        removed = false;
+    QByteArray finalRoot;
+    if (readRoot(finalRoot) != ErrorCode::NoError || finalRoot != QByteArrayLiteral("ABSENT")) removed = false;
+    const bool acknowledged = removed && (probeOnly
+        ? authority->completeProbeCleanup(directory, expectedIdentity, &authorityError)
+        : authority->completeCleanup(directory, expectedIdentity, &authorityError));
+    if (!acknowledged) {
+        result.insert(QStringLiteral("reason"), !removed ? QStringLiteral("native_cleanup_failed") : authorityError);
+        result.insert(QStringLiteral("retainedDirectory"), directory);
+        result.insert(QStringLiteral("cleanupRequired"), true);
+        result.insert(QStringLiteral("pendingRecovery"), false);
+        return ErrorCode::ServerCheckFailed;
+    }
+    return ErrorCode::NoError;
+}
+
+namespace {
+ErrorCode observedAwgJournalSha(const ServerCredentials &credentials, DockerContainer source,
+        qint64 generation, QString &digest)
+{
+    digest.clear();
+    if ((source != DockerContainer::Awg && source != DockerContainer::Awg2)
+            || !amnezia::awgControlAuthority::generation(generation)) return ErrorCode::ServerCheckFailed;
+    const QString path = QStringLiteral("/opt/amnezia/awg-migration/%1/%2/transaction.json")
+            .arg(ContainerUtils::containerToString(source)).arg(generation);
+    SshSession session;
+    QByteArray output;
+    const auto error = session.runScript(credentials, QStringLiteral("sudo sha256sum -- '%1'").arg(path),
+        [&output](const QString &chunk, libssh::Client &) {
+            const auto bytes = chunk.toUtf8();
+            if (bytes.size() > 512 - output.size()) return ErrorCode::ServerCheckFailed;
+            output += bytes; return ErrorCode::NoError;
+        }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+    if (error != ErrorCode::NoError) return error;
+    const auto fields = QString::fromUtf8(output).trimmed().split(QRegularExpression(QStringLiteral("\\s+")));
+    if (fields.size() != 2 || fields[1] != path || !amnezia::awgControlAuthority::digest(fields[0]))
+        return ErrorCode::ServerCheckFailed;
+    // This is a compare-and-swap locator only. It never supplies an executable pin.
+    digest = fields[0]; return ErrorCode::NoError;
+}
+
+ErrorCode discoverInterruptedAwgGeneration(const ServerCredentials &credentials, DockerContainer source,
+        qint64 &generation, QString &journalSha, const QJsonArray &trustedRetiredHistory,
+        qint64 minimumGeneration)
+{
+    generation = 0; journalSha.clear();
+    const QString root = QStringLiteral("/opt/amnezia/awg-migration/%1/").arg(ContainerUtils::containerToString(source));
+    SshSession session;
+    QByteArray output;
+    const auto error = session.runScript(credentials, QStringLiteral(
+        "sudo find -P '%1' -mindepth 2 -maxdepth 2 -type f -name transaction.json -printf '%h\\n'").arg(root),
+        [&output](const QString &chunk, libssh::Client &) {
+            const auto bytes = chunk.toUtf8();
+            if (bytes.size() > 4096 - output.size()) return ErrorCode::ServerCheckFailed;
+            output += bytes; return ErrorCode::NoError;
+        }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+    if (error != ErrorCode::NoError) return error;
+    // Prior retired paths are independently remembered in the local Store.
+    // Excluding them selects only a locator, never an executable authority pin.
+    const auto candidate = AwgMaintenance::prepareRecoveryGeneration(output, root,
+        trustedRetiredHistory, minimumGeneration);
+    if (!candidate) return ErrorCode::ServerCheckFailed;
+    generation = *candidate;
+    return observedAwgJournalSha(credentials, source, generation, journalSha);
+}
+} // namespace
+
+ErrorCode InstallController::reconcileAwgMigrationControls(const ServerCredentials &credentials,
+        DockerContainer source, qint64 generation, const QString &expectedJournalSha256,
+        amnezia::awgControlAuthority::Store *authority, QJsonObject &result, const QString &explicitCurrentPin)
+{
+    result = {};
+    QString authorityError;
+    QString journalSha = expectedJournalSha256;
+    const bool discoverPrepare = generation == 0 && journalSha.isEmpty();
+    if (!authority || !authority->matches(credentials, ContainerUtils::containerToString(source))
+            || !authority->lock(&authorityError)
+            || (!discoverPrepare && (!amnezia::awgControlAuthority::generation(generation)
+                || !amnezia::awgControlAuthority::digest(journalSha)))) {
+        result.insert("reason", authorityError.isEmpty() ? QStringLiteral("authority_recovery_conflict") : authorityError);
+        return ErrorCode::ServerCheckFailed;
+    }
+    const auto saved = authority->load();
+    if (!saved.ok || saved.missing) {
+        result.insert("reason", saved.ok ? QStringLiteral("authority_recovery_missing") : saved.error);
+        return ErrorCode::ServerCheckFailed;
+    }
+    const QString state = saved.record.value("state").toString();
+    if (discoverPrepare) {
+        if (state != QStringLiteral("pendingPrepare")) {
+            result.insert("reason", QStringLiteral("authority_recovery_conflict"));
+            return ErrorCode::ServerCheckFailed;
+        }
+        const ErrorCode located = discoverInterruptedAwgGeneration(credentials, source, generation, journalSha,
+            saved.record.value(QStringLiteral("retiredPredecessors")).toArray(),
+            qMax<qint64>(1, saved.record.value(QStringLiteral("minimumGeneration")).toInteger()));
+        if (located != ErrorCode::NoError) {
+            result.insert("reason", QStringLiteral("authority_prepare_locator_unavailable"));
+            return located;
+        }
+    }
+    AwgMaintenance::Selection selection;
+    selection.nativeControlVariant = QStringLiteral("native-control-http-v1");
+    if (state == QStringLiteral("pendingPrepare")) {
+        // Caller generation/hash are locators only. Verify must prove the saved
+        // operation UUID through the original journal and immutable LIVE owner.
+        selection.currentControlSha256 = saved.record.value("currentSha").toString();
+        selection.clientOperationId = saved.record.value("operationId").toString();
+        selection.operation = AwgMaintenance::Operation::InspectPrepare;
+        if ((!explicitCurrentPin.isEmpty() && explicitCurrentPin != selection.currentControlSha256)
+                || selection.clientOperationId.isEmpty()) {
+            result.insert("reason", QStringLiteral("authority_recovery_conflict"));
+            return ErrorCode::ServerCheckFailed;
+        }
+        QJsonObject inspected;
+        const ErrorCode partial = maintainAwgMigrationControls(credentials, source, generation,
+            journalSha, selection, inspected, authority);
+        if (partial != ErrorCode::NoError && inspected.value("cleanupRequired").toBool()) {
+            result = inspected;
+            return partial;
+        }
+        // Both probes are read-only. A proved partial intent may be aborted;
+        // otherwise only full ready/live verification can adopt its result.
+        selection.operation = partial == ErrorCode::NoError ? AwgMaintenance::Operation::AbortPrepare
+            : AwgMaintenance::Operation::VerifyPrepare;
+    } else if (state == QStringLiteral("pendingMaintenance")
+            && saved.record.value("generation").toInteger() == generation) {
+        selection.clientOperationId = saved.record.value("prepareOperationId").toString();
+        QStringList candidates{saved.record.value("currentSha").toString(), saved.record.value("replacementSha").toString()};
+        candidates.removeDuplicates();
+        if (!explicitCurrentPin.isEmpty()) {
+            if (!candidates.contains(explicitCurrentPin)) {
+                result.insert("reason", QStringLiteral("authority_recovery_conflict"));
+                return ErrorCode::ServerCheckFailed;
+            }
+            candidates = {explicitCurrentPin};
+        }
+        bool selected = false;
+        // Status is read-only and NEVER settles the local intent. Try at most
+        // the two independently saved pins, then issue only ONE mutating recover.
+        for (const QString &candidate : candidates) {
+            selection.operation = AwgMaintenance::Operation::Status;
+            selection.currentControlSha256 = candidate;
+            QJsonObject status;
+            const ErrorCode checked = maintainAwgMigrationControls(credentials, source, generation,
+                journalSha, selection, status, authority);
+            if (checked == ErrorCode::NoError) { selected = true; break; }
+            // An actionable cleanup failure must not be hidden by another try.
+            if (status.value("cleanupRequired").toBool()) { result = status; return checked; }
+        }
+        if (!selected) {
+            result.insert("reason", QStringLiteral("authority_recovery_probe_failed"));
+            return ErrorCode::ServerCheckFailed;
+        }
+        selection.operation = AwgMaintenance::Operation::Recover;
+    } else {
+        result.insert("reason", QStringLiteral("authority_recovery_conflict"));
+        return ErrorCode::ServerCheckFailed;
+    }
+    const ErrorCode recovered = maintainAwgMigrationControls(credentials, source, generation,
+        journalSha, selection, result, authority);
+    if (recovered != ErrorCode::NoError) return recovered;
+    result.insert("reconciled", true);
+    if (selection.operation == AwgMaintenance::Operation::AbortPrepare) {
+        result.insert("retired", true);
+        return ErrorCode::NoError;
+    }
+    QJsonObject cleanup;
+    const ErrorCode cleaned = cleanupAwgMigrationControlInputs(credentials, source, authority, cleanup);
+    if (cleaned != ErrorCode::NoError) {
+        for (auto it = cleanup.constBegin(); it != cleanup.constEnd(); ++it) result.insert(it.key(), it.value());
+    }
+    return cleaned;
+}
+
+namespace {
+ErrorCode removeAwgPrepareInputs(const ServerCredentials &credentials, const QJsonObject &roots,
+                                QJsonObject &result)
+{
+    const QRegularExpression stagingPattern(QStringLiteral("\\A/tmp/amnezia-migration-[A-Za-z0-9]{24}\\z"));
+    const QRegularExpression programPattern(QStringLiteral("\\A/tmp/amnezia-migration-programs-[A-Za-z0-9]{24}\\z"));
+    const QRegularExpression identityPattern(QStringLiteral("\\A(?:0|[1-9][0-9]{0,19}) (?:0|[1-9][0-9]{0,19}) 700 (?:0|[1-9][0-9]{0,19}) (?:0|[1-9][0-9]{0,19})\\z"));
+    SshSession session;
+    bool failed = false;
+    auto capture = [](QByteArray &bytes) {
+        return [&bytes](const QString &text, libssh::Client &) {
+            const auto part = text.toUtf8();
+            if (part.size() > 256 - bytes.size()) return ErrorCode::ServerCheckFailed;
+            bytes += part; return ErrorCode::NoError;
+        };
+    };
+    QByteArray tmp;
+    const bool trustedTmp = session.runScript(credentials, QStringLiteral("stat -c '%u %g %a' /tmp"),
+        capture(tmp), [](const QString &, libssh::Client &) { return ErrorCode::NoError; }) == ErrorCode::NoError
+        && tmp.trimmed() == QByteArrayLiteral("0 0 1777");
+    // Each tree has its own proven identity. Refusal/failure in the privileged
+    // tree never skips exact unprivileged staging cleanup.
+    for (const bool privileged : {true, false}) {
+        const QString path = roots.value(privileged ? "programDirectory" : "stagingDirectory").toString();
+        const QString expected = roots.value(privileged ? "programIdentity" : "stagingIdentity").toString();
+        if (path.isEmpty()) continue;
+        const bool pathValid = (privileged ? programPattern : stagingPattern).match(path).hasMatch();
+        if (pathValid) result.insert(privileged ? "retainedProgramDirectory" : "retainedPrepareDirectory", path);
+        bool identityValid = identityPattern.match(expected).hasMatch();
+        const auto fields = expected.split(QLatin1Char(' '));
+        if (fields.size() != 5) identityValid = false;
+        else for (int i : {0, 1, 3, 4}) {
+            bool ok = false;
+            const auto number = fields[i].toULongLong(&ok);
+            if (!ok || QString::number(number) != fields[i]) identityValid = false;
+        }
+        if (!trustedTmp || !pathValid || !identityValid || (privileged && !expected.startsWith("0 0 700 "))) {
+            failed = true; continue; // Never learn ownership from a fresh stat.
+        }
+        const QString prefix = privileged ? QStringLiteral("sudo ") : QString();
+        auto observe = [&](QByteArray &out) {
+            out.clear();
+            return session.runScript(credentials, prefix + QStringLiteral(
+                "sh -c 'if [ ! -e \"$1\" ] && [ ! -L \"$1\" ]; then printf ABSENT; "
+                "elif [ -d \"$1\" ] && [ ! -L \"$1\" ]; then stat -c \"%u %g %a %d %i\" -- \"$1\"; "
+                "else exit 1; fi' sh '%1'").arg(path), capture(out),
+                [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+        };
+        auto same = [&]() {
+            QByteArray out;
+            return observe(out) == ErrorCode::NoError && QString::fromLatin1(out.trimmed()) == expected;
+        };
+        QByteArray first;
+        if (observe(first) != ErrorCode::NoError) { failed = true; continue; }
+        if (first == QByteArrayLiteral("ABSENT")) continue; // lost cleanup acknowledgement
+        if (QString::fromLatin1(first.trimmed()) != expected) { failed = true; continue; }
+        const QStringList names = privileged ? QStringList{"native-feed", "native-collector"}
+            : QStringList{"native-feed.upload", "native-collector.upload", "prepare.py", "automatic.py",
+                "trusted_image.py", "service.py", "target.py", "policy.py", "journal.py", "feeds.py", "ready_validation.py"};
+        for (const auto &name : names) {
+            if (!same()) { failed = true; break; }
+            if (session.runScript(credentials, prefix + QStringLiteral("rm -f -- '%1/%2'").arg(path, name)) != ErrorCode::NoError)
+                failed = true;
+        }
+        if (!same()) { failed = true; continue; }
+        if (session.runScript(credentials, prefix + QStringLiteral("rmdir -- '%1'").arg(path)) != ErrorCode::NoError)
+            failed = true;
+        QByteArray final;
+        if (observe(final) != ErrorCode::NoError || final != QByteArrayLiteral("ABSENT")) failed = true;
+    }
+    if (failed) {
+        result.insert("reason", "native_prepare_cleanup_failed");
+        result.insert("cleanupRequired", true);
+        return ErrorCode::ServerCheckFailed;
+    }
+    result = {};
+    return ErrorCode::NoError;
+}
+}
+
+ErrorCode InstallController::cleanupAwgMigrationPrepareInputs(const ServerCredentials &credentials,
+        DockerContainer source, amnezia::awgControlAuthority::Store *authority, QJsonObject &result)
+{
+    result = {};
+    QString authorityError;
+    if (!credentials.isValid() || !authority
+            || !authority->matches(credentials, ContainerUtils::containerToString(source))
+            || !authority->lock(&authorityError)) {
+        result.insert("reason", authorityError.isEmpty() ? QStringLiteral("authority_store_required") : authorityError);
+        return ErrorCode::ServerCheckFailed;
+    }
+    const auto saved = authority->loadPrepareCleanup();
+    if (!saved.ok) { result.insert("reason", saved.error); return ErrorCode::ServerCheckFailed; }
+    if (saved.missing) return ErrorCode::NoError;
+    QJsonObject roots;
+    for (const char *key : {"programDirectory", "programIdentity", "stagingDirectory", "stagingIdentity"})
+        roots.insert(QLatin1String(key), saved.record.value(QLatin1String(key)));
+    const ErrorCode removed = removeAwgPrepareInputs(credentials, roots, result);
+    if (removed != ErrorCode::NoError) return removed;
+    if (!authority->completePrepareCleanup(roots, &authorityError)) {
+        result.insert("reason", authorityError);
+        result.insert("cleanupRequired", true);
+        result.insert("retainedPrepareDirectory", roots.value("stagingDirectory"));
+        result.insert("retainedProgramDirectory", roots.value("programDirectory"));
+        return ErrorCode::ServerCheckFailed;
+    }
+    return ErrorCode::NoError;
 }
 
 ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &credentials, DockerContainer source,
@@ -1304,6 +1827,7 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
             return ErrorCode::ServerCheckFailed;
         }
     }
+    QJsonArray retiredPredecessors;
     if (nativeFeed) {
         QString authorityError;
         if (!authority || !authority->matches(credentials, ContainerUtils::containerToString(source))
@@ -1312,50 +1836,151 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
                 ? QStringLiteral("authority_store_required") : authorityError);
             return ErrorCode::ServerCheckFailed;
         }
+        // The separate cleanup obligation survives even when PREPARE never
+        // reached main authority admission. Drain it before fresh or recovery work.
+        const ErrorCode prepareCleaned = cleanupAwgMigrationPrepareInputs(credentials, source, authority, result);
+        if (prepareCleaned != ErrorCode::NoError) return prepareCleaned;
+        const auto previous = authority->load();
+        if (previous.ok && !previous.missing) {
+            const ErrorCode cleaned = cleanupAwgMigrationControlInputs(credentials, source, authority, result, true);
+            if (cleaned != ErrorCode::NoError) return cleaned;
+        }
         const auto saved = authority->load();
-        if (!saved.ok || !saved.missing) {
-            result.insert(QStringLiteral("reason"), !saved.ok ? saved.error
-                : QStringLiteral("authority_existing_generation_requires_maintenance"));
+        if (!saved.ok) {
+            result.insert(QStringLiteral("reason"), saved.error);
             return ErrorCode::ServerCheckFailed;
+        }
+        if (!saved.missing && saved.record.value("state").toString() == QStringLiteral("retiredPrepare")) {
+            if (!automatic || saved.record.value("endpointHost").toString() != endpointHost) {
+                result.insert(QStringLiteral("reason"), QStringLiteral("authority_retirement_conflict"));
+                return ErrorCode::ServerCheckFailed;
+            }
+            retiredPredecessors = saved.record.value("retiredPredecessors").toArray();
+            if (retiredPredecessors.isEmpty() || retiredPredecessors.size() >= 32) {
+                result.insert(QStringLiteral("reason"), QStringLiteral("authority_retirement_capacity"));
+                return ErrorCode::ServerCheckFailed;
+            }
+        } else if (!saved.missing) {
+            if (!automatic || saved.record.value("endpointHost").toString() != endpointHost
+                    || (saved.record.value("prepareOperationId").toString().isEmpty()
+                        && saved.record.value("state").toString() != QStringLiteral("pendingPrepare"))) {
+                result.insert(QStringLiteral("reason"), QStringLiteral("authority_existing_generation_requires_maintenance"));
+                return ErrorCode::ServerCheckFailed;
+            }
+            QString state = saved.record.value("state").toString();
+            if (state == QStringLiteral("pendingPrepare")) {
+                const ErrorCode recovered = reconcileAwgMigrationControls(credentials, source, 0, {}, authority, result);
+                if (recovered == ErrorCode::NoError) {
+                    const bool retired = result.value(QStringLiteral("retired")).toBool();
+                    result.insert(QStringLiteral("prepared"), !retired);
+                    if (retired) result.insert(QStringLiteral("reason"), QStringLiteral("authority_prepare_retired"));
+                }
+                return recovered;
+            }
+            qint64 existingGeneration = saved.record.value("generation").toInteger();
+            QString journalSha;
+            ErrorCode checked = observedAwgJournalSha(credentials, source, existingGeneration, journalSha);
+            if (checked != ErrorCode::NoError) return checked;
+            if (state == QStringLiteral("pendingMaintenance")) {
+                checked = reconcileAwgMigrationControls(credentials, source, existingGeneration, journalSha, authority, result);
+                if (checked != ErrorCode::NoError) return checked;
+            }
+            const auto current = authority->load();
+            if (!current.ok || current.missing || current.record.value("state").toString() != QStringLiteral("current")
+                    || current.record.value("generation").toInteger() != existingGeneration) {
+                result.insert(QStringLiteral("reason"), QStringLiteral("authority_recovery_conflict"));
+                return ErrorCode::ServerCheckFailed;
+            }
+            checked = observedAwgJournalSha(credentials, source, existingGeneration, journalSha);
+            if (checked != ErrorCode::NoError) return checked;
+            AwgMaintenance::Selection selection;
+            selection.nativeControlVariant = QStringLiteral("native-control-http-v1");
+            selection.currentControlSha256 = current.record.value("currentSha").toString();
+            selection.clientOperationId = current.record.value("prepareOperationId").toString();
+            const ErrorCode maintained = maintainAwgMigrationControls(credentials, source, existingGeneration,
+                journalSha, selection, result, authority);
+            if (maintained == ErrorCode::NoError) result.insert(QStringLiteral("prepared"), true);
+            return maintained;
         }
     }
     const QString directory = QStringLiteral("/tmp/amnezia-migration-%1").arg(Utils::getRandomString(24));
-    ErrorCode error = session.runScript(credentials,
-            QStringLiteral("umask 077; mkdir '%1'").arg(directory));
-    if (error != ErrorCode::NoError) return error;
-    QString programDirectory;
-    bool programDirectoryCreated = false;
-    auto cleanup = [&]() -> ErrorCode {
-        // Only the two random, fixed-prefix directories created by this
-        // invocation are removed, each by exact file names. A failure in one
-        // tree is recorded but never skips the remaining exact cleanup.
-        ErrorCode cleanupError = ErrorCode::NoError;
-        if (programDirectoryCreated) {
-            const ErrorCode programFilesError = session.runScript(credentials, QStringLiteral(
-                    "sudo rm -f -- '%1/native-feed' '%1/native-collector'").arg(programDirectory));
-            const ErrorCode programDirectoryError = session.runScript(credentials,
-                    QStringLiteral("sudo rmdir -- '%1'").arg(programDirectory));
-            if (programFilesError != ErrorCode::NoError || programDirectoryError != ErrorCode::NoError) {
-                cleanupError = ErrorCode::ServerCheckFailed;
+    QJsonObject cleanupRoots{{"stagingDirectory", directory}, {"stagingIdentity", QString()},
+                             {"programDirectory", QString()}, {"programIdentity", QString()}};
+    bool cleanupIntentAttempted = false;
+    auto cleanup = [&](QJsonObject &details) -> ErrorCode {
+        if (cleanupIntentAttempted) {
+            const auto saved = authority->loadPrepareCleanup();
+            if (!saved.ok) {
+                details.insert("reason", saved.error);
+                details.insert("cleanupRequired", true);
+                details.insert("retainedPrepareDirectory", directory);
+                details.insert("retainedProgramDirectory", cleanupRoots.value("programDirectory"));
+                return ErrorCode::ServerCheckFailed;
+            }
+            if (!saved.missing) {
+                QJsonObject savedRoots;
+                for (const char *key : {"programDirectory", "programIdentity", "stagingDirectory", "stagingIdentity"})
+                    savedRoots.insert(QLatin1String(key), saved.record.value(QLatin1String(key)));
+                if (savedRoots == cleanupRoots)
+                    return cleanupAwgMigrationPrepareInputs(credentials, source, authority, details);
+                details.insert("reason", "authority_prepare_cleanup_conflict");
+                details.insert("cleanupRequired", true);
+                details.insert("retainedPrepareDirectory", directory);
+                details.insert("retainedProgramDirectory", cleanupRoots.value("programDirectory"));
+                return ErrorCode::ServerCheckFailed;
             }
         }
-        const ErrorCode stagingFilesError = session.runScript(credentials, QStringLiteral("rm -f -- '%1/native-feed.upload' '%1/native-collector.upload' '%1/prepare.py' '%1/automatic.py' '%1/trusted_image.py' '%1/service.py' '%1/target.py' '%1/policy.py' '%1/journal.py' '%1/feeds.py' '%1/ready_validation.py'").arg(directory));
-        const ErrorCode stagingDirectoryError = session.runScript(credentials,
-                QStringLiteral("rmdir -- '%1'").arg(directory));
-        if (stagingFilesError != ErrorCode::NoError || stagingDirectoryError != ErrorCode::NoError) {
-            cleanupError = ErrorCode::ServerCheckFailed;
-        }
-        return cleanupError;
+        return removeAwgPrepareInputs(credentials, cleanupRoots, details);
     };
     auto finish = [&](ErrorCode primary) -> ErrorCode {
-        const ErrorCode cleanupError = cleanup();
-        // The primary work error always wins; cleanup adds a visible failure
-        // only when the work itself succeeded.
-        if (primary == ErrorCode::NoError && cleanupError != ErrorCode::NoError) {
-            result.insert(QStringLiteral("reason"), QStringLiteral("native_cleanup_failed"));
+        QJsonObject details;
+        const ErrorCode cleanupError = cleanup(details);
+        // Preserve the primary failure while exposing independently actionable
+        // cleanup obligations on every error path, including failed PREPARE.
+        for (auto it = details.constBegin(); it != details.constEnd(); ++it) {
+            if (it.key() != QStringLiteral("reason") || primary == ErrorCode::NoError
+                    || result.value("reason").toString().isEmpty()) result.insert(it.key(), it.value());
         }
         return primary != ErrorCode::NoError ? primary : cleanupError;
     };
+    auto directoryIdentity = [&](const QString &path, bool privileged, QString &identity) -> ErrorCode {
+        QByteArray observed;
+        const QString prefix = privileged ? QStringLiteral("sudo ") : QString();
+        const ErrorCode checked = session.runScript(credentials, prefix + QStringLiteral(
+            "sh -c 'test -d \"$1\" && test ! -L \"$1\" && stat -c \"%u %g %a %d %i\" -- \"$1\"' sh '%1'").arg(path),
+            [&observed](const QString &text, libssh::Client &) {
+                const auto bytes = text.toUtf8();
+                if (bytes.size() > 256 - observed.size()) return ErrorCode::ServerCheckFailed;
+                observed += bytes; return ErrorCode::NoError;
+            }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+        const QString value = QString::fromLatin1(observed.trimmed());
+        const QRegularExpression pattern(QStringLiteral("\\A(?:0|[1-9][0-9]{0,9}) (?:0|[1-9][0-9]{0,9}) 700 (?:0|[1-9][0-9]{0,19}) (?:0|[1-9][0-9]{0,19})\\z"));
+        bool valid = checked == ErrorCode::NoError && pattern.match(value).hasMatch();
+        const auto fields = value.split(QLatin1Char(' '));
+        if (fields.size() != 5) valid = false;
+        else for (int i : {0, 1, 3, 4}) {
+            bool ok = false; const auto number = fields[i].toULongLong(&ok);
+            if (!ok || QString::number(number) != fields[i]
+                    || ((i == 0 || i == 1) && number > 4294967295ULL)) valid = false;
+        }
+        if (!valid || (privileged && !value.startsWith("0 0 700 "))
+                || (!identity.isEmpty() && identity != value)) {
+            result.insert("reason", "native_program_directory_trust_failed");
+            return checked != ErrorCode::NoError ? checked : ErrorCode::ServerCheckFailed;
+        }
+        if (identity.isEmpty()) identity = value;
+        return ErrorCode::NoError;
+    };
+    ErrorCode error = session.runScript(credentials,
+            QStringLiteral("umask 077; mkdir '%1'").arg(directory));
+    // An uncertain mkdir/stat cannot establish ownership. Report the exact safe
+    // path, but never infer an inode later or remove an unknown directory.
+    if (error != ErrorCode::NoError) return finish(error);
+    QString stagingIdentity;
+    error = directoryIdentity(directory, false, stagingIdentity);
+    if (error != ErrorCode::NoError) return finish(error);
+    cleanupRoots.insert("stagingIdentity", stagingIdentity);
+    QString programDirectory;
     if (!nativeFeed) {
         for (const QString &name : {QStringLiteral("prepare.py"), QStringLiteral("automatic.py"), QStringLiteral("trusted_image.py"), QStringLiteral("service.py"), QStringLiteral("target.py"), QStringLiteral("policy.py"), QStringLiteral("journal.py"), QStringLiteral("feeds.py"), QStringLiteral("ready_validation.py")}) {
             QFile resource(QStringLiteral(":/server_scripts/awg_migration/%1").arg(name));
@@ -1383,32 +2008,25 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
             return finish(error != ErrorCode::NoError ? error : ErrorCode::ServerCheckFailed);
         }
         programDirectory = QStringLiteral("/tmp/amnezia-migration-programs-%1").arg(Utils::getRandomString(24));
+        cleanupRoots.insert("programDirectory", programDirectory);
         error = session.runScript(credentials,
                 QStringLiteral("sudo mkdir -m 0700 '%1'").arg(programDirectory));
         if (error != ErrorCode::NoError) {
             result.insert(QStringLiteral("reason"), QStringLiteral("native_program_directory_trust_failed"));
             return finish(error);
         }
-        // mkdir failed on collision, so this exact random path is ours now.
-        programDirectoryCreated = true;
-        auto readPrivateDirectory = [&](const QString &path) -> ErrorCode {
-            QByteArray stat;
-            const ErrorCode statError = session.runScript(credentials,
-                QStringLiteral("sudo stat -c '%u %g %a' '%1'").arg(path),
-                [&stat](const QString &data, libssh::Client &) {
-                    const QByteArray bytes = data.toUtf8();
-                    if (stat.size() + bytes.size() > 64) return ErrorCode::ServerCheckFailed;
-                    stat += bytes;
-                    return ErrorCode::NoError;
-                }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
-            if (statError != ErrorCode::NoError || stat.trimmed() != QByteArrayLiteral("0 0 700")) {
-                result.insert(QStringLiteral("reason"), QStringLiteral("native_program_directory_trust_failed"));
-                return statError != ErrorCode::NoError ? statError : ErrorCode::ServerCheckFailed;
-            }
-            return ErrorCode::NoError;
-        };
-        error = readPrivateDirectory(programDirectory);
+        QString programIdentity;
+        error = directoryIdentity(programDirectory, true, programIdentity);
         if (error != ErrorCode::NoError) return finish(error);
+        cleanupRoots.insert("programIdentity", programIdentity);
+        // Persist exact independently observed identities before any payload
+        // upload or executable invocation, even preflight that never admits PREPARE.
+        QString cleanupAuthorityError;
+        cleanupIntentAttempted = true;
+        if (!authority->beginPrepareCleanup(cleanupRoots, &cleanupAuthorityError)) {
+            result.insert("reason", cleanupAuthorityError);
+            return finish(ErrorCode::ServerCheckFailed);
+        }
         // Root-owned delivery of the exact reviewed bytes: upload, install as
         // root, then hash the installed file independently. Only a matching
         // readback permits any native executable invocation.
@@ -1453,7 +2071,7 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
         if (error != ErrorCode::NoError) { return finish(error); }
         // Re-verify the root-private directory immediately before any
         // executable invocation, so its file names cannot have been swapped.
-        error = readPrivateDirectory(programDirectory);
+        error = directoryIdentity(programDirectory, true, programIdentity);
         if (error != ErrorCode::NoError) return finish(error);
         const QString feedPath = programDirectory + QStringLiteral("/native-feed");
         const QString collectorPath = programDirectory + QStringLiteral("/native-collector");
@@ -1467,6 +2085,10 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
                 .arg(feedPath, nativeFeed->sha256);
         script += QStringLiteral(" --native-collector '%1' --native-collector-sha256 '%2'")
                 .arg(collectorPath, nativeCollector->sha256);
+        if (!retiredPredecessors.isEmpty()) {
+            const QByteArray history = QJsonDocument(retiredPredecessors).toJson(QJsonDocument::Compact).toBase64();
+            script += QStringLiteral(" --retired-predecessors '%1'").arg(QString::fromLatin1(history));
+        }
     } else {
         script = automatic ? QStringLiteral(
                 "sudo python3 -B '%1/prepare.py' --source '%2' --host '%3' --automatic")
@@ -1490,12 +2112,22 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
     }
     const ErrorCode collectorError = ExportController::prepareMigrationSourceCollector(credentials, source);
     if (collectorError != ErrorCode::NoError) { return finish(collectorError); }
+    QString prepareOperationId;
     if (nativeFeed) {
         QString authorityError;
-        if (!authority->beginPrepare(nativeFeed->sha256, &authorityError)) {
+        if (!authority->beginPrepare(nativeFeed->sha256, &authorityError, endpointHost)) {
             result.insert(QStringLiteral("reason"), authorityError);
             return finish(ErrorCode::ServerCheckFailed);
         }
+        const auto intent = authority->load();
+        prepareOperationId = intent.record.value(QStringLiteral("operationId")).toString();
+        const QUuid operation(prepareOperationId);
+        if (!intent.ok || intent.missing || operation.isNull()
+                || operation.toString(QUuid::WithoutBraces) != prepareOperationId) {
+            result.insert(QStringLiteral("reason"), QStringLiteral("authority_prepare_conflict"));
+            return finish(ErrorCode::ServerCheckFailed);
+        }
+        script += QStringLiteral(" --client-operation-id '%1'").arg(prepareOperationId);
     }
     output.clear();
     error = session.runScript(credentials, script,
@@ -1510,19 +2142,14 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
     result = QJsonDocument::fromJson(output.trimmed()).object();
     ErrorCode outcome = error;
     if (outcome == ErrorCode::NoError && nativeFeed) {
-        const auto number = result.value(QStringLiteral("generation"));
-        const double generationValue = number.toDouble();
-        const bool prepared = result.value(QStringLiteral("prepared")).isBool()
-                && result.value(QStringLiteral("prepared")).toBool()
-                && result.value(QStringLiteral("legacyRetained")).isBool()
-                && result.value(QStringLiteral("legacyRetained")).toBool()
-                && number.isDouble() && generationValue >= 1 && generationValue <= 9007199254740991.0
-                && generationValue == static_cast<double>(number.toInteger())
-                && (automatic || number.toInteger() == generation);
+        QJsonObject preparedReceipt;
+        const bool prepared = AwgMaintenance::nativePrepareReceipt(result, prepareOperationId,
+                generation, automatic, &preparedReceipt);
         QString authorityError;
         // Initial native PREPARE refuses existing generations. The digest below
         // comes only from the independently verified delivered bundle, never JSON.
-        if (!prepared || !authority->commitPrepare(number.toInteger(), nativeFeed->sha256, &authorityError)) {
+        if (!prepared || !authority->commitPrepare(preparedReceipt.value("generation").toInteger(),
+                nativeFeed->sha256, &authorityError)) {
             result.insert(QStringLiteral("reason"), authorityError.isEmpty()
                 ? QStringLiteral("native_prepare_receipt_invalid") : authorityError);
             outcome = ErrorCode::ServerCheckFailed;
@@ -1530,11 +2157,7 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
     } else if (outcome == ErrorCode::NoError && !result.value(QStringLiteral("prepared")).toBool(false)) {
         outcome = ErrorCode::ServerCheckFailed;
     }
-    const ErrorCode cleanupError = cleanup();
-    if (outcome != ErrorCode::NoError) return outcome;
-    if (cleanupError != ErrorCode::NoError)
-        result.insert(QStringLiteral("reason"), QStringLiteral("native_cleanup_failed"));
-    return cleanupError;
+    return finish(outcome);
 }
 
 ServerRoutingRulesPublishResult InstallController::publishVersionedServerRoutingRules(
