@@ -4,6 +4,27 @@
 #include <QString>
 
 namespace AwgMaintenance {
+// Preserve actionable recovery locations without reflecting arbitrary SSH output
+// or credentials through operator JSON when the primary operation failed.
+inline QJsonObject failureDetails(const QJsonObject &receipt)
+{
+    QJsonObject details;
+    const QString reason = receipt.value(QStringLiteral("reason")).toString();
+    if (QRegularExpression(QStringLiteral("\\A[a-z][a-z0-9_]{0,159}\\z")).match(reason).hasMatch())
+        details.insert(QStringLiteral("reason"), reason);
+    const QString retained = receipt.value(QStringLiteral("retainedDirectory")).toString();
+    if (QRegularExpression(QStringLiteral("\\A/tmp/amnezia-migration-maintenance-[A-Za-z0-9]{24}\\z"))
+            .match(retained).hasMatch()) {
+        details.insert(QStringLiteral("retainedDirectory"), retained);
+        const auto pending = receipt.value(QStringLiteral("pendingRecovery"));
+        details.insert(QStringLiteral("pendingRecovery"), pending.isBool() ? pending.toBool() : true);
+        if (receipt.value(QStringLiteral("cleanupRequired")).isBool()
+                && receipt.value(QStringLiteral("cleanupRequired")).toBool())
+            details.insert(QStringLiteral("cleanupRequired"), true);
+    }
+    return details;
+}
+
 // Explicit native-control selection. The variant is authoritative: legacy
 // generations carry no selection and keep their existing Python recipe. The
 // current-control digest is a caller-authoritative pin; it is never read from

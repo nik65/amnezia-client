@@ -2,6 +2,7 @@
 #include <QByteArray>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QCryptographicHash>
@@ -19,31 +20,76 @@
 // this is deliberately not a claim of protection from a compromised account.
 namespace awgMigrationSecretStore {
 #if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
-inline bool privateFile(const QString &path, QByteArray *bytes)
+inline constexpr qint64 maximumPrivateFileSize = 65536;
+inline bool syncDescriptor(int fd)
+{
+    int result;
+    do { result = ::fsync(fd); } while (result != 0 && errno == EINTR);
+    return result == 0;
+}
+inline bool syncDirectory(const QString &path)
 {
     const auto name = QFile::encodeName(path);
-    const int fd = ::open(name.constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    const int fd = ::open(name.constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return false;
     struct stat st{};
-    const bool safe = ::fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == ::geteuid()
-            && (st.st_mode & 077) == 0 && st.st_size >= 0 && st.st_size <= 65536;
-    if (!safe) { ::close(fd); return false; }
-    QFile file;
-    if (!file.open(fd, QIODevice::ReadOnly, QFileDevice::AutoCloseHandle)) { ::close(fd); return false; }
-    *bytes = file.readAll();
-    return bytes->size() == st.st_size;
+    const bool synced = ::fstat(fd, &st) == 0 && S_ISDIR(st.st_mode)
+            && st.st_uid == ::geteuid() && (st.st_mode & 07022) == 0 && syncDescriptor(fd);
+    return ::close(fd) == 0 && synced;
+}
+inline bool safePrivateFile(const struct stat &st)
+{
+    return S_ISREG(st.st_mode) && st.st_uid == ::geteuid()
+            && (st.st_mode & 07077) == 0 && st.st_size >= 0 && st.st_size <= maximumPrivateFileSize;
+}
+inline bool privateFile(const QString &path, QByteArray *bytes)
+{
+    if (!bytes) return false;
+    bytes->clear();
+    const auto name = QFile::encodeName(path);
+    // Reject FIFOs and device nodes without waiting for their producer first.
+    const int fd = ::open(name.constData(), O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return false;
+    struct stat st{};
+    if (::fstat(fd, &st) != 0 || !safePrivateFile(st)) { ::close(fd); return false; }
+    // A bounded sentinel read also catches growth after the initial fstat.
+    QByteArray result(maximumPrivateFileSize + 1, '\0');
+    qint64 count = 0;
+    bool complete = false;
+    while (count < result.size()) {
+        const ssize_t received = ::read(fd, result.data() + count,
+                                        static_cast<size_t>(result.size() - count));
+        if (received < 0 && errno == EINTR) continue;
+        if (received < 0) break;
+        if (received == 0) { complete = true; break; }
+        count += received;
+    }
+    struct stat after{};
+    const bool stable = complete && count == st.st_size && ::fstat(fd, &after) == 0
+            && safePrivateFile(after) && after.st_size == st.st_size
+            && after.st_dev == st.st_dev && after.st_ino == st.st_ino && after.st_mode == st.st_mode
+            && after.st_mtim.tv_sec == st.st_mtim.tv_sec && after.st_mtim.tv_nsec == st.st_mtim.tv_nsec
+            && after.st_ctim.tv_sec == st.st_ctim.tv_sec && after.st_ctim.tv_nsec == st.st_ctim.tv_nsec;
+    const bool closed = ::close(fd) == 0;
+    if (!stable || !closed) return false;
+    result.resize(count);
+    *bytes = result;
+    return true;
 }
 inline bool atomicWrite(const QString &path, const QByteArray &bytes)
 {
+    if (bytes.size() > maximumPrivateFileSize) return false;
     struct stat st{};
     const auto name = QFile::encodeName(path);
-    if (::lstat(name.constData(), &st) == 0
-        && (!S_ISREG(st.st_mode) || st.st_uid != ::geteuid() || (st.st_mode & 077))) return false;
+    if (::lstat(name.constData(), &st) == 0) {
+        if (!safePrivateFile(st)) return false;
+    } else if (errno != ENOENT) return false;
     QSaveFile file(path);
     file.setDirectWriteFallback(false);
     if (!file.open(QIODevice::WriteOnly) || !file.setPermissions(QFile::ReadOwner | QFile::WriteOwner)
-        || file.write(bytes) != bytes.size()) return false;
-    return file.commit();
+        || file.write(bytes) != bytes.size() || !file.flush() || !syncDescriptor(file.handle())) return false;
+    // A committed rename is not durable until the containing directory is.
+    return file.commit() && syncDirectory(QFileInfo(path).absolutePath());
 }
 inline QString directory()
 {
@@ -56,15 +102,17 @@ inline QString directory()
         struct stat st{};
         const auto parent = QFile::encodeName(current);
         if (::lstat(parent.constData(), &st) != 0 || !S_ISDIR(st.st_mode)
-            || st.st_uid != ::geteuid() || (st.st_mode & 022)) return {};
+            || st.st_uid != ::geteuid() || (st.st_mode & 07022)) return {};
         current += '/' + part;
         const auto name = QFile::encodeName(current);
-        if (::mkdir(name.constData(), 0700) != 0 && errno != EEXIST) return {};
+        if (::mkdir(name.constData(), 0700) == 0) {
+            if (!syncDirectory(QFileInfo(current).absolutePath())) return {};
+        } else if (errno != EEXIST) return {};
     }
     struct stat st{};
     const auto name = QFile::encodeName(path);
     if (::lstat(name.constData(), &st) != 0 || !S_ISDIR(st.st_mode)
-        || st.st_uid != ::geteuid() || (st.st_mode & 077)) return {};
+        || st.st_uid != ::geteuid() || (st.st_mode & 07077)) return {};
     return path;
 }
 inline QByteArray key(const QString &directory)
@@ -82,9 +130,19 @@ inline QByteArray key(const QString &directory)
     if (RAND_bytes(reinterpret_cast<unsigned char *>(result.data()), result.size()) != 1) return {};
     const int fd = ::open(QFile::encodeName(path).constData(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) return privateFile(path, &result) && result.size() == 32 ? result : QByteArray{};
-    const bool stored = ::write(fd, result.constData(), result.size()) == result.size() && ::fsync(fd) == 0;
-    ::close(fd);
-    if (!stored) return {};
+    qint64 written = 0;
+    while (written < result.size()) {
+        const ssize_t count = ::write(fd, result.constData() + written,
+                                      static_cast<size_t>(result.size() - written));
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) break;
+        written += count;
+    }
+    const bool stored = written == result.size() && syncDescriptor(fd);
+    const bool closed = ::close(fd) == 0;
+    // Preserve a failed/partial key file. It must never be replaced with a
+    // newly generated key on the next call, which would reset durable pins.
+    if (!stored || !closed || !syncDirectory(directory)) return {};
     return result;
 }
 inline QByteArray crypt(const QByteArray &input, const QByteArray &key, bool encrypt)

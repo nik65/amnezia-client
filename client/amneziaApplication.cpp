@@ -1,4 +1,5 @@
 #include "amneziaApplication.h"
+#include "core/utils/awgControlAuthorityStore.h"
 #include <libssh/libssh.h>
 #include "core/controllers/selfhosted/installController.h"
 
@@ -1221,16 +1222,37 @@ bool AmneziaApplication::parseCommands()
                 AwgMaintenance::Selection selection;
                 selection.nativeControlVariant = selected.value("nativeControlVariant").toString();
                 selection.currentControlSha256 = selected.value("currentControlSha256").toString();
-                error = InstallController::maintainAwgMigrationControls(admin->credentials(), source,
-                    static_cast<qint64>(selected.value("generation").toDouble()),
-                    selected.value("expectedJournalSha256").toString(), selection, receipt);
+                const qint64 generation = selected.value("generation").toInteger();
+                std::unique_ptr<amnezia::awgControlAuthority::Store> authority;
+                bool authorized = true;
+                if (selection.native()) {
+                    authority = std::make_unique<amnezia::awgControlAuthority::Store>(nullptr,
+                        amnezia::awgControlAuthority::identity(selected.value("serverId").toString(),
+                            admin->credentials(), ContainerUtils::containerToString(source)));
+                    QString authorityError;
+                    authorized = authority->lock(&authorityError);
+                    if (authorized && !selection.currentControlSha256.isEmpty())
+                        authorized = authority->anchorCurrent(generation, selection.currentControlSha256, &authorityError);
+                    if (authorized) {
+                        const auto saved = authority->load();
+                        authorized = saved.ok && !saved.missing
+                            && saved.record.value("state").toString() == QStringLiteral("current")
+                            && saved.record.value("generation").toInteger() == generation;
+                        if (authorized) selection.currentControlSha256 = saved.record.value("currentSha").toString();
+                        else authorityError = saved.ok ? QStringLiteral("authority_recovery_required") : saved.error;
+                    }
+                    if (!authorized) receipt.insert(QStringLiteral("reason"), authorityError);
+                }
+                if (authorized)
+                    error = InstallController::maintainAwgMigrationControls(admin->credentials(), source,
+                        generation, selected.value("expectedJournalSha256").toString(), selection, receipt, authority.get());
                 ssh_finalize();
             }
         }
 #endif
         const bool ok = error == ErrorCode::NoError;
         const QJsonObject output{{"schema", "amnezia.operator.awg-controls.v1"},
-            {"ok", ok}, {"result", ok ? receipt : QJsonObject{}},
+            {"ok", ok}, {"result", ok ? receipt : AwgMaintenance::failureDetails(receipt)},
             {"error", ok ? QString() : QStringLiteral("migration_control_maintenance_failed")}};
         writeConsole(stdout, QString::fromUtf8(QJsonDocument(output).toJson(QJsonDocument::Compact)));
         m_commandExitCode = ok ? 0 : 2;

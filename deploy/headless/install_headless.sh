@@ -748,17 +748,49 @@ y_probe_host() {
         --ubuntu-codename "$VERSION_CODENAME"
 }
 y_consume_metadata() {
-    local native_metadata native_probe
+    local native_metadata native_probe metadata_line
+    local version_seen=0 helper_role_seen=0
+    Y_PACKAGE_VERSION=""
+    Y_NATIVE_HELPER_KIND=""
     if ! native_metadata="$(y_validate_package)"; then
         echo "authenticated native verifier rejected the package metadata or receipt" >&2
         exit 3
     fi
-    if [[ "$native_metadata" != *"validated package metadata (host probes deferred): "* ]]; then
-        echo "authenticated native verifier did not report the package version" >&2
+    # Consume only complete canonical stdout records from the authenticated
+    # verifier. Missing/duplicate/unknown roles refuse without a legacy fallback;
+    # stderr, substrings and a role printed by a failing process are not authority.
+    while IFS= read -r metadata_line; do
+        case "$metadata_line" in
+            'validated package metadata (host probes deferred): '*)
+                if [[ "$version_seen" -ne 0 ]]; then
+                    echo "authenticated native verifier reported duplicate package versions" >&2
+                    exit 3
+                fi
+                version_seen=1
+                Y_PACKAGE_VERSION="${metadata_line#validated package metadata (host probes deferred): }"
+                ;;
+            'validated native helper role: '*)
+                if [[ "$helper_role_seen" -ne 0 ]]; then
+                    echo "authenticated native verifier reported duplicate native helper roles" >&2
+                    exit 3
+                fi
+                helper_role_seen=1
+                case "$metadata_line" in
+                    'validated native helper role: none') Y_NATIVE_HELPER_KIND="" ;;
+                    'validated native helper role: amnezia-headless-fs') Y_NATIVE_HELPER_KIND=amnezia-headless-fs ;;
+                    'validated native helper role: amnezia-cli') Y_NATIVE_HELPER_KIND=amnezia-cli ;;
+                    *)
+                        echo "authenticated native verifier reported an invalid native helper role" >&2
+                        exit 3
+                        ;;
+                esac
+                ;;
+        esac
+    done <<< "$native_metadata"
+    if [[ "$version_seen" -ne 1 || "$helper_role_seen" -ne 1 ]]; then
+        echo "authenticated native verifier did not report the package version and native helper role" >&2
         exit 3
     fi
-    Y_PACKAGE_VERSION="${native_metadata##*validated package metadata (host probes deferred): }"
-    Y_PACKAGE_VERSION="${Y_PACKAGE_VERSION%%$'\n'*}"
     if ! [[ "$Y_PACKAGE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
         echo "authenticated native verifier reported an invalid package version" >&2
         exit 3
@@ -1212,13 +1244,22 @@ if [[ "$(sha256sum "$PUBLIC_KEY" | awk '{print tolower($1)}')" != "${EXPECTED_KE
     echo "supplied trust anchor fingerprint does not match the expected receipt" >&2
     exit 3
 fi
-NATIVE_HELPER_KIND="$(python3 - "$PACKAGE_ROOT/package-manifest.json" <<'PY'
+if [[ -n "$BOOTSTRAP_VERIFIER" ]]; then
+    NATIVE_HELPER_KIND="$Y_NATIVE_HELPER_KIND"
+elif ! NATIVE_HELPER_KIND="$(python3 - "$PACKAGE_ROOT/package-manifest.json" <<'PY'
 import json
 import sys
 from pathlib import Path
 print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")).get("nativeHelper", ""))
 PY
-)" || exit 3
+)"; then
+    echo "legacy provisioning native helper role could not be read" >&2
+    exit 3
+fi
+case "$NATIVE_HELPER_KIND" in
+    ''|amnezia-headless-fs|amnezia-cli) ;;
+    *) echo "invalid authenticated native provisioning helper role" >&2; exit 3 ;;
+esac
 if [[ "$NATIVE_HELPER_KIND" == "amnezia-headless-fs" ]]; then
     if [[ -L "$PACKAGE_ROOT/amnezia-headless-fs" || ! -f "$PACKAGE_ROOT/amnezia-headless-fs" || ! -x "$PACKAGE_ROOT/amnezia-headless-fs" ]]; then
         echo "authenticated native provisioning helper is not executable/regular" >&2

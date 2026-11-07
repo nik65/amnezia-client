@@ -74,13 +74,16 @@ inline QJsonObject parseAwgMaintenanceArgument(const QString &input)
     if (!QRegularExpression(QStringLiteral("^[a-f0-9]{64}$")).match(result.value("expectedJournalSha256").toString()).hasMatch()) return {};
     const QString variant = result.value("nativeControlVariant").toString();
     const QString current = result.value("currentControlSha256").toString();
-    if (variant.isEmpty() != current.isEmpty()) return {};
+    if (variant.isEmpty() && result.contains("currentControlSha256")) return {};
     if (!variant.isEmpty()) {
-        // Explicit journal variant selection. nativeFeedSha256 is never a
-        // selector, and a current pin is mandatory for native maintenance.
-        if (variant != "native-control-http-v1"
-                || !QRegularExpression(QStringLiteral("^[a-f0-9]{64}$")).match(current).hasMatch()) return {};
-        if (result.size() != 6) return {};
+        // Omission selects the persisted local CURRENT; it never selects a
+        // journal/replacement digest. Explicit pins still require exact syntax.
+        if (variant != "native-control-http-v1") return {};
+        if (result.contains("currentControlSha256")) {
+            if (current.size() != 64
+                    || !QRegularExpression(QStringLiteral("^[a-f0-9]{64}$")).match(current).hasMatch()
+                    || result.size() != 6) return {};
+        } else if (result.size() != 5) return {};
     } else if (result.size() != 4) {
         return {};
     }

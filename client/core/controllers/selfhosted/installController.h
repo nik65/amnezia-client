@@ -19,6 +19,8 @@
 #include "core/repositories/secureAppSettingsRepository.h"
 #include "core/installers/mtProxyInstaller.h"
 
+namespace amnezia::awgControlAuthority { class Store; }
+
 class SshSession;
 class InstallerBase;
 
@@ -116,12 +118,14 @@ public:
     // Administrator action only. Creates a parallel endpoint, retains the old Device.
     static ErrorCode prepareAwgMigration(const ServerCredentials &credentials, DockerContainer source,
             const QString &endpointHost, int targetPort, const QString &immutableAwgImage,
-            qint64 generation, QJsonObject &result, bool automatic = false);
+            qint64 generation, QJsonObject &result, bool automatic = false,
+            amnezia::awgControlAuthority::Store *authority = nullptr);
 
     // Explicit selected existing migration only; never provisions VPN or collectors.
     static ErrorCode maintainAwgMigrationControls(const ServerCredentials &credentials,
             DockerContainer source, qint64 generation, const QString &expectedJournalSha256,
-            const AwgMaintenance::Selection &selection, QJsonObject &result);
+            const AwgMaintenance::Selection &selection, QJsonObject &result,
+            amnezia::awgControlAuthority::Store *authority = nullptr);
 
     void clearCachedProfile(const QString &serverId, DockerContainer container);
 

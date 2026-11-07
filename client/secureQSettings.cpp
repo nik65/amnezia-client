@@ -4,6 +4,7 @@
 #include "cryptoUtils.h"
 #include "core/utils/utilities.h"
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDeadlineTimer>
 #include <QDataStream>
 #include <QDebug>
@@ -452,7 +453,7 @@ namespace {
     }
 
 #if defined(Q_OS_ANDROID)
-    QString androidSettingsFilePath()
+    QString androidSettingsFilePath(SecureQSettings::StorageScope scope)
     {
         // Do not construct QSettings with an empty filename.  On Android the
         // NativeFormat fallback can resolve to a read-only/invalid location
@@ -471,7 +472,9 @@ namespace {
                 continue;
             }
             const QString probePath = QDir(directory).filePath(
-                    QStringLiteral(".amnezia-settings-write-probe"));
+                    scope == SecureQSettings::StorageScope::ControlAuthority
+                        ? QStringLiteral(".amnezia-control-authority-write-probe")
+                        : QStringLiteral(".amnezia-settings-write-probe"));
             QFile probe(probePath);
             if (!probe.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
                 continue;
@@ -480,30 +483,37 @@ namespace {
             probe.close();
             (void)QFile::remove(probePath);
             if (probeOk) {
-                return QDir(directory).filePath(QStringLiteral("settings.ini"));
+                return QDir(directory).filePath(scope == SecureQSettings::StorageScope::ControlAuthority
+                    ? QStringLiteral("control-authority.ini") : QStringLiteral("settings.ini"));
             }
         }
         qCritical() << "SecureQSettings: no writable app-private Android settings directory";
         return QDir(QDir::tempPath()).filePath(
-                QStringLiteral("amnezia-settings-unavailable.ini"));
+                scope == SecureQSettings::StorageScope::ControlAuthority
+                    ? QStringLiteral("amnezia-control-authority-unavailable.ini")
+                    : QStringLiteral("amnezia-settings-unavailable.ini"));
     }
 #endif
 }
 
 SecureQSettings::SecureQSettings(const QString &organization, const QString &application, QObject *parent,
-                                 AccessMode accessMode, bool enableEncryption)
+                                 AccessMode accessMode, bool enableEncryption, StorageScope storageScope)
     : QObject { parent },
 #if defined(Q_OS_ANDROID)
       // Qt's Android NativeFormat backend can report AccessError for durable
       // writes on some Qt/device combinations. Keep the same encrypted-value
       // layer, but put the QSettings file explicitly in app-private storage.
-      m_settings(androidSettingsFilePath(), QSettings::IniFormat, parent),
+      m_settings(androidSettingsFilePath(storageScope), QSettings::IniFormat, parent),
 #else
-      m_settings(organization, application, parent),
+      m_settings(organization, storageScope == StorageScope::ControlAuthority
+          ? application + QStringLiteral("-ControlAuthority") : application, parent),
 #endif
       encryptedKeys({ "Servers/serversList", "Conf/remoteLogTokens",
                       "Conf/favoriteLocations", "Conf/proxyUrls/agw_state" }),
-      m_accessMode(accessMode), m_encryptionEnabled(enableEncryption)
+      m_accessMode(accessMode), m_encryptionEnabled(enableEncryption), m_storageScope(storageScope),
+      m_keychainScope(storageScope == StorageScope::ControlAuthority
+          ? QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(QJsonArray{organization, application})
+                .toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex()) : QString())
 {
 #if defined(Q_OS_ANDROID)
     // Some Android filesystems do not support QSettings' temporary rename
@@ -511,12 +521,14 @@ SecureQSettings::SecureQSettings(const QString &organization, const QString &app
     // are valid. The path was already proven writable above; disable only the
     // failing rename requirement, while retaining the explicit sync/readback
     // checks for every durable updater value.
-    m_settings.setAtomicSyncRequired(false);
+    // Authority intents require atomic replacement; unsupported filesystems
+    // fail before remote mutation rather than truncating CURRENT after a crash.
+    m_settings.setAtomicSyncRequired(storageScope == StorageScope::ControlAuthority);
     m_settings.setFallbacksEnabled(false);
     // Preserve values from an older APK when the new private file has not
     // been created yet. A failed legacy read is ignored; new writes remain
     // fail-closed through the normal sync/status check below.
-    if (m_settings.allKeys().isEmpty()) {
+    if (storageScope == StorageScope::Application && m_settings.allKeys().isEmpty()) {
         QSettings legacy(organization, application, parent);
         if (legacy.status() == QSettings::NoError) {
             for (const QString &key : legacy.allKeys()) {
@@ -526,6 +538,7 @@ SecureQSettings::SecureQSettings(const QString &organization, const QString &app
         }
     }
 #endif
+    if (storageScope == StorageScope::ControlAuthority) m_settings.setFallbacksEnabled(false);
     // Operator-mode processes are strictly read-only observers. In particular,
     // they must never migrate settings or create replacement keychain material:
     // doing so could race the authoritative process and make encrypted settings
@@ -617,6 +630,21 @@ QVariant SecureQSettings::value(const QString &key, const QVariant &defaultValue
 
     m_cache.insert(normalizedCacheKey, retVal);
     return retVal;
+}
+
+bool SecureQSettings::readFreshValue(const QString &key, QVariant &result)
+{
+    QMutexLocker locker(&m_mutex);
+    result = {};
+    if (!amnezia::secureSettingsPolicy::isValidSettingsKey(key)) return false;
+    const QString canonical = amnezia::secureSettingsPolicy::canonicalKey(key);
+    if (canonical.isEmpty()) return false;
+    m_settings.sync();
+    if (m_settings.status() != QSettings::NoError) return false;
+    m_cache.remove(amnezia::secureSettingsPolicy::cacheKey(canonical));
+    if (!m_settings.contains(canonical)) return true;
+    result = value(canonical);
+    return result.isValid() && m_settings.status() == QSettings::NoError;
 }
 
 void SecureQSettings::setValue(const QString &key, const QVariant &value)
@@ -976,9 +1004,14 @@ QByteArray SecureQSettings::getEncKey(bool allowCreate) const
         return {};
     }
     // load keys from system key storage
+    // An empty authority store must never replace the application's existing
+    // shared key/IV after their loss. Its keychain slots are separate as well.
+    const QString keyTag = m_storageScope == StorageScope::ControlAuthority
+        ? QStringLiteral("controlAuthorityKeyTag-v1-") + m_keychainScope
+        : QString::fromLatin1(settingsKeyTag);
     bool readCompleted = false;
     bool entryNotFound = false;
-    m_key = getSecTag(settingsKeyTag, &readCompleted, &entryNotFound);
+    m_key = getSecTag(keyTag, &readCompleted, &entryNotFound);
 
     if (m_key.isEmpty()) {
         if (m_accessMode == AccessMode::ReadOnly || !allowCreate) {
@@ -996,14 +1029,14 @@ QByteArray SecureQSettings::getEncKey(bool allowCreate) const
             return {};
         }
 
-        if (!setSecTag(settingsKeyTag, key)) {
+        if (!setSecTag(keyTag, key)) {
             qCritical() << "SecureQSettings::getEncKey keychain write failed";
             return {};
         }
 
         // check
         bool verifyCompleted = false;
-        m_key = getSecTag(settingsKeyTag, &verifyCompleted);
+        m_key = getSecTag(keyTag, &verifyCompleted);
         if (!verifyCompleted) {
             qCritical() << "SecureQSettings::getEncKey keychain verification timed out";
             return {};
@@ -1031,9 +1064,12 @@ QByteArray SecureQSettings::getEncIv(bool allowCreate) const
         return {};
     }
     // load keys from system key storage
+    const QString ivTag = m_storageScope == StorageScope::ControlAuthority
+        ? QStringLiteral("controlAuthorityIvTag-v1-") + m_keychainScope
+        : QString::fromLatin1(settingsIvTag);
     bool readCompleted = false;
     bool entryNotFound = false;
-    m_iv = getSecTag(settingsIvTag, &readCompleted, &entryNotFound);
+    m_iv = getSecTag(ivTag, &readCompleted, &entryNotFound);
 
     if (m_iv.isEmpty()) {
         if (m_accessMode == AccessMode::ReadOnly || !allowCreate) {
@@ -1050,14 +1086,14 @@ QByteArray SecureQSettings::getEncIv(bool allowCreate) const
             qCritical() << "SecureQSettings::getEncIv Unable to generate new enc IV";
             return {};
         }
-        if (!setSecTag(settingsIvTag, iv)) {
+        if (!setSecTag(ivTag, iv)) {
             qCritical() << "SecureQSettings::getEncIv keychain write failed";
             return {};
         }
 
         // check
         bool verifyCompleted = false;
-        m_iv = getSecTag(settingsIvTag, &verifyCompleted);
+        m_iv = getSecTag(ivTag, &verifyCompleted);
         if (!verifyCompleted) {
             qCritical() << "SecureQSettings::getEncIv keychain verification timed out";
             return {};

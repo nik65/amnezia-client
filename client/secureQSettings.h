@@ -317,14 +317,23 @@ public:
         ReadOnly,
     };
 
+    enum class StorageScope {
+        Application,
+        ControlAuthority,
+    };
+
     explicit SecureQSettings(const QString &organization, const QString &application = QString(),
                              QObject *parent = nullptr, AccessMode accessMode = AccessMode::ReadWrite,
-                             bool enableEncryption = true);
+                             bool enableEncryption = true,
+                             StorageScope storageScope = StorageScope::Application);
     SecureQSettings(const QString &organization, const QString &application,
                     QObject *parent, bool enableEncryption);
 
     QVariant value(const QString &key, const QVariant &defaultValue = QVariant()) const;
     void setValue(const QString &key, const QVariant &value);
+    // Fresh persisted read for externally locked, cross-process authority state.
+    // true + invalid QVariant means absent; false includes sync/decryption failure.
+    bool readFreshValue(const QString &key, QVariant &result);
     void remove(const QString &key);
 
     QByteArray backupAppConfig() const;
@@ -371,6 +380,8 @@ private:
 
     const AccessMode m_accessMode;
     const bool m_encryptionEnabled;
+    const StorageScope m_storageScope;
+    const QString m_keychainScope;
 
     mutable QRecursiveMutex m_mutex;
 };

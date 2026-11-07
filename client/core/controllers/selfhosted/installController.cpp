@@ -1,4 +1,5 @@
 #include "installController.h"
+#include "core/utils/awgControlAuthorityStore.h"
 #include "awgMaintenanceReceipt.h"
 #include "exportController.h"
 #include <QFile>
@@ -951,7 +952,8 @@ ErrorCode InstallController::publishServerRoutingRules(const ServerCredentials &
 
 ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredentials &credentials,
         DockerContainer source, qint64 generation, const QString &expectedJournalSha256,
-        const AwgMaintenance::Selection &selection, QJsonObject &result)
+        const AwgMaintenance::Selection &selection, QJsonObject &result,
+        amnezia::awgControlAuthority::Store *authority)
 {
     result = {};
     const QRegularExpression hashPattern(QStringLiteral("^[a-f0-9]{64}$"));
@@ -976,6 +978,13 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
         };
     };
     if (selection.native()) {
+        QString authorityError;
+        if (!authority || !authority->matches(credentials, ContainerUtils::containerToString(source))
+                || !authority->lock(&authorityError)) {
+            result.insert(QStringLiteral("reason"), authorityError.isEmpty()
+                ? QStringLiteral("authority_store_required") : authorityError);
+            return ErrorCode::ServerCheckFailed;
+        }
         // The selected bundle is the only replacement-payload producer. It is
         // independent of the journal and of the operator's current pin; a
         // missing/invalid bundle fails closed instead of selecting Python.
@@ -1030,7 +1039,11 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
         const QList<QByteArray> fields = out.trimmed().split(' ');
         if (fields.size() != 5 || fields.at(0) != "0" || fields.at(1) != "0" || fields.at(2) != "700")
             return ErrorCode::ServerCheckFailed;
-        rootIdentity = QString::fromLatin1(out.trimmed());
+        const QString observedIdentity = QString::fromLatin1(out.trimmed());
+        if (!rootIdentity.isEmpty()) {
+            return observedIdentity == rootIdentity ? ErrorCode::NoError : ErrorCode::ServerCheckFailed;
+        }
+        rootIdentity = observedIdentity;
         return ErrorCode::NoError;
     };
     auto cleanupOwned = [&]() -> ErrorCode {
@@ -1091,13 +1104,17 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
             if (primary == ErrorCode::NoError)
                 result.insert(QStringLiteral("reason"), QStringLiteral("native_recovery_inputs_retained"));
             result.insert(QStringLiteral("retainedDirectory"), directory);
+            result.insert(QStringLiteral("pendingRecovery"), true);
             if (primary == ErrorCode::NoError) return ErrorCode::ServerCheckFailed;
             return primary;
         }
         const ErrorCode cleanupError = cleanupOwned();
         if (primary != ErrorCode::NoError) return primary;
-        if (cleanupError != ErrorCode::NoError)
+        if (cleanupError != ErrorCode::NoError) {
             result.insert(QStringLiteral("reason"), QStringLiteral("native_cleanup_failed"));
+            result.insert(QStringLiteral("retainedDirectory"), directory);
+            result.insert(QStringLiteral("cleanupRequired"), true);
+        }
         return cleanupError;
     };
     if (selection.native()) {
@@ -1141,6 +1158,14 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
             capture(finalReadback, 512), [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
         if (finalError != ErrorCode::NoError || finalReadback != expectedReadback.toUtf8())
             return finish(finalError != ErrorCode::NoError ? finalError : ErrorCode::ServerCheckFailed, false);
+        // Durable intent precedes the control mutation, after inert staging.
+        // A lost reply retains the independently authorized old/new pair.
+        QString authorityError;
+        if (!authority->beginMaintenance(generation, selection.currentControlSha256,
+                selectedControl->sha256, expectedJournalSha256, &authorityError, directory)) {
+            result.insert(QStringLiteral("reason"), authorityError);
+            return finish(ErrorCode::ServerCheckFailed, false);
+        }
         QByteArray output;
         const QString command = QStringLiteral(
             "sudo '%1' --maintenance --source '%2' --generation %3 --expected-journal-sha256 '%4'"
@@ -1159,6 +1184,13 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
             const ErrorCode validationError = error != ErrorCode::NoError ? error : ErrorCode::ServerCheckFailed;
             return finish(validationError, true);
         }
+        // The verified consumer committed before cleanup. Even if cleanup
+        // fails, CURRENT must advance to the authenticated replacement bytes.
+        if (!authority->commitMaintenance(generation, selection.currentControlSha256,
+                selectedControl->sha256, &authorityError)) {
+            result.insert(QStringLiteral("reason"), authorityError);
+            return finish(ErrorCode::ServerCheckFailed, false);
+        }
         return finish(ErrorCode::NoError, false);
     }
     ErrorCode error = session.runScript(credentials, QStringLiteral("umask 077; mkdir '%1'").arg(directory));
@@ -1167,19 +1199,29 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
         QStringLiteral("service.py"), QStringLiteral("target.py"),
         QStringLiteral("ready_validation.py"), QStringLiteral("trusted_image.py")};
     QJsonObject expectedHashes;
-    auto cleanup = [&]() {
-        QString command = QStringLiteral("rm -f");
+    auto cleanup = [&]() -> ErrorCode {
+        QString command = QStringLiteral("rm -f --");
         for (const QString &name : files) command += QStringLiteral(" '%1/%2'").arg(directory, name);
-        session.runScript(credentials, command + QStringLiteral("; rmdir '%1'").arg(directory));
+        const ErrorCode removeError = session.runScript(credentials, command);
+        const ErrorCode directoryError = session.runScript(credentials,
+                QStringLiteral("rmdir -- '%1'").arg(directory));
+        return removeError != ErrorCode::NoError ? removeError : directoryError;
+    };
+    auto finishLegacy = [&](ErrorCode primary) -> ErrorCode {
+        const ErrorCode cleanupError = cleanup();
+        if (primary != ErrorCode::NoError) return primary;
+        if (cleanupError != ErrorCode::NoError)
+            result.insert(QStringLiteral("reason"), QStringLiteral("legacy_cleanup_failed"));
+        return cleanupError;
     };
     for (const QString &name : files) {
         QFile resource(QStringLiteral(":/server_scripts/awg_migration/%1").arg(name));
-        if (!resource.open(QIODevice::ReadOnly)) { cleanup(); return ErrorCode::InternalError; }
+        if (!resource.open(QIODevice::ReadOnly)) return finishLegacy(ErrorCode::InternalError);
         const QByteArray bytes = resource.readAll();
         if (name == QStringLiteral("service.py") || name == QStringLiteral("target.py"))
             expectedHashes.insert(name, QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex()));
         error = session.uploadFileToHost(credentials, bytes, directory + QLatin1Char('/') + name);
-        if (error != ErrorCode::NoError) { cleanup(); return error; }
+        if (error != ErrorCode::NoError) return finishLegacy(error);
     }
     QByteArray output;
     const QString command = QStringLiteral(
@@ -1187,16 +1229,17 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
         .arg(directory, ContainerUtils::containerToString(source)).arg(generation).arg(expectedJournalSha256);
     error = session.runScript(credentials, command, capture(output, 16384),
         [](const QString &, libssh::Client &) { return ErrorCode::NoError; }, 10 * 60 * 1000);
-    cleanup();
     result = QJsonDocument::fromJson(output.trimmed()).object();
-    if (error != ErrorCode::NoError) return error;
-    return AwgMaintenance::validReceipt(result, ContainerUtils::containerToString(source), generation, expectedHashes)
-            ? ErrorCode::NoError : ErrorCode::ServerCheckFailed;
+    const ErrorCode validationError = error != ErrorCode::NoError ? error
+            : AwgMaintenance::validReceipt(result, ContainerUtils::containerToString(source), generation, expectedHashes)
+                ? ErrorCode::NoError : ErrorCode::ServerCheckFailed;
+    return finishLegacy(validationError);
 }
 
 ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &credentials, DockerContainer source,
         const QString &endpointHost, int targetPort, const QString &immutableAwgImage,
-        qint64 generation, QJsonObject &result, bool automatic)
+        qint64 generation, QJsonObject &result, bool automatic,
+        amnezia::awgControlAuthority::Store *authority)
 {
     result = {};
     const QRegularExpression hostPattern(QStringLiteral("^[A-Za-z0-9.-]{1,253}$"));
@@ -1261,6 +1304,21 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
             return ErrorCode::ServerCheckFailed;
         }
     }
+    if (nativeFeed) {
+        QString authorityError;
+        if (!authority || !authority->matches(credentials, ContainerUtils::containerToString(source))
+                || !authority->lock(&authorityError)) {
+            result.insert(QStringLiteral("reason"), authorityError.isEmpty()
+                ? QStringLiteral("authority_store_required") : authorityError);
+            return ErrorCode::ServerCheckFailed;
+        }
+        const auto saved = authority->load();
+        if (!saved.ok || !saved.missing) {
+            result.insert(QStringLiteral("reason"), !saved.ok ? saved.error
+                : QStringLiteral("authority_existing_generation_requires_maintenance"));
+            return ErrorCode::ServerCheckFailed;
+        }
+    }
     const QString directory = QStringLiteral("/tmp/amnezia-migration-%1").arg(Utils::getRandomString(24));
     ErrorCode error = session.runScript(credentials,
             QStringLiteral("umask 077; mkdir '%1'").arg(directory));
@@ -1273,14 +1331,18 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
         // tree is recorded but never skips the remaining exact cleanup.
         ErrorCode cleanupError = ErrorCode::NoError;
         if (programDirectoryCreated) {
-            if (session.runScript(credentials, QStringLiteral(
-                    "sudo rm -f '%1/native-feed' '%1/native-collector'; sudo rmdir '%1'")
-                    .arg(programDirectory)) != ErrorCode::NoError) {
+            const ErrorCode programFilesError = session.runScript(credentials, QStringLiteral(
+                    "sudo rm -f -- '%1/native-feed' '%1/native-collector'").arg(programDirectory));
+            const ErrorCode programDirectoryError = session.runScript(credentials,
+                    QStringLiteral("sudo rmdir -- '%1'").arg(programDirectory));
+            if (programFilesError != ErrorCode::NoError || programDirectoryError != ErrorCode::NoError) {
                 cleanupError = ErrorCode::ServerCheckFailed;
             }
         }
-        if (session.runScript(credentials, QStringLiteral("rm -f '%1/native-feed.upload' '%1/native-collector.upload' '%1/prepare.py' '%1/automatic.py' '%1/trusted_image.py' '%1/service.py' '%1/target.py' '%1/policy.py' '%1/journal.py' '%1/feeds.py' '%1/ready_validation.py'; rmdir '%1'").arg(directory))
-                != ErrorCode::NoError && cleanupError == ErrorCode::NoError) {
+        const ErrorCode stagingFilesError = session.runScript(credentials, QStringLiteral("rm -f -- '%1/native-feed.upload' '%1/native-collector.upload' '%1/prepare.py' '%1/automatic.py' '%1/trusted_image.py' '%1/service.py' '%1/target.py' '%1/policy.py' '%1/journal.py' '%1/feeds.py' '%1/ready_validation.py'").arg(directory));
+        const ErrorCode stagingDirectoryError = session.runScript(credentials,
+                QStringLiteral("rmdir -- '%1'").arg(directory));
+        if (stagingFilesError != ErrorCode::NoError || stagingDirectoryError != ErrorCode::NoError) {
             cleanupError = ErrorCode::ServerCheckFailed;
         }
         return cleanupError;
@@ -1428,6 +1490,13 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
     }
     const ErrorCode collectorError = ExportController::prepareMigrationSourceCollector(credentials, source);
     if (collectorError != ErrorCode::NoError) { return finish(collectorError); }
+    if (nativeFeed) {
+        QString authorityError;
+        if (!authority->beginPrepare(nativeFeed->sha256, &authorityError)) {
+            result.insert(QStringLiteral("reason"), authorityError);
+            return finish(ErrorCode::ServerCheckFailed);
+        }
+    }
     output.clear();
     error = session.runScript(credentials, script,
             [&output](const QString &data, libssh::Client &) {
@@ -1438,15 +1507,34 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
                 output += bytes;
                 return ErrorCode::NoError;
             }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; }, 10 * 60 * 1000);
-    const ErrorCode cleanupError = cleanup();
     result = QJsonDocument::fromJson(output.trimmed()).object();
-    if (error != ErrorCode::NoError) return error;
-    if (cleanupError != ErrorCode::NoError) {
-        result.insert(QStringLiteral("reason"), QStringLiteral("native_cleanup_failed"));
-        return ErrorCode::ServerCheckFailed;
+    ErrorCode outcome = error;
+    if (outcome == ErrorCode::NoError && nativeFeed) {
+        const auto number = result.value(QStringLiteral("generation"));
+        const double generationValue = number.toDouble();
+        const bool prepared = result.value(QStringLiteral("prepared")).isBool()
+                && result.value(QStringLiteral("prepared")).toBool()
+                && result.value(QStringLiteral("legacyRetained")).isBool()
+                && result.value(QStringLiteral("legacyRetained")).toBool()
+                && number.isDouble() && generationValue >= 1 && generationValue <= 9007199254740991.0
+                && generationValue == static_cast<double>(number.toInteger())
+                && (automatic || number.toInteger() == generation);
+        QString authorityError;
+        // Initial native PREPARE refuses existing generations. The digest below
+        // comes only from the independently verified delivered bundle, never JSON.
+        if (!prepared || !authority->commitPrepare(number.toInteger(), nativeFeed->sha256, &authorityError)) {
+            result.insert(QStringLiteral("reason"), authorityError.isEmpty()
+                ? QStringLiteral("native_prepare_receipt_invalid") : authorityError);
+            outcome = ErrorCode::ServerCheckFailed;
+        }
+    } else if (outcome == ErrorCode::NoError && !result.value(QStringLiteral("prepared")).toBool(false)) {
+        outcome = ErrorCode::ServerCheckFailed;
     }
-    return result.value(QStringLiteral("prepared")).toBool(false)
-            ? ErrorCode::NoError : ErrorCode::ServerCheckFailed;
+    const ErrorCode cleanupError = cleanup();
+    if (outcome != ErrorCode::NoError) return outcome;
+    if (cleanupError != ErrorCode::NoError)
+        result.insert(QStringLiteral("reason"), QStringLiteral("native_cleanup_failed"));
+    return cleanupError;
 }
 
 ServerRoutingRulesPublishResult InstallController::publishVersionedServerRoutingRules(

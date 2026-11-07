@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QFutureWatcher>
 #include <QTimer>
@@ -16,6 +17,7 @@
 
 #include "core/utils/api/apiUtils.h"
 #include "core/controllers/selfhosted/installController.h"
+#include "core/utils/awgControlAuthorityStore.h"
 #include "core/controllers/connectionController.h"
 #include "core/utils/networkUtilities.h"
 #include "core/utils/errorStrings.h"
@@ -395,12 +397,21 @@ void InstallUiController::runNextAutomaticAwgMigration()
             retry = new AutomaticAwgRetry(this);
             m_automaticAwgRetries.insert(attempt, retry);
         }
-        if (result.first == ErrorCode::NoError && result.second.value("prepared").toBool()) {
+        const auto currentAdmin = m_serversController->selfHostedAdminConfig(serverId);
+        const bool bindingStillCurrent = currentAdmin && currentAdmin->hasCredentials()
+                && !currentAdmin->isReadOnly() && currentAdmin->containers.contains(container)
+                && automaticAwgBinding(*currentAdmin, container) == binding;
+        if (result.first == ErrorCode::NoError && result.second.value("prepared").toBool() && bindingStillCurrent) {
             retry->cancel();
             message = QStringLiteral("AWG 3.1 готов. Совместимые клиенты перейдут при следующем подключении. Текущие подключения сохранены.");
         } else {
-            const QString reason = result.second.value("reason").toString();
-            if (reason == "unsupported_server_architecture")
+            const QString reason = bindingStillCurrent ? result.second.value("reason").toString()
+                : QStringLiteral("migration_identity_changed");
+            if (reason.startsWith(QStringLiteral("authority_")))
+                message = QStringLiteral("Автоматический переход приостановлен: требуется проверка сохранённого состояния управления миграцией.");
+            else if (reason == "migration_identity_changed")
+                message = QStringLiteral("Настройки сервера изменились во время подготовки. Результат требует новой проверки.");
+            else if (reason == "unsupported_server_architecture")
                 message = QStringLiteral("Автоматический переход ожидает поддержки архитектуры сервера. Доступен Linux x64.");
             else if (reason == "trusted_image_unavailable")
                 message = QStringLiteral("Проверка целостности официального образа AWG 3.1 не пройдена. Автоматический переход приостановлен.");
@@ -430,9 +441,14 @@ void InstallUiController::runNextAutomaticAwgMigration()
         emit automaticAwgMigrationStatusChanged(serverId, containerIndex);
         QTimer::singleShot(0, this, &InstallUiController::runNextAutomaticAwgMigration);
     });
-    m_automaticAwgFuture = QtConcurrent::run([credentials, container, endpointHost]() {
+    // Capture namespace and immutable SSH scope here. The worker owns its
+    // authority settings and lock; it never retains application-owned settings.
+    const auto authority = std::make_shared<amnezia::awgControlAuthority::Store>(nullptr,
+        amnezia::awgControlAuthority::identity(serverId, credentials, ContainerUtils::containerToString(container)));
+    m_automaticAwgFuture = QtConcurrent::run([credentials, container, endpointHost, authority]() {
+        const auto releaseAuthority = qScopeGuard([&authority] { authority->close(); });
         QJsonObject result;
-        const auto error = InstallController::prepareAwgMigration(credentials, container, endpointHost, 0, {}, 0, result, true);
+        const auto error = InstallController::prepareAwgMigration(credentials, container, endpointHost, 0, {}, 0, result, true, authority.get());
         return qMakePair(error, result);
     });
     watcher->setFuture(m_automaticAwgFuture);

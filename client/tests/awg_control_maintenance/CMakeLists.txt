@@ -8,3 +8,9 @@ add_executable(awg_control_maintenance_tests tst_receipt.cpp)
 target_include_directories(awg_control_maintenance_tests PRIVATE ../..)
 target_link_libraries(awg_control_maintenance_tests PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME awg_control_maintenance COMMAND awg_control_maintenance_tests)
+
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME awg_maintenance_source_contract
+        COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_LIST_DIR}/test_native_maintenance_source_contract.py")
+endif()

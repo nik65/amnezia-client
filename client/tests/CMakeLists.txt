@@ -23,6 +23,8 @@ set(AMNEZIA_FOCUSED_TEST_DIRS
     backend_failure_contract
     protocol_error_order
     awg_migration
+    awg_control_maintenance
+    awg_control_authority
 )
 
 foreach(test_dir IN LISTS AMNEZIA_FOCUSED_TEST_DIRS)

@@ -1055,6 +1055,10 @@ int run_validate_package(int argc, char **argv) {
   }
   std::printf("validated package metadata (host probes deferred): %s\n",
               identity.version.c_str());
+  // Canonical stdout record consumed by the installer only after all pinned
+  // package/receipt/checksum validation above has succeeded. "none" is explicit.
+  std::printf("validated native helper role: %s\n",
+              native_helper.empty() ? "none" : native_helper.c_str());
   std::printf("runtime probe plan: %zu commands, %zu backend modes, %zu package "
               "entries (executed=false)\n",
               contract.required_commands.size(), contract.backend_modes.size(),

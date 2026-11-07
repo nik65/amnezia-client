@@ -5,6 +5,8 @@
 #include "../../../common/awgMigrationSecretStore.h"
 #include "../../../common/awgMigrationTransport.h"
 #include <QTemporaryDir>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include "core/utils/migrationTeardownContext.h"
 #include "core/models/protocols/awgProtocolConfig.h"
 
@@ -358,6 +360,120 @@ private slots:
         QVERIFY(awgMigrationSecretStore::key(dir.path()).isEmpty());
 #else
         QSKIP("Linux migration secret-store permission contract");
+#endif
+    }
+    void privateMigrationFileRejectsFifoPromptly()
+    {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+        const QString childPath = qEnvironmentVariable("AMNEZIA_SECRET_STORE_FIFO_TEST_PATH");
+        if (!childPath.isEmpty()) {
+            QByteArray bytes("previous value");
+            QVERIFY(!awgMigrationSecretStore::privateFile(childPath, &bytes));
+            QVERIFY(bytes.isEmpty());
+            return;
+        }
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString fifo = dir.path() + "/fifo";
+        QCOMPARE(::mkfifo(QFile::encodeName(fifo).constData(), 0600), 0);
+        // Isolate the blocking-open regression so a broken implementation
+        // fails this test instead of hanging the complete regression suite.
+        QProcess child;
+        auto environment = QProcessEnvironment::systemEnvironment();
+        environment.insert("AMNEZIA_SECRET_STORE_FIFO_TEST_PATH", fifo);
+        child.setProcessEnvironment(environment);
+        child.start(QCoreApplication::applicationFilePath(), {"privateMigrationFileRejectsFifoPromptly"});
+        QVERIFY(child.waitForStarted(1000));
+        const bool finished = child.waitForFinished(3000);
+        if (!finished) { child.kill(); child.waitForFinished(3000); }
+        QVERIFY2(finished, "Opening an unpaired FIFO must not block privateFile");
+        QCOMPARE(child.exitStatus(), QProcess::NormalExit);
+        QCOMPARE(child.exitCode(), 0);
+#else
+        QSKIP("Linux migration secret storage only");
+#endif
+    }
+    void privateMigrationFileSizeBoundary_data()
+    {
+        QTest::addColumn<int>("size");
+        QTest::addColumn<bool>("accepted");
+        QTest::newRow("empty") << 0 << true;
+        QTest::newRow("exact-limit") << 65536 << true;
+        QTest::newRow("one-over-limit") << 65537 << false;
+    }
+    void privateMigrationFileSizeBoundary()
+    {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+        QFETCH(int, size);
+        QFETCH(bool, accepted);
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.path() + "/journal";
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.setPermissions(QFile::ReadOwner | QFile::WriteOwner));
+        const QByteArray original(size, 'x');
+        QCOMPARE(file.write(original), qint64(size));
+        file.close();
+        QByteArray bytes("previous value");
+        QCOMPARE(awgMigrationSecretStore::privateFile(path, &bytes), accepted);
+        QCOMPARE(bytes, accepted ? original : QByteArray{});
+        QCOMPARE(awgMigrationSecretStore::atomicWrite(path, original), accepted);
+#else
+        QSKIP("Linux migration secret storage only");
+#endif
+    }
+    void privateMigrationFileRejectsSpecialModes_data()
+    {
+        QTest::addColumn<int>("specialMode");
+        QTest::newRow("setuid") << 04000;
+        QTest::newRow("setgid") << 02000;
+        QTest::newRow("sticky") << 01000;
+    }
+    void privateMigrationFileRejectsSpecialModes()
+    {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+        QFETCH(int, specialMode);
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QByteArray originalKey = awgMigrationSecretStore::key(dir.path());
+        QCOMPARE(originalKey.size(), 32);
+        const QString path = dir.path() + "/key";
+        QCOMPARE(::chmod(QFile::encodeName(path).constData(), 0600 | specialMode), 0);
+        QByteArray bytes("previous value");
+        QVERIFY(!awgMigrationSecretStore::privateFile(path, &bytes));
+        QVERIFY(bytes.isEmpty());
+        QVERIFY(!awgMigrationSecretStore::atomicWrite(path, QByteArray(32, 'x')));
+        QVERIFY(awgMigrationSecretStore::key(dir.path()).isEmpty());
+        QCOMPARE(::chmod(QFile::encodeName(path).constData(), 0600), 0);
+        QCOMPARE(awgMigrationSecretStore::key(dir.path()), originalKey);
+#else
+        QSKIP("Linux migration secret storage only");
+#endif
+    }
+    void failedMigrationKeyCreationNeverResetsExistingState()
+    {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QFile partialKey(dir.path() + "/key");
+        QVERIFY(partialKey.open(QIODevice::WriteOnly));
+        QVERIFY(partialKey.setPermissions(QFile::ReadOwner | QFile::WriteOwner));
+        QCOMPARE(partialKey.write("partial", 7), qint64(7));
+        partialKey.close();
+        QVERIFY(awgMigrationSecretStore::key(dir.path()).isEmpty());
+        QVERIFY(partialKey.open(QIODevice::ReadOnly));
+        QCOMPARE(partialKey.readAll(), QByteArray("partial"));
+        partialKey.close();
+        const QString path = dir.path() + "/journal";
+        const QByteArray original("durable state");
+        QVERIFY(awgMigrationSecretStore::atomicWrite(path, original));
+        QVERIFY(!awgMigrationSecretStore::atomicWrite(path, QByteArray(65537, 'x')));
+        QByteArray bytes;
+        QVERIFY(awgMigrationSecretStore::privateFile(path, &bytes));
+        QCOMPARE(bytes, original);
+#else
+        QSKIP("Linux migration secret storage only");
 #endif
     }
     void nativeParametersProveAppliedValuesWithoutLeakingKey()

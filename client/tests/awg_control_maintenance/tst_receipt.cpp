@@ -9,6 +9,13 @@ private slots:
         using namespace amnezia::operatorMode;
         const QString request = QStringLiteral("{\"serverId\":\"selected\",\"source\":\"amnezia-awg2\",\"generation\":1,\"expectedJournalSha256\":\"%1\"}").arg(QString(64, 'a'));
         QVERIFY(!parseAwgMaintenanceArgument(request).isEmpty());
+        const QString localCurrent = request.left(request.size() - 1)
+                + QStringLiteral(",\"nativeControlVariant\":\"native-control-http-v1\"}");
+        QVERIFY(!parseAwgMaintenanceArgument(localCurrent).isEmpty());
+        const QString explicitCurrent = localCurrent.left(localCurrent.size() - 1)
+                + QStringLiteral(",\"currentControlSha256\":\"%1\"}").arg(QString(64, 'b'));
+        QVERIFY(!parseAwgMaintenanceArgument(explicitCurrent).isEmpty());
+        QVERIFY(parseAwgMaintenanceArgument(QString(explicitCurrent).replace(QString(64, 'b'), QString())).isEmpty());
         auto maximum = request;
         maximum.replace("\"generation\":1", "\"generation\":9007199254740991");
         QVERIFY(!parseAwgMaintenanceArgument(maximum).isEmpty());
@@ -38,6 +45,20 @@ private slots:
         QByteArray second("--status");
         char *multiple[] {executable.data(), argument.data(), second.data()};
         QVERIFY(!parseArguments(3, multiple).valid);
+    }
+    void failureOutputPreservesOnlySafeRecoveryHints() {
+        const QString owned = "/tmp/amnezia-migration-maintenance-" + QString(24, 'a');
+        const QJsonObject raw{{"reason", "native_cleanup_failed"}, {"retainedDirectory", owned},
+                              {"password", "must-not-escape"}, {"raw", "ssh-output"}};
+        const auto safe = AwgMaintenance::failureDetails(raw);
+        QCOMPARE(safe.value("reason").toString(), QString("native_cleanup_failed"));
+        QCOMPARE(safe.value("retainedDirectory").toString(), owned);
+        QVERIFY(safe.value("pendingRecovery").toBool());
+        QCOMPARE(safe.size(), 3);
+        for (const QString &path : {QString("/tmp/../etc"), owned + "/child", owned + "\n", QString("/home/user/private")}) {
+            const auto rejected = AwgMaintenance::failureDetails({{"reason", "bad\noutput"}, {"retainedDirectory", path}});
+            QVERIFY(rejected.isEmpty());
+        }
     }
     void acceptsExactUploadedRecipe() {
         const QJsonObject hashes{{"service.py", QString(64, 'a')}, {"target.py", QString(64, 'b')}};
