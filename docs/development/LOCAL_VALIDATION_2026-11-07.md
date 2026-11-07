@@ -213,3 +213,15 @@ Paused Windows worktree и работающий VPN хоста не изменя
 Следующему Release-кандидату назначены `5.0.3.19` и Android `versionCode=2205`,
 строго выше `5.0.3.18` / `2204`, прочитанных с подключённого физического телефона.
 Ранее перечисленные Debug artifacts сохраняют свои исходные версии и hashes.
+
+Оба PowerShell release wrappers теперь читают default version из общего
+`cmake/version.cmake`, а не из прежнего расположения в `CMakeLists.txt`.
+Настоящий Windows PowerShell 5.1 consumer test: 2/2 PASS, оба negative controls
+отвергли старое расположение, полные wrappers не выполнялись.
+
+Подключённый телефон подтверждён как физический USB Android; installed package
+`org.amnezia.vpn` не debuggable. Production PKCS12 certificate совпадает с
+проверенным сертификатом установленного APK, manifest Ed25519 keypair совпадает.
+Приватные ключи не экспортировались, приложение и его данные не изменялись.
+Это проверка условий обновления; установка нового Release и runtime acceptance
+ещё не выполнены.
