@@ -112,6 +112,12 @@ internal class DnsFallbackProtocol(
             else -> NativeIdleState.UNKNOWN
         }, dnsOwner.currentGeneration(), identity.takeIf { cleanupConfirmed })
     }
+    override fun retireUnstartedSession(descriptor: NativeSessionDescriptor): Boolean = synchronized(lifecycle) {
+        if (identity != null || active || dnsStarted || primaryRetired || transport != null || pendingTransport != null
+            || ownedTransports.isNotEmpty() || monitor != null || workers != null || originalConfig != null || primaryProbe != null)
+            return@synchronized false
+        primary.retireUnstartedSession(descriptor)
+    }
     override fun stopVpnIfBound(expected: NativeSessionIdentity): Boolean {
         if (!expected.valid() || identity != expected) return false
         stopVpn()
@@ -441,6 +447,12 @@ internal class DnsFallbackProtocol(
         if (dnsClosed) dnsStarted = false
         val primaryClosed = joined && runCatching {
             primary.stopVpn()
+            // A cancelled wrapper may never have reached its primary start. Only
+            // the primary's pristine guard can author the exact retirement receipt.
+            originalConfig?.let { config ->
+                identity?.let { id -> primary.retireUnstartedSession(NativeSessionDescriptor(id,
+                    config.optString("nativeSessionServerId"), config.optString("protocol").uppercase(java.util.Locale.ROOT))) }
+            }
             primary.readNativeIdleObservation().isAbsent
         }.getOrDefault(false)
         if (joined && dnsClosed) {

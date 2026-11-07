@@ -33,6 +33,8 @@ abstract class Protocol {
     }
     open fun readNativeIdleObservation(): NativeIdleObservation = NativeIdleObservation(NativeIdleState.UNKNOWN, 0)
     open fun stopVpnIfBound(expected: NativeSessionIdentity): Boolean = false
+    /** After the exact start job was cancelled and joined; the backend must prove it never activated. */
+    open fun retireUnstartedSession(descriptor: NativeSessionDescriptor): Boolean = false
     protected lateinit var context: Context
     protected lateinit var state: MutableStateFlow<ProtocolState>
     protected lateinit var onError: (String) -> Unit

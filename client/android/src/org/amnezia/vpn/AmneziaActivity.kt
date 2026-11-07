@@ -131,6 +131,8 @@ class AmneziaActivity : QtActivity() {
     private var boundRemoteMessenger: Messenger? = null
     private var boundServiceComponent: ComponentName? = null
     private var pendingControlComponent: ComponentName? = null
+    private data class PendingControlStart(val component: ComponentName, val connectionNonce: String, var cancelled: Boolean = false)
+    private var pendingControlStart: PendingControlStart? = null
     private var discoveryConsumed = false
     private data class PendingStart(val config: String, val generation: String, val requestId: String, var issued: Boolean = false)
     private var pendingStart: PendingStart? = null
@@ -981,6 +983,7 @@ class AmneziaActivity : QtActivity() {
     private fun doBindService() {
         Log.d(TAG, "Bind service")
         vpnProto?.let { proto ->
+            val issuedStart = pendingControlStart
             val connection = object : ServiceConnection {
                 var released = false
                 fun release() { if (!released) { released = true; try { unbindService(this) } catch (_: IllegalArgumentException) { } } }
@@ -989,6 +992,7 @@ class AmneziaActivity : QtActivity() {
                     if (name?.className != proto.serviceClass.name || service == null) { doUnbindService(); invalidateDiscoveryLifecycle(); return }
                     pendingControlComponent = null
                     adoptConnectedService(name, service, false)
+                    deliverPendingControlStop(issuedStart)
                     val retained = discoveryAttempt
                     if (retained != null && retained.connection === this && retained.generation == discoveryGeneration && discoveryPhase == "PENDING") {
                         val inventory = ownServiceInventory()
@@ -1021,6 +1025,7 @@ class AmneziaActivity : QtActivity() {
         val retiringConnection = activeServiceConnection
         activeServiceConnection = null
         pendingControlComponent = null
+        pendingControlStart = null
         retiringAttempt?.release()
         if (isInBoundState || isServiceConnected) {
             Log.d(TAG, "Unbind service")
@@ -1174,6 +1179,18 @@ class AmneziaActivity : QtActivity() {
         vpnServiceMessenger.send(Action.DISCONNECT)
     }
 
+    private fun deliverPendingControlStop(start: PendingControlStart?) {
+        if (start == null || pendingControlStart !== start || boundServiceComponent != start.component) return
+        pendingControlStart = null
+        if (!start.cancelled) return
+        val receiver = boundActivityMessenger ?: return
+        // REGISTER_CLIENT was sent by adoptConnectedService on this same Binder.
+        // The service checks the exact issued nonce again before touching its owner.
+        vpnServiceMessenger.send(Action.DISCONNECT.packToMessage {
+            putString("expectedIssuedStartNonce", start.connectionNonce)
+        }, replyTo = receiver)
+    }
+
     /**
      * Methods called by Qt
      */
@@ -1256,6 +1273,10 @@ class AmneziaActivity : QtActivity() {
                 val intent = Intent(this, proto.serviceClass).putExtra(MSG_VPN_CONFIG, request.config)
                 request.issued = true
                 ContextCompat.startForegroundService(this, intent)
+                pendingControlStart = if (proto.serviceClass == AwgService::class.java) {
+                    val nonce = runCatching { JSONObject(request.config).opt("migrationConnectionNonce") as? String }.getOrNull()
+                    nonce?.takeIf(NativeSessionWire::uuid)?.let { PendingControlStart(ComponentName(this, proto.serviceClass), it) }
+                } else null
                 vpnProto = proto
                 isWaitingStatus = false
                 doBindService()
@@ -1295,6 +1316,14 @@ class AmneziaActivity : QtActivity() {
         Log.v(TAG, "Stop VPN")
         mainScope.launch {
             invalidateRestoreRequest()
+            val issuedStart = pendingControlStart
+            if (!isServiceConnected && issuedStart != null && activeServiceConnection != null
+                && pendingControlComponent == issuedStart.component) {
+                // startForegroundService has already dispatched this activation.
+                // Keep its stop until the exact control binding can deliver it.
+                issuedStart.cancelled = true
+                return@launch
+            }
             disconnectFromVpn()
         }
     }

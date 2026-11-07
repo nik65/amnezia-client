@@ -15,7 +15,7 @@ terminal_branch=terminal_branch[:terminal_branch.rindex('                    }')
 assert terminal_branch.index('retireDisconnectedControlBinding()') < terminal_branch.index('QtAndroidController.onVpnStateChanged(state.ordinal)')
 region=s[s.index('    private var discoveryForeground'):s.index('    private var isWaitingStatus')]
 if 'private var pendingControlComponent:' not in region: region+='\nprivate var pendingControlComponent:ComponentName?=null\n'
-methods='\n'.join(block(x) for x in ['fun requestServiceDiscovery(', 'fun requestRestoreStatus(', 'fun startWithDiscovery(', 'private fun dispatchAdmittedStart(', 'private fun doBindService(', 'private fun doUnbindService(', 'private fun createBoundActivityMessenger('])
+methods='\n'.join(block(x) for x in ['fun requestServiceDiscovery(', 'fun requestRestoreStatus(', 'fun startWithDiscovery(', 'private fun dispatchAdmittedStart(', 'private fun doBindService(', 'private fun doUnbindService(', 'private fun createBoundActivityMessenger(', 'private fun deliverPendingControlStop('])
 prefix=r'''
 import org.amnezia.vpn.protocol.*
 import org.amnezia.vpn.ServiceDiscoveryWire
@@ -31,7 +31,8 @@ private class Message {val data=Bundle();var replyTo:Messenger?=null;fun recycle
 private class Looper {companion object{fun getMainLooper()=Looper()}}
 private open class Handler(looper:Looper) {open fun handleMessage(message:Message){}}
 private class Messenger(val handler:Handler?=null) {var sends=0;var fail=false;fun send(message:Message){sends++;if(fail)error("inert dispatch failure");handler?.handleMessage(message)}}
-private enum class Action {REQUEST_STATUS,CONNECT,UNREGISTER_CLIENT;fun packToMessage(body:Bundle.()->Unit)=Message().apply{data.body()}}
+private enum class Action {REQUEST_STATUS,CONNECT,DISCONNECT,UNREGISTER_CLIENT;fun packToMessage(body:Bundle.()->Unit)=Message().apply{data.body()}}
+private class JSONObject(value:String){fun opt(key:String):Any?=if(key=="migrationConnectionNonce") "33333333-3333-4333-8333-333333333333" else null}
 private class Outbound {
  var onSend:(()->Unit)?=null;val messages=mutableListOf<Message>()
  fun send(action:Action,receiver:Messenger){val callback=onSend;onSend=null;callback?.invoke()}

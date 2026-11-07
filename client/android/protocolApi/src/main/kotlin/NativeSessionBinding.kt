@@ -135,6 +135,13 @@ class NativeSessionGuard {
     fun binding(peer: String, address: String): NativeSessionBinding? = locked { descriptor?.let { NativeSessionBinding(it, peer, address, generation) } }
     fun confirmedCleanup() = locked { advanceGeneration(); cleaned = descriptor?.identity; idleState = NativeIdleState.VERIFIED_RETIRED }
     fun cleanupIdentity(): NativeSessionIdentity? = locked { cleaned }
+    fun retireNeverStarted(expected: NativeSessionDescriptor): Boolean = locked {
+        if (!expected.valid() || descriptor != null || generation != 0L || cleaned != null
+            || idleState != NativeIdleState.NEVER_STARTED) return@locked false
+        descriptor = expected
+        confirmedCleanup()
+        true
+    }
     fun stopIfBound(expected: NativeSessionIdentity, stop: () -> Unit): Boolean = locked {
         if (!expected.valid() || descriptor?.identity != expected) return@locked false
         stop()

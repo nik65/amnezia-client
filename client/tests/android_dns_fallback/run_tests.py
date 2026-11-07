@@ -50,6 +50,7 @@ abstract class Protocol {
  open fun isRestoredSessionBindingCurrent(binding:NativeSessionBinding)=true
  open fun readNativeIdleObservation()=NativeIdleObservation(NativeIdleState.UNKNOWN,0)
  open fun stopVpnIfBound(expected: NativeSessionIdentity)=false
+ open fun retireUnstartedSession(descriptor: NativeSessionDescriptor)=false
  fun initialize(c:Context,s:MutableStateFlow<ProtocolState>,e:(String)->Unit) {context=c;state=s;onError=e;internalInit()}
  protected abstract fun internalInit()
  abstract suspend fun startVpn(config:JSONObject,builder:VpnService.Builder,protect:(Int)->Boolean)
@@ -114,12 +115,13 @@ disconnect=method(service,'private fun disconnect(').replace('private fun discon
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.amnezia.vpn.protocol.NativeSessionIdentity
+import org.amnezia.vpn.protocol.NativeSessionWire
 import org.amnezia.vpn.protocol.NativeSessionDescriptor
 import org.amnezia.vpn.protocol.ProtocolState.*
 private const val TAG="test"
 private const val DISCONNECT_TIMEOUT=100L
 private object Log {fun d(tag:String,msg:String){};fun w(tag:String,msg:String){}}
-private open class Protocol(val stopped:()->Unit) {var calls=0;fun stopVpn(){calls++;stopped()};fun stopVpnIfBound(expected:NativeSessionIdentity):Boolean{stopVpn();return true}}
+private open class Protocol(val stopped:()->Unit) {var calls=0;fun stopVpn(){calls++;stopped()};fun retireUnstartedSession(descriptor:NativeSessionDescriptor)=false;fun stopVpnIfBound(expected:NativeSessionIdentity):Boolean{stopVpn();return true}}
 private class DnsFallbackProtocol(stopped:()->Unit):Protocol(stopped)
 private class Gate {fun invalidate(){}}
 private enum class VpnProto(val protocol:Protocol) {XRAY(Protocol{}),SSXRAY(Protocol{})}

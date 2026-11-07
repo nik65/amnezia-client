@@ -46,7 +46,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
@@ -543,7 +545,14 @@ open class AmneziaVpnService : VpnService() {
                     }
 
                     Action.DISCONNECT -> {
-                        if (msg.data.containsKey("expectedNativeSession")) {
+                        if (msg.data.containsKey("expectedIssuedStartNonce")) {
+                            // Never downgrade a malformed conditional stop to an unbound one.
+                            if (msg.data.containsKey("expectedNativeSession")) return
+                            val requester = msg.replyTo ?: return
+                            val nonce = msg.data.get("expectedIssuedStartNonce") as? String ?: return
+                            if (!clientMessengers.containsKey(requester) || requester in observationClients) return
+                            disconnect(expectedIssuedStartNonce = nonce)
+                        } else if (msg.data.containsKey("expectedNativeSession")) {
                             val expected = msg.data.get("expectedNativeSession") as? String
                             if (expected != null) disconnect(expected)
                         } else disconnect()
@@ -1190,19 +1199,25 @@ open class AmneziaVpnService : VpnService() {
             disconnectionJob?.join()
             disconnectionJob = null
             protocol.initialize(applicationContext, protocolState, ::onError)
+            currentCoroutineContext().ensureActive()
             protocol.startVpn(privateConfig, Builder(), ::protect)
         }
     }
 
     @MainThread
-    private fun disconnect(expectedSessionJson: String? = null) {
-        val expected = if (expectedSessionJson != null) NativeSessionIdentity.parseExpected(expectedSessionJson) ?: return else null
+    private fun disconnect(expectedSessionJson: String? = null, expectedIssuedStartNonce: String? = null) {
+        val restoredIdentity = if (expectedSessionJson != null) NativeSessionIdentity.parseExpected(expectedSessionJson) ?: return else null
         val retiringSession = activeNativeSession
-        if (expected != null && retiringSession?.descriptor?.identity != expected) return
+        if (restoredIdentity != null && retiringSession?.descriptor?.identity != restoredIdentity) return
+        val issuedStart = expectedIssuedStartNonce != null
+        if (issuedStart && (!NativeSessionWire.uuid(expectedIssuedStartNonce!!)
+                || retiringSession?.descriptor?.identity?.valid() != true
+                || retiringSession.descriptor.identity.connectionNonce != expectedIssuedStartNonce)) return
+        val expected = restoredIdentity ?: if (issuedStart) retiringSession?.descriptor?.identity else null
         val retiringProtocol = retiringSession?.protocol ?: vpnProto?.protocol
         // An owned DNS wrapper may hold a partial native TUN while reporting UNKNOWN.
         // User stop must still retire that exact owner; UNKNOWN is not proof of absence.
-        val mayRetryOwnedCleanup = retiringSession != null && (retiringProtocol is DnsFallbackProtocol
+        val mayRetryOwnedCleanup = retiringSession != null && (issuedStart || retiringProtocol is DnsFallbackProtocol
             || vpnProto in setOf(VpnProto.XRAY, VpnProto.SSXRAY))
         if ((isUnknown && !mayRetryOwnedCleanup) || isDisconnected || protocolState.value == DISCONNECTING) return
 
@@ -1217,6 +1232,19 @@ open class AmneziaVpnService : VpnService() {
             connectionJob?.cancelAndJoin()
             connectionJob = null
 
+            if (issuedStart && !withContext(Dispatchers.Main.immediate) {
+                    activeNativeSession === retiringSession && protocolState.value == DISCONNECTING
+                }) return@launch
+            if (issuedStart && retiringSession != null
+                && retiringProtocol?.retireUnstartedSession(retiringSession.descriptor) == true) {
+                // The pristine backend guard now exposes an exact retirement
+                // receipt. Do not manufacture one from a missing handle or UI state.
+                withContext(Dispatchers.Main.immediate) {
+                    if (activeNativeSession === retiringSession && protocolState.value == DISCONNECTING)
+                        protocolState.value = DISCONNECTED
+                }
+                return@launch
+            }
             if (expected != null) {
                 if (retiringProtocol?.stopVpnIfBound(expected) != true) return@launch
             } else retiringProtocol?.stopVpn()

@@ -31,6 +31,9 @@ if 'val retained = pendingTransport' in s:
 fixture=r'''
 private enum class ProtocolState { UNKNOWN, CONNECTED, DISCONNECTED }
 private class VpnStartException(message:String):Exception(message)
+// Inert extra API seam: these existing relay tests never configure a primary start.
+private class NativeSessionDescriptor(val identity:Any,val serverId:String,val protocol:String)
+private class JSONObject { fun optString(key:String)="" }
 private fun <T> runBlocking(body:()->T)=body()
 private class DnsFallbackTransport(val events:MutableList<String>) {
  var stopped=false
@@ -64,6 +67,7 @@ private class StopFixture {
  val events=mutableListOf<String>();val lifecycle=Any();var active=true;var joinedResult=true
  var dnsStarted=true;var primaryRetired=true;var stopResult=true;var stopThrows=false;var cleanupConfirmed=false;var reason=""
  val state=Fixture.State()
+ var originalConfig:JSONObject?=null;var identity:Any?=null
  class Policy{fun stop(){}};val policy=Policy()
  class Owner{fun retire(){}};val dnsOwner=Owner()
  class Probe{fun disconnect(){}};var primaryProbe:Probe?=Probe()
@@ -74,7 +78,7 @@ private class StopFixture {
  var transport:DnsFallbackTransport?=null;var pendingTransport:DnsFallbackTransport?=null
  inner class Native{fun stopVpnVerified():Boolean{events.add("stop");if(stopThrows)error("native fixture");return stopResult}}
  val xray=Native()
- inner class Primary{fun stopVpn(){events.add("primaryStop")};fun readNativeIdleObservation()=Idle()}
+ inner class Primary{fun stopVpn(){events.add("primaryStop")};fun retireUnstartedSession(descriptor:NativeSessionDescriptor)=false;fun readNativeIdleObservation()=Idle()}
  class Idle{val isAbsent=true};val primary=Primary()
  fun closeTransport(value:DnsFallbackTransport?){value?.close();if(value?.stopped==true)ownedTransports.remove(value)}
  fun <T> withTimeoutOrNull(ms:Long,body:()->T):T?=if(joinedResult)body() else null

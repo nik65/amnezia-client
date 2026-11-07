@@ -500,6 +500,15 @@ open class Wireguard : Protocol() {
 
     override fun stopVpnIfBound(expected: NativeSessionIdentity): Boolean = nativeSessionGuard.stopIfBound(expected) { stopVpn() }
 
+    override fun retireUnstartedSession(descriptor: NativeSessionDescriptor): Boolean = nativeSessionGuard.locked {
+        if (tunnelHandle != -1 || pendingStart != null || pendingStartJob != null || pendingCleanupUnconfirmed
+            || config != null || migrationConnectionNonce.isNotEmpty() || cleanedNonce.isNotEmpty()) return@locked false
+        if (!nativeSessionGuard.retireNeverStarted(descriptor)) return@locked false
+        migrationConnectionNonce = descriptor.identity.connectionNonce
+        cleanedNonce = descriptor.identity.connectionNonce
+        true
+    }
+
     override fun stopVpn() {
         return nativeSessionGuard.locked {
         if (pendingStart != null) pendingStartCancelled = true
