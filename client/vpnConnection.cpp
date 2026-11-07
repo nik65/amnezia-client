@@ -1158,6 +1158,17 @@ void VpnConnection::scheduleManagedRouteReconnect(
     m_managedRouteReconnectCooldownTimer.start(delayMs);
 }
 
+#ifdef Q_OS_ANDROID
+static QString androidDiscoveryComponent(const QJsonObject &configuration)
+{
+    const auto protocol = configuration.value("protocol").toString().toLower();
+    if (protocol == "awg" || protocol == "wireguard") return QStringLiteral("AWG");
+    if (protocol == "openvpn") return QStringLiteral("OPENVPN");
+    if (protocol == "xray" || protocol == "ssxray") return QStringLiteral("XRAY");
+    return {};
+}
+#endif
+
 void VpnConnection::flushManagedRouteReconnect()
 {
     if (!m_managedRouteReconnectGate.pending()) {
@@ -1201,6 +1212,28 @@ void VpnConnection::flushManagedRouteReconnect()
         m_managedRouteReconnectCooldownTimer.start(delayMs);
         return;
     }
+#ifdef Q_OS_ANDROID
+    // Background Activity unbinding revokes discovery authority while the native
+    // VPN can remain healthy. Keep the latest desired routes and cooldown pending;
+    // only a new correlated discovery event may retry the native rebuild.
+    if (m_migrationTeardownContext || m_migrationTeardownRecoveryRequired
+        || m_unboundNativeSessionObserved || !m_vpnProtocol
+        || m_discoveryObservationEpoch != m_connectionEpoch
+        || m_discoveryObservationServerId != m_serverId
+        || m_discoveryObservationReceiver != quintptr(m_vpnProtocol.data())
+        || !AndroidServiceDiscovery::coordinator.canReconnect(androidDiscoveryComponent(m_vpnConfiguration))) {
+        qInfo() << "VpnConnection: deferred managed-route rebuild until native discovery is confirmed";
+        return;
+    }
+    const auto admissionEpoch = m_connectionEpoch;
+    qInfo() << "VpnConnection: applying the latest managed routes with a bounded reconnect";
+    reconnectToVpn();
+    // reconnectToVpn records the cooldown only after its own final admission
+    // checks and advances the epoch when it actually reserves native teardown.
+    // A concurrently revoked grant must retain the desired rebuild for retry.
+    if (m_connectionEpoch != admissionEpoch) m_managedRouteReconnectGate.cancelPending();
+    return;
+#endif
     if (!m_managedRouteReconnectGate.takeDue(
                 m_serverId, nowMs, managedRouteReconnectMinimumIntervalMs)) {
         return;
@@ -1923,16 +1956,7 @@ Vpn::ConnectionState VpnConnection::connectionState() const
     return m_connectionState;
 }
 
-#ifdef Q_OS_ANDROID
-static QString androidDiscoveryComponent(const QJsonObject &configuration)
-{
-    const auto protocol = configuration.value("protocol").toString().toLower();
-    if (protocol == "awg" || protocol == "wireguard") return QStringLiteral("AWG");
-    if (protocol == "openvpn") return QStringLiteral("OPENVPN");
-    if (protocol == "xray" || protocol == "ssxray") return QStringLiteral("XRAY");
-    return {};
-}
-#endif
+
 
 void VpnConnection::connectToVpn(const QString &serverId, int serverIndex,
                                  DockerContainer container,
@@ -1973,6 +1997,7 @@ void VpnConnection::connectToVpn(const QString &serverId, int serverIndex,
         emit serviceDiscoveryRefreshRequested();
 #endif
         qCritical() << "VpnConnection::connectToVpn: invalid server id" << serverId;
+        emit vpnProtocolError(ErrorCode::InternalError);
         setConnectionState(Vpn::ConnectionState::Error);
         return;
     }
@@ -2034,6 +2059,8 @@ void VpnConnection::connectToVpn(const QString &serverId, int serverIndex,
     m_vpnConfiguration.remove("migrationReconnectExpectedEpoch");
     m_vpnConfiguration.remove("migrationReconnectExpectedServerId");
     m_vpnConfiguration.remove("restoredNativeSession");
+    m_vpnConfiguration.remove("effectiveTransport");
+    m_vpnConfiguration.remove("dnsProfileDigest");
     m_vpnConfiguration.remove("serviceDiscoveryAdmission");
     m_vpnConfiguration["nativeSessionServerId"] = serverId;
     m_vpnConfiguration["migrationConnectionNonce"] = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -2058,14 +2085,15 @@ void VpnConnection::connectToVpn(const QString &serverId, int serverIndex,
 #ifdef Q_OS_ANDROID
         emit serviceDiscoveryRefreshRequested();
 #endif
-        setConnectionState(Vpn::ConnectionState::Error);
         emit vpnProtocolError(ErrorCode::InternalError);
+        setConnectionState(Vpn::ConnectionState::Error);
         return;
     }
 
 #if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS) && !defined(MACOS_NE)
     m_vpnProtocol.reset(VpnProtocol::factory(container, m_vpnConfiguration));
     if (!m_vpnProtocol) {
+        emit vpnProtocolError(ErrorCode::InternalError);
         setConnectionState(Vpn::ConnectionState::Error);
         return;
     }
@@ -2096,8 +2124,8 @@ void VpnConnection::connectToVpn(const QString &serverId, int serverIndex,
         emit serviceDiscoveryConnectRefused(err, m_connectionState);
         emit serviceDiscoveryRefreshRequested();
 #else
-        setConnectionState(Vpn::ConnectionState::Error);
         emit vpnProtocolError(err);
+        setConnectionState(Vpn::ConnectionState::Error);
 #endif
     }
 }
@@ -2132,6 +2160,8 @@ void VpnConnection::createProtocolConnections()
                 if (migrationEpoch != m_connectionEpoch || migrationServerId != m_serverId
                     || !migrationProtocol || migrationProtocol.data() != m_vpnProtocol.data()) return;
 #ifdef Q_OS_ANDROID
+                if (NativeSessionRestore::ingress.observed()) return;
+                if (NativeSessionRestore::isDnsConfiguration(m_vpnConfiguration)) return;
                 if (observation.value("connectionNonce") != m_vpnConfiguration.value("migrationConnectionNonce")) return;
                 if (observation.value("nativeCleanupConfirmed").isBool()
                     && observation.value("nativeCleanupConfirmed").toBool()) {
@@ -2369,7 +2399,10 @@ void VpnConnection::appendSplitTunnelingConfig()
 void VpnConnection::registerServiceDiscovery(const QString &requestId)
 {
     const bool accepted = AndroidServiceDiscovery::coordinator.acknowledge(requestId);
-    if (accepted) m_discoveryRegisteredId = requestId;
+    if (accepted) {
+        m_discoveryRegisteredId = requestId;
+        captureNativeDiscoveryOwner();
+    }
     emit serviceDiscoveryRegistered(requestId, accepted);
 }
 
@@ -2413,9 +2446,99 @@ void VpnConnection::refuseServiceDiscovery()
     emit serviceDiscoveryRefreshRequested();
 }
 
+void VpnConnection::captureNativeDiscoveryOwner()
+{
+    m_discoveryObservationEpoch = m_connectionEpoch;
+    m_discoveryObservationReceiver = quintptr(m_vpnProtocol.data());
+    m_discoveryObservationRecovery = m_migrationTeardownRecoveryRequired;
+    m_discoveryObservationUnbound = m_unboundNativeSessionObserved;
+    m_discoveryObservationIngressVersion = NativeSessionRestore::ingress.version();
+    m_discoveryObservationServerId = m_serverId;
+}
+
+bool VpnConnection::retireConfirmedNativeObservation(const QString &serverId, quint64 epoch)
+{
+    const std::lock_guard<std::recursive_mutex> lock(NativeSessionRestore::admissionMutex);
+    if (!epoch || epoch != m_connectionEpoch || serverId.isEmpty() || serverId != m_serverId
+        || m_vpnProtocol || m_migrationTeardownContext || m_migrationTeardownRecoveryRequired) return false;
+    m_unboundNativeSessionObserved = false;
+    m_nativeRestoreProbe.clear();
+    invalidateNativeRestore();
+    m_restoredNativeIdentity = {};
+    NativeSessionRestore::ingress.invalidate();
+    return true;
+}
+
+bool VpnConnection::retireAbsentNativeReceiver(const QJsonObject &snapshot)
+{
+    // EMPTY is a fresh Android inventory + network absence proof, not Activity
+    // unbinding or a dead Binder callback. Never reuse an already consumed grant.
+    const bool receiver = m_vpnProtocol && androidVpnProtocol && androidVpnProtocol == m_vpnProtocol.data()
+        && !m_migrationTeardownRecoveryRequired;
+    const bool orphanObservation = !m_vpnProtocol && !m_serverId.isEmpty()
+        && m_discoveryObservationUnbound && m_unboundNativeSessionObserved
+        && m_discoveryObservationIngressVersion == NativeSessionRestore::ingress.version()
+        && !NativeSessionRestore::ingress.observed();
+    const bool terminalRecovery = !m_vpnProtocol && !m_serverId.isEmpty()
+        && m_discoveryObservationRecovery && m_migrationTeardownRecoveryRequired;
+    if (snapshot != AndroidServiceDiscovery::coordinator.snapshot()
+        || snapshot.value("phase") != "EMPTY" || !AndroidServiceDiscovery::coordinator.allowsFresh()
+        || snapshot.value("requestId") != m_discoveryRegisteredId
+        || m_discoveryObservationEpoch != m_connectionEpoch
+        || m_discoveryObservationServerId != m_serverId
+        || m_discoveryObservationReceiver != quintptr(m_vpnProtocol.data())
+        || (!receiver && !terminalRecovery && !orphanObservation)
+        || m_connectionState == Vpn::ConnectionState::Disconnecting
+        || m_migrationTeardownContext
+        || !m_startAdmissionLedger.absenceSettled()) return false;
+    if (m_nativeStartAdmissionAge.isValid() && m_nativeStartAdmissionAge.elapsed() < 10000) {
+        const auto age = m_nativeStartAdmissionAge.elapsed();
+        if (age >= 0) {
+            const auto epoch = m_connectionEpoch;
+            const auto owner = quintptr(m_vpnProtocol.data());
+            const auto request = m_discoveryRegisteredId;
+            QTimer::singleShot(int(10000 - age + 1), Qt::PreciseTimer, this, [this, epoch, owner, request]() {
+                if (epoch == m_connectionEpoch && owner == quintptr(m_vpnProtocol.data())
+                    && request == m_discoveryRegisteredId) emit serviceDiscoveryRefreshRequested();
+            });
+        }
+        return false; // Re-observe after the grace; never reuse this early EMPTY proof.
+    }
+    // Native absence retires only the process-local receiver. No stop request,
+    // migration cleanup receipt, route teardown or synthetic peer event is sent.
+    disconnectSlots();
+    m_checkTimer.stop();
+    ++m_connectionEpoch;
+    ++m_manualDiscoveryRequestSerial;
+    ++m_discoveryReconnectSerial;
+    m_discoveryReconnectStart = {};
+    invalidateNativeRestore();
+    m_nativeRestoreProbe.clear();
+    m_restoredNativeIdentity = {};
+    m_unboundNativeSessionObserved = false;
+    // Release only the terminal local start barrier. This is not a retrospective
+    // migration teardown receipt and does not mark any migration journal PASS.
+    m_migrationTeardownRecoveryRequired = false;
+    NativeSessionRestore::ingress.invalidate();
+    m_startAdmissionLedger.clear();
+    m_nativeStartAdmissionAge.invalidate();
+    m_vpnProtocol.clear();
+    androidVpnProtocol = nullptr;
+    m_vpnConfiguration.remove("restoredNativeSession");
+    m_vpnConfiguration.remove("effectiveTransport");
+    m_vpnConfiguration.remove("dnsProfileDigest");
+    m_connectionRestoredWithoutStartup = false;
+    setConnectionState(Vpn::ConnectionState::Disconnected);
+    return true;
+}
+
 void VpnConnection::serviceDiscoveryChanged(const QJsonObject &snapshot)
 {
     if (snapshot != AndroidServiceDiscovery::coordinator.snapshot()) return;
+    if (retireAbsentNativeReceiver(snapshot)) return;
+    if (m_managedRouteReconnectGate.pending()
+        && AndroidServiceDiscovery::coordinator.canReconnect(androidDiscoveryComponent(m_vpnConfiguration)))
+        flushManagedRouteReconnect();
     if (!m_discoveryReconnectStart) return;
     if (m_discoveryReconnectEpoch != m_connectionEpoch || m_discoveryReconnectServerId != m_serverId) {
         m_discoveryReconnectStart = {};
@@ -2496,6 +2619,7 @@ void VpnConnection::refreshReconnectDiscovery()
 void VpnConnection::armStartAdmission(const AndroidServiceDiscovery::Grant &grant)
 {
     androidVpnProtocol->setStartAdmission(grant);
+    m_nativeStartAdmissionAge.start();
     const auto epoch = m_connectionEpoch;
     const auto wrapper = quintptr(m_vpnProtocol.data());
     m_startAdmissionLedger.registerStart(grant, epoch, wrapper);
@@ -2540,7 +2664,11 @@ void VpnConnection::handleStartAdmission(const QJsonObject &snapshot)
 void VpnConnection::registerNativeRestore(const QString &requestId, const QString &generation)
 {
     m_pendingNativeRestore.invalidate();
-    const bool accepted = !m_vpnProtocol && !m_migrationTeardownContext && !m_migrationTeardownRecoveryRequired
+    const bool liveOwner = m_vpnProtocol && androidVpnProtocol == m_vpnProtocol.data()
+        && NativeSessionRestore::uuid(m_vpnConfiguration.value("migrationConnectionNonce").toString())
+        && m_connectionState != Vpn::ConnectionState::Disconnected
+        && m_connectionState != Vpn::ConnectionState::Disconnecting;
+    const bool accepted = (!m_vpnProtocol || liveOwner) && !m_migrationTeardownContext && !m_migrationTeardownRecoveryRequired
         && m_pendingNativeRestore.registerRequest(requestId,generation,m_connectionEpoch);
     emit nativeRestoreRegistered(requestId,generation,accepted);
     if (accepted) {
@@ -2560,9 +2688,26 @@ void VpnConnection::invalidateNativeRestore() { m_pendingNativeRestore.invalidat
 bool VpnConnection::rejectNativeRestoreConnect()
 {
     if (!m_vpnProtocol && NativeSessionRestore::ingress.observed()) m_unboundNativeSessionObserved=true;
+    const auto discovery = AndroidServiceDiscovery::coordinator.snapshot();
+    const auto phase = discovery.value("phase").toString();
+    const bool provenIdle = !m_vpnProtocol && !m_migrationTeardownContext && !m_migrationTeardownRecoveryRequired
+        && !m_unboundNativeSessionObserved && !NativeSessionRestore::ingress.observed()
+        && m_startAdmissionLedger.absenceSettled() && AndroidServiceDiscovery::coordinator.allowsFresh()
+        && (phase == "EMPTY" || phase == "IDLE_NATIVE")
+        && discovery.value("requestId") == m_discoveryRegisteredId
+        && m_discoveryObservationEpoch == m_connectionEpoch
+        && m_discoveryObservationReceiver == 0 && m_discoveryObservationServerId == m_serverId;
+    // An idle native service cannot return an active restore snapshot. Its fresh,
+    // one-shot start authority supersedes that observation-only challenge. Keep
+    // every uncertain/live-owner challenge fail-closed; final Java admission still
+    // validates the idle owner immediately before CONNECT dispatch.
+    if (provenIdle) m_nativeRestoreProbe.clear();
     const bool restorePending = !m_nativeRestoreProbe.isEmpty();
     invalidateNativeRestore();
     if (restorePending || m_unboundNativeSessionObserved || (m_vpnProtocol && !m_restoredNativeIdentity.isEmpty())) {
+        const char *reason = restorePending ? "pending_restore_probe"
+            : m_unboundNativeSessionObserved ? "unbound_native_observed" : "restored_owner_active";
+        qWarning() << "NativeRestoreConnectRefused" << "reason=" << reason << "state=" << int(m_connectionState);
         emit vpnProtocolError(ErrorCode::NativeTunnelCleanupUnconfirmed);
         // Refusal is not a native state transition or a cleanup receipt. Re-sync
         // Preparing UI from retained worker state without the Error route path.
@@ -2589,21 +2734,61 @@ void VpnConnection::adoptNativeRestore(const QJsonObject &snapshot, const QStrin
                                      DockerContainer container, const QJsonObject &configuration)
 {
     const auto checked = NativeSessionRestore::decode(QJsonDocument(snapshot).toJson(QJsonDocument::Compact));
-    if (m_vpnProtocol || m_migrationTeardownContext || m_migrationTeardownRecoveryRequired || serverIndex<0
+    if (m_migrationTeardownContext || m_migrationTeardownRecoveryRequired || serverIndex<0
         || !(ContainerUtils::isAwgContainer(container) || container==DockerContainer::WireGuard)
         || !NativeSessionRestore::matchesConfiguration(checked,serverId,configuration)
-        || !m_pendingNativeRestore.consume(checked,m_connectionEpoch)) return;
+        || !m_pendingNativeRestore.matches(checked,m_connectionEpoch)) return;
+    const auto restoredState = checked.value("state") == "RECONNECTING"
+        ? Vpn::ConnectionState::Reconnecting : Vpn::ConnectionState::Connected;
+    if (m_vpnProtocol) {
+        // Refresh only the exact current native owner. Neither primary refresh
+        // nor DNS cutover creates another logical receiver or native TUN.
+        if (!androidVpnProtocol || androidVpnProtocol != m_vpnProtocol.data()
+            || container != m_container || serverId != m_serverId
+            || m_connectionState == Vpn::ConnectionState::Disconnected
+            || m_connectionState == Vpn::ConnectionState::Disconnecting) return;
+        const bool dnsOwner = NativeSessionRestore::isDnsSnapshot(checked);
+        if (dnsOwner ? !NativeSessionRestore::matchesLiveDnsOwner(checked,serverId,m_vpnConfiguration,m_restoredNativeIdentity)
+                     : !NativeSessionRestore::matchesLivePrimaryOwner(checked,serverId,m_vpnConfiguration,m_restoredNativeIdentity)) return;
+        auto boundConfig = NativeSessionRestore::configurationForAdoption(checked,m_vpnConfiguration);
+        boundConfig["restoredNativeSession"] = NativeSessionRestore::boundIdentity(checked);
+        if (dnsOwner ? !androidVpnProtocol->adoptObservedDnsSession(boundConfig)
+                     : !androidVpnProtocol->adoptObservedPrimarySession(checked)) return;
+        if (!m_pendingNativeRestore.consume(checked,m_connectionEpoch)) return;
+        m_vpnConfiguration = boundConfig;
+        m_restoredNativeIdentity = NativeSessionRestore::boundIdentity(checked);
+        m_nativeRestoreProbe.clear();
+        if (dnsOwner) NativeSessionRestore::ingress.observe(); // Fence stale AWG callbacks until DNS owner stops.
+        else NativeSessionRestore::ingress.invalidate(); // Exact fresh primary proof retires the observation fence.
+        m_unboundNativeSessionObserved = false;
+        if (dnsOwner) emit nativeDnsTransportAdopted(serverId);
+        emit nativeRestoreAccepted(checked.value("requestId").toString(),checked.value("bindingGeneration").toString());
+        setConnectionState(restoredState);
+        return;
+    }
+    if (!m_pendingNativeRestore.consume(checked,m_connectionEpoch)) return;
     m_restoredNativeIdentity = NativeSessionRestore::boundIdentity(checked);
     m_nativeRestoreProbe.clear();
-    NativeSessionRestore::ingress.invalidate();
+    if (NativeSessionRestore::isDnsSnapshot(checked)) NativeSessionRestore::ingress.observe();
+    else NativeSessionRestore::ingress.invalidate();
     m_unboundNativeSessionObserved = false;
-    QJsonObject boundConfig = configuration;
+    QJsonObject boundConfig = NativeSessionRestore::configurationForAdoption(checked, configuration);
     boundConfig["restoredNativeSession"] = m_restoredNativeIdentity;
     boundConfig["migrationConnectionNonce"] = m_restoredNativeIdentity.value("connectionNonce");
     boundConfig["nativeSessionServerId"] = serverId;
-    restoreConnection(serverId,serverIndex,container,boundConfig,Vpn::ConnectionState::Connected);
+    const auto priorRestoreEpoch = m_connectionEpoch;
+    restoreConnection(serverId,serverIndex,container,boundConfig,restoredState);
+    // Rebind discovery only after exact accepted native restoration creates the
+    // logical receiver. A replaced request/epoch/owner must obtain fresh discovery.
+    const auto restoredDiscovery = AndroidServiceDiscovery::coordinator.snapshot();
+    if (restoredDiscovery.value("phase") == "BOUND_NATIVE"
+        && restoredDiscovery.value("requestId") == m_discoveryRegisteredId
+        && m_discoveryObservationEpoch == priorRestoreEpoch
+        && m_discoveryObservationReceiver == 0 && m_discoveryObservationServerId == serverId)
+        captureNativeDiscoveryOwner();
+    if (NativeSessionRestore::isDnsSnapshot(checked)) emit nativeDnsTransportAdopted(serverId);
     emit nativeRestoreAccepted(checked.value("requestId").toString(),checked.value("bindingGeneration").toString());
-    setConnectionState(Vpn::ConnectionState::Connected);
+    setConnectionState(restoredState);
 }
 
 void VpnConnection::restoreConnection(const QString &serverId, int serverIndex,
@@ -2770,6 +2955,8 @@ void VpnConnection::reconnectToVpn() {
 #endif
         // Each native activation owns a distinct receipt identity.
         m_vpnConfiguration.remove("restoredNativeSession");
+        m_vpnConfiguration.remove("effectiveTransport");
+        m_vpnConfiguration.remove("dnsProfileDigest");
 #ifdef Q_OS_ANDROID
         m_restoredNativeIdentity = {};
 #endif
@@ -2782,6 +2969,7 @@ void VpnConnection::reconnectToVpn() {
 #else
         m_vpnProtocol.reset(VpnProtocol::factory(m_container, m_vpnConfiguration));
         if (!m_vpnProtocol) {
+            emit vpnProtocolError(ErrorCode::InternalError);
             setConnectionState(Vpn::ConnectionState::Error);
             return;
         }
@@ -2800,8 +2988,8 @@ void VpnConnection::reconnectToVpn() {
             emit serviceDiscoveryConnectRefused(err, m_connectionState);
             emit serviceDiscoveryRefreshRequested();
     #else
-            setConnectionState(Vpn::ConnectionState::Error);
             emit vpnProtocolError(err);
+            setConnectionState(Vpn::ConnectionState::Error);
     #endif
         }
     };
@@ -2962,10 +3150,7 @@ void VpnConnection::disconnectFromVpn()
                         emit vpnProtocolError(ErrorCode::NativeTunnelCleanupUnconfirmed);
                     }
 #ifdef Q_OS_ANDROID
-                    if (confirmed) {
-                        const std::lock_guard<std::recursive_mutex> lock(NativeSessionRestore::admissionMutex);
-                        NativeSessionRestore::ingress.invalidate();
-                    }
+                    if (confirmed) retireConfirmedNativeObservation(serverId, disconnectEpoch);
 #endif
                     setConnectionState(confirmed ? Vpn::ConnectionState::Disconnected : Vpn::ConnectionState::Error);
                     emit migrationTeardownObserved(serverId, disconnectEpoch, confirmed);
@@ -3017,7 +3202,10 @@ void VpnConnection::disconnectFromVpn()
                 completionContext->deleteLater();
             });
     QTimer::singleShot(9000, completionContext, [this, completionContext, isCurrentDisconnect]() {
-        if (isCurrentDisconnect()) setConnectionState(Vpn::ConnectionState::Error);
+        if (isCurrentDisconnect()) {
+            emit vpnProtocolError(ErrorCode::NativeTunnelCleanupUnconfirmed);
+            setConnectionState(Vpn::ConnectionState::Error);
+        }
         // Also release stale owners without touching any replacement session.
         completionContext->deleteLater();
     });

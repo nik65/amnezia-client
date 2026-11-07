@@ -162,3 +162,4 @@ DeveloperIdApplicationCertificate.p12
 DeveloperIdInstallerCertificate.p12
 
 .build-locks/
+gwenv.sh

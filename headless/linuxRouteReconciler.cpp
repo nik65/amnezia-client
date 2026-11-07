@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <optional>
 #include <utility>
 
 #include "../client/core/utils/managedRoutePolicy.h"
@@ -1052,8 +1053,35 @@ bool LinuxRouteReconciler::addFullTunnelRulesBatch(const QList<QStringList> &arg
 bool LinuxRouteReconciler::removeFullTunnelRulesBatch(const QList<QStringList> &arguments,
                                                       QString *failureDetail)
 {
+    // Keep a bounded diagnostic even when the caller replaces the public error
+    // with a generic recovery message.  Never retain command output or policy
+    // destinations here; these fields are safe for the durable receipt/log.
+    const auto recordFailure = [this, &arguments](const QString &category,
+                                                   int completed, int batch,
+                                                   std::optional<int> nativeExit = std::nullopt,
+                                                   int remaining = -1) {
+        const qint64 elapsed = m_fullTunnelDeadline.isValid()
+                ? m_fullTunnelDeadline.elapsed() : 0;
+        QJsonObject diagnostic {
+            { QStringLiteral("operation"), QStringLiteral("bypass_delete") },
+            { QStringLiteral("category"), category },
+            { QStringLiteral("completed"), completed },
+            { QStringLiteral("total"), arguments.size() },
+            { QStringLiteral("batch"), batch },
+            { QStringLiteral("remaining"), remaining },
+            { QStringLiteral("elapsedMs"), elapsed },
+        };
+        if (nativeExit) diagnostic.insert(QStringLiteral("nativeExit"), *nativeExit);
+        m_lastDiagnostics.insert(QStringLiteral("batchFailure"), diagnostic);
+        qWarning().noquote() << QStringLiteral(
+                "LinuxRouteReconciler bypass delete failure category=%1 batch=%2 completed=%3/%4 exit=%5 remaining=%6 elapsedMs=%7")
+                .arg(category).arg(batch).arg(completed).arg(arguments.size())
+                .arg(nativeExit ? QString::number(*nativeExit) : QStringLiteral("unavailable"))
+                .arg(remaining).arg(elapsed);
+    };
     const QString executable = ipExecutable();
     if (executable.isEmpty()) {
+        recordFailure(QStringLiteral("ip_unavailable"), 0, 0);
         if (failureDetail) *failureDetail = QStringLiteral("ip executable unavailable");
         return false;
     }
@@ -1063,6 +1091,7 @@ bool LinuxRouteReconciler::removeFullTunnelRulesBatch(const QList<QStringList> &
     for (int offset = 0, batch = 0; offset < arguments.size();
          offset += FullTunnelRuleBatchSize, ++batch) {
         if (m_fullTunnelDeadline.elapsed() > FullTunnelBatchTotalDeadlineMs) {
+            recordFailure(QStringLiteral("deadline"), completed, batch + 1);
             if (failureDetail) *failureDetail = QStringLiteral(
                     "bypass delete deadline exceeded completed=%1/%2 elapsedMs=%3")
                     .arg(completed).arg(arguments.size()).arg(m_fullTunnelDeadline.elapsed());
@@ -1079,6 +1108,8 @@ bool LinuxRouteReconciler::removeFullTunnelRulesBatch(const QList<QStringList> &
             // peer cleanup cannot strand later selectors in this batch.
             for (const QStringList &command : commands) {
                 if (m_fullTunnelDeadline.elapsed() > FullTunnelBatchTotalDeadlineMs) {
+                    recordFailure(QStringLiteral("retry_deadline"), completed,
+                                  batch + 1, result.exitCode);
                     if (failureDetail) *failureDetail = QStringLiteral(
                             "bypass delete retry deadline exceeded completed=%1/%2 elapsedMs=%3")
                             .arg(completed).arg(arguments.size())
@@ -1088,6 +1119,8 @@ bool LinuxRouteReconciler::removeFullTunnelRulesBatch(const QList<QStringList> &
                 m_runner->run(executable, command);
             }
             if (m_fullTunnelDeadline.elapsed() > FullTunnelBatchTotalDeadlineMs) {
+                recordFailure(QStringLiteral("readback_deadline"), completed,
+                              batch + 1, result.exitCode);
                 if (failureDetail) *failureDetail = QStringLiteral(
                         "bypass delete readback deadline exceeded completed=%1/%2 elapsedMs=%3")
                         .arg(completed).arg(arguments.size())
@@ -1118,6 +1151,9 @@ bool LinuxRouteReconciler::removeFullTunnelRulesBatch(const QList<QStringList> &
                 }
             }
             if (remaining != 0) {
+                recordFailure(remaining < 0 ? QStringLiteral("readback_invalid")
+                                            : QStringLiteral("rules_remaining"),
+                              completed, batch + 1, result.exitCode, remaining);
                 if (failureDetail) {
                     *failureDetail = QStringLiteral(
                             "bypass delete batch %1/%2 failed completed=%3/%4 exit=%5 remaining=%6 elapsedMs=%7: %8")

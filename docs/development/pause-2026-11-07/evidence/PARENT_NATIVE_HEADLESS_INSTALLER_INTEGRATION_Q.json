@@ -1,0 +1,156 @@
+{
+  "createdUtc": "2026-11-07T15:50:46.682732+00:00",
+  "sourceIntegrationPass": true,
+  "sourceManifest": {
+    "path": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-integration-parent\\MATERIALIZED_PRODUCT_SOURCE_MANIFEST.json",
+    "sha256": "63bf398cc97d98d986f9cc99d2a07e1f49aa0f642b8540ab981c26e1259eeec9",
+    "fileCount": 2635
+  },
+  "priorSourceManifest": {
+    "path": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-integration-parent\\MATERIALIZED_PRODUCT_SOURCE_MANIFEST.json",
+    "sha256": "0830d940be4d89245fc695e7d8d3dffca5eb897b25bd8199449338941890d722"
+  },
+  "allowedDelta": {
+    "deploy/headless/install_headless.sh": {
+      "sha256": "61fab91ab09cc95555b6ee2a19b3d3ab62a11049a9c7d92abe5eecfe8cac5a80",
+      "size": 65434,
+      "selectedSourcePath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-consumer-y\\src\\install_headless.sh",
+      "selectedSha256": "b19da99c6a8e79c0a28c73162e8fac790426c8fc0f689e7c28d183e27ea25d4b",
+      "snapshotPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-integration-parent\\baseline\\deploy\\headless\\install_headless.sh"
+    },
+    "deploy/headless/build_headless_release.sh": {
+      "sha256": "5447fecd61e288fd099520f7f31b6240fdd78e91ce3c594c6ba3eed671b86855",
+      "size": 7039,
+      "selectedSourcePath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-delivery-parent\\selected-a\\build_headless_release.sh",
+      "selectedSha256": "328aabd988b9a802fa51c00754b0b3db43321f04ad5f2779021b2fcc4a32fe1d",
+      "snapshotPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-integration-parent\\baseline\\deploy\\headless\\build_headless_release.sh"
+    }
+  },
+  "lineDelta": {
+    "deploy/headless/install_headless.sh": {
+      "added": 187,
+      "removed": 4
+    },
+    "deploy/headless/build_headless_release.sh": {
+      "added": 22,
+      "removed": 2
+    }
+  },
+  "unrelatedSourceRowsUnchanged": 2633,
+  "rawIndexes": {
+    "candidate": "3e5142545f4ff71fad593b63010998e3fcc45901b84c5f6197d491c704c9368b",
+    "canonical": "01347bedcda9626cced1629915c32e65b2eddbd36ebf78880fafc4b84dfdb9c4"
+  },
+  "actualCanonicalAttempts": {
+    "canonical-builder-role-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-installer-integration-parent/canonical-builder-role-a/RESULT.json",
+      "sha256": "39e4f8331b9d50887fffe615bb5a24367b6a104fcce5248b00eac27fd35ac1ad",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 4
+    },
+    "canonical-builder-legacy-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-installer-integration-parent/canonical-builder-legacy-a/RESULT.json",
+      "sha256": "6878134f0cc1aa05db477c5e58983c385246dbc412e9d213366c68bba9d94764",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 4
+    },
+    "canonical-builder-failedwork-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-installer-integration-parent/canonical-builder-failedwork-a/RESULT.json",
+      "sha256": "aa5b36333dd22c13a1bef68b9c7a84490cb8503ce1e7dc4386546a21616fed8f",
+      "nativeExit": 23,
+      "componentPass": false,
+      "inputCount": 4
+    },
+    "canonical-stage-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-installer-integration-parent/canonical-stage-a/RESULT.json",
+      "sha256": "59d6717e1db8eb5c1efe188823bd1b336f9cad25bc50d27bde5a6e014a901077",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 3073
+    },
+    "canonical-probe-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-installer-integration-parent/canonical-probe-a/RESULT.json",
+      "sha256": "f6f35696de486519a5823965108620b155b723cab1232793831d4460ca1dbaf6",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 3082
+    },
+    "canonical-consumer-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-installer-integration-parent/canonical-consumer-a/RESULT.json",
+      "sha256": "d4ffb3e37a5fe01b7d6fd6a2ca3da97e3528c0ba13b1efe91570dc0e6403ed61",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 3115
+    },
+    "canonical-consumer-failedwork-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-installer-integration-parent/canonical-consumer-failedwork-a/RESULT.json",
+      "sha256": "5a39fa3ce381e4685942f709f50e094a4685e9aaa24a9db026bce725e55e46e5",
+      "nativeExit": 23,
+      "componentPass": false,
+      "inputCount": 3115
+    }
+  },
+  "finalGate": {
+    "path": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-installer-integration-parent\\final-gate-a\\RESULT.json",
+    "sha256": "c4691db0dcfcefcea73d82efc81effcb35524c2c50d3c3245bfcf86810a33ff0",
+    "nativeExit": 0,
+    "inputCount": 3197
+  },
+  "failedWorkGate": {
+    "path": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-installer-integration-parent\\final-gate-failedwork-a\\RESULT.json",
+    "sha256": "9b1fb57d4d52473db5345a4a59ce005b4d2c452321ea269ce827b65efddb63e3",
+    "nativeExit": 23,
+    "componentPass": false,
+    "inputCount": 3197
+  },
+  "unchangedNativeArtifact": {
+    "path": "/home/ivano/amnezia-product-50318-q/native-headless-integration-parent/cmake-build-a/build/amnezia-verify-provisioning-native",
+    "size": 7769672,
+    "sha256": "9e11222529593f8276a5202e4e8569e54ca8383a84152aa438eea5c38171792a",
+    "executed": false,
+    "staticElf64X86_64": true,
+    "notFinalDelivery": true
+  },
+  "nativeArtifactOriginalBuildManifestSha256": "0830d940be4d89245fc695e7d8d3dffca5eb897b25bd8199449338941890d722",
+  "explicitOldBuildSourceFenceDelta": {
+    "/home/ivano/codex-amnezia-upstream-20261104/deploy/headless/build_headless_release.sh": {
+      "beforeSha256": "5447fecd61e288fd099520f7f31b6240fdd78e91ce3c594c6ba3eed671b86855",
+      "afterSha256": "328aabd988b9a802fa51c00754b0b3db43321f04ad5f2779021b2fcc4a32fe1d"
+    },
+    "/home/ivano/codex-amnezia-upstream-20261104/deploy/headless/install_headless.sh": {
+      "beforeSha256": "61fab91ab09cc95555b6ee2a19b3d3ab62a11049a9c7d92abe5eecfe8cac5a80",
+      "afterSha256": "b19da99c6a8e79c0a28c73162e8fac790426c8fc0f689e7c28d183e27ea25d4b"
+    }
+  },
+  "nativeCMakeCppDependenciesLinkInputsUnchanged": true,
+  "nativeArtifactFreshRebuild": false,
+  "rolePackage": {
+    "path": "/home/ivano/amnezia-product-50318-q/native-headless-installer-integration-parent/canonical-builder-role-a/artifacts/AmneziaHeadless_1.0.0.42_linux_x64_provisioning.tar.gz",
+    "sha256": "fbf2b36c1e49b654e62ef2841eb0b4b980bf51d265213ff043e74639a963728a",
+    "size": 2937269,
+    "memberCount": 9,
+    "selectedInstallerSha256": "b19da99c6a8e79c0a28c73162e8fac790426c8fc0f689e7c28d183e27ea25d4b"
+  },
+  "legacyPackage": {
+    "path": "/home/ivano/amnezia-product-50318-q/native-headless-installer-integration-parent/canonical-builder-legacy-a/artifacts/AmneziaHeadless_1.0.0.42_linux_x64_provisioning.tar.gz",
+    "sha256": "976e05e2dd6231d227ec66c398782244e0bf1a93ea43fe7aed1d78bb53de9e9c",
+    "size": 18513,
+    "memberCount": 8,
+    "selectedInstallerSha256": "b19da99c6a8e79c0a28c73162e8fac790426c8fc0f689e7c28d183e27ea25d4b"
+  },
+  "scope": "Two exact reviewed shell-source integrations and fresh actual canonical package-builder/guard-span source smoke. CMake TESTdaemon/CLI, exact UID0-dir metadata and OSprobe MODELS remain explicit. Not whole installer/root activation/recovery/host probes/app/runtime/release acceptance. No installer/static/product/guest/phone/network/service execution.",
+  "admission": "NOT_ADMITTED",
+  "runtimeAcceptance": "NOT_RUN",
+  "allFunctionsPass": false,
+  "releasePass": false,
+  "published": false,
+  "open": [
+    "Initial nativeHelper kind getter remains Python",
+    "Trusted installed-root activation and persisted recovery not accepted",
+    "BB explicit headless component controller/strict guest receipts normal result not delivered",
+    "AA independent authenticated automaticCURRENT normal result not delivered",
+    "Final static6pair/app/sign/fresh106/fourplatform/provisioning/peer/data-plane/manualclient publication"
+  ]
+}

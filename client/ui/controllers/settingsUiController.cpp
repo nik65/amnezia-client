@@ -8,7 +8,7 @@
 #include "core/utils/errorCodes.h"
 #include "core/utils/routeModes.h"
 #include "core/utils/commonStructs.h"
-#include "logger.h"
+#include "core/controllers/logsController.h"
 #include "systemController.h"
 #include "amneziaApplication.h"
 #include "version.h"
@@ -90,36 +90,11 @@ void SettingsUiController::toggleLogging(bool enable)
     emit loggingStateChanged();
 }
 
-void SettingsUiController::openLogsFolder()
-{
-    Logger::openLogsFolder(false);
-}
-
-void SettingsUiController::openServiceLogsFolder()
-{
-    Logger::openLogsFolder(true);
-}
-
 void SettingsUiController::exportLogsFile(const QString &fileName)
 {
-#ifdef Q_OS_ANDROID
-    AndroidController::instance()->exportLogsFile(fileName);
-#else
-    if (!SystemController::saveFile(fileName, Logger::getLogFile())) {
+    if (!SystemController::saveFile(fileName, LogsController::readAll(LogsController::Stream::App))) {
         qInfo() << "SettingsUiController::exportLogsFile: save or share was cancelled or failed";
     }
-#endif
-}
-
-void SettingsUiController::exportServiceLogsFile(const QString &fileName)
-{
-#ifdef Q_OS_ANDROID
-    AndroidController::instance()->exportLogsFile(fileName);
-#else
-    if (!SystemController::saveFile(fileName, Logger::getServiceLogFile())) {
-        qInfo() << "SettingsUiController::exportServiceLogsFile: save or share was cancelled or failed";
-    }
-#endif
 }
 
 void SettingsUiController::clearLogs()
@@ -141,14 +116,14 @@ void SettingsUiController::backupAppConfig(const QString &fileName)
 
 void SettingsUiController::restoreAppConfig(const QString &fileName)
 {
-    QFile file(fileName);
+    QByteArray data;
 
-    if (!file.open(QIODevice::ReadOnly)) {
+    if (!SystemController::readFile(fileName, data)) {
         emit errorOccurred(ErrorCode::OpenError);
         return;
     }
 
-    restoreAppConfigFromData(file.readAll());
+    restoreAppConfigFromData(data);
 }
 
 void SettingsUiController::restoreAppConfigFromData(const QByteArray &data)

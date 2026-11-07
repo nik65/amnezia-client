@@ -56,6 +56,10 @@ try:
 except ImportError:  # pragma: no cover - package import path
     from .windows_evidence_archive import WindowsEvidenceArchiveError, archive_exact_file, validate_archive_record
 try:
+    from windows_consent_visual import ConsentVisualError, prepare_request as prepare_consent_visual, confirm_after_review as confirm_reviewed_consent, validate_completed as validate_consent_visual
+except ImportError:
+    from .windows_consent_visual import ConsentVisualError, prepare_request as prepare_consent_visual, confirm_after_review as confirm_reviewed_consent, validate_completed as validate_consent_visual
+try:
     from publisher_filemap import PublisherFileMapError, canonical_publisher_file_map, validate_observed_file_map
 except ImportError:  # pragma: no cover - package import path
     from .publisher_filemap import PublisherFileMapError, canonical_publisher_file_map, validate_observed_file_map
@@ -150,6 +154,7 @@ SEMANTIC_HELPER_RELATIVES = (
     "deploy/release_lab/headless_preexisting_fixture_guest.py",
     "deploy/release_lab/guest_helpers/linux_gui_window_evidence.py",
     "deploy/release_lab/linux_gui_visual_ack.py",
+    "deploy/release_lab/windows_consent_visual.py",
     "deploy/release_lab/linux_gui_fixture.py",
     "deploy/release_lab/linux_desktop_readiness.py",
     "deploy/release_lab/guest_helpers/linux_gui_softpipe_setup.py",
@@ -660,9 +665,17 @@ def validate_hyperv_interactive_archives(root: Path, receipt: Mapping[str, Any])
     if not isinstance(ui_archive, Mapping) or not isinstance(app_archive, Mapping):
         raise LabError("Hyper-V interactive durable screenshot records are missing")
     try:
-        validate_archive_record(root, ui_archive, kind="uac", vm_id=vm_id, case_id="outer-interactive", attempt_nonce=attempt)
+        validate_archive_record(root, ui_archive, kind="installer-desktop", vm_id=vm_id, case_id="outer-interactive", attempt_nonce=attempt)
         validate_archive_record(root, app_archive, kind="app-window", vm_id=vm_id, case_id="outer-interactive", attempt_nonce=attempt)
-    except WindowsEvidenceArchiveError as exc:
+        validate_consent_visual(owned_root=root, proof=hyperv_ui.get("consent_visual"),
+            observe=hyperv_ui.get("observe") or {},
+            confirmed_consent=(hyperv_ui.get("confirm") or {}).get("consent"),
+            confirmed_at=(hyperv_ui.get("confirm") or {}).get("confirmed_at"),
+            completed_at=(hyperv_ui.get("installer_completion") or {}).get("completed_at"))
+        visual_request=hyperv_ui["consent_visual"]["request"]
+        if visual_request.get("run_id") != receipt.get("run_id") or visual_request.get("vm_id") != vm_id:
+            raise LabError("Hyper-V consent pixels belong to a different run/VM")
+    except (WindowsEvidenceArchiveError, ConsentVisualError) as exc:
         raise LabError(f"Hyper-V interactive durable archive validation failed: {exc}") from exc
 
 
@@ -818,6 +831,12 @@ def build_hyperv_matrix_aggregation(
     if (not interactive_vm_id or str(interactive_state.get("vm_id") or "") != interactive_vm_id
             or not re.fullmatch(r"[0-9a-fA-F]{64}", interactive_parent)):
         raise LabError("Hyper-V matrix interactive VM binding differs from reset state")
+    visual_request=interactive["hyperv_ui"]["consent_visual"]["request"]
+    if (visual_request.get("manifest_sha256") != (run.get("manifest") or {}).get("sha256")
+            or visual_request.get("artifact_sha256") != outer_candidate.get("sha256")
+            or visual_request.get("parent_sha256") != interactive_parent
+            or visual_request.get("version") != planned_candidate):
+        raise LabError("Hyper-V root-reviewed consent pixels differ from exact release/reset context")
     if {step.get("id") for step in matrix_steps if isinstance(step, Mapping) and step.get("passed") is True} != {"probe", "reinstall", "update", "service-health"}:
         raise LabError("Hyper-V matrix archive does not represent every canonical Windows step")
     return {
@@ -1009,6 +1028,295 @@ def artifact_record(path: Path) -> dict[str, Any]:
     return {"path": str(path), "sha256": digest, "size": size}
 
 
+def _native_component_bytes(path: Path, maximum: int, *, private: bool = False) -> bytes:
+    """Reject nonregular inputs before open; bound both reads and race cases."""
+    path = Path(path)
+    before = path.lstat()
+    if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or not 0 < before.st_size <= maximum
+            or (private and (before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) != 0o600))):
+        raise LabError("component input metadata or size refused")
+    fields = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_ctime_ns,
+                           item.st_uid, item.st_mode, item.st_nlink)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        if fields(os.fstat(fd)) != fields(before):
+            raise LabError("component input changed while opening")
+        chunks, total = [], 0
+        while total <= maximum:
+            chunk = os.read(fd, min(1024 * 1024, maximum + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        if total != before.st_size or fields(os.fstat(fd)) != fields(before) or fields(path.lstat()) != fields(before):
+            raise LabError("component input changed during bounded read")
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+_NATIVE_COMPONENT_CASES = {
+    "marker_uid0_gate", "root_private_incarnation", "two_elf_pins_and_manifest",
+    "explicit_loopback_port", "collector_argv_source_derived", "process_registry_before_setup",
+    "health_ok", "unknown_route_404", "auth_wrong_token_403", "upload_first_204",
+    "upload_idempotent_204", "upload_conflict_409", "stored_file_bytes_hash",
+    "route_noarg_refusal", "route_invalid_scope_refusal", "route_refusal_negative_control", "cleanup",
+}
+_NATIVE_COMPONENT_NOT_RUN = ["fullDocker", "reconcile", "96MiB", "cgroup", "nativeCTest", "rootmutation"]
+_NATIVE_COMPONENT_STAGE = r'''
+import hashlib, json, os, re, stat, sys
+operation, raw = sys.argv[1:]
+cfg = json.loads(raw)
+root, run, nonce = cfg['root'], cfg['run_id'], cfg['nonce']
+profile = 'linux-headless-x64'
+marker = '/tmp/amnezia-release-lab-marker'
+expected_marker = ('amnezia-release-lab:' + run + ':' + profile).encode()
+if (os.geteuid() != 0 or not re.fullmatch('native-[0-9a-f]{32}', run)
+    or not re.fullmatch('[0-9a-f]{64}', nonce) or root != '/var/tmp/amnezia-native-' + nonce):
+    raise SystemExit('component staging identity refused')
+def directory(path, private=False):
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != 0:
+        raise SystemExit('component staging directory owner/type refused')
+    if private:
+        if stat.S_IMODE(st.st_mode) != 0o700: raise SystemExit('component staging privacy refused')
+    elif st.st_mode & 0o022 and not (st.st_mode & stat.S_ISVTX and path in ('/tmp', '/var/tmp')):
+        raise SystemExit('component staging ancestor permissions refused')
+    return [st.st_dev, st.st_ino]
+def signature(st):
+    return (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_nlink, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+def read(path, bound):
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode) or before.st_uid != 0 or before.st_nlink != 1 or not 0 <= before.st_size <= bound:
+        raise SystemExit('component staging file metadata refused')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        if signature(os.fstat(fd)) != signature(before): raise SystemExit('component staging open race')
+        data = bytearray()
+        while len(data) <= bound:
+            part = os.read(fd, min(65536, bound + 1 - len(data)))
+            if not part: break
+            data.extend(part)
+        if len(data) != before.st_size or signature(os.fstat(fd)) != signature(before) or signature(os.lstat(path)) != signature(before):
+            raise SystemExit('component staging read race')
+        return bytes(data), fd
+    except BaseException:
+        os.close(fd)
+        raise
+for path in ('/', '/var', '/var/tmp', '/tmp'): directory(path)
+if operation == 'create':
+    try: os.lstat(root)
+    except FileNotFoundError: pass
+    else: raise SystemExit('component staging root already exists')
+    try: os.lstat(marker)
+    except FileNotFoundError:
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        try:
+            pending = expected_marker
+            while pending:
+                count = os.write(fd, pending)
+                if count <= 0: raise SystemExit('component staging marker write failed')
+                pending = pending[count:]
+            os.fsync(fd)
+        finally: os.close(fd)
+    data, fd = read(marker, 256)
+    os.close(fd)
+    if data != expected_marker: raise SystemExit('component staging foreign marker')
+    os.mkdir(root, 0o700)
+elif operation not in ('check', 'seal'):
+    raise SystemExit('component staging operation refused')
+identity = directory(root, True)
+if operation != 'create' and identity != cfg['incarnation']:
+    raise SystemExit('component staging root changed')
+data, fd = read(marker, 256)
+os.close(fd)
+if data != expected_marker: raise SystemExit('component staging marker changed')
+if operation == 'check':
+    target = cfg['target']
+    if '/' in target or target not in ('collector', 'collector-route', 'manifest.json', 'probe.py', 'plan.json'):
+        raise SystemExit('component staging target refused')
+    try: os.lstat(root + '/' + target)
+    except FileNotFoundError: pass
+    else: raise SystemExit('component staging target is not fresh')
+if operation == 'seal':
+    for row in cfg['files']:
+        if directory(root, True) != identity: raise SystemExit('component staging root replaced during seal')
+        name = row['name']
+        if '/' in name or name not in ('collector', 'collector-route', 'manifest.json', 'probe.py', 'plan.json'):
+            raise SystemExit('component staged member name refused')
+        data, fd = read(root + '/' + name, 32 * 1024 * 1024)
+        try:
+            if len(data) != row['size'] or hashlib.sha256(data).hexdigest() != row['sha256']:
+                raise SystemExit('component staged member bytes refused')
+            os.fchmod(fd, 0o600)
+            if stat.S_IMODE(os.fstat(fd).st_mode) != 0o600: raise SystemExit('component staged mode refused')
+        finally: os.close(fd)
+if directory(root, True) != identity: raise SystemExit('component staging root replaced before return')
+print(json.dumps({'schema': 1, 'root': root, 'incarnation': identity, 'marker_sha256': hashlib.sha256(expected_marker).hexdigest()}, sort_keys=True))
+'''
+
+
+def validate_native_component_receipt(receipt: Any, guest_plan: Mapping[str, Any]) -> None:
+    keys = {"schema", "run_id", "profile", "nonce", "origin", "injected", "artifacts",
+            "work_passed", "cleanup_passed", "capture_complete", "cases", "streams", "errors", "not_run"}
+    if (not isinstance(receipt, dict) or set(receipt) != keys or type(receipt["schema"]) is not int
+            or receipt["schema"] != 1 or any(receipt[key] != guest_plan[key] for key in ("run_id", "profile", "nonce", "artifacts"))
+            or receipt["origin"] != "guest" or receipt["injected"] is not False
+            or any(receipt[key] is not True for key in ("work_passed", "cleanup_passed", "capture_complete"))
+            or receipt["errors"] != {"primary": None, "cleanup": None} or receipt["not_run"] != _NATIVE_COMPONENT_NOT_RUN):
+        raise LabError("component guest receipt identity, scope, or outcome refused")
+    cases = receipt["cases"]
+    if not isinstance(cases, list) or len(cases) != len(_NATIVE_COMPONENT_CASES):
+        raise LabError("component guest receipt omitted required cases")
+    rows = {}
+    for row in cases:
+        if (not isinstance(row, dict) or not isinstance(row.get("name"), str) or row["name"] in rows
+                or row["name"] not in _NATIVE_COMPONENT_CASES or row.get("status") != "PASS"):
+            raise LabError("component guest case is missing, duplicated, or failed")
+        rows[row["name"]] = row
+    for name, expected in {"health_ok": 200, "unknown_route_404": 404, "auth_wrong_token_403": 403,
+                           "upload_first_204": 204, "upload_idempotent_204": 204, "upload_conflict_409": 409}.items():
+        if type(rows[name].get("actual_http")) is not int or rows[name]["actual_http"] != expected:
+            raise LabError("component guest HTTP observation refused")
+    for name in ("route_noarg_refusal", "route_invalid_scope_refusal"):
+        if type(rows[name].get("native_exit")) is not int or rows[name]["native_exit"] != 1:
+            raise LabError("component guest safe route refusal exit refused")
+    actual = rows["explicit_loopback_port"].get("actual")
+    if (not isinstance(actual, dict) or actual.get("bind") != "127.0.0.1"
+            or type(actual.get("port")) is not int or not 1 <= actual["port"] <= 65535):
+        raise LabError("component guest listener is not explicit loopback")
+    body = b"synthetic-guest-artifact-data\n"
+    if rows["stored_file_bytes_hash"].get("evidence") != {"files": 1, "size": len(body), "sha256": hashlib.sha256(body).hexdigest()}:
+        raise LabError("component guest stored bytes observation refused")
+    streams = receipt["streams"]
+    if not isinstance(streams, dict) or len(streams) != 6:
+        raise LabError("component guest did not retain all three child stream pairs")
+    pairs = {}
+    for key, row in streams.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[1-9][0-9]*:(stdout|stderr)", key) or not isinstance(row, dict):
+            raise LabError("component guest stream identity refused")
+        pid, channel = key.split(":")
+        pairs.setdefault(pid, set()).add(channel)
+        if (set(row) != {"size", "sha256", "eof", "truncated", "head_b64", "tail_b64"}
+                or type(row["size"]) is not int or not 0 <= row["size"] <= 4096
+                or row["eof"] is not True or row["truncated"] is not False
+                or not isinstance(row["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["sha256"])):
+            raise LabError("component guest capture incomplete or exceeds retained full window")
+        try:
+            head = base64.b64decode(row["head_b64"], validate=True)
+            tail = base64.b64decode(row["tail_b64"], validate=True)
+        except (ValueError, TypeError) as exc:
+            raise LabError("component guest capture encoding refused") from exc
+        if len(head) != min(row["size"], 2048) or len(tail) != min(row["size"], 2048):
+            raise LabError("component guest capture window length refused")
+        complete = head if row["size"] <= 2048 else head + tail[-(row["size"] - 2048):]
+        if hashlib.sha256(complete).hexdigest() != row["sha256"] or (row["size"] <= 2048 and head != tail):
+            raise LabError("component guest capture bytes do not match digest")
+    if len(pairs) != 3 or any(channels != {"stdout", "stderr"} for channels in pairs.values()):
+        raise LabError("component guest capture pairs refused")
+
+
+def native_component_bundle(bundle_dir: Path) -> dict[str, Any]:
+    """Validate inert x86_64 component data under the product ELF contract."""
+    bundle = Path(os.path.abspath(str(bundle_dir)))
+    directories = {}
+    for directory in (bundle, bundle / "x86_64"):
+        metadata = directory.lstat()
+        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o700 or directory.resolve() != directory):
+            raise LabError("component bundle directory is not private and owned")
+        directories[directory] = (metadata.st_dev, metadata.st_ino)
+
+    def read(path: Path, maximum: int) -> bytes:
+        return _native_component_bytes(path, maximum, private=True)
+
+    manifest_raw = read(bundle / "manifest.json", 16 * 1024)
+    manifest = json.loads(manifest_raw)
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    if (manifest_raw not in (canonical, canonical + b"\n") or not isinstance(manifest, dict)
+            or set(manifest) != {"schema", "binaries"} or type(manifest["schema"]) is not int
+            or manifest["schema"] != 1 or not isinstance(manifest["binaries"], list)
+            or len(manifest["binaries"]) != 2):
+        raise LabError("component manifest schema or canonical bytes refused")
+    records = {}
+    for expected_role, item in zip(("collector", "collector-route"), manifest["binaries"]):
+        if (not isinstance(item, dict) or set(item) != {"architecture", "role", "path", "sha256", "size"}
+                or item["role"] != expected_role or item["architecture"] != "x86_64"
+                or item["path"] != f"x86_64/{expected_role}" or type(item["size"]) is not int
+                or not 64 <= item["size"] <= 32 * 1024 * 1024
+                or not isinstance(item["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])):
+            raise LabError("component member schema refused")
+        path = bundle / item["path"]
+        raw = read(path, 32 * 1024 * 1024)
+        if len(raw) != item["size"] or hashlib.sha256(raw).hexdigest() != item["sha256"]:
+            raise LabError("component member digest or size changed")
+        le = lambda at, length: int.from_bytes(raw[at:at + length], "little")
+        if (raw[:7] != b"\x7fELF\x02\x01\x01" or raw[7] not in (0, 3) or raw[8] != 0
+                or le(16, 2) != 2 or le(18, 2) != 62 or le(20, 4) != 1
+                or le(52, 2) != 64 or le(54, 2) != 56):
+            raise LabError("component ELF header refused")
+        table, count, entry = le(32, 8), le(56, 2), le(24, 8)
+        if not 0 < count <= 128 or table < 64 or table + count * 56 > len(raw):
+            raise LabError("component ELF program-header table refused")
+        executable_entry = False
+        for index in range(count):
+            at = table + index * 56
+            kind, flags = le(at, 4), le(at + 4, 4)
+            offset, address = le(at + 8, 8), le(at + 16, 8)
+            file_size, memory_size, alignment = le(at + 32, 8), le(at + 40, 8), le(at + 48, 8)
+            if kind in (2, 3) or offset > len(raw) or file_size > len(raw) - offset:
+                raise LabError("component ELF loader/dynamic/segment refused")
+            if kind == 1:
+                if (file_size > memory_size or memory_size > (1 << 64) - 1 - address
+                        or offset % 4096 != address % 4096
+                        or (alignment > 1 and ((alignment & (alignment - 1)) or offset % alignment != address % alignment))):
+                    raise LabError("component ELF load segment refused")
+                executable_entry |= bool(flags & 1 and entry >= address and entry - address < file_size)
+        if not executable_entry:
+            raise LabError("component ELF entry is not executable file-backed data")
+        records[expected_role] = {"path": str(path), "sha256": item["sha256"], "size": len(raw)}
+    for directory, identity in directories.items():
+        metadata = directory.lstat()
+        if (metadata.st_dev, metadata.st_ino) != identity:
+            raise LabError("component bundle directory incarnation changed")
+    return {"bundle_dir": str(bundle), "manifest": {"path": str(bundle / "manifest.json"),
+            "sha256": hashlib.sha256(manifest_raw).hexdigest(), "size": len(manifest_raw)}, "binaries": records}
+
+
+def verify_native_component_sources(manifest_path: Path) -> dict[str, Any]:
+    """Verify every declared physical source, not just the manifest digest."""
+    raw = _native_component_bytes(manifest_path, 2 * 1024 * 1024)
+    manifest_record = {"path": os.path.abspath(str(manifest_path)), "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+    rows = json.loads(raw)
+    if not isinstance(rows, list) or not rows:
+        raise LabError("component source manifest must enumerate physical inputs")
+    required = {"deploy/release_lab/lab.py", "client/core/utils/selfhosted/serverNativeBundle.h",
+                "client/core/utils/constants/protocolConstants.h", "client/cmake/serverNativeBundle.cmake"}
+    for directory in ("client/server_scripts/client_logs/native", "client/server_scripts/client_logs/native_route"):
+        for path in (repo_root() / directory).iterdir():
+            if path.name == "CMakeLists.txt" or path.suffix in {".cpp", ".h"}:
+                required.add(path.relative_to(repo_root()).as_posix())
+    seen = set()
+    for row in rows:
+        if (not isinstance(row, dict) or set(row) != {"path", "sha256", "size"}
+                or not isinstance(row["path"], str) or not row["path"] or row["path"] in seen
+                or not Path(row["path"]).parts or Path(row["path"]).as_posix() != row["path"]
+                or "\\" in row["path"] or "\0" in row["path"]
+                or Path(row["path"]).is_absolute() or ".." in Path(row["path"]).parts
+                or Path(row["path"]).parts[0] in {".git", ".env"}
+                or type(row["size"]) is not int or row["size"] < 0
+                or not isinstance(row["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["sha256"])):
+            raise LabError("component source row is invalid or duplicated")
+        path = ensure_owned_child(repo_root(), repo_root() / row["path"], "component physical source")
+        digest, size = sha256_file(path)
+        if digest != row["sha256"] or size != row["size"]:
+            raise LabError("component physical source drift: " + row["path"])
+        seen.add(row["path"])
+    if not required <= seen or _native_component_bytes(manifest_path, 2 * 1024 * 1024) != raw:
+        raise LabError("component source closure is missing required roles or changed")
+    return {"manifest": manifest_record, "verified_files": len(seen)}
+
+
 def _safe_failure_metadata(value: Any) -> str:
     """Return bounded metadata for a process/QGA value without its contents."""
     if isinstance(value, bytes):
@@ -1026,6 +1334,68 @@ def _safe_qga_response_metadata(response: Any) -> str:
         f"response_has_return={'return' in response};"
         f"response_has_error={'error' in response}"
     )
+
+
+def _archive_hyperv_failure(root: Path, *, run_id: str | None, action: str, case_id: Any, result: Any) -> str:
+    """Best-effort private byte evidence; never expose native output or mask failure."""
+    try:
+        # The actual controller runs in owned WSL Linux. chmod on Windows does
+        # not establish a private DACL; do not persist native data there.
+        if os.name != "posix" or not hasattr(os, "geteuid"):
+            return "archive=unavailable-platform"
+        valid = lambda value: isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", value) is not None
+        if not valid(run_id) or not valid(action) or (case_id is not None and not valid(case_id)):
+            return "archive=unavailable-identity"
+        root = Path(root).absolute()
+        uid = os.geteuid()
+        if any(stat.S_ISLNK(parent.lstat().st_mode) for parent in (root, *root.parents)):
+            return "archive=unavailable-path"
+        # Reuse only this controller's existing owned root. No external cache,
+        # credentials, argv, environment or stdin are included in the archive.
+        info = root.lstat()
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != uid or info.st_mode & 0o022:
+            return "archive=unavailable-root"
+        cursor = root
+        for part in ("exports", run_id, "private-adapter-errors"):
+            cursor = cursor / part
+            try:
+                cursor.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            info = cursor.lstat()
+            if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != uid or info.st_mode & 0o022:
+                return "archive=unavailable-path"
+        if cursor.stat().st_mode & 0o077:
+            return "archive=unavailable-permissions"
+        directory = cursor / (action + "-" + secrets.token_hex(16))
+        directory.mkdir(mode=0o700)
+        records = {}
+        def write_new(path: Path, data: bytes) -> None:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if path.read_bytes() != data or stat.S_IMODE(path.stat().st_mode) != 0o600:
+                raise OSError("private archive readback failed")
+        for label in ("stdout", "stderr"):
+            raw = getattr(result, label, b"")
+            if not isinstance(raw, bytes):
+                raise TypeError("native output is not bytes")
+            # Never silently truncate and call it exact. Oversize streams are
+            # represented by metadata only; the other bounded stream survives.
+            record = {"size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(), "persisted": len(raw) <= 131072}
+            if record["persisted"]:
+                write_new(directory / (label + ".bin"), raw)
+            records[label] = record
+        metadata = {"schema": 1, "run_id": run_id, "case_id": case_id, "action": action,
+                    "exit_code": result.returncode, "streams": records}
+        raw_meta = (json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        write_new(directory / "metadata.json", raw_meta)
+        # Return public evidence metadata only; never native content/error text.
+        return "archive=" + json.dumps({"path": str(directory / "metadata.json"), "sha256": hashlib.sha256(raw_meta).hexdigest(), "size": len(raw_meta)}, separators=(",", ":"))
+    except Exception:
+        return "archive=unavailable"
 
 
 def _safe_process_metadata(result: Any) -> str:
@@ -1471,6 +1841,27 @@ class QgaClient:
                     if hasattr(primary,"add_note"):primary.add_note(f"guest-file-close also failed: {close_error!r}")
 
 
+@contextlib.contextmanager
+def owned_cleanup_cancel_scope(max_seconds=120):
+    import signal,sys
+    if type(max_seconds) not in (int,float) or not 0 < max_seconds <= 120:
+        raise ValueError('cleanup signal scope bound must be within120seconds')
+    already_cancelling=isinstance(sys.exc_info()[1],KeyboardInterrupt)
+    if not already_cancelling:
+        # Never defer the first cancellation of an ordinary reset.
+        yield
+        return
+    deadline=time.monotonic()+max_seconds
+    previous=signal.getsignal(signal.SIGINT)
+    def defer(kind,frame):
+        if time.monotonic()>=deadline:
+            raise KeyboardInterrupt('owned cleanup cancellation deadline reached')
+    signal.signal(signal.SIGINT,defer)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT,previous)
+
 @dataclass
 class LabController:
     root: Path
@@ -1629,17 +2020,20 @@ class LabController:
         # Keep the controller's adapter deadline above the guest runner's
         # bounded 15 minute installer wait, so the guest can publish its
         # completion/failure receipt before the host bridge times out.
-        result = subprocess.run(argv, input=((secret + "\n").encode("utf-8") if secret is not None else None), check=False, shell=False, text=False, capture_output=True, timeout=960)
+        with (owned_cleanup_cancel_scope() if action == "reset" else contextlib.nullcontext()):
+            result = subprocess.run(argv, input=((secret + "\n").encode("utf-8") if secret is not None else None), check=False, shell=False, text=False, capture_output=True, timeout=960)
         stdout = result.stdout.decode("utf-8-sig", errors="replace")
         stderr = result.stderr.decode("utf-8-sig", errors="replace")
+        def failure_archive() -> str:
+            return _archive_hyperv_failure(self.root, run_id=run_id, action=action, case_id=kwargs.get("CaseId"), result=result)
         if result.returncode != 0:
-            raise LabError(f"Hyper-V adapter {action} failed ({_safe_process_metadata(result)})")
+            raise LabError(f"Hyper-V adapter {action} failed ({_safe_process_metadata(result)};{failure_archive()})")
         try:
             value = json.loads(stdout)
         except json.JSONDecodeError as exc:
-            raise LabError(f"Hyper-V adapter {action} returned non-JSON output") from exc
+            raise LabError(f"Hyper-V adapter {action} returned non-JSON output ({failure_archive()})") from exc
         if not isinstance(value, dict):
-            raise LabError(f"Hyper-V adapter {action} returned a non-object response")
+            raise LabError(f"Hyper-V adapter {action} returned a non-object response ({failure_archive()})")
         return value
 
     @property
@@ -1899,6 +2293,412 @@ class LabController:
         self.save_state(state)
         return state["runs"][run_id]
 
+    def create_component(self, bundle_dir: Path, source_manifest: Path, run_id: str | None = None) -> dict[str, Any]:
+        """Register a component run in the normal owned VM lifecycle."""
+        self.assert_mutation_context()
+        if self.dry_run:
+            raise LabError("component admission cannot run in dry-run")
+        run_id = run_id or "native-" + uuid.uuid4().hex
+        if not isinstance(run_id, str) or not re.fullmatch(r"native-[0-9a-f]{32}", run_id):
+            raise LabError("component run identity must be native- plus 32 lowercase hex characters")
+        with self.mutation_session("create_component"):
+            bundle = native_component_bundle(bundle_dir)
+            source_context = verify_native_component_sources(source_manifest)
+            profile_id = "linux-headless-x64"
+            profile = load_profiles()[profile_id]
+            if profile.get("backend") != "qemu-linux" or profile.get("nic") != "none":
+                raise LabError("component profile must remain the existing isolated Linux QEMU profile")
+            state = self.load_state()
+            run_dir = ensure_owned_child(self.root, self.root / "runs" / run_id, "component run directory")
+            if run_id in state.get("runs", {}) or run_dir.exists():
+                raise LabError("component run already exists")
+            run_dir.parent.mkdir(parents=True, exist_ok=True)
+            run_dir.mkdir(mode=0o700)
+            profile_dir = run_dir / profile_id
+            profile_dir.mkdir(mode=0o700)
+            overlay = ensure_owned_child(self.root, profile_dir / "overlay.qcow2", "component overlay")
+            json_dump(profile_dir / ".owned-overlay.json", {"run_id": run_id, "profile": profile_id, "overlay": str(overlay)})
+            plan = {"schema": 1, "run_id": run_id, "kind": "native-component", "profile": profile_id,
+                    "nonce": uuid.uuid4().hex + uuid.uuid4().hex, "created_at": utc_now(),
+                    "expires_epoch": time.time() + 480, "bundle": bundle, "source_context": source_context,
+                    "profile_record": artifact_record(profiles_root() / f"{profile_id}.json")}
+            plan_path = run_dir / "native-component-plan.json"
+            json_dump(plan_path, plan)
+            plan_path.chmod(0o600)
+            run = {"run_id": run_id, "kind": "native-component", "lane": "component", "release_eligible": False,
+                   "dry_run": False, "test_mode": self.test_mode, "created_at": plan["created_at"],
+                   "component_plan": artifact_record(plan_path), "windows_backend": "qemu",
+                   "expected_profiles": [profile_id], "artifacts": {},
+                   "profiles": {profile_id: {"status": "created", "vm": None, "evidence": None}}}
+            state["lab_id"] = state.get("lab_id") or "lab-" + uuid.uuid4().hex
+            state.setdefault("runs", {})[run_id] = run
+            self.save_state(state)
+            return run
+
+    def _native_component_plan(self, run_id: str) -> dict[str, Any]:
+        run = self.get_run(run_id)
+        if run.get("kind") != "native-component" or run.get("release_eligible") is not False or run.get("dry_run"):
+            raise LabError("run is not an admitted non-release component run")
+        path = ensure_owned_child(self.root, self.root / "runs" / run_id / "native-component-plan.json", "component plan")
+        if artifact_record(path) != run.get("component_plan"):
+            raise LabError("component immutable plan changed")
+        plan = json.loads(path.read_bytes())
+        if (plan.get("schema") != 1 or plan.get("kind") != "native-component" or plan.get("run_id") != run_id
+                or plan.get("profile") != "linux-headless-x64" or not isinstance(plan.get("nonce"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", plan["nonce"])
+                or type(plan.get("expires_epoch")) not in (int, float) or not math.isfinite(plan["expires_epoch"])
+                or time.time() > plan["expires_epoch"]):
+            raise LabError("component plan identity or lifetime refused")
+        if native_component_bundle(Path(plan["bundle"]["bundle_dir"])) != plan["bundle"]:
+            raise LabError("component artifact bytes changed after admission")
+        if verify_native_component_sources(Path(plan["source_context"]["manifest"]["path"])) != plan["source_context"]:
+            raise LabError("component source context changed after admission")
+        if artifact_record(profiles_root() / "linux-headless-x64.json") != plan["profile_record"]:
+            raise LabError("component profile changed after admission")
+        return plan
+
+    def gate_component(self, run_id: str) -> dict[str, Any]:
+        self.assert_mutation_context()
+        plan = self._native_component_plan(run_id)
+        run = self.get_run(run_id)
+        runtime = run.get("component_runtime")
+        if runtime is None:
+            return {"run_id": run_id, "component_passed": False, "runtime_acceptance": "NOT_RUN",
+                    "release_passed": False, "reason": "no controller-acquired guest execution evidence"}
+        if not isinstance(runtime, dict) or runtime.get("status") != "captured":
+            raise LabError("component runtime is not captured and finalized")
+        path = ensure_owned_child(self.root, Path(runtime["archive"]["path"]), "component runtime archive")
+        raw = _native_component_bytes(path, 1024 * 1024, private=True)
+        if artifact_record(path) != runtime["archive"]:
+            raise LabError("component runtime archive changed")
+        record = json.loads(raw)
+        if (record.get("run_id") != run_id or record.get("nonce") != plan["nonce"]
+                or record.get("plan_binding") != run["component_plan"] or record.get("status") != "captured"
+                or record.get("reset", {}).get("reset_profiles") != [plan["profile"]]
+                or record.get("reset", {}).get("run_id") != run_id
+                or run["profiles"][plan["profile"]].get("vm") is not None
+                or run["profiles"][plan["profile"]].get("status") != "reset"):
+            raise LabError("component runtime plan or canonical reset binding refused")
+        source_rows = json.loads(_native_component_bytes(Path(plan["source_context"]["manifest"]["path"]), 2 * 1024 * 1024))
+        helper_rows = [row for row in source_rows if row["path"] == "deploy/release_lab/guest_helpers/native_component_probe.py"]
+        if len(helper_rows) != 1 or record.get("helper") != helper_rows[0]:
+            raise LabError("component runtime helper binding refused")
+        validate_native_component_receipt(record["receipt"], record["guest_plan"])
+        expected = [{"path": f"/var/tmp/amnezia-native-{plan['nonce']}/{role}", "role": role,
+                     "sha256": plan["bundle"]["binaries"][role]["sha256"], "size": plan["bundle"]["binaries"][role]["size"]}
+                    for role in ("collector", "collector-route")]
+        if record["guest_plan"].get("artifacts") != expected:
+            raise LabError("component runtime artifact binding refused")
+        return {"run_id": run_id, "runtime_acceptance": "PASS_SCOPED_NATIVE_ABI_HTTP",
+                "component_passed": False, "release_passed": False, "not_run": list(_NATIVE_COMPONENT_NOT_RUN),
+                "runtime_archive": dict(runtime["archive"]), "scope": "native ABI/HTTP/safe route refusal only"}
+
+    def _native_component_fence(self, run_id: str, vm: Mapping[str, Any], deadline: float) -> None:
+        """Revalidate the recorded process and QMP identity, without guest IO."""
+        current = self.owned_vm(run_id, "linux-headless-x64")
+        keys = ("pid", "proc_start_time", "uid", "uuid", "qmp_socket", "qga_socket", "argv")
+        if any(current.get(key) != vm.get(key) for key in keys):
+            raise LabError("component VM ownership changed")
+        for operation in ("query-uuid", "query-status"):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LabError("component command deadline expired")
+            result = QmpClient(Path(vm["qmp_socket"]), timeout=min(5.0, remaining)).request(operation)
+            value = require_qmp_return(result, operation)["return"]
+            if (not isinstance(value, dict)
+                    or (operation == "query-uuid" and value.get("UUID") != vm.get("uuid"))
+                    or (operation == "query-status" and (value.get("running") is not True or value.get("status") != "running"))):
+                raise LabError("component QMP incarnation or running state refused")
+
+    def _native_component_exec(self, run_id: str, vm: Mapping[str, Any], executable: str,
+                               args: Sequence[str], *, timeout: float = 20) -> dict[str, Any]:
+        """Acquire and privately retain canonical QGA replies before validation.
+
+        This is an internal transport boundary, not a runtime/release gate.
+        The caller must bind its command to the admitted component plan.
+        """
+        self.assert_mutation_context()
+        if not self.test_mode and self._mutation_lock_depth == 0:
+            raise LabError("component guest execution requires an active mutation session")
+        if (not isinstance(run_id, str) or not re.fullmatch(r"native-[0-9a-f]{32}", run_id)
+                or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 20
+                or self.dry_run):
+            raise LabError("component execution identity or deadline refused")
+        deadline = time.monotonic() + timeout
+        self._native_component_fence(run_id, vm, deadline)
+        parent = ensure_owned_child(self.root, self.root / "exports" / run_id / "native-component-private", "component private archive")
+        for path in reversed((parent, *parent.parents)):
+            if path == self.root or self.root in path.parents:
+                if not path.exists():
+                    path.mkdir(mode=0o700)
+                info = path.lstat()
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+                    raise LabError("component archive ancestor is not owned")
+        directory = parent / uuid.uuid4().hex
+        directory.mkdir(mode=0o700)
+        identity = directory.lstat()
+        if stat.S_IMODE(identity.st_mode) != 0o700:
+            raise LabError("component raw archive is not private")
+        sequence = 0
+
+        def retain(response: Any) -> dict[str, Any]:
+            nonlocal sequence
+            now = directory.lstat()
+            if (now.st_dev, now.st_ino, now.st_uid, now.st_mode) != (identity.st_dev, identity.st_ino, identity.st_uid, identity.st_mode):
+                raise LabError("component private archive incarnation changed")
+            data = (json.dumps(response, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+            if len(data) > 1024 * 1024:
+                raise LabError("component canonical QGA archive exceeds frame bound")
+            path = directory / f"qga-{sequence:04d}.json"
+            sequence += 1
+            immutable_bytes_dump(path, data)
+            if _native_component_bytes(path, 1024 * 1024, private=True) != data:
+                raise LabError("component private QGA archive readback changed")
+            now = directory.lstat()
+            if (now.st_dev, now.st_ino) != (identity.st_dev, identity.st_ino):
+                raise LabError("component private archive incarnation changed after write")
+            return {"path": str(path), "sha256": hashlib.sha256(data).hexdigest(), "size": len(data),
+                    "role": "canonical-parsed-qga-reply"}
+
+        qga = QgaClient(Path(vm["qga_socket"]), timeout=min(5.0, max(0.001, deadline - time.monotonic())))
+        def invoke(operation, *, admission: bool = False):
+            self._native_component_fence(run_id, vm, deadline)
+            try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise LabError("component command deadline expired before send")
+                qga.timeout = min(5.0, remaining)
+                response = operation()
+                archive = retain({"return": response} if admission else response)
+            except BaseException as primary:
+                if isinstance(primary, QgaGuestExecutionError):
+                    try:
+                        record = retain(primary.private_failure_capture())
+                        primary.add_note("private component QGA admission: " + json.dumps(record, sort_keys=True))
+                    except Exception as secondary:
+                        primary.add_note("component private admission archive failed: " + type(secondary).__name__)
+                try:
+                    self._native_component_fence(run_id, vm, deadline)
+                except Exception as secondary:
+                    primary.add_note("component post-call fence failed: " + type(secondary).__name__)
+                raise
+            self._native_component_fence(run_id, vm, deadline)
+            return response, archive
+
+        started, _ = invoke(lambda: qga.guest_exec(executable, args), admission=True)
+        guest_pid = started["pid"]
+        while True:
+            # Retain even a malformed/nonzero reply BEFORE the post-call fence.
+            response, archive = invoke(lambda: qga.request("guest-exec-status", {"pid": guest_pid}))
+            value = response.get("return") if isinstance(response, dict) else None
+            if (not isinstance(response, dict) or "error" in response or not isinstance(value, dict)
+                    or type(value.get("exited")) is not bool):
+                raise LabError("component QGA status schema refused")
+            if value["exited"]:
+                if type(value.get("exitcode")) is not int or value["exitcode"] != 0:
+                    failure = LabError("component guest native exit refused")
+                    # The outer actual caller may reset only after a complete,
+                    # durable final capture. Never infer it from native exit alone.
+                    try:
+                        if (type(value.get("exitcode")) is int
+                                and all(value.get(key, False) is False for key in ("out-truncated", "err-truncated"))):
+                            for key in ("out-data", "err-data"):
+                                if not isinstance(value.get(key, ""), str):
+                                    raise ValueError("invalid captured stream")
+                                base64.b64decode(value.get(key, ""), validate=True)
+                            failure.component_capture_archive = dict(archive)
+                    except (ValueError, TypeError):
+                        pass
+                    raise failure
+                if any(value.get(key, False) is not False for key in ("out-truncated", "err-truncated")):
+                    raise LabError("component guest capture is truncated")
+                streams = {}
+                for source, name in (("out-data", "stdout"), ("err-data", "stderr")):
+                    encoded = value.get(source, "")
+                    if not isinstance(encoded, str):
+                        raise LabError("component captured stream type refused")
+                    try:
+                        streams[name] = base64.b64decode(encoded, validate=True)
+                    except (ValueError, TypeError) as exc:
+                        raise LabError("component captured stream encoding refused") from exc
+                return {"pid": guest_pid, "exitcode": 0, "capture_complete": True,
+                        "archive": archive, **streams}
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LabError("component guest command deadline expired")
+            time.sleep(min(0.2, remaining))
+
+    @mutation_operation
+    def run_component(self, run_id: str) -> dict[str, Any]:
+        """Acquire a single scoped observation in an already-owned isolated VM.
+
+        Uses the normal principal, lock, source plan, transport and reset. This
+        does not start a guest or grant any release/component-wide acceptance.
+        """
+        self.assert_mutation_context()
+        if self.dry_run:
+            raise LabError("component acquisition cannot run in dry-run")
+        plan = self._native_component_plan(run_id)
+        run = self.get_run(run_id)
+        if run.get("component_runtime") is not None:
+            raise LabError("component acquisition is already spent")
+        profile = "linux-headless-x64"
+        vm = self.owned_vm(run_id, profile)
+        source_rows = json.loads(_native_component_bytes(Path(plan["source_context"]["manifest"]["path"]), 2 * 1024 * 1024))
+        relative = "deploy/release_lab/guest_helpers/native_component_probe.py"
+        helpers = [row for row in source_rows if row["path"] == relative]
+        helper_path = repo_root() / relative
+        helper_raw = _native_component_bytes(helper_path, 128 * 1024)
+        helper = {"path": relative, "sha256": hashlib.sha256(helper_raw).hexdigest(), "size": len(helper_raw)}
+        if helpers != [helper]:
+            raise LabError("component acquisition lacks the exact admitted guest helper")
+        nonce = plan["nonce"]
+        root = "/var/tmp/amnezia-native-" + nonce
+        artifacts = [{"path": root + "/" + role, "role": role, "sha256": row["sha256"], "size": row["size"]}
+                     for role in ("collector", "collector-route") for row in [plan["bundle"]["binaries"][role]]]
+        guest_plan = {"schema": 1, "run_id": run_id, "profile": profile, "nonce": nonce, "root": root,
+                      "marker_path": "/tmp/amnezia-release-lab-marker",
+                      "marker_content": f"amnezia-release-lab:{run_id}:{profile}", "artifacts": artifacts,
+                      "manifest": {"path": root + "/manifest.json", "sha256": plan["bundle"]["manifest"]["sha256"],
+                                   "size": plan["bundle"]["manifest"]["size"]}, "port": None}
+        parent = ensure_owned_child(self.root, self.root / "exports" / run_id / "native-component-host", "component host archive")
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory = parent / uuid.uuid4().hex
+        directory.mkdir(mode=0o700)
+        identity = directory.lstat()
+        sequence = 0
+        capture_safe = True
+
+        def retain(label: str, data: bytes) -> dict[str, Any]:
+            nonlocal sequence
+            now = directory.lstat()
+            if ((now.st_dev, now.st_ino, now.st_uid, stat.S_IMODE(now.st_mode))
+                    != (identity.st_dev, identity.st_ino, os.geteuid(), 0o700)
+                    or not isinstance(data, bytes) or len(data) > 1024 * 1024 or sequence >= 4096):
+                raise LabError("component host private capture boundary refused")
+            path = directory / f"{sequence:04d}-{label}.json"
+            sequence += 1
+            immutable_bytes_dump(path, data)
+            if _native_component_bytes(path, 1024 * 1024, private=True) != data:
+                raise LabError("component host private capture readback refused")
+            return artifact_record(path)
+
+        plan_bytes = (json.dumps(guest_plan, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        plan_record = retain("guest-plan", plan_bytes)
+        state = self.load_state()
+        state["runs"][run_id]["component_runtime"] = {"status": "acquiring", "nonce": nonce, "guest_plan": plan_record}
+        self.save_state(state)
+        primary, receipt, reset_result, cleanup_error = None, None, None, None
+        cfg = {"run_id": run_id, "nonce": nonce, "root": root}
+
+        def execute(args: list[str], timeout: float) -> bytes:
+            nonlocal capture_safe
+            if time.time() >= plan["expires_epoch"]:
+                raise LabError("component acquisition plan expired")
+            capture_safe = False
+            try:
+                result = self._native_component_exec(run_id, vm, "/usr/bin/python3", ["-I", "-B", *args], timeout=timeout)
+            except BaseException as error:
+                if isinstance(getattr(error, "component_capture_archive", None), dict):
+                    capture_safe = True
+                raise
+            capture_safe = True
+            retain("stdout", result["stdout"])
+            if result["stderr"]:
+                raise LabError("component helper produced unexpected stderr; retained in private QGA capture")
+            return result["stdout"]
+
+        def stage(operation: str, extra: Mapping[str, Any] | None = None, timeout: float = 10) -> dict[str, Any]:
+            value = json.loads(execute(["-c", _NATIVE_COMPONENT_STAGE, operation, json.dumps({**cfg, **(extra or {})})], timeout))
+            expected_marker = hashlib.sha256(f"amnezia-release-lab:{run_id}:{profile}".encode()).hexdigest()
+            incarnation = value.get("incarnation") if isinstance(value, dict) else None
+            if (not isinstance(value, dict) or type(value.get("schema")) is not int or value["schema"] != 1
+                    or value.get("root") != root or value.get("marker_sha256") != expected_marker
+                    or not isinstance(incarnation, list) or len(incarnation) != 2
+                    or any(type(part) is not int or part < 0 for part in incarnation)
+                    or (operation != "create" and incarnation != cfg["incarnation"])):
+                raise LabError("component guest staging identity refused")
+            return value
+
+        try:
+            cfg["incarnation"] = stage("create")["incarnation"]
+            files = [(role, Path(plan["bundle"]["binaries"][role]["path"]), plan["bundle"]["binaries"][role])
+                     for role in ("collector", "collector-route")]
+            files.extend((("manifest.json", Path(plan["bundle"]["manifest"]["path"]), plan["bundle"]["manifest"]),
+                          ("probe.py", helper_path, helper), ("plan.json", Path(plan_record["path"]), plan_record)))
+            qga = QgaClient(Path(vm["qga_socket"]), timeout=5)
+            original_request = qga._request_on_connection
+
+            def recorded_request(connection, command, arguments=None):
+                nonlocal capture_safe
+                capture_safe = False
+                response = original_request(connection, command, arguments)
+                retain("file-qga", (json.dumps(response, sort_keys=True, separators=(",", ":")) + "\n").encode())
+                capture_safe = True
+                return response
+
+            qga._request_on_connection = recorded_request
+            for name, source, record in files:
+                deadline = time.monotonic() + 20
+                stage("check", {"target": name}, timeout=min(10, deadline - time.monotonic()))
+                self._native_component_fence(run_id, vm, deadline)
+                capture_safe = False
+                try:
+                    qga.write_file_from_path(root + "/" + name, source, record["sha256"], record["size"],
+                                             deadline=deadline, max_size=32 * 1024 * 1024)
+                    capture_safe = True
+                except BaseException as error:
+                    try:
+                        self._native_component_fence(run_id, vm, deadline)
+                    except Exception as secondary:
+                        error.add_note("component post-write ownership fence failed: " + type(secondary).__name__)
+                    raise
+                self._native_component_fence(run_id, vm, deadline)
+            stage("seal", {"files": [{"name": name, "sha256": record["sha256"], "size": record["size"]}
+                                      for name, source, record in files]})
+            output = execute([root + "/probe.py", "--plan", root + "/plan.json"], timeout=20)
+            try:
+                receipt = json.loads(output)
+            except (ValueError, UnicodeDecodeError) as error:
+                raise LabError("component guest receipt JSON refused") from error
+            validate_native_component_receipt(receipt, guest_plan)
+            self._native_component_plan(run_id)
+        except BaseException as error:
+            primary = error
+        finally:
+            if capture_safe:
+                try:
+                    reset_result = self.reset(run_id, profile)
+                    if reset_result.get("run_id") != run_id or reset_result.get("reset_profiles") != [profile]:
+                        raise LabError("component canonical reset result refused")
+                except BaseException as error:
+                    cleanup_error = type(error).__name__
+                    if primary is None:
+                        primary = error
+                    else:
+                        primary.add_note("component canonical reset also failed: " + type(error).__name__)
+            elif primary is not None:
+                primary.add_note("component owned VM preserved: incomplete or uncertain private capture")
+            record = {"schema": 1, "run_id": run_id, "nonce": nonce, "profile": profile,
+                      "status": "captured" if primary is None else "failed", "plan_binding": run["component_plan"],
+                      "helper": helper, "guest_plan": guest_plan, "receipt": receipt,
+                      "vm_identity": {key: vm.get(key) for key in ("pid", "proc_start_time", "uid", "uuid", "qmp_socket", "qga_socket", "argv")},
+                      "reset": reset_result, "capture_safe": capture_safe,
+                      "primary_error": type(primary).__name__ if primary else None, "cleanup_error": cleanup_error}
+            try:
+                archive = retain("runtime-record", (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode())
+                state = self.load_state()
+                state["runs"][run_id]["component_runtime"] = {"status": record["status"], "archive": archive}
+                self.save_state(state)
+            except BaseException as error:
+                if primary is None:
+                    primary = error
+                else:
+                    primary.add_note("component final record also failed: " + type(error).__name__)
+        if primary is not None:
+            raise primary
+        return self.gate_component(run_id)
+
     def get_run(self, run_id: str) -> dict[str, Any]:
         run = self.load_state().get("runs", {}).get(run_id)
         if not isinstance(run, dict):
@@ -2088,6 +2888,10 @@ class LabController:
         run = self.get_run(run_id)
         if self.dry_run or run.get("dry_run"):
             raise LabError("dry-run cannot start a VM")
+        if run.get("kind") == "native-component":
+            if profile_id != "linux-headless-x64":
+                raise LabError("component run cannot start another profile")
+            self._native_component_plan(run_id)
         profile = profiles[profile_id]
         try:
             migration_wan = validate_migration_wan(run, profile_id,
@@ -2840,6 +3644,8 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
         profiles = load_profiles(); profile = profiles[profile_id]
         artifact_id = artifact_id_for_profile(profile_id)
         planned_run = self.get_run(run_id)
+        if planned_run.get("kind") == "native-component":
+            raise LabError("component runs cannot execute application installer/update steps")
         fixture = None
         if windows_route_fixture_path is not None or windows_route_fixture_sha256 is not None:
             if (not windows_route_fixture_path or not windows_route_fixture_sha256 or self.dry_run
@@ -3056,7 +3862,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                 observe_deadline = time.monotonic() + 90
                 while time.monotonic() < observe_deadline:
                     try:
-                        candidate_observation = self.hyperv_call("ui-observe", run_id=run_id, CaseId=interactive_case, credential=True, ExpectedArtifactSha256=outer_candidate["sha256"])
+                        candidate_observation = self.hyperv_call("ui-observe", run_id=run_id, CaseId=interactive_case, credential=True, ExpectedArtifactSha256=outer_candidate["sha256"], AttemptNonce=interactive_attempt)
                         candidate_consent = candidate_observation.get("consent") if isinstance(candidate_observation, dict) else None
                         if isinstance(candidate_consent, dict) and candidate_consent.get("expected_consent") is True:
                             ui_observe = candidate_observation
@@ -3071,7 +3877,21 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                 observed_consent = ui_observe.get("consent") if isinstance(ui_observe, dict) else None
                 if not isinstance(observed_consent, dict) or observed_consent.get("expected_consent") is not True:
                     raise LabError("Hyper-V UI observation did not prove the guest consent process")
-                ui_confirm = self.hyperv_call("ui-confirm", run_id=run_id, CaseId=interactive_case, credential=True, ExpectedArtifactSha256=outer_candidate["sha256"])
+                console = ui_observe.get("console_capture") or {}
+                console_host_path = str(console.get("host_path") or "")
+                expected_console_root = f"{HYPERV_RUNS_ROOT_WINDOWS}/{run_id}/windows-x64/cases/{interactive_case}/evidence/".lower()
+                normalized_console_path = console_host_path.replace("\\", "/")
+                if (not normalized_console_path.lower().startswith(expected_console_root)
+                        or not re.fullmatch(r"consent-console-"+re.escape(interactive_attempt)+r"-[0-9a-f]{32}\.rgb565", normalized_console_path.rsplit("/",1)[-1])):
+                    raise LabError("Hyper-V console pixels escaped the owned fresh case evidence root")
+                current_interactive = self.get_run(run_id)["profiles"][profile_id]["hyperv_cases"][interactive_case]
+                consent_visual_request = prepare_consent_visual(owned_root=self.root, run_id=run_id,
+                    version=str(planned_run["candidate_version"]), manifest_sha256=planned_run["manifest"]["sha256"],
+                    artifact_sha256=outer_candidate["sha256"], parent_sha256=current_interactive["parent_sha256"],
+                    observe=ui_observe, raw_source=wsl_path_for_windows_host(console_host_path), attempt_nonce=interactive_attempt)
+                consent_visual_ack, ui_confirm = confirm_reviewed_consent(owned_root=self.root, request=consent_visual_request,
+                    confirm=lambda: self.hyperv_call("ui-confirm", run_id=run_id, CaseId=interactive_case, credential=True, ExpectedArtifactSha256=outer_candidate["sha256"],
+                        ExpectedConsentPid=observed_consent["process_id"], ExpectedConsentStartTime=observed_consent["creation_time"], ExpectedConsentSessionId=observed_consent["session_id"]))
                 confirmed_consent = ui_confirm.get("consent") if isinstance(ui_confirm, dict) else None
                 if not isinstance(confirmed_consent, dict) or confirmed_consent.get("expected_consent") is not True:
                     raise LabError("Hyper-V UI confirmation lost the guest consent binding")
@@ -3100,7 +3920,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                     self.root, wsl_path_for_windows_host(ui_host_path),
                     self.root / "exports" / run_id / profile_id / interactive_case,
                     expected_sha256=str(ui_export.get("sha256") or ""), expected_size=ui_export.get("size"),
-                    kind="uac", vm_id=expected_vm_id, case_id=interactive_case,
+                    kind="installer-desktop", vm_id=expected_vm_id, case_id=interactive_case,
                     attempt_nonce=interactive_attempt,
                 )
                 interactive_receipt["hyperv_ui"] = {
@@ -3117,6 +3937,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                     "installer_pid": confirmed_consent.get("installer_pid"),
                     "installer_path": confirmed_consent.get("installer_path"),
                     "installer_completion": completion,
+                    "consent_visual": {"request": consent_visual_request, "ack": consent_visual_ack},
                 }
                 checkpoint_run = self.get_run(run_id)
                 checkpoint_run["profiles"][profile_id]["interactive_installer_receipt"] = interactive_receipt
@@ -4396,6 +5217,8 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
     def gate(self, run_id: str, lane: str, artifact_dir: Path | None = None, outer_artifact: Path | None = None) -> dict[str, Any]:
         self.assert_mutation_context()
         run = self.get_run(run_id)
+        if run.get("kind") == "native-component":
+            raise LabError("component-only runs cannot enter candidate/release acceptance")
         if run.get('automatic_migration_wan') is not None:
             raise LabError('automatic migration WAN diagnostics cannot pass a release gate')
         if lane not in ("candidate", "release"):
@@ -4975,6 +5798,14 @@ def build_parser() -> argparse.ArgumentParser:
     gate = sub.add_parser("gate")
     gate.add_argument("--run-id", required=True); gate.add_argument("--lane", choices=("candidate", "release"), default="release")
     gate.add_argument("--artifact-dir"); gate.add_argument("--outer-artifact")
+    component_create = sub.add_parser("create-component")
+    component_create.add_argument("--bundle-dir", required=True)
+    component_create.add_argument("--source-manifest", required=True)
+    component_create.add_argument("--run-id")
+    component_gate = sub.add_parser("gate-component")
+    component_gate.add_argument("--run-id", required=True)
+    component_run = sub.add_parser("run-component")
+    component_run.add_argument("--run-id", required=True)
     observe = sub.add_parser("server-observe")
     observe.add_argument("--run-id", required=True); observe.add_argument("--ssh-host-key-pin", required=True)
     fixture = sub.add_parser("fixture-start")
@@ -5015,8 +5846,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     controller = LabController(state_root_from(args.state_root), dry_run=args.dry_run, windows_backend=args.windows_backend, android_backend=args.android_backend)
     mutating_commands = {"plan", "create", "start", "guest-probe", "run", "collect", "nested-android-probe", "run-suite", "reset", "gate", "server-observe", "fixture-start", "fixture-stop", "publish-validation", "awg-gui-run"}
+    mutating_commands.update({"create-component", "gate-component", "run-component"})
     mutation_lock_held = False
     try:
+        if args.command in {"create-component", "gate-component", "run-component"}:
+            controller.assert_mutation_context()
         if args.command in mutating_commands:
             controller.acquire_mutation_lock(args.command)
             mutation_lock_held = True
@@ -5037,6 +5871,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "run-suite": result = controller.run_suite(args.lane, parse_artifacts(args.artifact), Path(args.outer_artifact).resolve() if args.outer_artifact else None, args.run_id, Path(args.manifest).resolve() if args.manifest else None, parse_artifacts(args.baseline_artifact), args.baseline_version, args.candidate_version, Path(args.manifest_public_key).resolve() if args.manifest_public_key else None, Path(args.baseline_manifest).resolve() if args.baseline_manifest else None, Path(args.headless_baseline_receipt).resolve() if args.headless_baseline_receipt else None, Path(args.headless_candidate_receipt).resolve() if args.headless_candidate_receipt else None, Path(args.baseline_outer_artifact).resolve() if args.baseline_outer_artifact else None)
         elif args.command == "reset": result = controller.reset(args.run_id, args.profile)
         elif args.command == "gate": result = controller.gate(args.run_id, args.lane, Path(args.artifact_dir).resolve() if args.artifact_dir else None, Path(args.outer_artifact).resolve() if args.outer_artifact else None)
+        elif args.command == "create-component":
+            result = controller.create_component(Path(args.bundle_dir), Path(args.source_manifest), args.run_id)
+        elif args.command == "gate-component":
+            result = controller.gate_component(args.run_id)
+        elif args.command == "run-component":
+            result = controller.run_component(args.run_id)
         elif args.command == "server-observe": result = controller.observe_server(args.run_id, args.ssh_host_key_pin)
         elif args.command == "fixture-start": result = controller.start_consumer_fixture(args.run_id, Path(args.manifest).resolve(), Path(args.artifact).resolve())
         elif args.command == "fixture-stop": result = controller.stop_consumer_fixture(args.run_id)
@@ -5092,8 +5932,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         emit(result, args.as_json)
         if args.command == "preflight" and not result.get("ready", False): return 2
         if args.command == "gate" and not (result.get("release_passed") or result.get("candidate_passed")): return 3
+        if args.command == "gate-component" and not result.get("component_passed"): return 3
         return 0
-    except (LabError, RelaySmokeError, WindowsEvidenceArchiveError, OSError, subprocess.SubprocessError) as exc:
+    except (LabError, RelaySmokeError, WindowsEvidenceArchiveError, ConsentVisualError, OSError, subprocess.SubprocessError) as exc:
         emit({"ok": False, "error": str(exc), "release_passed": False}, args.as_json)
         return 1
     finally:

@@ -2,6 +2,7 @@
 #include "core/controllers/awgMigrationController.h"
 #include "../../../common/awgMigration.h"
 #include "../../../common/awgBackendObservation.h"
+#include "core/utils/nativeSessionRestore.h"
 #include <memory>
 using namespace amnezia::awgMigration;
 
@@ -91,6 +92,7 @@ class AwgMigrationControllerTests : public QObject {
     }
 private slots:
     void init() {
+        NativeSessionRestore::ingress.invalidate();
         auto generator = EVP_PKEY_CTX_new_id(EVP_PKEY_ED25519, nullptr);
         QVERIFY(generator);
         QVERIFY(EVP_PKEY_keygen_init(generator) == 1);
@@ -378,6 +380,31 @@ private slots:
         current->observe("server", 44, observation(*current, 20));
         QCOMPARE(repository.journal.value("state").toString(), QString("committed"));
         QCOMPARE(repository.swaps, 1);
+    }
+    void dnsOwnerFencesQueuedPeerAndOriginal25SecondDeadline() {
+        recover();auto current=controller();stage(*current);
+        current->beginActivation("server");current->prepare("server",connection);
+        QVERIFY(current->testTrialActive());QVERIFY(current->testDeadline()->isActive());
+        QCOMPARE(current->testDeadline()->interval(),25000);
+        int reconnects=0;current->reconnectLegacy=[&](const QJsonObject &){++reconnects;};
+        requests.clear();NativeSessionRestore::ingress.observe();
+        current->observe("server",44,observation(*current));
+        QVERIFY(requests.isEmpty());QCOMPARE(repository.swaps,0);
+        // Dispatch the actual production timer's timeout signal; no wall-clock
+        // sleep is needed to exercise its unchanged 25-second callback.
+        QVERIFY(QMetaObject::invokeMethod(current->testDeadline(),"timeout",Qt::DirectConnection));
+        QCOMPARE(reconnects,0);QVERIFY(!current->testDeadline()->isActive());QVERIFY(!current->testTrialActive());
+        QCOMPARE(repository.journal.value("state").toString(),QString("rolled_back"));
+        NativeSessionRestore::ingress.invalidate();
+    }
+    void ordinaryAwgDeadlineStillReconnectsWithoutDnsOwnerFence() {
+        recover();auto current=controller();stage(*current);
+        current->beginActivation("server");current->prepare("server",connection);
+        QVERIFY(current->testTrialActive());int reconnects=0;
+        current->reconnectLegacy=[&](const QJsonObject &){++reconnects;};
+        QVERIFY(!NativeSessionRestore::ingress.observed());
+        QVERIFY(QMetaObject::invokeMethod(current->testDeadline(),"timeout",Qt::DirectConnection));
+        QCOMPARE(reconnects,1);
     }
 };
 QTEST_GUILESS_MAIN(AwgMigrationControllerTests)

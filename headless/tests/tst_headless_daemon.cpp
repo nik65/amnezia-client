@@ -537,6 +537,56 @@ private slots:
         daemon.stop();
     }
 
+    void healthCleanupFailureDoesNotTearDownBackend()
+    {
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString socketPath = temporaryDirectory.filePath(QStringLiteral("health.sock"));
+        const QString storePath = temporaryDirectory.filePath(QStringLiteral("profiles.json"));
+        const QString configPath = temporaryDirectory.filePath(QStringLiteral("work.conf"));
+        QFile config(configPath);
+        QVERIFY(config.open(QIODevice::WriteOnly));
+        config.write("[Interface]\n");
+        config.close();
+        ProfileStore store(storePath);
+        QVERIFY(store.load());
+        Profile profile;
+        QVERIFY(store.fromJson(QJsonObject {
+            { QStringLiteral("id"), QStringLiteral("work") },
+            { QStringLiteral("name"), QStringLiteral("Work") },
+            { QStringLiteral("protocol"), QStringLiteral("wireguard") },
+            { QStringLiteral("configPath"), configPath },
+            { QStringLiteral("dnsServers"), QJsonArray { QStringLiteral("10.8.1.53") } },
+            { QStringLiteral("dnsDomains"), QJsonArray { QStringLiteral("~.") } },
+        }, profile));
+        QVERIFY(store.add(profile));
+        auto runner = std::make_shared<FakeCommandRunner>(true);
+        Daemon daemon(socketPath, storePath, runner);
+        QVERIFY(daemon.start());
+        runner->resolverStatusOutput = QStringLiteral(
+                "Global\nLink 7 (wg0)\n    DNS Servers: 10.8.1.53\n    DNS Domain: ~.\n");
+        QLocalSocket client;
+        client.connectToServer(socketPath, QIODevice::ReadWrite);
+        QVERIFY(client.waitForConnected(1000));
+        sendRequest(client, Request { Command::Connect, QStringLiteral("connect"),
+                    QJsonObject { { QStringLiteral("profile"), QStringLiteral("work") } } });
+        QVERIFY(readResponse(client).object().value(QStringLiteral("ok")).toBool());
+        runner->calls.clear();
+        runner->m_interfacePresent = false; // passive health observation detects loss
+        runner->failDnsRevert = true;       // routing ownership cleanup cannot complete
+        sendRequest(client, Request { Command::Status, QStringLiteral("health"), {} });
+        const auto status = readResponse(client).object().value(QStringLiteral("result")).toObject();
+        QCOMPARE(status.value(QStringLiteral("state")).toString(), QStringLiteral("cleanup_failed"));
+        QVERIFY(std::none_of(runner->calls.cbegin(), runner->calls.cend(), [](const auto &call) {
+            return call.program == QStringLiteral("wg-quick")
+                && call.arguments.value(0) == QStringLiteral("down");
+        }));
+        QCOMPARE(status.value(QStringLiteral("activeProfile")).toString(), QStringLiteral("work"));
+        runner->failDnsRevert = false;
+        client.disconnectFromServer();
+        daemon.stop();
+    }
+
     void backendCleanupFailureRetainsBackendForBackendOnlyRetry()
     {
         QTemporaryDir temporaryDirectory;

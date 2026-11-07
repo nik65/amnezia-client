@@ -16,6 +16,7 @@
 #include <QLocalSocket>
 #include <QTimer>
 #include <QThread>
+#include <QScopeGuard>
 #include <QNetworkInterface>
 #include <QHostAddress>
 
@@ -64,12 +65,62 @@ void WireguardUtilsLinux::tunnelErrorOccurred(QProcess::ProcessError error) {
     emit backendFailure();
 }
 
-bool WireguardUtilsLinux::addInterface(const InterfaceConfig& config) {
-    Q_UNUSED(config);
-    if (m_tunnel.state() != QProcess::NotRunning) {
-        logger.warning() << "Unable to start: tunnel process already running";
+bool WireguardUtilsLinux::canMutateInterface() const {
+    if (m_activationCleanupPending) {
+        logger.error() << "Activation cleanup remains pending";
         return false;
     }
+    if (m_tunnel.state() == QProcess::NotRunning &&
+        QNetworkInterface::interfaceFromName(WG_INTERFACE).isValid()) {
+        logger.error() << "Refusing mutation of an interface without its owned tunnel";
+        return false;
+    }
+    return true;
+}
+
+bool WireguardUtilsLinux::cleanupFailedActivation() {
+    m_interfaceReady = false;
+    // Only this object's QProcess is controlled. Never delete a netdev by name
+    // or tear down the firewall as rollback of a failed activation.
+    if (m_tunnel.state() != QProcess::NotRunning) {
+        m_tunnel.terminate();
+        if (!m_tunnel.waitForFinished(WG_TUN_PROC_TIMEOUT)) {
+            m_tunnel.kill();
+            m_tunnel.waitForFinished(WG_TUN_PROC_TIMEOUT);
+        }
+    }
+    if (m_tunnel.state() != QProcess::NotRunning ||
+        QNetworkInterface::interfaceFromName(WG_INTERFACE).isValid()) {
+        logger.error() << "Failed activation still owns unconfirmed cleanup state";
+        return false;
+    }
+    if (!m_endpointRouteStates.isEmpty() || !m_peerEndpoints.isEmpty() ||
+        (m_rtmonitor && m_rtmonitor->hasPendingGatewayRoutes())) {
+        logger.error() << "Failed activation retains route ownership receipts";
+        return false;
+    }
+    delete m_rtmonitor;
+    m_rtmonitor = nullptr;
+    m_ifname.clear();
+    m_activationCleanupPending = false;
+    return true;
+}
+
+bool WireguardUtilsLinux::addInterface(const InterfaceConfig& config) {
+    if (m_peerMutationBusy) {
+        logger.error() << "Refusing reentrant interface activation";
+        return false;
+    }
+    QScopedValueRollback<bool> mutationGuard(m_peerMutationBusy, true);
+    if (m_activationCleanupPending && !cleanupFailedActivation())
+        return false;
+    if (m_tunnel.state() != QProcess::NotRunning || m_rtmonitor ||
+        !m_endpointRouteStates.isEmpty() || !m_peerEndpoints.isEmpty()) {
+        logger.warning() << "Unable to start: owned tunnel or cleanup state already exists";
+        return false;
+    }
+    if (!canMutateInterface())
+        return false;
 
     QDir wgRuntimeDir(WG_RUNTIME_DIR);
     if (!wgRuntimeDir.exists()) {
@@ -86,17 +137,18 @@ bool WireguardUtilsLinux::addInterface(const InterfaceConfig& config) {
 
     QDir appPath(QCoreApplication::applicationDirPath());
     QStringList wgArgs = {"-f", "amn0"};
+    m_interfaceReady = false;
+    m_activationCleanupPending = true;
+    auto activationGuard = qScopeGuard([this] { cleanupFailedActivation(); });
     m_tunnel.start(appPath.filePath("amneziawg-go"), wgArgs);
     if (!m_tunnel.waitForStarted(WG_TUN_PROC_TIMEOUT)) {
         logger.error() << "Unable to start tunnel process due to timeout";
-        m_tunnel.kill();
         return false;
     }
 
     m_ifname = waitForTunnelName(wgNameFile);
     if (m_ifname.isNull()) {
         logger.error() << "Unable to read tunnel interface name";
-        m_tunnel.kill();
         return false;
     }
     logger.debug() << "Created wireguard interface" << m_ifname;
@@ -204,17 +256,26 @@ bool WireguardUtilsLinux::addInterface(const InterfaceConfig& config) {
                     params.blockAddrs.append(net.toString());
                 }
             }
-            applyFirewallRules(params);
+            if (!applyFirewallRules(params)) {
+                return false;
+            }
         }
     }
 
-    return (err == 0);
+    if (err != 0)
+        return false;
+    m_interfaceReady = true;
+    m_activationCleanupPending = false;
+    activationGuard.dismiss();
+    return true;
 }
 
 bool WireguardUtilsLinux::cleanupEndpointRoute(
     const QString& peerKey, EndpointRouteState& state) {
     Q_UNUSED(peerKey);
-    if (state.routeUncertain) return false;
+    // An uncertain creation cannot be adopted. An uncertain deletion of a
+    // confirmed lease can retry deletion of its exact stored tuple and ACK.
+    if (state.routeUncertain && !state.routeOwned) return false;
     if (!state.routeOwned) return true;
     if (m_rtmonitor == nullptr) return false;
     const auto result = m_rtmonitor->removeOwnedEndpointRoute(
@@ -232,6 +293,8 @@ bool WireguardUtilsLinux::cleanupEndpointRoute(
 }
 
 bool WireguardUtilsLinux::deleteInterface() {
+    if (!canMutateInterface())
+        return false;
     if (m_peerMutationBusy) {
         logger.error() << "Refusing reentrant peer/interface mutation";
         return false;
@@ -250,21 +313,40 @@ bool WireguardUtilsLinux::deleteInterface() {
         logger.error() << "Endpoint route cleanup remains pending";
         return false;
     }
+    if (m_rtmonitor && m_rtmonitor->hasPendingGatewayRoutes()) {
+        logger.error() << "Gateway route ownership cleanup remains pending";
+        return false;
+    }
+    // A retry after a partial teardown finds the tunnel already stopped.  That
+    // is not a failure: the interface must still be absent and the firewall
+    // transaction must still complete before this call reports success, so the
+    // retry can finish work that a previous attempt did not confirm.
+    if (m_tunnel.state() != QProcess::NotRunning) {
+        m_tunnel.terminate();
+        if (!m_tunnel.waitForFinished(WG_TUN_PROC_TIMEOUT)) {
+            m_tunnel.kill();
+            m_tunnel.waitForFinished(WG_TUN_PROC_TIMEOUT);
+        }
+        if (m_tunnel.state() != QProcess::NotRunning) return false;
+    }
+    m_interfaceReady = false;
+    if (QNetworkInterface::interfaceFromName(WG_INTERFACE).isValid()) {
+        logger.error() << "Owned interface is still present after tunnel teardown";
+        return false;
+    }
+    QDir wgRuntimeDir(WG_RUNTIME_DIR);
+    QFile::remove(wgRuntimeDir.filePath(QString(WG_INTERFACE) + ".name"));
+    if (!KillSwitch::instance()->disableKillSwitch()) {
+        logger.error() << "Firewall teardown did not complete";
+        return false;
+    }
+    // Released only after every owned object is gone: a failed teardown keeps
+    // the monitor (and its route-ownership receipts) alive so the retry can
+    // still treat already-deleted routes as NotFound rather than unowned.
     if (m_rtmonitor) {
         delete m_rtmonitor;
         m_rtmonitor = nullptr;
     }
-    if (m_tunnel.state() == QProcess::NotRunning) return false;
-    m_tunnel.terminate();
-    if (!m_tunnel.waitForFinished(WG_TUN_PROC_TIMEOUT)) {
-        m_tunnel.kill();
-        m_tunnel.waitForFinished(WG_TUN_PROC_TIMEOUT);
-    }
-    if (m_tunnel.state() != QProcess::NotRunning) return false;
-    if (QNetworkInterface::interfaceFromName(WG_INTERFACE).isValid()) return false;
-    QDir wgRuntimeDir(WG_RUNTIME_DIR);
-    QFile::remove(wgRuntimeDir.filePath(QString(WG_INTERFACE) + ".name"));
-    KillSwitch::instance()->disableKillSwitch();
     m_endpointRouteStates.clear();
     m_peerEndpoints.clear();
     return true;
@@ -361,6 +443,10 @@ bool WireguardUtilsLinux::updatePeer(const InterfaceConfig& config) {
                 logger.error() << "Endpoint route installation is uncertain";
                 return false;
             }
+            if (result != LinuxRouteMonitor::EndpointRouteResult::Success) {
+                logger.error() << "Endpoint route creation did not confirm ownership";
+                return false;
+            }
             state.routeOwned = true;
             m_endpointRouteStates.insert(peerKey, state);
             routeState = &m_endpointRouteStates[peerKey];
@@ -394,6 +480,8 @@ bool WireguardUtilsLinux::updatePeer(const InterfaceConfig& config) {
 }
 
 bool WireguardUtilsLinux::deletePeer(const InterfaceConfig& config) {
+    if (!canMutateInterface())
+        return false;
     if (m_peerMutationBusy) {
         logger.error() << "Refusing reentrant peer mutation";
         return false;
@@ -403,8 +491,13 @@ bool WireguardUtilsLinux::deletePeer(const InterfaceConfig& config) {
     QByteArray publicKey =
         QByteArray::fromBase64(qPrintable(config.m_serverPublicKey));
     auto stateIterator = m_endpointRouteStates.find(peerKey);
-    const bool peerAlreadyRemoved = stateIterator != m_endpointRouteStates.end() &&
-                                    stateIterator->peerRemoved;
+    // A peer cannot outlive the tunnel process: the netdev and every peer in it
+    // disappear with it.  Sending UAPI to the closed socket would report EINVAL
+    // and block the retry that the firewall teardown may still be owed.
+    const bool tunnelGone = m_tunnel.state() == QProcess::NotRunning;
+    const bool peerAlreadyRemoved = tunnelGone ||
+                                    (stateIterator != m_endpointRouteStates.end() &&
+                                     stateIterator->peerRemoved);
     if (!peerAlreadyRemoved) {
         QString message;
         QTextStream out(&message);
@@ -498,6 +591,8 @@ bool WireguardUtilsLinux::updateRoutePrefix(const IPAddress& prefix) {
 }
 
 bool WireguardUtilsLinux::deleteRoutePrefix(const IPAddress& prefix) {
+    if (!canMutateInterface())
+        return false;
     if (!m_rtmonitor) {
         return false;
     }
@@ -525,6 +620,8 @@ bool WireguardUtilsLinux::addExclusionRoute(const IPAddress& prefix) {
 }
 
 bool WireguardUtilsLinux::deleteExclusionRoute(const IPAddress& prefix) {
+    if (!canMutateInterface())
+        return false;
     if (!m_rtmonitor) {
         return false;
     }
@@ -616,26 +713,37 @@ QString WireguardUtilsLinux::waitForTunnelName(const QString& filename) {
     return QString();
 }
 
-void WireguardUtilsLinux::applyFirewallRules(FirewallParams& params)
+bool WireguardUtilsLinux::applyFirewallRules(FirewallParams& params)
 {
-    // double-check + ensure our firewall is installed and enabled
-    if (!LinuxFirewall::isInstalled()) LinuxFirewall::install();
+    // double-check + ensure our firewall is installed and enabled.  A partial
+    // install is not a firewall: if install() reports failure the anchors below
+    // must not be written, and the caller must not report the interface up.
+    if (!LinuxFirewall::install()) {
+        logger.error() << "Linux firewall install did not complete;"
+                       << "refusing to apply kill-switch rules";
+        return false;
+    }
 
     // Note: rule precedence is handled inside IpTablesFirewall
     LinuxFirewall::ensureRootAnchorPriority();
 
-    LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("000.allowLoopback"), true);
-    LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("100.blockAll"), params.blockAll);
-    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("110.allowNets"), params.allowNets);
-    LinuxFirewall::updateAllowNets(params.allowAddrs);
-    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("120.blockNets"), params.blockNets);
-    LinuxFirewall::updateBlockNets(params.blockAddrs);
-    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("200.allowVPN"), true);
-    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv6, QStringLiteral("250.blockIPv6"), true);
-    LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("290.allowDHCP"), true);
-    LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("300.allowLAN"), true);
-    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("310.blockDNS"), true);
-    LinuxFirewall::updateDNSServers(params.dnsServers);
-    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("320.allowDNS"), true);
-    LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("400.allowPIA"), true);
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("100.blockAll"), true)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv6, QStringLiteral("250.blockIPv6"), true)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("000.allowLoopback"), true)) return false;
+    if (!LinuxFirewall::updateBlockNets(params.blockAddrs)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("120.blockNets"), params.blockNets)) return false;
+    if (!LinuxFirewall::updateAllowNets(params.allowAddrs)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("110.allowNets"), params.allowNets)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("200.allowVPN"), true)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv6, QStringLiteral("250.blockIPv6"), true)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("290.allowDHCP"), true)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("300.allowLAN"), true)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("310.blockDNS"), true)) return false;
+    QStringList dnsServers = params.dnsServers;
+    dnsServers.removeAll(QString());
+    if (!LinuxFirewall::updateDNSServers(dnsServers)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("320.allowDNS"), true)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("400.allowPIA"), true)) return false;
+    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("100.blockAll"), params.blockAll)) return false;
+    return true;
 }

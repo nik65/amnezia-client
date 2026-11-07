@@ -135,11 +135,37 @@ int RemoteLogHealthUiController::lastHttpStatus() const
     return m_uploader ? 0 : m_serviceHealth.value("httpStatus").toInt();
 }
 
+int RemoteLogHealthUiController::redactionReason() const
+{
+    return m_uploader ? -1 : m_serviceHealth.value("redactionReason").toInt(-1);
+}
+
+qint64 RemoteLogHealthUiController::redactionCount() const
+{
+    return m_uploader || !m_serviceHealth.contains("redactionCount")
+            ? -1 : qint64(m_serviceHealth.value("redactionCount").toDouble());
+}
+
+QString RemoteLogHealthUiController::redactionLabel() const
+{
+    switch (redactionReason()) {
+    case 0: return tr("Normal privacy filtering");
+    case 1: return tr("Privacy quarantine while checking log continuity");
+    case 2: return tr("Privacy quarantine after credentials changed");
+    case 3: return tr("Privacy quarantine while retrying after credentials changed");
+    case 4: return tr("Privacy protection limit reached");
+    case 5: return tr("The privacy filter redacted the payload");
+    default: return tr("Payload privacy status was not reported");
+    }
+}
+
 void RemoteLogHealthUiController::observeServiceHealth(const QJsonObject &snapshot)
 {
     if (m_uploader) return;
-    const QSet<QString> keys{"schema", "state", "lastSuccessMs", "pendingBytes",
+    QSet<QString> keys{"schema", "state", "lastSuccessMs", "pendingBytes",
                              "errorCategory", "httpStatus", "nextRetryMs"};
+    const bool hasPrivacy = snapshot.contains("redactionReason") || snapshot.contains("redactionCount");
+    if (hasPrivacy) keys.unite({"redactionReason", "redactionCount"});
     const auto actualKeys = snapshot.keys();
     if (QSet<QString>(actualKeys.begin(), actualKeys.end()) != keys) return;
     const auto validInteger = [&snapshot](const char *key, double maximum) {
@@ -153,7 +179,9 @@ void RemoteLogHealthUiController::observeServiceHealth(const QJsonObject &snapsh
         || !validInteger("state", 5) || !validInteger("errorCategory", 7)
         || !validInteger("httpStatus", 599) || !validInteger("pendingBytes", 1073741824)
         || !validInteger("lastSuccessMs", QDateTime::currentMSecsSinceEpoch() + 300000.0)
-        || !validInteger("nextRetryMs", deadline)) return;
+        || !validInteger("nextRetryMs", deadline)
+        || (hasPrivacy && (!validInteger("redactionReason", 5)
+                          || !validInteger("redactionCount", 2147483647)))) return;
     const int http = snapshot.value("httpStatus").toInt();
     if (http != 0 && http < 100) return;
     if (snapshot.value("state").toInt() == 3

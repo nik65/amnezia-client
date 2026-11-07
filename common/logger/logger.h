@@ -30,18 +30,17 @@ public:
 
     static bool setServiceLogsEnabled(bool enabled);
 
-    static bool openLogsFolder(bool isServiceLogger);
-
     static void clearLogs(bool isServiceLogger);
     static void clearServiceLogs();
     static void cleanUp();
 
     static QString userLogsFilePath();
     static QString serviceLogsFilePath();
-    static QString systemLogDir();
 
+    // Compatibility for fork telemetry; UI consumers use LogsController streams.
     static QString getLogFile();
     static QString getServiceLogFile();
+    static QString systemLogDir();
 
     // compat with Mozilla logger
     Logger(const QString &className)

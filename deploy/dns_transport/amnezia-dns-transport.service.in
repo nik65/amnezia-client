@@ -1,0 +1,35 @@
+[Unit]
+Description=Amnezia encrypted DNS fallback transport
+After=network-online.target amnezia-dns-gateway.service
+Wants=network-online.target
+Requires=amnezia-dns-gateway.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+DynamicUser=yes
+LoadCredential=server.key:/etc/amnezia/dns-transport/server.key
+ExecStart=/opt/amnezia-dns-transport/dnstt-server -udp @PUBLIC_IPV4@:53 -mtu 512 -privkey-file ${CREDENTIALS_DIRECTORY}/server.key @DNS_DOMAIN@ 127.0.0.1:18084
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=256M
+CPUQuota=50%
+TasksMax=64
+LimitNOFILE=1024
+UMask=0077
+Environment=GOMAXPROCS=2
+Environment=GOMEMLIMIT=128MiB
+
+[Install]
+WantedBy=multi-user.target

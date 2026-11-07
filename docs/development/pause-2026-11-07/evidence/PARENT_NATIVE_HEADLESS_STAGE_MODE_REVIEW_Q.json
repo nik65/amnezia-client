@@ -1,0 +1,96 @@
+{
+  "kind": "parent-native-headless-stage-final-source-review-NEW-only",
+  "verifiedUtc": "2026-11-07T14:05:48.208687+00:00",
+  "supersedesScopedReview": {
+    "path": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\PARENT_NATIVE_HEADLESS_STAGE_REVIEW_Q.json",
+    "sha256": "e84caab8322b3352f5c05e59e86b50fb97a80cb1890d432abce29b2822ea168d"
+  },
+  "candidateUnchanged": {
+    "count": 2632,
+    "manifestSha256": "24c89c956ed12df24c741c4fca21bff1a7cf49a0d3e6ad01c05e747d20bbeeba",
+    "bothRawIndexesUnchanged": true
+  },
+  "selectedSource": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\selected-a",
+  "preauthSha256": "ab9df3d42b0fb0dc492d32d77189f87364f202e773eecd6154aadcc00ccb19d9",
+  "productionDeltaFromOriginalW": [
+    "After copy compare returned StagedEntry mode/size/sha to signed role, throw into full-stage cleanup on mismatch.",
+    "must_be_regular_mode preserves all07777 permission/special bits so exact0755 checks reject4755/2755/1755 in both verifier and sibling helper consumer paths; private-root predicate unchanged."
+  ],
+  "raceRed": {
+    "path": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-stage-parent\\stage-race-red-a\\RESULT.json",
+    "sha256": "4491b0f11de4183a2f7718e9e053daa5f06373b2199a6a3802f23c43295e3710",
+    "actualStageExit": 0,
+    "wrongBytesAccepted": true
+  },
+  "modeRed": {
+    "path": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-stage-parent\\role-mode4755-red-a\\RESULT.json",
+    "sha256": "9a27f38d40e356d39389cabb977f025b5c0f5733f035628cb7d79a30577bebca",
+    "actualMetadataExit": 0,
+    "mode": "4755"
+  },
+  "green": {
+    "path": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-stage-parent\\stage-green-b\\RESULT.json",
+    "sha256": "302f454568f45098bcced4fe0b47a3c85dfb86d321af44c9e3e6006fb02ef29a",
+    "nativeExit": 0,
+    "inputCount": 3070,
+    "inputsUnchanged": true
+  },
+  "failedWork": {
+    "path": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-stage-parent\\stage-failedwork-b\\RESULT.json",
+    "sha256": "8c6413c1aaac4ae96a2800bb77f19464ee029becac60dcda80876311721f3931",
+    "nativeExit": 23,
+    "componentPass": false
+  },
+  "functional": {
+    "path": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-stage-parent\\selected-regressions-b\\RESULT.json",
+    "sha256": "e1fe829c5ae57caac47abb4e0c6d83d6d8eb1017d26ea787dbe8af071dcfab4b",
+    "nativeExit": 0,
+    "cases": 41,
+    "pass": 41
+  },
+  "legacyCases": 17,
+  "byteIdenticalLegacyReceipts": [
+    {
+      "case": "valid-classic",
+      "sha256": "474983801ea4d857558d85f84e35daf3d7ff4c0d0fc0459cc4ab9b6bcb47ece7",
+      "byteIdentical": true
+    },
+    {
+      "case": "valid-native-helper",
+      "sha256": "17c5ca84dab64bdb9742c5f182cef761c2bbcd70c34e0ed25e22860268919440",
+      "byteIdentical": true
+    },
+    {
+      "case": "valid-native-cli",
+      "sha256": "c929a7abdf5bc75879688c33728e1cc8ab066336fc46a5b0a8eb5ff4b8c2df46",
+      "byteIdentical": true
+    }
+  ],
+  "nRegressions": 26,
+  "separateBaselineCharacterizations": 4,
+  "artifact": {
+    "path": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-stage-parent\\selected-regressions-b\\build\\bootstrap-native",
+    "size": 7758640,
+    "sha256": "a5e1858758bfde345ad48e1ea96926d376a3502ba4e2b8db93dcfcd562c6794b",
+    "executed": false,
+    "inspectOnly": true,
+    "notFinalDelivery": true
+  },
+  "scope": "Actual inert N main native archive receipt equals actual canonical Python receipt; full --stage-inputs -> actual --validate-package for legacy8/role9. Only exact dev/ino-pinned owned directory lstat uid0 MODEL; all actual process/filesystem uids1000, real copy/hash/FD/mode/auth/cleanup. No product/packaged/static ELF/installer/probe/network/service/namespace/rootwrapper/guest/phone execution.",
+  "originalWFailedworkInvalid": "Parent reproduced original wrapper child23 but outerexit0/componenttrue, retained w-original-failedwork-red-a/RESULT.json. Own same stage runner returns23/false.",
+  "priorArtifactsQuarantined": [
+    "4148479f original W has demonstrated copy-race false success",
+    "b12be8a6 post-copy-only derivative still admitted4755 metadata, not the final selected source"
+  ],
+  "pending": [
+    "X deleg_62936581-1/sa-0-5f656f3b actual metadata -> probe-host role consumer",
+    "Y deleg_62936581-2/sa-1-500ec91d initial installer consumer; lateststeer no-live, normal result pending",
+    "Combine reviewed corrected N/W/U/K with V, independent root-owned recovery activation",
+    "Automatic CURRENT, finalstaticapps/runtime106/manualpublication"
+  ],
+  "componentPass": true,
+  "integrated": false,
+  "allFunctionsPass": false,
+  "releasePass": false,
+  "published": false
+}

@@ -24,7 +24,8 @@ public:
     ~WireguardUtilsLinux();
 
     bool interfaceExists() override {
-        return m_tunnel.state() == QProcess::Running;
+        return m_interfaceReady && !m_activationCleanupPending &&
+               m_tunnel.state() == QProcess::Running;
     }
     QString interfaceName() override { return m_ifname; }
     bool addInterface(const InterfaceConfig& config) override;
@@ -42,7 +43,7 @@ public:
 
     bool excludeLocalNetworks(const QList<IPAddress>& lanAddressRanges) override;
 
-    void applyFirewallRules(FirewallParams& params);
+    bool applyFirewallRules(FirewallParams& params);
 signals:
     void backendFailure();
 
@@ -64,12 +65,17 @@ private:
     bool cleanupEndpointRoute(const QString& peerKey,
                               EndpointRouteState& state);
 
+    bool canMutateInterface() const;
+    bool cleanupFailedActivation();
+
     QString m_ifname;
     QProcess m_tunnel;
     LinuxRouteMonitor* m_rtmonitor = nullptr;
     QHash<QString, EndpointRouteState> m_endpointRouteStates;
     QHash<QString, QString> m_peerEndpoints;
     bool m_peerMutationBusy = false;
+    bool m_interfaceReady = false;
+    bool m_activationCleanupPending = false;
 };
 
 #endif  // WIREGUARDUTILSLINUX_H

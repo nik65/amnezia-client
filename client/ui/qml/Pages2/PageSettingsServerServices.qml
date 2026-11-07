@@ -18,7 +18,7 @@ import "../Components"
 PageType {
     id: root
 
-    property var installedServicesCount
+    readonly property int installedServicesCount: proxyContainersModel.count
 
     SettingsContainersListView {
         id: settingsContainersListView
@@ -39,7 +39,6 @@ PageType {
             } else {
                 proxyContainersModel.filters = ContainersModelFilters.getReadAccessServicesListFilters()
             }
-            root.installedServicesCount = proxyContainersModel.count
         }
 
         model: SortFilterProxyModel {
@@ -54,26 +53,15 @@ PageType {
             width: settingsContainersListView.width
             visible: ServersUiController.isProcessedServerHasWriteAccess()
             height: visible ? implicitHeight : 0
-
-            LabelWithButtonType {
+            ListItemType {
                 Layout.fillWidth: true
-
                 text: qsTr("Server routing rules")
-                descriptionText: qsTr("Configure domains and IPs that this server adds to client split tunneling")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
-
-                clickedFunction: function() {
-                    PageController.goToPage(PageEnum.PageSettingsServerManagedSplitTunneling)
-                }
+                subtitle: qsTr("Configure domains and IPs that this server adds to client split tunneling")
+                trailingIconSource: "qrc:/images/controls/chevron-right.svg"
+                onClicked: PageController.goToPage(PageEnum.PageSettingsServerManagedSplitTunneling)
             }
-
-            DividerType {}
         }
 
-        Component.onCompleted: {
-            settingsContainersListView.isFocusable = true
-            settingsContainersListView.interactive = true
-            updateContainersModelFilters()
-        }
+        Component.onCompleted: updateContainersModelFilters()
     }
 }

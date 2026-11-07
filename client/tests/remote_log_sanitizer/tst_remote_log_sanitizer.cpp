@@ -8,6 +8,7 @@
 #include <QTextStream>
 
 #include "core/utils/remoteLogSanitizer.h"
+#include "core/utils/remoteLogReceipt.h"
 
 using namespace amnezia::remoteLogSanitizer;
 
@@ -2088,16 +2089,24 @@ int main(int argc, char *argv[])
     QFile uploaderSourceFile(uploaderPath);
     CHECK(uploaderSourceFile.open(QIODevice::ReadOnly));
     const QByteArray uploaderSource = uploaderSourceFile.readAll();
+    // The uploader delegates receipt validation to the shared production helper.
+    // A successful HTTP response alone, or a stale/empty batch id, cannot ACK it.
+    CHECK(amnezia::remoteLogBatchReceiptAccepted("1", "batch-current", "batch-current"));
+    CHECK(!amnezia::remoteLogBatchReceiptAccepted("", "batch-current", "batch-current"));
+    CHECK(!amnezia::remoteLogBatchReceiptAccepted("0", "batch-current", "batch-current"));
+    CHECK(!amnezia::remoteLogBatchReceiptAccepted("1", "batch-stale", "batch-current"));
+    CHECK(!amnezia::remoteLogBatchReceiptAccepted("1", "", "batch-current"));
+    CHECK(!amnezia::remoteLogBatchReceiptAccepted("1", "", ""));
     CHECK(uploaderSource.contains(
-            "reply->rawHeader(\"X-Amnezia-Batch-Accepted\") == QByteArrayLiteral(\"1\")"));
-    CHECK(uploaderSource.contains(
-            "reply->rawHeader(\"X-Amnezia-Batch-Id\") == batchId"));
+            "const bool receiptAccepted = amnezia::remoteLogBatchReceiptAccepted("));
+    CHECK(uploaderSource.contains("reply->rawHeader(\"X-Amnezia-Batch-Accepted\"),"));
+    CHECK(uploaderSource.contains("reply->rawHeader(\"X-Amnezia-Batch-Id\"), batchId)"));
     CHECK(uploaderSource.contains("constexpr int streamStateVersion = 2;"));
     CHECK(uploaderSource.contains("streamStatePendingKind"));
     CHECK(uploaderSource.contains("streamStatePendingPhase"));
     CHECK(uploaderSource.contains("streamStatePendingWhitespaceBytes"));
-    CHECK(uploaderSource.contains("const bool ok = httpOk && receiptAccepted;"));
-    CHECK(uploaderSource.indexOf("const bool ok = httpOk && receiptAccepted;")
+    CHECK(uploaderSource.contains("const bool ok = httpOk && receiptAccepted && !responseBody->tooLarge;"));
+    CHECK(uploaderSource.indexOf("const bool ok = httpOk && receiptAccepted && !responseBody->tooLarge;")
           < uploaderSource.indexOf("persistCursor(payload.offsetKey"));
 
     return runner.finish();

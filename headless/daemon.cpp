@@ -798,15 +798,16 @@ void Daemon::ensureBackendHealthy(bool allowMutation)
         return;
     }
     m_routingRefreshTimer.stop();
-    const BackendResult backend = m_backendOwned
-            ? m_vpnBackend.disconnect() : BackendResult { true, {}, {} };
-    if (backend.ok) m_backendOwned = false;
-    const RoutingResult routing = backend.ok
-            ? m_routingOwned ? m_routingController.disconnect()
-                             : RoutingResult { true, {}, {} }
-            : RoutingResult { false, QStringLiteral("backend_stop_failed"),
-                              QStringLiteral("VPN backend did not stop; routing cleanup was withheld") };
+    // Health failure does not transfer ownership of the policy rules. Retire
+    // routing/DNS before backend-down can remove the interface and its table,
+    // just as explicit disconnect and shutdown do. If cleanup fails, retain
+    // the backend owner for guarded recovery instead of destroying its proof.
+    const RoutingResult routing = m_routingOwned
+            ? m_routingController.disconnect() : RoutingResult { true, {}, {} };
     if (routing.ok) m_routingOwned = false;
+    const BackendResult backend = routing.ok && m_backendOwned
+            ? m_vpnBackend.disconnect() : BackendResult { true, {}, {} };
+    if (routing.ok && backend.ok) m_backendOwned = false;
     if (!routing.ok || !backend.ok) {
         m_state = QStringLiteral("cleanup_failed");
         return;

@@ -11,6 +11,7 @@
 #include "core/utils/containers/containerUtils.h"
 #include "core/utils/protocolEnum.h"
 #include "core/utils/errorCodes.h"
+#include "awgMaintenanceReceipt.h"
 #include "core/utils/routeModes.h"
 #include "core/utils/commonStructs.h"
 #include "core/models/containerConfig.h"
@@ -57,15 +58,16 @@ public:
                               QObject *parent = nullptr);
     ~InstallController();
 
-    ErrorCode setupContainer(const ServerCredentials &credentials, DockerContainer container, ContainerConfig &config, bool isUpdate = false);
+    ErrorCode setupContainer(const ServerCredentials &credentials, DockerContainer container, ContainerConfig &config, bool isUpdate = false, bool acceptXrayKeyLoss = false);
 
     // Updates server-side container settings (admin self-hosted only): reconfigures the container over SSH.
-    ErrorCode updateServerConfig(const QString &serverId, DockerContainer container, const ContainerConfig &oldConfig, ContainerConfig &newConfig);
+    ErrorCode updateServerConfig(const QString &serverId, DockerContainer container, const ContainerConfig &oldConfig, ContainerConfig &newConfig, bool acceptXrayKeyLoss = false);
 
     // Updates client-local settings only: rewrites the stored container config for any self-hosted/native server. No SSH.
     ErrorCode updateClientConfig(const QString &serverId, DockerContainer container, ContainerConfig &newConfig);
 
     ErrorCode rebootServer(const QString &serverId);
+    ErrorCode updateServerPackages(const QString &serverId);
     ErrorCode removeAllContainers(const QString &serverId);
     ErrorCode removeContainer(const QString &serverId, DockerContainer container);
 
@@ -119,7 +121,7 @@ public:
     // Explicit selected existing migration only; never provisions VPN or collectors.
     static ErrorCode maintainAwgMigrationControls(const ServerCredentials &credentials,
             DockerContainer source, qint64 generation, const QString &expectedJournalSha256,
-            QJsonObject &result);
+            const AwgMaintenance::Selection &selection, QJsonObject &result);
 
     void clearCachedProfile(const QString &serverId, DockerContainer container);
 
@@ -146,6 +148,11 @@ private:
     ErrorCode configureContainerWorker(const ServerCredentials &credentials, DockerContainer container, ContainerConfig &config, SshSession &sshSession);
     ErrorCode startupContainerWorker(const ServerCredentials &credentials, DockerContainer container, const ContainerConfig &config, SshSession &sshSession);
 
+    ErrorCode readXrayStateBeforeVolumeMigration(const ServerCredentials &credentials, DockerContainer container,
+                                                 SshSession &sshSession, QMap<QString, QString> &outFiles);
+    ErrorCode restoreXrayStateIntoDataVolume(const ServerCredentials &credentials, DockerContainer container,
+                                             SshSession &sshSession, const QMap<QString, QString> &files);
+
     ErrorCode isServerPortBusy(const ServerCredentials &credentials, DockerContainer container, const ContainerConfig &config, SshSession &sshSession);
     ErrorCode isUserInSudo(const ServerCredentials &credentials, SshSession &sshSession);
     ErrorCode isServerDpkgBusy(const ServerCredentials &credentials, SshSession &sshSession);
@@ -170,7 +177,7 @@ private:
     bool m_cancelInstallation = false;
     QString m_tproxyInstallHostname;
     QString m_tproxyInstallEmail;
-    
+
 #ifndef Q_OS_IOS
     QList<QSharedPointer<QProcess>> m_sftpMountProcesses;
 #endif

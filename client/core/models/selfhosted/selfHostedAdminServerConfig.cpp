@@ -10,6 +10,7 @@
 #include "core/utils/protocolEnum.h"
 #include "core/utils/networkUtilities.h"
 #include "core/utils/serverConfigUtils.h"
+#include "core/utils/dnsFallbackConfig.h"
 
 namespace amnezia
 {
@@ -113,6 +114,10 @@ QJsonObject SelfHostedAdminServerConfig::toJson() const
     if (!dns2.isEmpty()) {
         obj[configKey::dns2] = dns2;
     }
+    const auto fallback = dnsFallbackConfig::normalized(dnsFallback);
+    if (!fallback.isEmpty()) {
+        obj[dnsFallbackConfig::key] = fallback;
+    }
     if (!clientLogs.isEmpty()) {
         obj[configKey::clientLogs] = clientLogs;
     }
@@ -156,6 +161,7 @@ SelfHostedAdminServerConfig SelfHostedAdminServerConfig::fromJson(const QJsonObj
 
     config.dns1 = json.value(configKey::dns1).toString();
     config.dns2 = json.value(configKey::dns2).toString();
+    config.dnsFallback = dnsFallbackConfig::normalized(json.value(dnsFallbackConfig::key));
     config.clientLogs = json.value(configKey::clientLogs).toObject();
 
     config.userName = json.value(configKey::userName).toString();

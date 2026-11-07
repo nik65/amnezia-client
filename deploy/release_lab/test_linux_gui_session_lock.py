@@ -1,7 +1,10 @@
 """Inert session policy and capture lock regressions; no DBus/guest commands."""
 import importlib.util
+import io
+import json
 from pathlib import Path
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -76,6 +79,71 @@ class SessionLockTests(unittest.TestCase):
     def test_unknown_or_truncated_dbus_fails_closed(self):
         with patch.object(WIN,'status_attempt',return_value={'stdout':'','exitcode':0,'overflow':True}):
             with self.assertRaises(WIN.EvidenceError):WIN.require_unlocked_session(SESSION,time.monotonic()+10)
+
+    def test_each_nonzero_readback_names_only_the_failed_command(self):
+        labels=['loginctl-show-session-'+k for k in ('Type','Active','State','Class','User','LockedHint')]+['gnome-screensaver-GetActive']
+        for failed,label in enumerate(labels):
+            with self.subTest(command=label):
+                c=Commands(False);calls=[]
+                def actual(argv,timeout):
+                    calls.append(argv)
+                    if len(calls)==failed+1:
+                        return {'stdout':b'private-output','stderr':b'private-error','exitcode':3,'timeout':False,'overflow':False}
+                    return {'stdout':c(argv),'stderr':b'','exitcode':0}
+                with patch.object(WIN,'status_attempt',side_effect=actual):
+                    with self.assertRaises(WIN.SessionLockReadbackError) as caught:
+                        WIN.require_unlocked_session(SESSION,time.monotonic()+60)
+                diag=caught.exception.diagnostics
+                self.assertEqual(diag['command_id'],label);self.assertEqual(diag['exitcode'],3)
+                self.assertEqual(len(calls),failed+1)
+                self.assertNotIn('private-output',json.dumps(diag));self.assertNotIn('private-error',json.dumps(diag))
+                self.assertNotIn('argv',diag)
+
+    def test_timeout_keeps_same_bounded_budget_and_does_not_retry(self):
+        with patch.object(WIN,'status_attempt',return_value={'stdout':b'','stderr':b'','exitcode':0,'timeout':True}) as attempt:
+            with self.assertRaises(WIN.SessionLockReadbackError) as caught:
+                WIN.require_unlocked_session(SESSION,time.monotonic()+60)
+        diag=caught.exception.diagnostics
+        self.assertTrue(diag['timeout']);self.assertEqual(diag['exitcode'],0)
+        self.assertEqual(diag['requested_timeout_ms'],5000);attempt.assert_called_once()
+
+    def test_overflow_diagnostics_are_bounded_without_stream_contents(self):
+        raw={'stdout':b'x'*1000000,'stderr':b'y'*1000000,'exitcode':0,'overflow':True}
+        with patch.object(WIN,'status_attempt',return_value=raw):
+            with self.assertRaises(WIN.SessionLockReadbackError) as caught:
+                WIN.require_unlocked_session(SESSION,time.monotonic()+60)
+        diag=caught.exception.diagnostics
+        self.assertTrue(diag['overflow']);self.assertEqual(diag['stdout']['bytes'],1000000)
+        self.assertLess(len(json.dumps(diag)),1500)
+
+    def test_unknown_successful_dbus_readback_still_rejected(self):
+        c=Commands(False)
+        def actual(argv,timeout):return {'stdout':b'()' if 'gdbus' in argv else c(argv),'exitcode':0}
+        with patch.object(WIN,'status_attempt',side_effect=actual):
+            with self.assertRaisesRegex(WIN.EvidenceError,'obscures') as caught:
+                WIN.require_unlocked_session(SESSION,time.monotonic()+60)
+        self.assertNotIsInstance(caught.exception,WIN.SessionLockReadbackError)
+
+    def test_unknown_logind_identity_never_reaches_screensaver_check(self):
+        c=Commands(False);c.foreign=True
+        def actual(argv,timeout):return {'stdout':c(argv),'exitcode':0}
+        with patch.object(WIN,'status_attempt',side_effect=actual):
+            with self.assertRaisesRegex(WIN.EvidenceError,'locked or changed'):
+                WIN.require_unlocked_session(SESSION,time.monotonic()+60)
+        self.assertFalse(any('gdbus' in argv for argv in c.calls))
+
+    def test_failure_json_retains_safe_diagnostics_and_remains_failure(self):
+        error=WIN.SessionLockReadbackError('gnome-screensaver-GetActive',
+            {'stdout':b'private-output','stderr':b'GDBus.Error:org.freedesktop.DBus.Error.NoReply private-token','exitcode':1},5,.25)
+        args=SimpleNamespace(action='unlocked',timeout=10,dwell=0,run_id='run16',profile=WIN.PROFILE,attempt_nonce='nonce')
+        stream=io.StringIO()
+        with patch.object(WIN,'parser',return_value=SimpleNamespace(parse_args=lambda:args)),patch.object(WIN,'validate_common',return_value=(None,None)),patch.object(WIN,'unlocked',side_effect=error),patch.object(WIN.sys,'stdout',stream):
+            self.assertEqual(WIN.main(),1)
+        value=json.loads(stream.getvalue())
+        self.assertEqual(value['status'],'FAIL');self.assertTrue(value['diagnosticOnly'])
+        self.assertEqual(value['run_id'],'run16');self.assertEqual(value['phase'],'unlocked')
+        self.assertEqual(value['lock_readback_failure']['dbus_error_names'],['org.freedesktop.DBus.Error.NoReply'])
+        self.assertNotIn('private-token',stream.getvalue());self.assertNotIn('private-output',stream.getvalue())
 
     def test_driver_locked_precapture_never_requests_qmp(self):
         import sys

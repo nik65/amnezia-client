@@ -52,6 +52,7 @@ public:
     void restoreConnection(Vpn::ConnectionState state, int serverIndex);
     void requestNativeSessionRestore(const QString &generation);
     void handleNativeRestoreStatus(const QJsonObject &snapshot);
+    void handleNativeDnsTransportAdopted(const QString &serverId);
     void invalidateNativeSessionRestore();
     void observeNativeSession(quint64 observationTicket);
     void handleNativeRestoreConnectRefused(Vpn::ConnectionState retainedState);

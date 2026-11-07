@@ -23,16 +23,17 @@ def ordinary_envelope(payload, key):
 
 
 @pytest.fixture
-def matrix(tmp_path, monkeypatch):
+def matrix(tmp_path, monkeypatch, request):
     plan = fixture.f.plan()
-    plan = replace(plan, candidate=replace(plan.candidate, version='5.0.3.14'),
+    version = getattr(request, 'param', '5.0.3.14')
+    plan = replace(plan, candidate=replace(plan.candidate, version=version),
                    baseline=replace(plan.baseline, version='5.0.3.13'))
     monkeypatch.setattr(fixture.f, 'plan', lambda: plan)
     sample = fixture.synthetic_signed_fixture(tmp_path, monkeypatch)
     # The contract fixture intentionally patches only physical context.verify:
     # no synthetic tar is represented as an installed/tested release artifact.
     monkeypatch.setattr(authority, 'utc_now', lambda: fixture.NOW)
-    context = sample['context']
+    context = replace(sample['context'], android_code=2201 if version == '5.0.3.15' else 2200)
     payload = copy.deepcopy(context.manifest_payload)
     payload['version'] = context.version
     extra = []
@@ -45,7 +46,7 @@ def matrix(tmp_path, monkeypatch):
             payload['headlessProvisioning'] = record
         else:
             payload['platforms'][name] = record
-        if name == 'android-arm64-v8a':record['versionCode'] = 2200
+        if name == 'android-arm64-v8a':record['versionCode'] = context.android_code
         extra.append({'path': path.name, 'size': record['size'], 'sha256': record['sha256']})
     context = replace(context, manifest_payload=payload, artifacts=context.artifacts + extra)
     old_payload = copy.deepcopy(payload)
@@ -85,6 +86,66 @@ def test_actual_four_domain_verification_and_historical_dependency(matrix):
     assert proof['observations'][2]['payload'] == headless
     assert proof['androidDerivation']['freshCapture'] is False
     assert expiry == authority._utc(headless['expiresAt'])
+
+
+@pytest.fixture
+def fresh_matrix(matrix):
+    inputs, sample, headless = matrix
+    current = inputs['context']
+    payload = authority.verify_export(inputs['android_export'], context=inputs['original_android_context'])
+    payload['binding'] = current.binding()
+    inputs['android_export'] = ordinary_envelope(payload, sample['key'])
+    inputs.update(original_android_context=replace(current),
+        original_android_bytes=authority.canonical(inputs['android_export']))
+    return inputs, sample
+
+
+@pytest.mark.parametrize('matrix', ['5.0.3.15'], indirect=True)
+def test_actual_fresh_current_15_android_uses_normal_verifier(fresh_matrix):
+    inputs, _ = fresh_matrix
+    before = authority.canonical(inputs['android_export'])
+    with patch.object(facade, 'verify_android_equivalence', side_effect=AssertionError('historical path')):
+        receipts, proof, _ = facade.prepare_coordinated_matrix(**inputs)
+    assert receipts[0]['kind'] == 'real-device'
+    derived = proof['androidDerivation']
+    assert derived['schema'] == 'amnezia-android-current-acquisition-derivation-v1'
+    assert derived['freshCapture'] is True
+    assert derived['originalEnvelopeSha256'] == hashlib.sha256(before).hexdigest()
+    assert before == authority.canonical(inputs['android_export'])
+
+
+@pytest.mark.parametrize('matrix', ['5.0.3.15'], indirect=True)
+@pytest.mark.parametrize('mutation', ['signature', 'raw', 'cleanup', 'partial', 'false', 'expired',
+    'binding', 'profile', 'target', 'bytes', 'original-manifest', 'original-payload', 'original-version'])
+def test_fresh_current_android_rejects_invalid_inputs(fresh_matrix, mutation):
+    inputs, sample = fresh_matrix
+    payload = authority.verify_export(inputs['android_export'], context=inputs['context'])
+    if mutation == 'signature':
+        inputs['android_export']['signature'] = base64.b64encode(b'0' * 64).decode()
+    elif mutation == 'bytes':
+        inputs['original_android_bytes'] += b'\n'
+    elif mutation.startswith('original-'):
+        old = inputs['original_android_context']
+        if mutation == 'original-manifest':
+            old = replace(old, manifest={**old.manifest, 'sha256': '0' * 64})
+        elif mutation == 'original-payload':
+            changed = copy.deepcopy(old.manifest_payload); changed['version'] = 'forged'
+            old = replace(old, manifest_payload=changed)
+        else:
+            old = replace(old, version='5.0.3.14', android_code=2200)
+        inputs['original_android_context'] = old
+    else:
+        if mutation in ('raw', 'cleanup'):payload[mutation + 'Capture']['sha256'] = '0' * 64
+        elif mutation == 'partial':payload['semantics'].pop(next(iter(payload['semantics'])))
+        elif mutation == 'false':payload['semantics'][next(iter(payload['semantics']))] = False
+        elif mutation == 'expired':payload['expiresAt'] = authority.utc_text(fixture.NOW - timedelta(seconds=1))
+        elif mutation == 'binding':payload['binding']['outerSha256'] = '0' * 64
+        elif mutation == 'profile':payload['profileId'] = 'android-emulator'
+        elif mutation == 'target':
+            payload['target'] = 'windows';payload['semantics'] = dict.fromkeys(authority.SEMANTICS['windows'], True)
+        inputs['android_export'] = ordinary_envelope(payload, sample['key'])
+    if mutation != 'bytes':inputs['original_android_bytes'] = authority.canonical(inputs['android_export'])
+    with pytest.raises(authority.TrustedAcquisitionError):facade.prepare_coordinated_matrix(**inputs)
 
 
 @pytest.mark.parametrize('mutation', ['domain', 'raw', 'cleanup', 'stage', 'binding'])

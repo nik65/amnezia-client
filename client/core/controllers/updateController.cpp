@@ -53,6 +53,8 @@
 #include "version.h"
 #include "core/controllers/gatewayController.h"
 #include "core/utils/api/gatewayPayloadBuilder.h"
+#include "core/utils/appUiConfig.h"
+#include "core/utils/constants/apiConstants.h"
 #include "core/utils/constants/apiKeys.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/constants/protocolConstants.h"
@@ -2701,12 +2703,7 @@ bool UpdateController::checkForUpdates()
     if (isSelfHostedUpdateChannelConfigured()) {
         fetchSelfHostedManifest();
     } else {
-        if (!GatewayController::hasConfiguredPublicKey(m_appSettingsRepository->isDevGatewayEnv())) {
-            logger.info() << "Gateway update channel is unavailable because its selected RSA key is not configured";
-            finishUpdateCheck();
-        } else {
-            fetchGatewayUrl();
-        }
+        fetchGatewayUrl();
     }
     return true;
 }
@@ -2852,9 +2849,14 @@ void UpdateController::fetchGatewayUrl()
     const quint64 generation = m_updateCheckGeneration;
     auto gatewayController = QSharedPointer<GatewayController>::create(m_appSettingsRepository->getGatewayEndpoint(),
                                                                        m_appSettingsRepository->isDevGatewayEnv(),
-                                                                       7000,
+                                                                       apiDefs::requestTimeoutMsecs,
                                                                        m_appSettingsRepository->isStrictKillSwitchEnabled(),
                                                                        m_appSettingsRepository);
+    if (!gatewayController->isAvailable()) {
+        logger.info() << "Gateway update channel is unavailable because its client configuration could not be initialized";
+        finishUpdateCheck();
+        return;
+    }
 
     QJsonObject apiPayload = GatewayPayloadBuilder(m_appSettingsRepository)
                                      .addField(apiDefs::key::cliVersion, QString(APP_VERSION))

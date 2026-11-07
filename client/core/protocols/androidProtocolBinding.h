@@ -21,11 +21,14 @@ bool deliverServiceError(const QPointer<Protocol> &protocol, const QObject *curr
 {
     if (eventEpoch != currentEpoch || !protocol || protocol.data() != currentProtocol) return false;
     if (error == amnezia::ErrorCode::AndroidCombinedRoutingRequiresAndroid10) {
-        emit protocol->protocolError(error);
-        // A direct observer may retire the QObject while handling the reason.
-        if (protocol) protocol->setLastError(error);
+        // The setter publishes the reason before its Error transition.
+        protocol->setLastError(error);
     } else {
-        genericFailure();
+        // A service Error transition must never surface the success code.
+        emit protocol->protocolError(error == amnezia::ErrorCode::NoError
+                ? amnezia::ErrorCode::UnknownError : error);
+        // Direct observers may retire the protocol while handling the reason.
+        if (protocol) genericFailure();
     }
     return true;
 }

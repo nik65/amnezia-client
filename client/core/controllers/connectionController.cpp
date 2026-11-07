@@ -27,6 +27,7 @@
 #include "core/utils/payloadSender.h"
 #include "core/utils/utilities.h"
 #include "core/utils/serverConfigUtils.h"
+#include "core/utils/dnsFallbackConfig.h"
 #include "version.h"
 #include "core/utils/containerEnum.h"
 #include "core/utils/containers/containerUtils.h"
@@ -463,6 +464,8 @@ ConnectionController::ConnectionController(SecureServersRepository* serversRepos
                 m_restoreRequestId.clear(); m_restoreBindingGeneration.clear();
             }
         }, Qt::QueuedConnection);
+    connect(m_vpnConnection, &VpnConnection::nativeDnsTransportAdopted, this,
+        &ConnectionController::handleNativeDnsTransportAdopted, Qt::QueuedConnection);
 #endif
     m_serverRoutingRulesSyncTimer.setSingleShot(true);
     connect(&m_serverRoutingRulesSyncTimer, &QTimer::timeout, this, &ConnectionController::syncServerRoutingRules);
@@ -1204,6 +1207,15 @@ void ConnectionController::handleNativeRestoreConnectRefused(Vpn::ConnectionStat
     emit connectionStateChanged(retainedState);
 }
 
+void ConnectionController::handleNativeDnsTransportAdopted(const QString &serverId)
+{
+    if (serverId.isEmpty() || m_awgMigration->serverId() != serverId) return;
+    // Exact worker acceptance precedes this callback. Cancel only this owner's
+    // stale trial/deadline; a DNS lease is never an AWG migration receipt.
+    ++m_awgMigrationReconnectGeneration;
+    m_awgMigration->cancel();
+}
+
 void ConnectionController::observeNativeSession(quint64 observationTicket)
 {
     if (m_vpnConnection) QMetaObject::invokeMethod(m_vpnConnection, [vpn=m_vpnConnection,observationTicket]() {
@@ -1379,6 +1391,9 @@ QJsonObject ConnectionController::createConnectionConfiguration(int serverIndex,
     vpnConfiguration[configKey::configVersion] = configVersion;
 
     const QJsonObject serverJson = m_serversRepository->serverJson(serverIndex);
+#ifdef Q_OS_ANDROID
+    dnsFallbackConfig::copyToConnection(serverJson, vpnConfiguration, isApiConfig);
+#endif
     const QString syncHost = serverJson.value(configKey::serverRoutingRulesSyncHost).toString().trimmed();
     if (!syncHost.isEmpty()) {
         vpnConfiguration[configKey::serverRoutingRulesSyncHost] = syncHost;
@@ -1415,8 +1430,12 @@ QJsonObject ConnectionController::createConnectionConfiguration(int serverIndex,
         for (const auto &app : apps) {
             appsJsonArray.append(app.appPath.isEmpty() ? app.packageName : app.appPath);
         }
+#ifdef Q_OS_ANDROID
+        dnsFallbackConfig::applyOwnerApplicationPolicy(vpnConfiguration, appsRouteMode, appsJsonArray);
+#endif
         if (appsRouteMode == amnezia::AppsRouteMode::VpnOnlyForwardApps
-            && !vpnConfiguration.value(configKey::clientLogs).toObject().isEmpty()) {
+            && !vpnConfiguration.value(configKey::clientLogs).toObject().isEmpty()
+            && !appsJsonArray.contains(QStringLiteral("org.amnezia.vpn"))) {
             appsJsonArray.append(QStringLiteral("org.amnezia.vpn"));
         }
         if (appsJsonArray.isEmpty()) {

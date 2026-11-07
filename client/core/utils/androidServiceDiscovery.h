@@ -176,6 +176,7 @@ public:
         if(!matches(id,generation,workerEpoch,wrapperIdentity) || state!=State::Unstarted) return Outcome::Ignored;
         state=State::TimedOut; return Outcome::Uncertain;
     }
+    bool absenceSettled() const { return state==State::Empty || state==State::Dispatched; }
     void clear() { admission={}; epoch=0; wrapper=0; state=State::Empty; }
     Grant grant() const { return admission; }
     quint64 workerEpoch() const { return epoch; }

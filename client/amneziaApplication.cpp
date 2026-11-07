@@ -1004,6 +1004,11 @@ void AmneziaApplication::init()
                 win->setPersistentSceneGraph(true);
                 win->setPersistentGraphics(true);
 #endif
+#ifdef Q_OS_IOS
+                auto pageController = m_coreController->pageController();
+                pageController->setSafeAreaMargins(win->safeAreaMargins());
+                QObject::connect(win, &QWindow::safeAreaMarginsChanged, pageController, &PageController::setSafeAreaMargins);
+#endif
 #if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
                 win->show();
 #else
@@ -1213,9 +1218,12 @@ bool AmneziaApplication::parseCommands()
             if (admin && admin->hasCredentials() && !admin->isReadOnly()
                     && !admin->sshHostKeyFingerprint.isEmpty() && admin->containers.contains(source)
                     && ssh_init() == SSH_OK) {
+                AwgMaintenance::Selection selection;
+                selection.nativeControlVariant = selected.value("nativeControlVariant").toString();
+                selection.currentControlSha256 = selected.value("currentControlSha256").toString();
                 error = InstallController::maintainAwgMigrationControls(admin->credentials(), source,
                     static_cast<qint64>(selected.value("generation").toDouble()),
-                    selected.value("expectedJournalSha256").toString(), receipt);
+                    selected.value("expectedJournalSha256").toString(), selection, receipt);
                 ssh_finalize();
             }
         }

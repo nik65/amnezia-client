@@ -3,6 +3,7 @@
 
 #include <QJniObject>
 #include <QPixmap>
+#include <QStringList>
 
 #include "core/protocols/vpnProtocol.h"
 #include "core/utils/androidServiceDiscovery.h"
@@ -40,6 +41,8 @@ public:
     void flushRestoreServiceReady();
     void resetLastServer(int serverIndex);
     void saveFile(const QString &fileName, const QString &data);
+    bool saveFile(const QString &fileName, const QByteArray &data, const QString &mime, bool *cancelled = nullptr);
+    void shareFile(const QString &path, const QString &mime);
     QString openFile(const QString &filter);
     int getFd(const QString &fileName);
     void closeFd();
@@ -79,6 +82,10 @@ public:
     static bool initLogging();
     static void messageHandler(QtMsgType type, const QMessageLogContext &context, const QString &message);
 
+    static QStringList logFiles(int stream);
+    static QString deviceInfo();
+    static void clearLogStream(int stream);
+
 signals:
     void connectionStateChanged(Vpn::ConnectionState state);
     void status(ConnectionState state, int serverIndex);
@@ -102,6 +109,7 @@ signals:
                                                    bool *authorized);
     void apkInstallerStarted(QString fileName);
     void apkInstallerStartFailed(QString fileName, QString reason);
+    void fileSaved(bool success, bool cancelled);
     void configImported(QString config);
     void importConfigFromOutside(QString config);
     void initConnectionState(Vpn::ConnectionState state, int serverIndex);
@@ -126,6 +134,8 @@ private:
     static jmethodID logWarning;
     static jmethodID logError;
     static jmethodID logFatal;
+
+    static jclass findLogClass();
 
     void qtAndroidControllerInitialized();
 
@@ -155,6 +165,7 @@ private:
     static void onApkInstallerStarted(JNIEnv *env, jobject thiz, jstring fileName);
     static void onApkInstallerStartFailed(JNIEnv *env, jobject thiz, jstring fileName,
                                           jstring reason);
+    static void onFileSaved(JNIEnv *env, jobject thiz, jboolean success, jboolean cancelled);
     static void onAuthResult(JNIEnv *env, jobject thiz, jboolean result);
     static bool decodeQrCode(JNIEnv *env, jobject thiz, jstring data);
     static void onImeInsetsChanged(JNIEnv *env, jobject thiz, jint heightDp);

@@ -6,6 +6,7 @@ owned /proc fixture. Production has no environment/path override switch.
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -34,7 +35,7 @@ class ReconcileTests(unittest.TestCase):
         text = text.replace('PROC_ROOT=/proc', 'PROC_ROOT=' + str(self.p / 'proc'))
         text = text.replace('ROOT=/opt/amnezia/client-logs', 'ROOT=' + str(self.root))
         text = text.replace('REQUIRED_UID=0', 'REQUIRED_UID=' + str(os.getuid()))
-        text = text.replace('a31814f2217aaea21c85b696cebac8442f4cfbb8c336f41497240147bca5e593', hashlib.sha256((self.root / 'collector.py').read_bytes()).hexdigest())
+        text = text.replace('11f90cc0849a66823607af2b8db7fcf292433f060c4f01694e57be724737b0c4', hashlib.sha256((self.root / 'collector.py').read_bytes()).hexdigest())
         self.script = self.p / 'reconcile.sh'
         self.script.write_text(text)
         source = {'Id': 'a' * 64, 'Name': '/amnezia-awg2', 'Image': SOURCE_IMAGE,
@@ -131,6 +132,67 @@ class ReconcileTests(unittest.TestCase):
         self.run_case(False)
         self.assertFalse(self.s['rule'])
         self.assertEqual([a[5] for a in self.mutations()], ['-A', '-D'])
+
+    def test_retention_only_upgrade_requires_exact_reviewed_repin(self):
+        baseline = b'# owned fixture\nMAX_FILES_PER_CLIENT = 512\n'
+        reviewed = baseline.replace(b'MAX_FILES_PER_CLIENT = 512', b'MAX_FILES_PER_CLIENT = 4096')
+        self.assertEqual(baseline.count(b'MAX_FILES_PER_CLIENT = 512'), 1)
+        original_pin = hashlib.sha256((self.root / 'collector.py').read_bytes()).hexdigest()
+        baseline_pin = hashlib.sha256(baseline).hexdigest()
+        reviewed_pin = hashlib.sha256(reviewed).hexdigest()
+        script = self.script.read_text()
+        self.assertIn('COLLECTOR_SHA256=' + original_pin, script)
+        self.script.write_text(script.replace('COLLECTOR_SHA256=' + original_pin,
+                                             'COLLECTOR_SHA256=' + baseline_pin))
+        (self.root / 'collector.py').write_bytes(reviewed)
+        result = self.run_case(False)
+        self.assertIn('collector_hash', result.stderr)
+        self.assertEqual(self.s['calls'], [])
+        self.assertEqual(self.mutations(), [])
+        script = self.script.read_text()
+        self.script.write_text(script.replace('COLLECTOR_SHA256=' + baseline_pin,
+                                             'COLLECTOR_SHA256=' + reviewed_pin))
+        self.run_case()
+        self.assertEqual(self.mutations(), [])
+
+    def test_exact_reviewed_generated_variant_and_third_body_rejection(self):
+        original = (self.root / 'collector.py').read_bytes()
+        alternate = original + b'# reviewed explanatory comment\n'
+        alternate_pin = hashlib.sha256(alternate).hexdigest()
+        script = self.script.read_text()
+        self.assertIn('COLLECTOR_GENERATED_SHA256=246a0009b79ce106d778b91023ad3cd04439fc4dd07236dbd07e59640d646fde', script)
+        self.script.write_text(script.replace(
+            'COLLECTOR_GENERATED_SHA256=246a0009b79ce106d778b91023ad3cd04439fc4dd07236dbd07e59640d646fde',
+            'COLLECTOR_GENERATED_SHA256=' + alternate_pin))
+        self.run_case()
+        (self.root / 'collector.py').write_bytes(alternate)
+        self.run_case()
+        self.assertEqual(self.mutations(), [])
+        (self.root / 'collector.py').write_bytes(alternate + b'changed_body = True\n')
+        self.s['calls'] = []
+        result = self.run_case(False)
+        self.assertIn('collector_hash', result.stderr)
+        self.assertEqual(self.s['calls'], [])
+
+    def test_current_generated_recipe_matches_exact_reviewed_comment_variant(self):
+        repo = HERE.parents[1]
+        source = (repo / 'client/core/controllers/selfhosted/exportController.cpp').read_text()
+        section = source[source.index('QByteArray clientLogsCollectorScript()'):source.index('QString clientLogsLegacyMapRefreshScript()')]
+        parts = re.findall(r'R"(PY[123])\((.*?)\)\1"', section, re.S)
+        self.assertEqual(len(parts), 3)
+        rendered = ''.join(part[1] for part in parts)
+        for token, value in {'__MAX_UPLOAD_BYTES__':'15728640', '__MAX_CLIENT_BYTES__':'31457280',
+                             '__PORT__':'17866', '__UPLOAD_PATH__':'/logs', '__BOOTSTRAP_PATH__':'/bootstrap'}.items():
+            rendered = rendered.replace(token, value)
+        data = rendered.encode()
+        self.assertEqual(hashlib.sha256(data).hexdigest(), '246a0009b79ce106d778b91023ad3cd04439fc4dd07236dbd07e59640d646fde')
+        comment = b'# Observed Windows cadence reaches about 1700 small log chunks per day.\n'
+        self.assertEqual(data.count(comment), 1)
+        self.assertEqual(hashlib.sha256(data.replace(comment, b'')).hexdigest(),
+                         '11f90cc0849a66823607af2b8db7fcf292433f060c4f01694e57be724737b0c4')
+        helper = (HERE / 'reconcile.sh').read_text()
+        self.assertIn('COLLECTOR_SHA256=11f90cc0849a66823607af2b8db7fcf292433f060c4f01694e57be724737b0c4', helper)
+        self.assertIn('COLLECTOR_GENERATED_SHA256=246a0009b79ce106d778b91023ad3cd04439fc4dd07236dbd07e59640d646fde', helper)
 
     def test_changed_collector_file_rejected(self):
         (self.root / 'collector.py').write_text('# changed\n')

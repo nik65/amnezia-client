@@ -15,6 +15,8 @@ Item {
     readonly property bool isOpened: isExpandedStateActive() || (isCollapsedStateActive() && (dragArea.drag.active === true))
     readonly property bool isClosed: isCollapsedStateActive() && (dragArea.drag.active === false)
 
+    property Item previousFocusItem: null
+
     property Component collapsedStateContent
     property Component expandedStateContent
 
@@ -24,7 +26,6 @@ Item {
     property real expandedHeight
     property real collapsedHeight: 0
 
-    property int depthIndex: 0
 
     signal cursorEntered
     signal cursorExited
@@ -115,25 +116,13 @@ Item {
     }
 
     Connections {
-        target: PageController
+        target: root
 
-        function onCloseTopDrawer() {
-            if (depthIndex === PageController.getDrawerDepth()) {
-                if (isCollapsedStateActive()) {
-                    return
-                }
-
-                aboutToHide()
-
-                drawerContent.state = root.drawerCollapsedStateName
-                depthIndex = 0
-                closed()
+        function onVisibleChanged() {
+            if (!root.visible && modalHost.visible) {
+                root.closeTriggered()
             }
         }
-    }
-
-    Connections {
-        target: root
 
         function onCloseTriggered() {
             if (isCollapsedStateActive()) {
@@ -141,25 +130,20 @@ Item {
             }
 
             aboutToHide()
-
             setParentInteractive(true)
-
             closed()
         }
 
         function onClosed() {
             drawerContent.state = root.drawerCollapsedStateName
-            
+
             if (root.isCollapsedStateActive()) {
                 var initialPageNavigationBarColor = PageController.getInitialPageNavigationBarColor()
                 if (initialPageNavigationBarColor !== 0xFF1C1D21) {
                     PageController.updateNavigationBarColor(initialPageNavigationBarColor)
                 }
             }
-
-            depthIndex = 0
-            PageController.decrementDrawerDepth()
-            FocusController.dropRootObject(root)
+            modalHost.close()
         }
 
         function onOpenTriggered() {
@@ -167,10 +151,10 @@ Item {
                 return
             }
 
+            previousFocusItem = root.Window.activeFocusItem
             root.aboutToShow()
-
             setParentInteractive(false)
-
+            modalHost.open()
             root.opened()
         }
 
@@ -182,205 +166,242 @@ Item {
                     PageController.updateNavigationBarColor(0xFF1C1D21)
                 }
             }
-
-            depthIndex = PageController.incrementDrawerDepth()
-            FocusController.pushRootObject(root)
+            drawerContent.forceActiveFocus(Qt.TabFocusReason)
         }
     }
 
-    Rectangle {
-        id: background
+    Popup {
+        id: modalHost
+        objectName: "drawerModalHost"
 
-        anchors.fill: parent
-        color: root.isCollapsedStateActive() ? AmneziaStyle.color.transparent : AmneziaStyle.color.translucentMidnightBlack
-
-        Behavior on color {
-            PropertyAnimation { duration: 200 }
-        }
-    }
-
-    MouseArea {
-        id: emptyArea
-        anchors.fill: parent
-
-        onClicked: {
-            root.closeTriggered()
-        }
-    }
-
-    MouseArea {
-        id: dragArea
-        objectName: "dragArea"
-
-        anchors.fill: drawerContentBackground
-        hoverEnabled: true
-
-        enabled: drawerContent.implicitHeight > 0
-
-        drag.target: drawerContent
-        drag.axis: Drag.YAxis
-        drag.maximumY: root.height - root.collapsedHeight
-        drag.minimumY: root.height - root.expandedHeight
-
-        /** If drag area is released at any point other than min or max y, transition to the other state */
-        onReleased: {
-            if (isCollapsedStateActive() && drawerContent.y < dragArea.drag.maximumY) {
-                root.openTriggered()
-                return
-            }
-            if (isExpandedStateActive() && drawerContent.y > dragArea.drag.minimumY) {
-                root.closeTriggered()
-                return
-            }
-        }
-
-        onEntered: {
-            root.cursorEntered()
-        }
-        onExited: {
-            root.cursorExited()
-        }
-        onPressedChanged: {
-            root.pressed(pressed, entered)
-        }
-
-        onClicked: {
-            if (isCollapsedStateActive()) {
-                root.openTriggered()
-            }
-        }
-    }
-
-    Rectangle {
-        id: drawerContentBackground
-        objectName: "drawerContentBackground"
-
-        anchors { left: drawerContent.left; right: drawerContent.right; top: drawerContent.top }
+        parent: root
+        x: 0
+        y: 0
+        width: root.width
         height: root.height
-        radius: 16
-        color: root.defaultColor
-        border.color: root.borderColor
-        border.width: 1
 
-        Rectangle {
-            width: parent.radius
-            height: parent.radius
-            anchors.bottom: parent.bottom
-            anchors.right: parent.right
-            anchors.left: parent.left
-            color: parent.color
+        modal: true
+        focus: true
+        dim: false
+        padding: 0
+        background: null
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        Overlay.modal: Item {}
+        enter: Transition {}
+        exit: Transition {}
+
+        onClosed: {
+            if (!root.isCollapsedStateActive()) {
+                root.closeTriggered()
+            }
+            if (root.previousFocusItem && root.previousFocusItem !== root) {
+                root.previousFocusItem.forceActiveFocus(Qt.BacktabFocusReason)
+            }
+            root.previousFocusItem = null
         }
     }
 
     Item {
-        id: drawerContent
-        objectName: "drawerContent"
+        id: drawerSurface
 
-        Drag.active: dragArea.drag.active
-        anchors.right: root.right
-        anchors.left: root.left
+        // Preserve the collapsed handle outside the closed popup.
+        parent: modalHost.visible ? modalHost.contentItem : root
+        anchors.fill: parent
 
-        state: root.drawerCollapsedStateName
+        Rectangle {
+            id: background
 
-        states: [
-            State {
-                name: root.drawerCollapsedStateName
-                PropertyChanges {
-                    target: drawerContent
-                    implicitHeight: collapsedHeight
-                    y: root.height - root.collapsedHeight
-                }
-                PropertyChanges {
-                    target: background
-                    color: AmneziaStyle.color.transparent
-                }
-                PropertyChanges {
-                    target: dragArea
-                    cursorShape: Qt.PointingHandCursor
-                }
-                PropertyChanges {
-                    target: emptyArea
-                    enabled: false
-                    visible: false
-                }
-                PropertyChanges {
-                    target: collapsedLoader
-                    // visible: true
-                }
-                PropertyChanges {
-                    target: expandedLoader
-                    visible: false
+            anchors.fill: parent
+            color: root.isCollapsedStateActive() ? AmneziaStyle.color.transparent : AmneziaStyle.color.translucentMidnightBlack
 
-                }
-            },
-            State {
-                name: root.drawerExpandedStateName
-                PropertyChanges {
-                    target: drawerContent
-                    implicitHeight: expandedHeight
-                    y: dragArea.drag.minimumY
-                }
-                PropertyChanges {
-                    target: background
-                    color: Qt.rgba(14/255, 14/255, 17/255, 0.8)
-                }
-                PropertyChanges {
-                    target: dragArea
-                    cursorShape: Qt.ArrowCursor
-                }
-                PropertyChanges {
-                    target: emptyArea
-                    enabled: true
-                    visible: true
-                }
-                PropertyChanges {
-                    target: collapsedLoader
-                    // visible: false
-                }
-                PropertyChanges {
-                    target: expandedLoader
-                    visible: true
-                }
+            Behavior on color {
+                PropertyAnimation { duration: 200 }
             }
-        ]
-
-        transitions: [
-            Transition {
-                from: root.drawerCollapsedStateName
-                to: root.drawerExpandedStateName
-                PropertyAnimation {
-                    target: drawerContent
-                    properties: "y"
-                    duration: 200
-                }
-            },
-            Transition {
-                from: root.drawerExpandedStateName
-                to: root.drawerCollapsedStateName
-                PropertyAnimation {
-                    target: drawerContent
-                    properties: "y"
-                    duration: 200
-                }
-            }
-        ]
-
-        Loader {
-            id: collapsedLoader
-
-            sourceComponent: root.collapsedStateContent
-
-            anchors.right: parent.right
-            anchors.left: parent.left
         }
 
-        Loader {
-            id: expandedLoader
+        MouseArea {
+            id: emptyArea
+            anchors.fill: parent
 
-            sourceComponent: root.expandedStateContent
+            onClicked: {
+                root.closeTriggered()
+            }
+        }
 
+        MouseArea {
+            id: dragArea
+            objectName: "dragArea"
+
+            anchors.fill: drawerContentBackground
+            hoverEnabled: true
+
+            enabled: drawerContent.implicitHeight > 0
+
+            drag.target: drawerContent
+            drag.axis: Drag.YAxis
+            drag.maximumY: root.height - root.collapsedHeight
+            drag.minimumY: root.height - root.expandedHeight
+
+            /** If drag area is released at any point other than min or max y, transition to the other state */
+            onReleased: {
+                if (isCollapsedStateActive() && drawerContent.y < dragArea.drag.maximumY) {
+                    root.openTriggered()
+                    return
+                }
+                if (isExpandedStateActive() && drawerContent.y > dragArea.drag.minimumY) {
+                    root.closeTriggered()
+                    return
+                }
+            }
+
+            onEntered: {
+                root.cursorEntered()
+            }
+            onExited: {
+                root.cursorExited()
+            }
+            onPressedChanged: {
+                root.pressed(pressed, entered)
+            }
+
+            onClicked: {
+                if (isCollapsedStateActive()) {
+                    root.openTriggered()
+                }
+            }
+        }
+
+        Rectangle {
+            id: drawerContentBackground
+            objectName: "drawerContentBackground"
+
+            anchors { left: drawerContent.left; right: drawerContent.right; top: drawerContent.top }
+            height: root.height
+            radius: 16
+            color: root.defaultColor
+            border.color: root.borderColor
+            border.width: 1
+
+            Rectangle {
+                width: parent.radius
+                height: parent.radius
+                anchors.bottom: parent.bottom
+                anchors.right: parent.right
+                anchors.left: parent.left
+                color: parent.color
+            }
+        }
+
+        FocusScope {
+            id: drawerContent
+            objectName: "drawerContent"
+
+            Drag.active: dragArea.drag.active
             anchors.right: parent.right
             anchors.left: parent.left
+
+            state: root.drawerCollapsedStateName
+
+            states: [
+                State {
+                    name: root.drawerCollapsedStateName
+                    PropertyChanges {
+                        target: drawerContent
+                        implicitHeight: collapsedHeight
+                        y: root.height - root.collapsedHeight
+                    }
+                    PropertyChanges {
+                        target: background
+                        color: AmneziaStyle.color.transparent
+                    }
+                    PropertyChanges {
+                        target: dragArea
+                        cursorShape: Qt.PointingHandCursor
+                    }
+                    PropertyChanges {
+                        target: emptyArea
+                        enabled: false
+                        visible: false
+                    }
+                    PropertyChanges {
+                        target: collapsedLoader
+                        // visible: true
+                    }
+                    PropertyChanges {
+                        target: expandedLoader
+                        visible: false
+
+                    }
+                },
+                State {
+                    name: root.drawerExpandedStateName
+                    PropertyChanges {
+                        target: drawerContent
+                        implicitHeight: expandedHeight
+                        y: dragArea.drag.minimumY
+                    }
+                    PropertyChanges {
+                        target: background
+                        color: Qt.rgba(14/255, 14/255, 17/255, 0.8)
+                    }
+                    PropertyChanges {
+                        target: dragArea
+                        cursorShape: Qt.ArrowCursor
+                    }
+                    PropertyChanges {
+                        target: emptyArea
+                        enabled: true
+                        visible: true
+                    }
+                    PropertyChanges {
+                        target: collapsedLoader
+                        // visible: false
+                    }
+                    PropertyChanges {
+                        target: expandedLoader
+                        visible: true
+                    }
+                }
+            ]
+
+            transitions: [
+                Transition {
+                    from: root.drawerCollapsedStateName
+                    to: root.drawerExpandedStateName
+                    PropertyAnimation {
+                        target: drawerContent
+                        properties: "y"
+                        duration: 200
+                    }
+                },
+                Transition {
+                    from: root.drawerExpandedStateName
+                    to: root.drawerCollapsedStateName
+                    PropertyAnimation {
+                        target: drawerContent
+                        properties: "y"
+                        duration: 200
+                    }
+                }
+            ]
+
+            Loader {
+                id: collapsedLoader
+
+                sourceComponent: root.collapsedStateContent
+
+                anchors.right: parent.right
+                anchors.left: parent.left
+            }
+
+            Loader {
+                id: expandedLoader
+
+                sourceComponent: root.expandedStateContent
+
+                anchors.right: parent.right
+                anchors.left: parent.left
+            }
         }
     }
 }

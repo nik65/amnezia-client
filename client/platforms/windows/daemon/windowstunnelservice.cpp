@@ -433,6 +433,13 @@ static bool waitForServiceStatus(SC_HANDLE service, DWORD expectedStatus,
       return true;
     }
 
+    if (amnezia::windowsTunnel::hasTerminalStartFailure(
+            expectedStatus, status.dwCurrentState, status.dwWin32ExitCode)) {
+      logger.warning() << "Tunnel service start reached a terminal failure"
+                       << status.dwWin32ExitCode;
+      return false;
+    }
+
     if (cancelled && cancelled()) {
       logger.warning() << "Service status wait cancelled";
       return false;

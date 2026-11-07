@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QSharedPointer>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <functional>
 #include <iostream>
@@ -15,6 +16,8 @@ struct Protocol {
  void setStartAdmission(const AndroidServiceDiscovery::Grant &grant){admission=grant;}
  void stop(){++stops;}
 };
+struct InertManagedRebuildGate {bool pending()const{return false;}};
+static QString androidDiscoveryComponent(const QJsonObject&){return "AWG";}
 class VpnConnection:public QObject {
 public:
  QString m_discoveryRegisteredId;
@@ -24,6 +27,12 @@ public:
  unsigned m_discoveryReconnectAttempts=0;
  QString m_discoveryReconnectServerId,m_serverId="fixture-server";
  AndroidServiceDiscovery::Ledger m_startAdmissionLedger;
+ QElapsedTimer m_nativeStartAdmissionAge;
+ InertManagedRebuildGate m_managedRouteReconnectGate;
+ QJsonObject m_vpnConfiguration{{"protocol","awg"}};
+ void flushManagedRouteReconnect() {}
+ void captureNativeDiscoveryOwner() {}
+ bool retireAbsentNativeReceiver(const QJsonObject&) {return false;}
  QSharedPointer<Protocol> m_vpnProtocol;
  Protocol *androidVpnProtocol=nullptr;
  bool m_migrationTeardownContext=false,m_migrationTeardownRecoveryRequired=false,m_unboundNativeSessionObserved=false;

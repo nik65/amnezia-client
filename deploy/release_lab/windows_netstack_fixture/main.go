@@ -16,6 +16,7 @@ import (
 )
 
 type config struct {
+	ClientRandomTrailers bool `json:"client_random_trailers"`
 	RunID         string `json:"run_id"`
 	CaseID        string `json:"case_id"`
 	VMID          string `json:"vm_id"`
@@ -51,11 +52,22 @@ func decodeConfig(b []byte) (config, error) {
 		if !ok || seen[key] {
 			return c, errors.New("duplicate config key")
 		}
+		switch key {
+		case "client_random_trailers", "run_id", "case_id", "vm_id", "nonce", "marker", "routes", "routes_sha256", "source_private_key", "target_private_key", "client_public_key", "client_address", "ttl_seconds":
+		default:
+			return c, errors.New("unknown or case-aliased config key")
+		}
 		seen[key] = true
 		var value json.RawMessage
 		if d.Decode(&value) != nil {
 			return c, errors.New("invalid config value")
 		}
+		if key == "client_random_trailers" && string(bytes.TrimSpace(value)) != "true" && string(bytes.TrimSpace(value)) != "false" {
+			return c, errors.New("client framing must be an explicit JSON boolean")
+		}
+	}
+	if !seen["client_random_trailers"] {
+		return c, errors.New("client framing is required")
 	}
 	if _, err = d.Token(); err != nil {
 		return c, errors.New("truncated config")
@@ -178,12 +190,12 @@ func run(configPath string) error {
 	}
 	// Lease remains as an immutable attempt receipt. The disposable guest owner
 	// performs cleanup; this helper never kills another PID or removes a lease.
-	source, e := newPeer(&udpBind{}, "172.29.172.253", c.SourcePrivate, c.ClientPublic, c.ClientAddress, "")
+	source, e := newPeerWithOptions(&udpBind{}, "172.29.172.253", c.SourcePrivate, c.ClientPublic, c.ClientAddress, "", peerOptions{RandomTrailers: c.ClientRandomTrailers})
 	if e != nil {
 		return e
 	}
 	defer source.dev.Close()
-	target, e := newPeer(&udpBind{}, "172.29.172.253", c.TargetPrivate, c.ClientPublic, c.ClientAddress, "")
+	target, e := newPeerWithOptions(&udpBind{}, "172.29.172.253", c.TargetPrivate, c.ClientPublic, c.ClientAddress, "", peerOptions{RandomTrailers: c.ClientRandomTrailers})
 	if e != nil {
 		return e
 	}
@@ -216,6 +228,7 @@ func run(configPath string) error {
 	}()
 	identity["source_udp_port"] = sp
 	identity["target_udp_port"] = tp
+	identity["fixture_client_random_trailers"] = c.ClientRandomTrailers
 	identity["ready"] = true
 	if e = exclusiveJSON(filepath.Join(root, "ready.json"), identity); e != nil {
 		return e

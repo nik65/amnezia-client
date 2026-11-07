@@ -1,0 +1,30 @@
+cmake_minimum_required(VERSION 3.25)
+project(dns_fallback_config_tests LANGUAGES CXX)
+enable_testing()
+find_package(Qt6 REQUIRED COMPONENTS Core)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+set(FIXTURE "${CMAKE_CURRENT_BINARY_DIR}/actual_profile_json.h")
+set(MODELS selfHostedAdminServerConfig selfHostedUserServerConfig nativeServerConfig)
+set(MODEL_SOURCES)
+foreach(model IN LISTS MODELS)
+    list(APPEND MODEL_SOURCES
+        "${REPO_ROOT}/client/core/models/selfhosted/${model}.h"
+        "${REPO_ROOT}/client/core/models/selfhosted/${model}.cpp")
+endforeach()
+add_custom_command(OUTPUT "${FIXTURE}"
+    COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/generate_fixture.py" "${REPO_ROOT}" "${FIXTURE}"
+    DEPENDS generate_fixture.py ${MODEL_SOURCES}
+    VERBATIM)
+add_executable(dns_fallback_config_tests tst_dns_fallback_config.cpp "${FIXTURE}")
+set_source_files_properties(tst_dns_fallback_config.cpp PROPERTIES OBJECT_DEPENDS "${FIXTURE};${REPO_ROOT}/client/core/utils/dnsFallbackConfig.h")
+target_include_directories(dns_fallback_config_tests PRIVATE "${REPO_ROOT}/client" "${CMAKE_CURRENT_BINARY_DIR}")
+target_compile_features(dns_fallback_config_tests PRIVATE cxx_std_17)
+target_link_libraries(dns_fallback_config_tests PRIVATE Qt6::Core)
+if(MSVC)
+    target_compile_options(dns_fallback_config_tests PRIVATE /W4 /WX /permissive-)
+else()
+    target_compile_options(dns_fallback_config_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_test(NAME dns_fallback_config COMMAND dns_fallback_config_tests)
+set_tests_properties(dns_fallback_config PROPERTIES TIMEOUT 30)

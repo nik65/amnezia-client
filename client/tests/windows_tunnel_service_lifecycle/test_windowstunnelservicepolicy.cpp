@@ -222,6 +222,11 @@ void unownedFailureCannotTriggerCleanupOrRetry() {
 }  // namespace
 
 int main() {
+  assert(amnezia::windowsTunnel::hasTerminalStartFailure(4, 1, 1066));
+  assert(amnezia::windowsTunnel::hasTerminalStartFailure(4, 1, 5));
+  assert(!amnezia::windowsTunnel::hasTerminalStartFailure(4, 1, 0));
+  assert(!amnezia::windowsTunnel::hasTerminalStartFailure(4, 2, 1066));
+  assert(!amnezia::windowsTunnel::hasTerminalStartFailure(1, 4, 1066));
   retryAfterOwnedCleanup();
   permanentFailureIsCleanedWithoutRetry();
   cancellationPreventsRetryAfterCleanup();

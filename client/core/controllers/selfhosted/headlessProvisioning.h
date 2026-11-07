@@ -18,7 +18,10 @@ inline bool hasSupportedHeadlessProvisioningFiles(const QJsonValue &value)
         QStringLiteral("runtime-dependencies.txt"), QStringLiteral("SHA256SUMS")
     };
     const QJsonArray files = value.toArray();
-    if (files.size() != legacy.size() && files.size() != legacy.size() + 1) {
+    static const QString nativeVerifier = QStringLiteral("amnezia-verify-provisioning-native");
+    static const QString nativeHelper = QStringLiteral("amnezia-headless-fs");
+    const qsizetype count = files.size();
+    if (count != legacy.size() && count != legacy.size() + 1 && count != legacy.size() + 2) {
         return false;
     }
     for (qsizetype index = 0; index < legacy.size(); ++index) {
@@ -26,8 +29,17 @@ inline bool hasSupportedHeadlessProvisioningFiles(const QJsonValue &value)
             return false;
         }
     }
-    return files.size() == legacy.size()
-            || (files.last().isString() && files.last().toString() == QStringLiteral("amnezia-headless-fs"));
+    if (count == legacy.size()) {
+        return true;
+    }
+    const bool hasHelper = files.at(legacy.size()).isString()
+            && files.at(legacy.size()).toString() == nativeHelper;
+    if (count == legacy.size() + 1) {
+        return hasHelper
+                || (files.last().isString() && files.last().toString() == nativeVerifier);
+    }
+    return hasHelper
+            && files.last().isString() && files.last().toString() == nativeVerifier;
 }
 }
 

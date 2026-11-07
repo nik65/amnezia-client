@@ -26,6 +26,9 @@ class RemoteLogHealthUiController final : public QObject
     Q_PROPERTY(QDateTime nextRetryAt READ nextRetryAt NOTIFY nextRetryAtChanged)
     Q_PROPERTY(bool retryAvailable READ retryAvailable NOTIFY stateChanged)
     Q_PROPERTY(int lastHttpStatus READ lastHttpStatus NOTIFY healthChanged)
+    Q_PROPERTY(int redactionReason READ redactionReason NOTIFY healthChanged)
+    Q_PROPERTY(qint64 redactionCount READ redactionCount NOTIFY healthChanged)
+    Q_PROPERTY(QString redactionLabel READ redactionLabel NOTIFY healthChanged)
 
 public:
     enum class State {
@@ -63,6 +66,9 @@ public:
     QDateTime nextRetryAt() const;
     bool retryAvailable() const;
     int lastHttpStatus() const;
+    int redactionReason() const;
+    qint64 redactionCount() const;
+    QString redactionLabel() const;
 
 public slots:
     void observeServiceHealth(const QJsonObject &snapshot);

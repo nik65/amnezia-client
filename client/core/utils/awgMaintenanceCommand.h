@@ -40,7 +40,8 @@ inline QJsonObject parseAwgMaintenanceArgument(const QString &input)
         space();
         QString key;
         if (!string(key) || result.contains(key)) return {};
-        if (key != "serverId" && key != "source" && key != "generation" && key != "expectedJournalSha256") return {};
+        if (key != "serverId" && key != "source" && key != "generation" && key != "expectedJournalSha256"
+                && key != "nativeControlVariant" && key != "currentControlSha256") return {};
         space();
         if (offset >= input.size() || input[offset++] != ':') return {};
         space();
@@ -64,13 +65,25 @@ inline QJsonObject parseAwgMaintenanceArgument(const QString &input)
         if (separator != ',') return {};
     }
     space();
-    if (offset != input.size() || result.size() != 4) return {};
+    if (offset != input.size()) return {};
     const QString serverId = result.value("serverId").toString();
     if (serverId.isEmpty() || serverId.size() > 256) return {};
     for (const QChar ch : serverId) if (ch.unicode() < 32) return {};
     const QString source = result.value("source").toString();
     if (source != "amnezia-awg" && source != "amnezia-awg2") return {};
     if (!QRegularExpression(QStringLiteral("^[a-f0-9]{64}$")).match(result.value("expectedJournalSha256").toString()).hasMatch()) return {};
+    const QString variant = result.value("nativeControlVariant").toString();
+    const QString current = result.value("currentControlSha256").toString();
+    if (variant.isEmpty() != current.isEmpty()) return {};
+    if (!variant.isEmpty()) {
+        // Explicit journal variant selection. nativeFeedSha256 is never a
+        // selector, and a current pin is mandatory for native maintenance.
+        if (variant != "native-control-http-v1"
+                || !QRegularExpression(QStringLiteral("^[a-f0-9]{64}$")).match(current).hasMatch()) return {};
+        if (result.size() != 6) return {};
+    } else if (result.size() != 4) {
+        return {};
+    }
     return result;
 }
 }

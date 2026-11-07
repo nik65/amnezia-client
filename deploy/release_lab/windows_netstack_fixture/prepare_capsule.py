@@ -9,13 +9,20 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, PublicFormat, NoEncryption
 
 
-def prepare(output, helper, observer, artifact_sha256, installed_exe_sha256):
+def prepare(output, helper, observer, artifact_sha256, installed_exe_sha256, *, limited_runner=None, limited_controller=None, operator_capture=None):
     if any(len(x) != 64 or any(c not in "0123456789abcdef" for c in x) for x in (artifact_sha256, installed_exe_sha256)):
         raise ValueError("exact rebuilt candidate hashes required")
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     keys = [X25519PrivateKey.generate() for _ in range(3)]
     private = [k.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption()) for k in keys]
     public = [k.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw) for k in keys]
+    support = Path(__file__).resolve().parent
+    limited_runner = Path(limited_runner) if limited_runner is not None else support/'limited_interactive_runner.ps1'
+    limited_controller = Path(limited_controller) if limited_controller is not None else support/'limited_interactive_controller.ps1'
+    operator_capture = Path(operator_capture) if operator_capture is not None else support/'BoundedOperatorCapture.cs'
+    for asset in (limited_runner, limited_controller, operator_capture):
+        if asset.is_symlink() or not asset.is_file() or not 0 < asset.stat().st_size <= 131072:
+            raise ValueError("bounded regular LIMITED fixture support is required")
     b64 = lambda b: base64.b64encode(b).decode()
     # Small explicit set, no padding and no historical production equivalence.
     prefixes = sorted({str(ipaddress.ip_network(x)) for x in (
@@ -32,7 +39,7 @@ def prepare(output, helper, observer, artifact_sha256, installed_exe_sha256):
         containers=[dict(container='amnezia-awg2', awg=dict(port='1', transport_proto='udp', last_config=json.dumps(last)))],
         clientLogs=dict(clientId='owned-synthetic-fixture', token='disabled', enabled=False))
     config = dict(source_private_key=private[1].hex(), target_private_key=private[2].hex(),
-        client_public_key=public[0].hex(), client_address=client, ttl_seconds=150)
+        client_public_key=public[0].hex(), client_address=client, ttl_seconds=280, client_random_trailers=False)
     plan = dict(client_address=client, route_shape='synthetic-windows-dataplane-v1', fixture_prefix_count=len(prefixes))
     documents = {'profile-template.json': profile, 'expected-routes.json': prefixes,
                  'routes.json': dict(schema=1, fixture='synthetic-windows-dataplane-v1', prefixes=prefixes),
@@ -40,7 +47,8 @@ def prepare(output, helper, observer, artifact_sha256, installed_exe_sha256):
     for name, value in documents.items():
         (output/name).write_text(json.dumps(value, sort_keys=True, separators=(',', ':')), encoding='utf-8')
     paths = dict(helper=helper, observer=observer, profile=output/'profile-template.json',
-        expected_routes=output/'expected-routes.json', routes=output/'routes.json', config=output/'config.json', observer_plan=output/'observer-plan.json')
+        expected_routes=output/'expected-routes.json', routes=output/'routes.json', config=output/'config.json', observer_plan=output/'observer-plan.json',
+        limited_runner=limited_runner, limited_controller=limited_controller, operator_capture=operator_capture)
     files = {k: dict(path=str(p.resolve()), size=p.stat().st_size, sha256=hashlib.sha256(p.read_bytes()).hexdigest()) for k,p in paths.items()}
     manifest = dict(schema=1, candidate_artifact_sha256=artifact_sha256, installed_exe_sha256=installed_exe_sha256, files=files)
     path = output/'manifest.json'

@@ -46,7 +46,7 @@ func TestPrivateConfigJSONRejectsAmbiguousOrUnknownFields(t *testing.T) {
 			t.Fatal("ambiguous config accepted")
 		}
 	}
-	if c, err := decodeConfig([]byte(`{"run_id":"a"}`)); err != nil || c.RunID != "a" {
+	if c, err := decodeConfig([]byte(`{"run_id":"a","client_random_trailers":false}`)); err != nil || c.RunID != "a" {
 		t.Fatal("valid JSON rejected")
 	}
 }

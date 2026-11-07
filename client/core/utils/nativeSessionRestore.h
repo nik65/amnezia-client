@@ -9,6 +9,7 @@
 #include <limits>
 #include <atomic>
 #include <mutex>
+#include "dnsFallbackConfig.h"
 
 // Process-local authority only; never a managed-route or kernel-address receipt.
 namespace NativeSessionRestore {
@@ -56,6 +57,17 @@ inline bool ipv4(const QString &s) {
 inline bool peer(const QString &s) {
     const auto b = QByteArray::fromBase64(s.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
     return b.size() == 32 && QString::fromLatin1(b.toBase64()) == s;
+}
+inline bool digest(const QString &s) {
+    static const QRegularExpression pattern(QStringLiteral("^[0-9a-f]{64}$"));
+    return s.size() == 64 && pattern.match(s).hasMatch();
+}
+inline bool isDnsSnapshot(const QJsonObject &snapshot) {
+    return snapshot.value("schema").toInt() == 2 && snapshot.value("effectiveTransport") == "dns";
+}
+inline bool isDnsConfiguration(const QJsonObject &configuration) {
+    return configuration.value("effectiveTransport") == "dns"
+        && digest(configuration.value("dnsProfileDigest").toString());
 }
 inline bool identity(const QJsonObject &o) {
     return o.size() == 3 && uuid(o.value("serviceInstanceId").toString())
@@ -105,23 +117,40 @@ inline QJsonObject decode(const QByteArray &bytes) {
     for (;;) {
         ws(); const auto key = string(); if (key.isEmpty() || keys.contains(key)) return {}; keys.insert(key);
         ws(); if (at >= bytes.size() || bytes[at++]!=':') return {}; ws();
-        if (key == "schema") { if (at >= bytes.size() || bytes[at++]!='1') return {}; result[key]=1; }
+        if (key == "schema") {
+            if (at >= bytes.size() || (bytes[at]!='1' && bytes[at]!='2')) return {};
+            result[key]=bytes[at++]-'0';
+        }
         else { const auto value = string(); if (value.isNull()) return {}; result[key]=value; }
         ws(); if (at >= bytes.size()) return {};
         const char separator = bytes[at++]; if (separator=='}') break; if(separator!=',') return {};
     }
     ws(); if (at != bytes.size()) return {};
-    const QSet<QString> expected = {"schema","requestId","bindingGeneration","state","serverId","protocol","serviceInstanceId","serviceActivationId","connectionNonce","peerPublicKey","deviceIpv4Address","nativeGeneration"};
-    if (keys != expected || result.value("schema").toInt()!=1 || result.value("state")!="CONNECTED"
+    QSet<QString> expected = {"schema","requestId","bindingGeneration","state","serverId","protocol","serviceInstanceId","serviceActivationId","connectionNonce","nativeGeneration"};
+    const bool dns = result.value("schema").toInt() == 2;
+    if (dns) expected.unite({"effectiveTransport","dnsProfileDigest"});
+    else expected.unite({"peerPublicKey","deviceIpv4Address"});
+    const auto state = result.value("state").toString();
+    if (keys != expected || (state != "CONNECTED" && !(dns && state == "RECONNECTING"))
         || !uuid(result.value("requestId").toString()) || !decimal(result.value("bindingGeneration").toString())
         || !decimal(result.value("nativeGeneration").toString()) || boundIdentity(result).isEmpty()
         || !serverId(result.value("serverId").toString())
-        || (result.value("protocol")!="AWG" && result.value("protocol")!="WIREGUARD")
-        || !peer(result.value("peerPublicKey").toString()) || !ipv4(result.value("deviceIpv4Address").toString())) return {};
+        || (result.value("protocol")!="AWG" && result.value("protocol")!="WIREGUARD")) return {};
+    if (dns) {
+        if (result.value("effectiveTransport") != "dns" || !digest(result.value("dnsProfileDigest").toString())) return {};
+    } else if (!peer(result.value("peerPublicKey").toString()) || !ipv4(result.value("deviceIpv4Address").toString())) return {};
     return result;
 }
 inline bool matchesConfiguration(const QJsonObject &snapshot, const QString &serverId, const QJsonObject &config) {
     const auto kind = config.value("protocol").toString().toUpper();
+    const auto schema = snapshot.value("schema").toInt();
+    if (snapshot.isEmpty() || snapshot.value("serverId") != serverId || snapshot.value("protocol") != kind
+        || (kind != "AWG" && kind != "WIREGUARD") || (schema != 1 && schema != 2)) return false;
+    if (schema == 2) {
+        if (!isDnsSnapshot(snapshot)) return false;
+        const auto enrolled = amnezia::dnsFallbackConfig::profileDigest(config.value(amnezia::dnsFallbackConfig::key));
+        return !enrolled.isEmpty() && snapshot.value("dnsProfileDigest") == enrolled;
+    }
     const auto protocolConfig = config.value(config.value("protocol").toString()+"_config_data").toObject();
     QString configuredIpv4;
     for (const auto &address : protocolConfig.value("client_ip").toString().split(',')) {
@@ -137,6 +166,36 @@ inline bool matchesConfiguration(const QJsonObject &snapshot, const QString &ser
         && (kind=="AWG" || kind=="WIREGUARD") && peer(protocolConfig.value("server_pub_key").toString())
         && snapshot.value("peerPublicKey")==protocolConfig.value("server_pub_key")
         && !configuredIpv4.isEmpty() && snapshot.value("deviceIpv4Address")==configuredIpv4;
+}
+inline QJsonObject configurationForAdoption(const QJsonObject &snapshot, const QJsonObject &configuration) {
+    auto bound = configuration;
+    bound.remove("effectiveTransport");
+    bound.remove("dnsProfileDigest");
+    if (isDnsSnapshot(snapshot)) {
+        // This owner is a DNS/Xray TUN, not a WireGuard peer or AWG trial.
+        // Keep only the common stop identity; no migration observation can be
+        // synthesized from the logical profile's cached peer or client address.
+        bound["effectiveTransport"] = "dns";
+        bound["dnsProfileDigest"] = snapshot.value("dnsProfileDigest");
+        bound.remove("migrationActivationToken");
+        bound.remove("migrationTrial");
+    }
+    return bound;
+}
+inline bool matchesLivePrimaryOwner(const QJsonObject &snapshot, const QString &serverId,
+                                    const QJsonObject &current, const QJsonObject &expectedIdentity) {
+    return snapshot.value("schema").toInt() == 1 && !isDnsConfiguration(current)
+        && matchesConfiguration(snapshot, serverId, current)
+        && uuid(current.value("migrationConnectionNonce").toString())
+        && snapshot.value("connectionNonce") == current.value("migrationConnectionNonce")
+        && (expectedIdentity.isEmpty() || boundIdentity(snapshot) == expectedIdentity);
+}
+inline bool matchesLiveDnsOwner(const QJsonObject &snapshot, const QString &serverId,
+                                const QJsonObject &current, const QJsonObject &expectedIdentity) {
+    return isDnsSnapshot(snapshot) && matchesConfiguration(snapshot, serverId, current)
+        && uuid(current.value("migrationConnectionNonce").toString())
+        && snapshot.value("connectionNonce") == current.value("migrationConnectionNonce")
+        && (expectedIdentity.isEmpty() || boundIdentity(snapshot) == expectedIdentity);
 }
 struct Pending {
     QString requestId, generation; quint64 epoch = 0;

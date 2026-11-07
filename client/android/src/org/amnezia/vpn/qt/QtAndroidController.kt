@@ -29,6 +29,7 @@ object QtAndroidController {
     external fun onRemoteLogHealth(snapshot: String)
 
     external fun onFileOpened(uri: String)
+    external fun onFileSaved(success: Boolean, cancelled: Boolean)
 
     /** Requires a durable native authorization before Android can open an APK installer. */
     external fun authorizeApkInstallerLaunch(

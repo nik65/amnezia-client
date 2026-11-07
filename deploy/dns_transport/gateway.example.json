@@ -1,0 +1,18 @@
+{
+  "log": {"level": "warn", "timestamp": true},
+  "dns": {"servers": [{"type": "udp", "tag": "public-dns", "server": "1.1.1.1"}]},
+  "inbounds": [{
+    "type": "vless", "tag": "dns-vless", "listen": "127.0.0.1", "listen_port": 18084,
+    "users": [{"name": "REPLACE_WITH_DEVICE_LABEL", "uuid": "REPLACE_WITH_UNIQUE_DEVICE_UUID"}]
+  }],
+  "outbounds": [{"type": "socks", "tag": "existing-backbone", "server": "127.0.0.1", "server_port": 10808, "version": "5"},
+    {"type": "direct", "tag": "client-logs-direct"}],
+  "route": {
+    "rules": [
+      {"action": "resolve", "server": "public-dns", "strategy": "ipv4_only"},
+      {"inbound": ["dns-vless"], "network": "tcp", "ip_cidr": ["172.29.172.251/32"], "port": 17866, "action": "route", "outbound": "client-logs-direct"},
+      {"ip_is_private": true, "action": "reject"}
+    ],
+    "final": "existing-backbone"
+  }
+}

@@ -38,6 +38,26 @@ RUN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 class EvidenceError(RuntimeError):
     pass
 
+
+class SessionLockReadbackError(EvidenceError):
+    """Bounded command metadata; never expose argv, stdout or stderr contents."""
+    def __init__(self, command_id, result, timeout, elapsed):
+        super().__init__('session lock readback failed')
+        def output_metadata(value):
+            data=value if isinstance(value,bytes) else value.encode('utf-8') if isinstance(value,str) else b''
+            return {'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+        stderr=result.get('stderr',b'')
+        if isinstance(stderr,bytes):stderr=stderr[:4096].decode('utf-8',errors='replace')
+        elif isinstance(stderr,str):stderr=stderr[:4096]
+        else:stderr=''
+        self.diagnostics={'schema':'linux-gui-session-lock-readback-failure-v1',
+            'diagnosticOnly':True,'command_id':command_id,
+            'exitcode':result.get('exitcode'),'timeout':result.get('timeout') is True,
+            'overflow':result.get('overflow') is True,
+            'requested_timeout_ms':round(timeout*1000),'elapsed_ms':max(0,round(elapsed*1000)),
+            'stdout':output_metadata(result.get('stdout')),'stderr':output_metadata(result.get('stderr')),
+            'dbus_error_names':sorted(set(re.findall(r'org\.freedesktop\.DBus\.Error\.[A-Za-z0-9_]{1,80}',stderr)))[:4]}
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -147,14 +167,16 @@ def require_unlocked_session(session,deadline):
     """Independent logind and GNOME actual state; a mapped window is insufficient."""
     sid=session['session_id'];uid=session['uid']
     if uid!=1000 or session.get('user')!='lab' or not re.fullmatch(r'[a-zA-Z0-9]+',sid):raise EvidenceError('owned session lock binding differs')
-    def text(argv):
-        raw=status_attempt(argv,remaining(deadline,5))
-        if raw['exitcode']!=0 or raw.get('timeout') or raw.get('overflow'):raise EvidenceError('session lock readback failed')
+    def text(argv,command_id):
+        timeout=remaining(deadline,5);started=time.monotonic()
+        raw=status_attempt(argv,timeout)
+        if raw['exitcode']!=0 or raw.get('timeout') or raw.get('overflow'):
+            raise SessionLockReadbackError(command_id,raw,timeout,time.monotonic()-started)
         return raw['stdout'].decode('utf-8',errors='strict').strip()
-    props={k:text(['loginctl','show-session',sid,'-p'+k,'--value']) for k in ('Type','Active','State','Class','User','LockedHint')}
+    props={k:text(['loginctl','show-session',sid,'-p'+k,'--value'],'loginctl-show-session-'+k) for k in ('Type','Active','State','Class','User','LockedHint')}
     if props!={'Type':'x11','Active':'yes','State':'active','Class':'user','User':'1000','LockedHint':'no'}:raise EvidenceError('owned GUI session is locked or changed')
     prefix=['runuser','-u','lab','--','env','XDG_RUNTIME_DIR=/run/user/1000','DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus','DISPLAY='+session['display'],'XAUTHORITY='+session['xauthority']]
-    active=text(prefix+['gdbus','call','--session','--dest','org.gnome.Shell.ScreenShield','--object-path','/org/gnome/ScreenSaver','--method','org.gnome.ScreenSaver.GetActive'])
+    active=text(prefix+['gdbus','call','--session','--dest','org.gnome.Shell.ScreenShield','--object-path','/org/gnome/ScreenSaver','--method','org.gnome.ScreenSaver.GetActive'],'gnome-screensaver-GetActive')
     if active!='(false,)':raise EvidenceError('GNOME ScreenSaver obscures owned GUI session')
     return {'lockedHint':'no','screenSaverActive':False,'session_id':sid,'observed_at':utc_now()}
 
@@ -806,7 +828,12 @@ def main() -> int:
         print(json.dumps(result, sort_keys=True))
         return 0
     except (EvidenceError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
-        print(json.dumps({"schema": SCHEMA, "status": "FAIL", "reason": str(exc)}, sort_keys=True))
+        failure={"schema": SCHEMA, "status": "FAIL", "reason": str(exc)}
+        if isinstance(exc,SessionLockReadbackError):
+            failure.update(diagnosticOnly=True,phase=args.action,run_id=args.run_id,
+                           profile=args.profile,attempt_nonce=args.attempt_nonce,
+                           lock_readback_failure=exc.diagnostics)
+        print(json.dumps(failure, sort_keys=True))
         return 1
 
 

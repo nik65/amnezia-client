@@ -11,6 +11,14 @@ namespace amnezia::windowsTunnel {
 inline constexpr std::uint32_t kServiceSpecificError = 1066;
 inline constexpr std::uint32_t kWinTunDeviceCreationError = 3;
 
+// A stopped service with a recorded failure cannot become running without a
+// new start attempt. STOPPED/zero can still be the initial SCM observation.
+inline bool hasTerminalStartFailure(std::uint32_t expectedState,
+                                    std::uint32_t currentState,
+                                    std::uint32_t win32ExitCode) {
+  return expectedState == 4 && currentState == 1 && win32ExitCode != 0;
+}
+
 struct StartAttempt {
   bool started = false;
   bool ownsService = false;

@@ -633,10 +633,152 @@ cleanup_pretransaction() {
     exit "$status"
 }
 trap cleanup_pretransaction EXIT
-if ! python3 - "$SOURCE_PACKAGE_ROOT" "$PRIVATE_INPUTS_ROOT" "$PUBLIC_KEY" "$VERIFIED_RECEIPT" <<'PY'
+
+# Proposal K bootstrap gate: authenticate and stage the packaged native helper
+# BEFORE the first packaged-helper use and without asking the helper to vouch
+# for its own bytes.  EXPECTED_CHECKSUMS_SHA256 is the caller's authenticated
+# authority (Ed25519-verified signed manifest -> release-lab runner -> argv[5]);
+# only bootstrap OS primitives (sha256sum/awk/install) are used here.
+declare -A BOOTSTRAP_HELPERS=()
+BOOTSTRAP_HELPER_DIR="$PRIVATE_INPUTS_ROOT/bootstrap-helper"
+NATIVE_VERIFIER_NAME="amnezia-verify-provisioning-native"
+BOOTSTRAP_VERIFIER=""
+export BOOTSTRAP_VERIFIER NATIVE_VERIFIER_NAME
+bootstrap_stage_helper() {
+    local name="$1" rows digest pinned_checksums
+    [[ -f "$SOURCE_PACKAGE_ROOT/$name" && ! -L "$SOURCE_PACKAGE_ROOT/$name" ]] || return 1
+    # Snapshot once inside the private root; never authenticate one source inode
+    # and then parse a separately mutable source path for executable authority.
+    install -d -o root -g root -m 0700 "$BOOTSTRAP_HELPER_DIR" || return 1
+    pinned_checksums="$BOOTSTRAP_HELPER_DIR/SHA256SUMS"
+    if [[ ! -e "$pinned_checksums" && ! -L "$pinned_checksums" ]]; then
+        install -o root -g root -m 0600 "$SOURCE_PACKAGE_ROOT/SHA256SUMS" "$pinned_checksums" || return 1
+    fi
+    [[ -f "$pinned_checksums" && ! -L "$pinned_checksums" ]] || return 1
+    if [[ "$(sha256sum "$pinned_checksums" | awk '{print tolower($1)}')" != "${EXPECTED_CHECKSUMS_SHA256,,}" ]]; then
+        echo "native helper checksums digest does not match the authenticated signed-manifest pin" >&2
+        return 1
+    fi
+    mapfile -t rows < <(awk -v name="$name" 'length($0) == 66 + length(name) && substr($0, 65, 2) == "  " && substr($0, 67) == name { print }' "$pinned_checksums")
+    [[ "${#rows[@]}" -eq 1 ]] || { echo "native helper checksum row is missing or ambiguous" >&2; return 1; }
+    digest="${rows[0]:0:64}"
+    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+    [[ "$(sha256sum "$SOURCE_PACKAGE_ROOT/$name" | awk '{print tolower($1)}')" == "$digest" ]] || {
+        echo "native helper bytes do not match the authenticated checksum row" >&2
+        return 1
+    }
+    install -o root -g root -m 0755 "$SOURCE_PACKAGE_ROOT/$name" "$BOOTSTRAP_HELPER_DIR/$name" || return 1
+    [[ "$(sha256sum "$BOOTSTRAP_HELPER_DIR/$name" | awk '{print tolower($1)}')" == "$digest" ]] || return 1
+    BOOTSTRAP_HELPERS["$name"]="$BOOTSTRAP_HELPER_DIR/$name"
+}
+if ! bootstrap_stage_helper amnezia-headless-fs; then
+    if [[ -e "$SOURCE_PACKAGE_ROOT/amnezia-headless-fs" || -L "$SOURCE_PACKAGE_ROOT/amnezia-headless-fs" ]]; then
+        echo "unable to authenticate and stage the packaged native helper" >&2
+        exit 3
+    fi
+fi
+if [[ -f "$SOURCE_PACKAGE_ROOT/amnezia-cli" && ! -L "$SOURCE_PACKAGE_ROOT/amnezia-cli" ]]; then
+    # Not yet known to be the declared variant; selection below is fatal if it is.
+    bootstrap_stage_helper amnezia-cli || true
+fi
+# Proposal U: stage the optional standalone native verifier from the same
+# private SHA256SUMS snapshot before any native program can run.  No manifest
+# parse and no packaged execution participates in this decision.
+if [[ -e "$SOURCE_PACKAGE_ROOT/$NATIVE_VERIFIER_NAME" || -L "$SOURCE_PACKAGE_ROOT/$NATIVE_VERIFIER_NAME" ]]; then
+    if ! bootstrap_stage_helper "$NATIVE_VERIFIER_NAME"; then
+        echo "unable to authenticate and stage the packaged native verifier" >&2
+        exit 3
+    fi
+    BOOTSTRAP_VERIFIER="${BOOTSTRAP_HELPERS[$NATIVE_VERIFIER_NAME]}"
+    export BOOTSTRAP_VERIFIER
+    if ! verifier_elf="$(readelf -h "$BOOTSTRAP_VERIFIER" 2>/dev/null)" \
+        || ! grep -q 'Class:[[:space:]]*ELF64' <<< "$verifier_elf" \
+        || ! grep -q 'Machine:[[:space:]]*Advanced Micro Devices X86-64' <<< "$verifier_elf" \
+        || ! grep -Eq 'Type:[[:space:]]*EXEC' <<< "$verifier_elf"; then
+        echo "authenticated native verifier is not a static x86_64 ELF executable" >&2
+        exit 3
+    fi
+    if ! verifier_programs="$(readelf -l "$BOOTSTRAP_VERIFIER" 2>/dev/null)" \
+        || grep -Eq '(^|[[:space:]])(INTERP|DYNAMIC)([[:space:]]|$)' <<< "$verifier_programs"; then
+        echo "authenticated native verifier is not a static x86_64 ELF executable" >&2
+        exit 3
+    fi
+    chmod 0700 "$BOOTSTRAP_VERIFIER" || exit 3
+fi
+# Proposal Y: when the signed package declares the standalone nativeVerifier
+# role, the already authenticated private verifier copy performs the actual
+# stage / validate / probe workflows.  It is authenticated from the pinned
+# SHA256SUMS snapshot above, never by this package or by its own claim.  The
+# Python heredocs below remain the explicit legacy fallback for packages
+# without the role; a failing declared-role native step never falls back.
+y_stage_inputs() {
+    "$BOOTSTRAP_VERIFIER" --stage-inputs \
+        --source-root "$SOURCE_PACKAGE_ROOT" \
+        --private-root "$PRIVATE_INPUTS_ROOT" \
+        --public-key "$PUBLIC_KEY" \
+        --verified-receipt "$VERIFIED_RECEIPT" \
+        --expected-public-key-sha256 "$EXPECTED_KEY_SHA256" \
+        --expected-package-manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
+        --expected-checksums-sha256 "$EXPECTED_CHECKSUMS_SHA256" \
+        --expected-signed-manifest-sha256 "$EXPECTED_SIGNED_MANIFEST_SHA256"
+}
+y_consume_stage_inputs() {
+    if ! y_stage_inputs; then
+        echo "authenticated native verifier failed to stage the private package inputs" >&2
+        exit 3
+    fi
+}
+y_validate_package() {
+    "$BOOTSTRAP_VERIFIER" --validate-package \
+        --package-root "$PACKAGE_ROOT" \
+        --receipt "$VERIFIED_RECEIPT" \
+        --public-key "$PUBLIC_KEY" \
+        --ubuntu-id "$ID" \
+        --ubuntu-version-id "$VERSION_ID" \
+        --ubuntu-codename "$VERSION_CODENAME" \
+        --expected-public-key-sha256 "$EXPECTED_KEY_SHA256" \
+        --expected-package-manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
+        --expected-checksums-sha256 "$EXPECTED_CHECKSUMS_SHA256" \
+        --expected-signed-manifest-sha256 "$EXPECTED_SIGNED_MANIFEST_SHA256"
+}
+y_probe_host() {
+    "$BOOTSTRAP_VERIFIER" --probe-host \
+        --runtime-manifest "$PACKAGE_ROOT/runtime-dependencies.json" \
+        --ubuntu-version-id "$VERSION_ID" \
+        --ubuntu-codename "$VERSION_CODENAME"
+}
+y_consume_metadata() {
+    local native_metadata native_probe
+    if ! native_metadata="$(y_validate_package)"; then
+        echo "authenticated native verifier rejected the package metadata or receipt" >&2
+        exit 3
+    fi
+    if [[ "$native_metadata" != *"validated package metadata (host probes deferred): "* ]]; then
+        echo "authenticated native verifier did not report the package version" >&2
+        exit 3
+    fi
+    Y_PACKAGE_VERSION="${native_metadata##*validated package metadata (host probes deferred): }"
+    Y_PACKAGE_VERSION="${Y_PACKAGE_VERSION%%$'\n'*}"
+    if ! [[ "$Y_PACKAGE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+        echo "authenticated native verifier reported an invalid package version" >&2
+        exit 3
+    fi
+    if ! native_probe="$(y_probe_host)"; then
+        echo "authenticated native verifier host probes did not pass" >&2
+        exit 3
+    fi
+    if [[ "$native_probe" != *'"hostProbesPassed":true'* || "$native_probe" != *'"releaseAccepted":false'* ]]; then
+        echo "authenticated native verifier did not report host probes passed" >&2
+        exit 3
+    fi
+}
+if [[ -n "$BOOTSTRAP_VERIFIER" ]]; then
+    y_consume_stage_inputs
+elif ! python3 - "$SOURCE_PACKAGE_ROOT" "$PRIVATE_INPUTS_ROOT" "$PUBLIC_KEY" "$VERIFIED_RECEIPT" <<'PY'
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 from pathlib import Path
@@ -697,6 +839,22 @@ if "nativeHelper" in manifest:
         raise SystemExit("unknown native provisioning helper")
     if manifest["nativeHelper"] == "amnezia-headless-fs":
         copy_exact(Path(source_root) / "amnezia-headless-fs", package_root / "amnezia-headless-fs", "native helper")
+verifier = manifest.get("nativeVerifier")
+verifier_name = os.environ.get("NATIVE_VERIFIER_NAME", "")
+if verifier is not None:
+    if (not isinstance(verifier, dict) or set(verifier) != {"path", "sha256", "size"}
+            or not isinstance(verifier.get("path"), str) or verifier.get("path") != verifier_name
+            or not isinstance(verifier.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", verifier["sha256"])
+            or not isinstance(verifier.get("size"), int) or verifier["size"] <= 0):
+        raise SystemExit("invalid native verifier role")
+    copy_exact(Path(source_root) / verifier_name, package_root / verifier_name, "native verifier")
+    staged = package_root / verifier_name
+    if staged.stat().st_size != verifier["size"] or hashlib.sha256(staged.read_bytes()).hexdigest() != verifier["sha256"]:
+        raise SystemExit("native verifier does not match the signed role binding")
+    if not os.environ.get("BOOTSTRAP_VERIFIER"):
+        raise SystemExit("authenticated native verifier was not staged before package use")
+elif (Path(source_root) / verifier_name).exists() or (Path(source_root) / verifier_name).is_symlink():
+    raise SystemExit("undeclared native verifier package member")
 copy_exact(Path(public_key_text), private_root / "update-public-key.pem", "public key")
 copy_exact(Path(receipt_text), private_root / "verified-receipt.json", "verified receipt")
 PY
@@ -927,7 +1085,10 @@ if [[ "$MODE" == "upgrade" && "$EXISTING_COMPONENTS" -ne 4 ]]; then
 fi
 SERVICE_TARGET="${SERVICE_PATH:-/etc/systemd/system/amneziad.service}"
 SERVICE_FRAGMENT_PATH=""
-if ! PACKAGE_VERSION="$(python3 - "$PACKAGE_ROOT" "$VERSION_ID" "$VERSION_CODENAME" <<'PY'
+if [[ -n "$BOOTSTRAP_VERIFIER" ]]; then
+    y_consume_metadata
+    PACKAGE_VERSION="$Y_PACKAGE_VERSION"
+elif ! PACKAGE_VERSION="$(python3 - "$PACKAGE_ROOT" "$VERSION_ID" "$VERSION_CODENAME" <<'PY'
 import json
 import re
 import shutil
@@ -983,6 +1144,7 @@ if ! (cd "$PACKAGE_ROOT" && sha256sum --strict --check SHA256SUMS); then
     echo "provisioning bundle integrity check failed" >&2
     exit 3
 fi
+if [[ -z "$BOOTSTRAP_VERIFIER" ]]; then
 if ! python3 - "$VERIFIED_RECEIPT" "$PACKAGE_ROOT" "$PUBLIC_KEY" "$EXPECTED_KEY_SHA256" "$EXPECTED_MANIFEST_SHA256" "$EXPECTED_CHECKSUMS_SHA256" "$EXPECTED_SIGNED_MANIFEST_SHA256" <<'PY'
 import hashlib
 import json
@@ -995,6 +1157,14 @@ expected_files = ["install_headless.sh", "amneziad", "amnezia-cli", "amneziad.se
                   "package-manifest.json", "runtime-dependencies.json",
                   "runtime-dependencies.txt", "SHA256SUMS"]
 manifest = json.loads((root / "package-manifest.json").read_text(encoding="utf-8"))
+verifier_role = manifest.get("nativeVerifier")
+if verifier_role is not None:
+    if (not isinstance(verifier_role, dict) or set(verifier_role) != {"path", "sha256", "size"}
+            or verifier_role.get("path") != "amnezia-verify-provisioning-native"
+            or not isinstance(verifier_role.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", verifier_role["sha256"])
+            or not isinstance(verifier_role.get("size"), int) or verifier_role["size"] <= 0):
+        raise SystemExit("invalid native verifier role")
+    expected_files.append(verifier_role["path"])
 if "nativeHelper" in manifest:
     if manifest["nativeHelper"] not in ("amnezia-headless-fs", "amnezia-cli"): raise SystemExit("invalid native helper")
     if manifest["nativeHelper"] == "amnezia-headless-fs":
@@ -1016,6 +1186,10 @@ manifest = json.loads((root / "package-manifest.json").read_text(encoding="utf-8
 if manifest.get("version") != receipt["version"] or manifest.get("artifacts") != ["amneziad", "amnezia-cli", "amneziad.service"]: raise SystemExit("package version/artifacts do not match receipt")
 for name in expected_files:
     if not (root / name).is_file() or (root / name).is_symlink(): raise SystemExit("package member is not a regular file")
+if verifier_role is not None:
+    name = verifier_role["path"]
+    if digest(root / name) != verifier_role["sha256"] or (root / name).stat().st_size != verifier_role["size"]:
+        raise SystemExit("native verifier does not match the signed role binding")
 if "nativeHelper" in manifest:
     helper_name = manifest["nativeHelper"]
     helper_rows = [line for line in (root / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
@@ -1028,6 +1202,7 @@ PY
 then
     echo "verified provisioning receipt is missing or does not match this package" >&2
     exit 3
+fi
 fi
 if ! openssl pkey -pubin -in "$PUBLIC_KEY" -text -noout 2>/dev/null | grep -qi 'ED25519'; then
     echo "public key is not a readable Ed25519 PEM public key" >&2
@@ -1049,12 +1224,11 @@ if [[ "$NATIVE_HELPER_KIND" == "amnezia-headless-fs" ]]; then
         echo "authenticated native provisioning helper is not executable/regular" >&2
         exit 3
     fi
-    NATIVE_HELPER="$PACKAGE_ROOT/amnezia-headless-fs"
-fi
-if [[ "$MODE" == "upgrade" ]]; then
-    for candidate in /var/lib/amnezia /run/amnezia /etc/amnezia /etc/amnezia/profiles; do
-        verify_root_private_tree "$candidate" || exit 4
-    done
+    if [[ -z "${BOOTSTRAP_HELPERS[amnezia-headless-fs]:-}" ]]; then
+        echo "authenticated amnezia-headless-fs helper was not staged before package use" >&2
+        exit 3
+    fi
+    NATIVE_HELPER="${BOOTSTRAP_HELPERS[amnezia-headless-fs]}"
 fi
 for binary in amneziad amnezia-cli; do
     if [[ -n "$NATIVE_HELPER" ]]; then
@@ -1062,16 +1236,7 @@ for binary in amneziad amnezia-cli; do
             echo "headless binary is not an x86_64 ELF64 executable: $binary" >&2
             exit 3
         fi
-    elif ! python3 - "$PACKAGE_ROOT/$binary" <<'PY'
-import struct
-import sys
-from pathlib import Path
-data = Path(sys.argv[1]).read_bytes()[:20]
-if len(data) < 20 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] not in (1,2): raise SystemExit("not ELF64")
-machine = struct.unpack("<H" if data[5] == 1 else ">H", data[18:20])[0]
-if machine != 62: raise SystemExit("not x86_64")
-PY
-    then echo "headless binary is not an x86_64 ELF64 executable: $binary" >&2; exit 3; fi
+    fi
     if ! elf_header="$(readelf -h "$PACKAGE_ROOT/$binary" 2>/dev/null)" \
         || ! grep -q 'Class:[[:space:]]*ELF64' <<< "$elf_header" \
         || ! grep -q 'Machine:[[:space:]]*Advanced Micro Devices X86-64' <<< "$elf_header"; then
@@ -1089,8 +1254,17 @@ done
 if [[ "$NATIVE_HELPER_KIND" == "amnezia-cli" ]]; then
     # Explicit authenticated package capability; never probe an old CLI and
     # silently fall back. Both binaries passed static/runtime checks above.
-    NATIVE_HELPER="$PACKAGE_ROOT/amnezia-cli"
+    if [[ -z "${BOOTSTRAP_HELPERS[amnezia-cli]:-}" ]]; then
+        echo "authenticated amnezia-cli helper was not staged before package use" >&2
+        exit 3
+    fi
+    NATIVE_HELPER="${BOOTSTRAP_HELPERS[amnezia-cli]}"
     NATIVE_HELPER_ARGS=(--provisioning-fs)
+fi
+if [[ "$MODE" == "upgrade" ]]; then
+    for candidate in /var/lib/amnezia /run/amnezia /etc/amnezia /etc/amnezia/profiles; do
+        verify_root_private_tree "$candidate" || exit 4
+    done
 fi
 if [[ "$MODE" == "fresh" ]]; then SERVICE_PATH=/etc/systemd/system/amneziad.service; fi
 SERVICE_WAS_ACTIVE=""

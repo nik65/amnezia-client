@@ -28,7 +28,10 @@ using namespace QKeychain;
 namespace {
     constexpr const char *settingsKeyTag = "settingsKeyTag";
     constexpr const char *settingsIvTag = "settingsIvTag";
-    constexpr const char *keyChainName = "AmneziaVPN-Keychain";
+    #ifndef CLIENT_KEYCHAIN_NAME_STR
+#define CLIENT_KEYCHAIN_NAME_STR "AmneziaVPN-Keychain"
+#endif
+    constexpr const char *keyChainName = CLIENT_KEYCHAIN_NAME_STR;
     constexpr int keychainOperationDeadlineMs = 1500;
     constexpr int keychainBrokerShutdownWaitMs = 250;
 
@@ -488,7 +491,7 @@ namespace {
 }
 
 SecureQSettings::SecureQSettings(const QString &organization, const QString &application, QObject *parent,
-                                 AccessMode accessMode)
+                                 AccessMode accessMode, bool enableEncryption)
     : QObject { parent },
 #if defined(Q_OS_ANDROID)
       // Qt's Android NativeFormat backend can report AccessError for durable
@@ -498,8 +501,9 @@ SecureQSettings::SecureQSettings(const QString &organization, const QString &app
 #else
       m_settings(organization, application, parent),
 #endif
-      encryptedKeys({ "Servers/serversList", "Conf/remoteLogTokens" }),
-      m_accessMode(accessMode)
+      encryptedKeys({ "Servers/serversList", "Conf/remoteLogTokens",
+                      "Conf/favoriteLocations", "Conf/proxyUrls/agw_state" }),
+      m_accessMode(accessMode), m_encryptionEnabled(enableEncryption)
 {
 #if defined(Q_OS_ANDROID)
     // Some Android filesystems do not support QSettings' temporary rename
@@ -533,11 +537,33 @@ SecureQSettings::SecureQSettings(const QString &organization, const QString &app
     const bool encrypted = m_settings.value("Conf/encrypted").toBool();
 
     // convert settings to encrypted for if updated to >= 2.1.0
-    if (encryptionRequired() && !encrypted) {
+    bool needsMigration = !encrypted;
+    if (encryptionRequired() && !needsMigration) {
+        // New protected keys can be plaintext even when an older version set
+        // the global encryption marker. Stage their migration together while
+        // preserving the existing no-replacement rule for ciphertext/key loss.
+        for (const QString &key : m_settings.allKeys()) {
+            if (!amnezia::secureSettingsPolicy::isEncryptedSetting(key)) continue;
+            const QVariant value = m_settings.value(key);
+            if (value.userType() != QMetaType::QByteArray
+                || !value.toByteArray().startsWith(magicString)) {
+                needsMigration = true;
+                break;
+            }
+        }
+    }
+    if (encryptionRequired() && needsMigration) {
         if (!migrateEncryptedSettings()) {
             qCritical() << "SecureQSettings migration did not complete";
         }
     }
+}
+
+SecureQSettings::SecureQSettings(const QString &organization, const QString &application,
+                                 QObject *parent, bool enableEncryption)
+    : SecureQSettings(organization, application, parent, AccessMode::ReadWrite,
+                      enableEncryption)
+{
 }
 
 QVariant SecureQSettings::value(const QString &key, const QVariant &defaultValue) const
@@ -698,21 +724,12 @@ QByteArray SecureQSettings::backupAppConfig() const
 
     QJsonObject cfg;
 
-    const auto needToBackup = [this](const auto &key) {
-      if (amnezia::secureSettingsPolicy::isLocalOnlySetting(key))
-      {
-        return false;
-      }
-
-      for (const auto &item : m_fieldsToBackup)
-      {
-        if (key.startsWith(item, Qt::CaseInsensitive))
-        {
-            return true;
+    const auto needToBackup = [this](const QString &key) {
+        if (isExcludedFromBackup(key)) return false;
+        for (const QString &item : m_fieldsToBackup) {
+            if (key.startsWith(item, Qt::CaseInsensitive)) return true;
         }
-      }
-
-      return false;
+        return false;
     };
 
     for (const QString &storedKey : m_settings.allKeys()) {
@@ -769,7 +786,7 @@ bool SecureQSettings::restoreAppConfig(const QByteArray &json)
             return false;
         }
         normalizedKeys.insert(identity);
-        if (amnezia::secureSettingsPolicy::isLocalOnlySetting(key)) {
+        if (isExcludedFromBackup(key)) {
             continue;
         }
         bool sanitized = false;
@@ -787,6 +804,19 @@ bool SecureQSettings::restoreAppConfig(const QByteArray &json)
     }
 
     return true;
+}
+
+bool SecureQSettings::isExcludedFromBackup(const QString &key) const
+{
+    if (amnezia::secureSettingsPolicy::isLocalOnlySetting(key)) return true;
+    const QString canonical = amnezia::secureSettingsPolicy::canonicalKey(key);
+    for (const QString &item : m_fieldsExcludedFromBackup) {
+        const QString excluded = amnezia::secureSettingsPolicy::canonicalKey(item);
+        if (amnezia::secureSettingsPolicy::isSameSettingOrChild(canonical, excluded)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void SecureQSettings::clearSettings()
@@ -837,6 +867,7 @@ QByteArray SecureQSettings::decryptText(const QByteArray &ba) const
 
 bool SecureQSettings::encryptionRequired() const
 {
+    if (!m_encryptionEnabled) return false;
 #if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
     // QtKeyChain failing on Linux
     return false;

@@ -52,6 +52,7 @@ signals:
     void serverRoutingRulesChanged(int serverIndex);
 
     void connectionErrorOccurred(ErrorCode errorCode);
+    void connectionAdmissionBlocked(ErrorCode errorCode);
 
     void connectButtonClicked();
     void preparingConfig();

@@ -18,7 +18,8 @@ SOURCE_IMAGE=sha256:7dc728e8183a86eac6b9f8033511d4c16a135dff1e8aed7946470376600a
 SOURCE_KEY=VoMDtwx77g/WR/KtVi48vs94syeRflU7GHarWkeDFCE=
 COLLECTOR_IMAGE=python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df
 COLLECTOR_IMAGE_ID=sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df
-COLLECTOR_SHA256=a31814f2217aaea21c85b696cebac8442f4cfbb8c336f41497240147bca5e593
+COLLECTOR_SHA256=11f90cc0849a66823607af2b8db7fcf292433f060c4f01694e57be724737b0c4
+COLLECTOR_GENERATED_SHA256=246a0009b79ce106d778b91023ad3cd04439fc4dd07236dbd07e59640d646fde
 LEGACY_ID=e8cce8c8054edb8f8f4871725e81b3185df247ca7de7d863467568a70782e0e0
 LABEL_KEY=org.amnezia.serverx-diagnostic-route
 LABEL_VALUE=awg2-v1
@@ -146,7 +147,8 @@ ready_collector() {
 [ "$(/usr/bin/stat -c '%u:%a' "$ROOT")" = "$REQUIRED_UID:700" ] || fail directory_permissions
 [ ! -L "$ROOT/collector.py" ] && [ -f "$ROOT/collector.py" ] || fail collector_file
 [ "$(/usr/bin/stat -c '%u' "$ROOT/collector.py")" -eq "$REQUIRED_UID" ] || fail collector_owner
-[ "$(/usr/bin/sha256sum "$ROOT/collector.py" | /usr/bin/cut -d ' ' -f 1)" = "$COLLECTOR_SHA256" ] || fail collector_hash
+collector_hash=$(/usr/bin/sha256sum "$ROOT/collector.py" | /usr/bin/cut -d ' ' -f 1)
+[ "$collector_hash" = "$COLLECTOR_SHA256" ] || [ "$collector_hash" = "$COLLECTOR_GENERATED_SHA256" ] || fail collector_hash
 # The enclosing root-only directory prevents a non-root symlink substitution.
 [ ! -L "$ROOT/serverx-route.lock" ] || fail lock_symlink
 exec 9>"$ROOT/serverx-route.lock"

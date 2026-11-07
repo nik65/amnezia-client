@@ -7,12 +7,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSet>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <sys/stat.h>
 
 #include "linuxRouteReconciler.h"
 #include "headlessRoutingController.h"
@@ -102,7 +104,7 @@ public:
     {
         ++batchCalls;
         batchContents.append(commands);
-        if (failBatches) return { false, 1, QStringLiteral("simulated batch failure") };
+        if (failBatches) return { false, batchFailureExitCode, QStringLiteral("simulated batch failure") };
         for (const QStringList &command : commands) {
             const CommandResult result = run(program, command);
             if (!result.ok) return result;
@@ -254,6 +256,7 @@ public:
     bool dnsResolverBindingAbsent = false;
     bool dnsResolverProbeFails = false;
     bool failBatches = false;
+    int batchFailureExitCode = 1;
     bool failIndividual = false;
     QString dnsFailureMessage = QStringLiteral("simulated DNS failure");
     QString dnsInterface;
@@ -268,6 +271,40 @@ class ServerRoutingTest : public QObject
     Q_OBJECT
 
 private slots:
+    void controllerReceiptPermissions_data()
+    {
+        QTest::addColumn<int>("creationMask");
+        QTest::addColumn<bool>("existingUnsafeMode");
+        QTest::newRow("service-mask") << int(0007) << false;
+        QTest::newRow("default-mask") << int(0022) << false;
+        QTest::newRow("private-mask") << int(0077) << false;
+        QTest::newRow("inherited-world-readable") << int(0007) << true;
+    }
+
+    void controllerReceiptPermissions()
+    {
+        QFETCH(int, creationMask);
+        QFETCH(bool, existingUnsafeMode);
+        const mode_t previousMask = ::umask(static_cast<mode_t>(creationMask));
+        const auto restoreMask = qScopeGuard([previousMask]() { ::umask(previousMask); });
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString routeStatePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        const QString controllerStatePath = temporaryDirectory.filePath(
+                QStringLiteral("routing-controller.json"));
+        auto runner = std::make_shared<FakeCommandRunner>();
+        HeadlessRoutingController controller(runner, routeStatePath);
+        if (existingUnsafeMode) {
+            QVERIFY(controller.disconnect().ok);
+            QCOMPARE(::chmod(controllerStatePath.toLocal8Bit().constData(), 0644), 0);
+        }
+        QVERIFY(controller.disconnect().ok);
+        struct stat saved {};
+        QCOMPARE(::lstat(controllerStatePath.toLocal8Bit().constData(), &saved), 0);
+        QVERIFY(S_ISREG(saved.st_mode));
+        QCOMPARE(static_cast<unsigned>(saved.st_mode & 0777), unsigned(0660));
+    }
+
     void parsesLegacyDirectRoutePolicy()
     {
         const QByteArray payload = R"json({
@@ -2325,6 +2362,59 @@ private slots:
         auto mismatchRunner = std::make_shared<FakeCommandRunner>();
         HeadlessRoutingController mismatchController(mismatchRunner, mismatchRouteState);
         QVERIFY(mismatchController.status().value(QStringLiteral("recoveryRequired")).toBool());
+    }
+
+    void staleBypassDeletionFailureRetainsBoundedDiagnostic_data()
+    {
+        QTest::addColumn<int>("nativeExit");
+        QTest::newRow("native-error") << 1;
+        QTest::newRow("native-start-or-timeout-failure") << -1;
+    }
+
+    void staleBypassDeletionFailureRetainsBoundedDiagnostic()
+    {
+        QFETCH(int, nativeExit);
+        QTemporaryDir temporaryDirectory;
+        QVERIFY(temporaryDirectory.isValid());
+        const QString statePath = temporaryDirectory.filePath(QStringLiteral("routes.json"));
+        auto runner = std::make_shared<FakeCommandRunner>();
+        LinuxRouteReconciler reconciler(runner, statePath);
+        QVERIFY(reconciler.applyAllExcept(QStringLiteral("wg0"),
+                                         { QStringLiteral("10.8.1.4") }).ok);
+        runner->failBatches = true;
+        runner->batchFailureExitCode = nativeExit;
+        runner->failIndividual = true;
+        const RouteReconcileResult result = reconciler.applyAllExcept(
+                QStringLiteral("wg0"), { QStringLiteral("10.8.1.5") });
+        QVERIFY(!result.ok);
+        QCOMPARE(result.code, QStringLiteral("recovery_required"));
+        QCOMPARE(result.message,
+                 QStringLiteral("stale full-tunnel allow-list rules could not be retired"));
+        const QJsonObject diagnostic = result.diagnostics.value(
+                QStringLiteral("batchFailure")).toObject();
+        QCOMPARE(diagnostic.value(QStringLiteral("operation")).toString(),
+                 QStringLiteral("bypass_delete"));
+        QCOMPARE(diagnostic.value(QStringLiteral("category")).toString(),
+                 QStringLiteral("rules_remaining"));
+        QVERIFY(diagnostic.contains(QStringLiteral("nativeExit")));
+        QCOMPARE(diagnostic.value(QStringLiteral("nativeExit")).toInt(), nativeExit);
+        QCOMPARE(diagnostic.value(QStringLiteral("remaining")).toInt(), 1);
+        QCOMPARE(diagnostic.value(QStringLiteral("completed")).toInt(), 0);
+        QCOMPARE(diagnostic.value(QStringLiteral("total")).toInt(), 1);
+        QCOMPARE(diagnostic.value(QStringLiteral("batch")).toInt(), 1);
+        QVERIFY(diagnostic.value(QStringLiteral("elapsedMs")).toInteger() >= 0);
+        QCOMPARE(reconciler.status().value(QStringLiteral("postconditionDiagnostics"))
+                         .toObject().value(QStringLiteral("batchFailure")).toObject(), diagnostic);
+        QFile state(statePath);
+        QVERIFY(state.open(QIODevice::ReadOnly));
+        const QByteArray receipt = state.readAll();
+        const QJsonObject persisted = QJsonDocument::fromJson(receipt).object();
+        QCOMPARE(persisted.value(QStringLiteral("mode")).toString(),
+                 QStringLiteral("recovery_required"));
+        QCOMPARE(persisted.value(QStringLiteral("postconditionDiagnostics"))
+                         .toObject().value(QStringLiteral("batchFailure")).toObject(), diagnostic);
+        QVERIFY(!QJsonDocument(diagnostic).toJson().contains("simulated"));
+        QVERIFY(!QJsonDocument(diagnostic).toJson().contains("10.8.1."));
     }
 
     void aggregateDeadlineCoversDeleteRetryAndProbe()

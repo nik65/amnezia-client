@@ -222,8 +222,6 @@ extension PacketTunnelProvider {
             return
         }
 
-        ovpnLog(.info, title: "Transport", message: "bytesIn=\(bytesin) bytesOut=\(bytesout)")
-
         let response: [String: Any] = [
             "rx_bytes": bytesin,
             "tx_bytes": bytesout

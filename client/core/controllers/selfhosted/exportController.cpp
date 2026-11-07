@@ -1617,6 +1617,9 @@ ExportController::ExportResult ExportController::generateConnectionConfig(const 
     adminConfig->dns1 = dns.first;
     adminConfig->dns2 = dns.second;
     adminConfig->clientLogs = clientLogs;
+    // A newly enrolled VPN client must receive its own DNS credential.
+    // Do not silently share the exporting administrator's VLESS identity.
+    adminConfig->dnsFallback = {};
 
     QJsonObject serverJson = adminConfig->toJson();
     removeClientResolvedServerRoutingRules(serverJson);
@@ -1916,7 +1919,7 @@ ExportController::ExportResult ExportController::generateXrayConfig(const QStrin
         vlessServer.serverName = realitySettings.value(amnezia::protocols::xray::serverName).toString();
         vlessServer.publicKey = realitySettings.value(amnezia::protocols::xray::publicKey).toString();
         vlessServer.shortId = realitySettings.value(amnezia::protocols::xray::shortId).toString();
-        vlessServer.fingerprint = realitySettings.value(amnezia::protocols::xray::fingerprint).toString("chrome");
+        vlessServer.fingerprint = realitySettings.value(amnezia::protocols::xray::fingerprint).toString(QString::fromLatin1(amnezia::protocols::xray::defaultFingerprint));
         vlessServer.spiderX = realitySettings.value(amnezia::protocols::xray::spiderX).toString("");
     } else if (vlessServer.security == "tls") {
         QJsonObject tlsSettings = streamSettings.value("tlsSettings").toObject();

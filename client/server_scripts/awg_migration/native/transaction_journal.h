@@ -25,11 +25,19 @@ public:
     void plan(const std::string& name, const std::string& image);
     void record(const std::string& name);
     void cleanup();
+    // Persist intent before changing the owned source namespace rules.
+    void activateSourceRules();
+    void finalizeNativeControl(const std::string& receiptJson,
+                               const std::string& nativeControlJson);
     // The caller must supply a read-only PID1/socket attestor when a source
     // control exists. Missing attestation fails before any runner mutation.
     void recoverReady(const std::function<void(const std::string&)>& attestListener = {});
     void verifyRequest(const std::string& requestJson, const std::string& sourceBytes) const;
     std::string snapshot() const;
+    const std::filesystem::path& directory() const;
+    std::string ownedSnapshot(const std::string& name) const;
+    std::string inspectSnapshot(const std::string& id) const;
+    void replaceValue(const std::string& json);
     static std::string sha256(const std::string& bytes);
 private:
     using Json = std::shared_ptr<json_object>;
