@@ -20,9 +20,17 @@ endif()
 file(GLOB_RECURSE _runtime_entries LIST_DIRECTORIES TRUE "${_runtime_root}/*")
 list(PREPEND _runtime_entries "${_runtime_root}")
 foreach(_entry IN LISTS _runtime_entries)
-    if(IS_DIRECTORY "${_entry}" AND NOT IS_SYMLINK "${_entry}")
+    if(IS_SYMLINK "${_entry}")
+        continue()
+    endif()
+    if(IS_DIRECTORY "${_entry}")
         file(CHMOD "${_entry}" PERMISSIONS
             OWNER_READ OWNER_WRITE OWNER_EXECUTE
             GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+    elseif(EXISTS "${_entry}")
+        # Qt deployment generates qt.conf/translations using the builder umask.
+        # Keep executables executable and make generated data publicly readable.
+        execute_process(COMMAND /usr/bin/chmod "a+rX,go-w" -- "${_entry}"
+            COMMAND_ERROR_IS_FATAL ANY)
     endif()
 endforeach()
