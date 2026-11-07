@@ -54,6 +54,7 @@ param(
     [string] $LabRunId = "",
     [string[]] $LabBaselineArtifact = @(),
     [string] $LabBaselineVersion = $(if ($env:AMNEZIA_RELEASE_LAB_BASELINE_VERSION) { $env:AMNEZIA_RELEASE_LAB_BASELINE_VERSION } else { "" }),
+    [string] $LabBaselineOuterArtifact = $(if ($env:AMNEZIA_RELEASE_LAB_BASELINE_OUTER_ARTIFACT) { $env:AMNEZIA_RELEASE_LAB_BASELINE_OUTER_ARTIFACT } else { "" }),
     [string] $LabManifestPublicKey = $(if ($env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY) { $env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY } else { "" }),
     [string] $LabBaselineManifest = $(if ($env:AMNEZIA_RELEASE_LAB_BASELINE_MANIFEST) { $env:AMNEZIA_RELEASE_LAB_BASELINE_MANIFEST } else { "" }),
     [string] $LabHeadlessBaselineReceipt = $(if ($env:AMNEZIA_RELEASE_LAB_HEADLESS_BASELINE_RECEIPT) { $env:AMNEZIA_RELEASE_LAB_HEADLESS_BASELINE_RECEIPT } else { "" }),
@@ -1322,6 +1323,12 @@ function Invoke-ReleaseLab([string] $Command, [string[]] $Arguments = @()) {
 
 function Assert-ReleaseLabPrerequisites {
     if ($LabLane -eq "off") { return }
+    if ($LabLane -eq "release" -or $LabWindowsBackend -eq "hyperv") {
+        if ([string]::IsNullOrWhiteSpace($LabBaselineOuterArtifact)) {
+            throw "Release/Hyper-V lab runs require -LabBaselineOuterArtifact or AMNEZIA_RELEASE_LAB_BASELINE_OUTER_ARTIFACT; the baseline thin installer is a different input."
+        }
+        Assert-ExistingFile $LabBaselineOuterArtifact "Release-lab N-1 outer self-hosted artifact"
+    }
     Write-Step "Preflight disposable release lab ($LabLane lane)"
     $preflightProfiles = @()
     if ($LabLane -eq "release") {
@@ -1747,6 +1754,9 @@ if ($LabLane -ne "off") {
     $suiteArgs += @("--manifest-public-key", (Convert-ToWslPath $LabManifestPublicKey))
     if (-not [string]::IsNullOrWhiteSpace($outerForLab)) {
         $suiteArgs += @("--outer-artifact", (Convert-ToWslPath $outerForLab))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LabBaselineOuterArtifact)) {
+        $suiteArgs += @("--baseline-outer-artifact", (Convert-ToWslPath $LabBaselineOuterArtifact))
     }
     Invoke-ReleaseLab "run-suite" $suiteArgs | Out-Null
     if ($LabLane -eq "release") {

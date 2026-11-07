@@ -100,6 +100,13 @@ Every run must provide both sides of the upgrade: `--baseline-version` and
 candidate artifact. The guest sequence keeps the N-1 baseline and N candidate
 separate, so a missing or changed baseline blocks the gate.
 
+Release and Hyper-V plans additionally require `--baseline-outer-artifact` for
+the exact N-1 self-hosted Windows wrapper, separate from the thin Windows
+installer in `--baseline-artifact windows-x64=...`. The local PowerShell wrappers
+expose this as `-LabBaselineOuterArtifact` or
+`AMNEZIA_RELEASE_LAB_BASELINE_OUTER_ARTIFACT`; preflight checks that file before
+building. This input does not satisfy the required physical Android acceptance.
+
 The guest runner receives one guarded artifact path at a time. The controller
 stages N-1 there for `reinstall`, then stages N at the same path for `update`,
 passing the run ID, expected version, expected SHA-256, and guest receipt path

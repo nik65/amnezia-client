@@ -87,7 +87,7 @@ if not defined VCINSTALLDIR (
             set "_version=-latest"
         )
         for /f "usebackq tokens=*" %%I in (
-            `"!VS_INSTALLER_PATH!" -products * !_version! -property resolvedInstallationPath`
+            `"!VS_INSTALLER_PATH!" -products * !_version! -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property resolvedInstallationPath`
         ) do (
             if not defined VCVARS_PATH set "VCVARS_PATH=%%I\VC\Auxiliary\Build\vcvarsall.bat"
         )

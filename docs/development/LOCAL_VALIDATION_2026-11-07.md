@@ -188,3 +188,24 @@ filesystem fixtures не заменяют release-lab guest acceptance. AArch64 
 Если SSH потерян до появления remote journal, pending PREPARE сохраняется.
 Отсутствие файла не доказывает, что исходная операция никогда не начнётся;
 автоматического reset/повторного запуска в этом неоднозначном случае нет.
+
+## Подготовка Windows release-кандидата на физическом ПК
+
+Исправлены три подтверждённых препятствия: выбор `vswhere` теперь требует
+установленный C++ toolchain; release wrappers передают явный N-1 outer installer
+в лабораторию; удалены семь случайных Debian control metadata из каталога с
+именем `\`, из-за которого обычный Windows Git checkout завершался ошибкой.
+Эти metadata остаются в Git history; Android sandbox implementation не менялся.
+
+На Windows проверены реальный CMD selector (четыре случая, включая старый
+selector как negative control) и PowerShell 5.1: syntax обоих wrappers,
+передача путей с пробелом/апострофом, независимость `LabLane off` и отказ до
+backend при отсутствующем baseline outer. Полные release scripts, установщики
+и VM для этих smoke tests не запускались. Локальная объединённая дельта:
+7 PASS, 1 Windows-only SKIP, 10 subtests PASS; Windows-only consumer отдельно PASS.
+
+SDK и кэши готовятся в отдельном owned workspace аккаунта `codexbuild`.
+Paused Windows worktree и работающий VPN хоста не изменялись. Это подготовка
+сборки, не результат установленной Release-приёмки: production configuration,
+подписанные финальные bytes, Windows/Linux guests и физический USB Android
+ещё требуют собственных проверок.

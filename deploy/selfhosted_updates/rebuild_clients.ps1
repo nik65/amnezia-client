@@ -41,6 +41,7 @@ param(
     [string] $LabRunId = "",
     [string[]] $LabBaselineArtifact = @(),
     [string] $LabBaselineVersion = $(if ($env:AMNEZIA_RELEASE_LAB_BASELINE_VERSION) { $env:AMNEZIA_RELEASE_LAB_BASELINE_VERSION } else { "" }),
+    [string] $LabBaselineOuterArtifact = $(if ($env:AMNEZIA_RELEASE_LAB_BASELINE_OUTER_ARTIFACT) { $env:AMNEZIA_RELEASE_LAB_BASELINE_OUTER_ARTIFACT } else { "" }),
     [string] $LabManifestPublicKey = $(if ($env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY) { $env:AMNEZIA_RELEASE_LAB_MANIFEST_PUBLIC_KEY } else { "" })
 )
 
@@ -110,6 +111,9 @@ function New-LocalReleaseCommand([switch] $PreflightCommand) {
     }
     if ($RebuildBoundParameters.ContainsKey("LabBaselineVersion") -or -not [string]::IsNullOrWhiteSpace($LabBaselineVersion)) {
         $parts += @("-LabBaselineVersion", (Quote-PowerShellString $LabBaselineVersion))
+    }
+    if ($RebuildBoundParameters.ContainsKey("LabBaselineOuterArtifact") -or -not [string]::IsNullOrWhiteSpace($LabBaselineOuterArtifact)) {
+        $parts += @("-LabBaselineOuterArtifact", (Quote-PowerShellString $LabBaselineOuterArtifact))
     }
     if ($RebuildBoundParameters.ContainsKey("LabManifestPublicKey") -or -not [string]::IsNullOrWhiteSpace($LabManifestPublicKey)) {
         $parts += @("-LabManifestPublicKey", (Quote-PowerShellString $LabManifestPublicKey))
