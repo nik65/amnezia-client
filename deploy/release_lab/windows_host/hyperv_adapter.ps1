@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('plan','status','create-child','start','stop','probe','precondition','prepare-interactive','stage','run','collect','diagnose-bootstrap-root','reset','ui-observe','ui-confirm','export-ui','app-window','seed-profile','relays-start','relays-stop','publish','netstack-fixture')]
+    [ValidateSet('plan','status','create-child','start','stop','probe','precondition','prepare-interactive','stage','run','collect','diagnose-bootstrap-root','reset','ui-observe','ui-confirm','export-ui','app-window','seed-profile','relays-start','relays-stop','publish','netstack-fixture','native-tests')]
     [string] $Action,
     [string] $RunId,
     [string] $CaseId = 'control',
@@ -50,6 +50,12 @@ param(
     [string] $ExpectedScreenshotSha256,
     [string] $ScreenshotGuestPath,
     [string] $TokenEvidencePath,
+    [string] $NativeManifestPath,
+    [string] $NativeManifestSha256,
+    [string] $NativeHelperPath,
+    [string] $NativeHelperSha256,
+    [string] $NativeCapturePath,
+    [string] $NativeCaptureSha256,
     [switch] $CredentialStdin
 )
 
@@ -1021,6 +1027,154 @@ if ($Action -eq 'relays-start') {
 if ($Action -eq 'relays-stop') {
     Emit (Stop-Relays $child); exit 0
 }
+
+function Get-NativeBindingCloseout([object[]]$Records) {
+    $failed=0;$errorTypes=@()
+    foreach($record in $Records){
+        try{[void](Assert-Artifact $record.path $record.sha256 $record.size)}
+        catch{$failed++;$type=$_.Exception.GetType().FullName;if($errorTypes-notcontains$type){$errorTypes+=,$type}}
+    }
+    return [ordered]@{unchanged=($failed-eq0);failed_input_count=$failed;error_types=$errorTypes}
+}
+
+function Assert-NativeTestPe([string]$Path,[bool]$Dll) {
+    $stream=[IO.File]::OpenRead($Path)
+    try {
+        $reader=New-Object IO.BinaryReader($stream)
+        if($reader.ReadUInt16()-ne0x5a4d){Fail 'native test PE DOS header'};$stream.Position=0x3c;$offset=$reader.ReadUInt32()
+        if($offset-lt64-or$offset+24-gt$stream.Length){Fail 'native test PE bounds'};$stream.Position=$offset
+        if($reader.ReadUInt32()-ne0x4550-or$reader.ReadUInt16()-ne0x8664){Fail 'native test PE signature/architecture'};$stream.Position=$offset+22;$flags=$reader.ReadUInt16()
+        if(($flags-band2)-eq0-or[bool]($flags-band0x2000)-ne$Dll){Fail 'native test PE executable/DLL role differs'}
+    } finally { $stream.Dispose() }
+}
+
+# Fixed native unit tests are a separate capability, never an installer action.
+if ($Action -eq 'native-tests') {
+    if ($CaseId -cne 'control' -or [string]$child.vm.State -cne 'Running' -or [string]$child.vm.Id -ine $ChildVmId -or $AttemptNonce -cnotmatch '^[0-9a-f]{48}$') { Fail 'native tests require the exact running owned control child and fresh nonce' }
+    foreach($localPath in @($NativeManifestPath,$NativeHelperPath,$NativeCapturePath)){if($localPath-cnotmatch'^[A-Za-z]:[\\/]' -or $localPath-match'(^|[\\/])\.\.([\\/]|$)'){Fail 'native test inputs must be local drive paths'}}
+    $manifestRecord = Assert-Artifact $NativeManifestPath $NativeManifestSha256 -1
+    $helperRecord = Assert-Artifact $NativeHelperPath $NativeHelperSha256 -1
+    $captureRecord = Assert-Artifact $NativeCapturePath $NativeCaptureSha256 -1
+    if ($manifestRecord.size -gt 131072 -or $helperRecord.size -gt 65536 -or $captureRecord.size -gt 65536) { Fail 'native test input bounds' }
+    if ([IO.Path]::GetFileName($helperRecord.path) -cne 'native_test_guest.ps1' -or [IO.Path]::GetFileName($captureRecord.path) -cne 'BoundedOperatorCapture.cs') { Fail 'native test helper role differs' }
+    $manifest = Read-Json $manifestRecord.path 'native test manifest'
+    $fields=@('schema','candidate_sha256','candidate_version','compile_source_commit','source_root','review_capsule','files')
+    if (@($manifest.PSObject.Properties.Name).Count -ne $fields.Count -or @($fields | Where-Object { $manifest.PSObject.Properties.Name -notcontains $_ }).Count -ne 0 -or $manifest.schema -cne 'amnezia.native-windows-tests.v1') { Fail 'native test manifest shape' }
+    $tests=@('operator_command_tests.exe','privileged_ipc_security_tests.exe','selfhosted_update_policy_tests.exe','windows_privileged_pipe_reuse_tests.exe')
+    $seen=@{}; $executables=@(); $total=0L; $records=@(); $files=@($manifest.files)
+    if ($files.Count -lt 4 -or $files.Count -gt 64) { Fail 'native test closure count' }
+    foreach ($file in $files) {
+        $name=[string]$file.name
+        if (@($file.PSObject.Properties.Name).Count -ne 4 -or @(@('name','source','sha256','size')|Where-Object{$file.PSObject.Properties.Name -notcontains $_}).Count -ne 0 -or $name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' -or $seen.ContainsKey($name)) { Fail 'native test unsafe/duplicate file' }
+        if ($tests -ccontains $name) { $executables+=,$name } elseif (-not $name.EndsWith('.dll',[StringComparison]::Ordinal)) { Fail 'native test executable role is forbidden' }
+        if ([IO.Path]::GetFileName([string]$file.source) -cne $name -or [int64]$file.size -le 0 -or [int64]$file.size -gt 134217728) { Fail 'native test source/size differs' }
+        if([string]$file.source-cnotmatch'^[A-Za-z]:[\\/]' -or [string]$file.source-match'(^|[\\/])\.\.([\\/]|$)'){Fail 'native test source must be local drive path'}
+        $record=Assert-Artifact ([string]$file.source) ([string]$file.sha256) ([int64]$file.size)
+        Assert-NativeTestPe $record.path ($name.EndsWith('.dll',[StringComparison]::Ordinal))
+        $records+=,$record; $seen[$name]=$true; $total+=$record.size
+    }
+    if ($executables.Count -ne 4 -or @($tests|Where-Object{$executables -cnotcontains $_}).Count -ne 0 -or $total -gt 536870912) { Fail 'native tests require exact four executable roles' }
+    if([string]$manifest.review_capsule.path-cnotmatch'^[A-Za-z]:[\\/]' -or [string]$manifest.source_root-cnotmatch'^[A-Za-z]:[\\/]'){Fail 'native test capsule/source root must be local drive paths'}
+    $capsuleRecord=Assert-Artifact ([string]$manifest.review_capsule.path) ([string]$manifest.review_capsule.sha256) ([int64]$manifest.review_capsule.size)
+    if($capsuleRecord.size-gt2097152){Fail 'native test review capsule bounds'}
+    $capsule=Read-Json $capsuleRecord.path 'native test compile capsule'
+    if($manifest.compile_source_commit-cnotmatch'^[0-9a-f]{40}$'-or$capsule.sourceCommit-cne$manifest.compile_source_commit-or$manifest.candidate_sha256-cnotmatch'^[0-9a-f]{64}$'-or$manifest.candidate_version-cnotmatch'^\d+\.\d+\.\d+\.\d+$'){Fail 'native test compile/candidate identity'}
+    $bindingRecords=@($manifestRecord,$helperRecord,$captureRecord,$capsuleRecord)
+    foreach($entry in @($capsule.runtimeHashes.PSObject.Properties)){if([string]$entry.Name-cnotmatch'^[A-Za-z]:[\\/]'){Fail 'native runtime capsule path must be local'};$bindingRecords+=,(Assert-Artifact ([string]$entry.Name) ([string]$entry.Value) -1)}
+    if(@($capsule.runtimeHashes.PSObject.Properties).Count-lt4-or@($capsule.sourceHashes.PSObject.Properties).Count-lt1){Fail 'native test compile capsule is incomplete'}
+    $sourceRoot=Full ([string]$manifest.source_root)
+    foreach($entry in @($capsule.sourceHashes.PSObject.Properties)){
+        $path=Assert-Contained (Join-Path $sourceRoot ([string]$entry.Name)) $sourceRoot 'native test compile source'
+        $bindingRecords+=,(Assert-Artifact $path ([string]$entry.Value) -1)
+    }
+    foreach($record in $records){
+        $bound=@($capsule.runtimeHashes.PSObject.Properties|Where-Object{(Full ([string]$_.Name))-ieq$record.path-and[string]$_.Value-ceq$record.sha256})
+        if($bound.Count-ne1){Fail 'native test runtime file is outside the reviewed compile capsule'}
+    }
+    $session=New-Session $child
+    $remote=$null;$sessionCleanup=$false;$sessionCleanupFailure=''
+    try {
+        $guestRoot="C:\ProgramData\AmneziaLab\runs\$RunId\windows-x64\control"
+        $nativeInputRoot=Join-Path $guestRoot 'native-tests-input'; $nativeOutputRoot=Join-Path $guestRoot 'native-tests-output'
+        Invoke-Command -Session $session -ScriptBlock {
+            param($root,$nativeInputRoot,$nativeOutputRoot,$id,$vmid)
+            $marker=Join-Path $root 'run-marker.txt';$lines=@([IO.File]::ReadAllLines($marker))
+            if($lines-notcontains"amnezia-release-lab:${id}:windows-x64"-or$lines-notcontains'case_id=control'-or$lines-notcontains"vm_id=$vmid"){throw 'native test guest marker differs before staging'}
+            $cursor=$root;while($cursor){$item=Get-Item -LiteralPath $cursor -Force;if(($item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){throw 'native test staging ancestor redirected'};$parent=Split-Path -Parent $cursor;if($parent-eq$cursor){break};$cursor=$parent}
+            if((Test-Path -LiteralPath $nativeInputRoot)-or(Test-Path -LiteralPath $nativeOutputRoot)){throw 'native test fresh guest paths required'}
+            New-Item -ItemType Directory -Path $nativeInputRoot,$nativeOutputRoot -ErrorAction Stop|Out-Null
+        } -ArgumentList $guestRoot,$nativeInputRoot,$nativeOutputRoot,$RunId,$ChildVmId | Out-Null
+        Copy-Item -LiteralPath $manifestRecord.path -Destination (Join-Path $nativeInputRoot 'manifest.json') -ToSession $session -ErrorAction Stop
+        Copy-Item -LiteralPath $helperRecord.path -Destination (Join-Path $nativeInputRoot 'native_test_guest.ps1') -ToSession $session -ErrorAction Stop
+        Copy-Item -LiteralPath $captureRecord.path -Destination (Join-Path $nativeInputRoot 'BoundedOperatorCapture.cs') -ToSession $session -ErrorAction Stop
+        foreach($record in $records){Copy-Item -LiteralPath $record.path -Destination (Join-Path $nativeInputRoot ([IO.Path]::GetFileName($record.path))) -ToSession $session -ErrorAction Stop}
+        $remote=Invoke-Command -Session $session -ScriptBlock {
+            param($root,$nativeInputRoot,$nativeOutputRoot,$id,$vmid,$nonce,$manifestSha,$helperSha,$captureSha)
+            $explorer=@(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'"|Where-Object{$_.SessionId-gt0})
+            if($explorer.Count-ne1){throw 'native tests require one existing interactive Explorer'}
+            $owner=Invoke-CimMethod -InputObject $explorer[0] -MethodName GetOwner -ErrorAction Stop
+            $ownerSid=Invoke-CimMethod -InputObject $explorer[0] -MethodName GetOwnerSid -ErrorAction Stop
+            if([string]$owner.User-cne'labadmin'){throw 'native tests require guest labadmin Explorer'}
+            function Set-NativeAcl([string]$Path,[string]$Kind){
+                $directory=$Kind-ne'File';$acl=if($directory){New-Object Security.AccessControl.DirectorySecurity}else{New-Object Security.AccessControl.FileSecurity}
+                $acl.SetAccessRuleProtection($true,$false);$acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
+                $inherit=if($directory){'ContainerInherit,ObjectInherit'}else{'None'}
+                foreach($sid in @('S-1-5-18','S-1-5-32-544')){$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)),'FullControl',$inherit,'None','Allow')))}
+                $rights=if($Kind-eq'Output'){'Modify'}else{'ReadAndExecute'}
+                $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier([string]$ownerSid.Sid)),$rights,$inherit,'None','Allow')))
+                $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-3-4')),'ReadPermissions',$inherit,'None','Allow')))
+                Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+            }
+            $base='C:\ProgramData\AmneziaLab'
+            foreach($path in @($base,"$base\runs","$base\runs\$id","$base\runs\$id\windows-x64",$root,$nativeInputRoot)){Set-NativeAcl $path 'Directory'}
+            Set-NativeAcl (Join-Path $root 'run-marker.txt') 'File';Set-NativeAcl $nativeOutputRoot 'Output'
+            foreach($file in @(Get-ChildItem -LiteralPath $nativeInputRoot -File)){Set-NativeAcl $file.FullName 'File'}
+            if((Get-FileHash -LiteralPath (Join-Path $nativeInputRoot 'manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()-cne$manifestSha-or(Get-FileHash -LiteralPath (Join-Path $nativeInputRoot 'native_test_guest.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()-cne$helperSha-or(Get-FileHash -LiteralPath (Join-Path $nativeInputRoot 'BoundedOperatorCapture.cs') -Algorithm SHA256).Hash.ToLowerInvariant()-cne$captureSha){throw 'native test helper guest copy differs'}
+            $taskName="AmneziaLab-NativeTests-$id";if($taskName.Length-gt200-or(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)){throw 'native test task must be fresh'}
+            $helper=Join-Path $nativeInputRoot 'native_test_guest.ps1';$arguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$helper`" -RunId $id -VmId $vmid -AttemptNonce $nonce -ManifestSha256 $manifestSha -HelperSha256 $helperSha -CaptureSha256 $captureSha"
+            $taskAction=New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $arguments
+            $userId=if([string]::IsNullOrWhiteSpace([string]$owner.Domain)){[string]$owner.User}else{"$($owner.Domain)\$($owner.User)"}
+            $principal=New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
+            $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 120) -MultipleInstances IgnoreNew
+            $taskStarted=$false;$taskCompleted=$false;$taskCleanup=$false;$taskExit=$null;$taskFailure=''
+            try{
+                Register-ScheduledTask -TaskName $taskName -Action $taskAction -Principal $principal -Settings $settings -Description 'Owned four native release tests; no installer' -ErrorAction Stop|Out-Null
+                Start-ScheduledTask -TaskName $taskName -ErrorAction Stop;$taskStarted=$true;$deadline=[DateTime]::UtcNow.AddSeconds(115)
+                do{$task=Get-ScheduledTask -TaskName $taskName; $info=Get-ScheduledTaskInfo -TaskName $taskName;if($task.State-ne'Running'-and$info.LastRunTime-gt[DateTime]::MinValue-and($info.LastTaskResult-ne267011)){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow-lt$deadline)
+                if($task.State-eq'Running'){throw 'native test bounded task did not complete'}
+                $taskCompleted=$true;$taskExit=[int64]$info.LastTaskResult
+            }catch{$taskFailure=$_.Exception.GetType().FullName+': '+$_.Exception.Message}
+            finally{
+                $task=Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                if($null-eq$task){$taskCleanup=$true}
+                elseif($task.State-ne'Running'){
+                    try{Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop;$taskCleanup=$null-eq(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)}catch{$taskFailure+='; task cleanup='+$_.Exception.GetType().FullName}
+                }
+            }
+            # Original fixed output bytes are returned even on native failure,
+            # missing receipt, startup rejection or a live task timeout. The
+            # canonical controller resets the whole owned child only after this
+            # private capture has been archived; no task/PID/name broad kill.
+            $captures=@();$receiptBytes=[byte[]]@();$total=0L
+            foreach($name in @('receipt.json','failure.json')+@('operator_command_tests.exe.capture.json','privileged_ipc_security_tests.exe.capture.json','selfhosted_update_policy_tests.exe.capture.json','windows_privileged_pipe_reuse_tests.exe.capture.json')){
+                $path=Join-Path $nativeOutputRoot $name
+                if(Test-Path -LiteralPath $path -PathType Leaf){
+                    $item=Get-Item -LiteralPath $path -Force
+                    if(($item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0-or$item.Length-gt4194304){throw 'native test output path/bounds differ'}
+                    $raw=[IO.File]::ReadAllBytes($path);$total+=$raw.Length;if($total-gt8388608){throw 'native test aggregate capture bound'}
+                    $captures+=,[ordered]@{name=$name;size=$raw.Length;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant();bytes_b64=[Convert]::ToBase64String($raw)}
+                    if($name-ceq'receipt.json'){$receiptBytes=$raw}
+                }
+            }
+            [ordered]@{receipt_bytes_b64=[Convert]::ToBase64String($receiptBytes);captures=$captures;task_exit=$taskExit;task_name=$taskName;task_started=$taskStarted;task_completed=$taskCompleted;task_removed=$taskCleanup;task_failure=$taskFailure}
+        } -ArgumentList $guestRoot,$nativeInputRoot,$nativeOutputRoot,$RunId,$ChildVmId,$AttemptNonce,$manifestRecord.sha256,$helperRecord.sha256,$captureRecord.sha256
+    } finally { try{Remove-PSSession $session -ErrorAction Stop;$sessionCleanup=$true}catch{$sessionCleanupFailure=$_.Exception.GetType().FullName} }
+    $bindingCloseout=Get-NativeBindingCloseout $bindingRecords
+    $receipt=$null;$receiptParseFailure='';$raw=[Convert]::FromBase64String([string]$remote.receipt_bytes_b64)
+    if($raw.Length-gt0){try{$receipt=[Text.Encoding]::UTF8.GetString($raw)|ConvertFrom-Json}catch{$receiptParseFailure=$_.Exception.GetType().FullName}}
+    Emit ([ordered]@{action='native-tests';transport='hyperv-powershell-direct';origin='guest';injected=$false;vm_id=[string]$child.vm.Id;parent_sha256=$child.parent.sha256;manifest_sha256=$manifestRecord.sha256;host_bindings_unchanged=$bindingCloseout.unchanged;host_binding_closeout=$bindingCloseout;session_cleanup_confirmed=$sessionCleanup;session_cleanup_failure=$sessionCleanupFailure;receipt_parse_failure=$receiptParseFailure;receipt=$receipt;original=$remote;release_passed=$false});exit 0
+}
+
 if ($Action -eq 'publish') {
     if ([string]$child.vm.State -ne 'Running') { Fail 'publisher CLI requires a running child VM' }
     $session = New-Session $child
