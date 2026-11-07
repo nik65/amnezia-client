@@ -68,7 +68,7 @@ mkdir -p "$UPDATE_DIR"
 install -m 0755 "$STAGE_DIR/usr/local/bin/amneziad" "$UPDATE_DIR/amneziad"
 install -m 0755 "$STAGE_DIR/usr/local/bin/amnezia-cli" "$UPDATE_DIR/amnezia-cli"
 GZIP=-n tar --create --gzip --file "$ARCHIVE_TMP" --directory "$UPDATE_DIR" \
-    --owner=0 --group=0 --numeric-owner --sort=name \
+    --owner=0 --group=0 --numeric-owner --sort=name --mode=u+rwX,go+rX,go-w \
     --mtime="@${ARCHIVE_MTIME}" \
     amneziad amnezia-cli
 mv -f -- "$ARCHIVE_TMP" "$ARCHIVE"
@@ -147,7 +147,7 @@ echo "headless package checksums sha256: $(sha256sum "$PACKAGE_DIR/SHA256SUMS" |
 PACKAGE_ARCHIVE="$OUT_DIR/AmneziaHeadless_${VERSION}_linux_x64_provisioning.tar.gz"
 PACKAGE_ARCHIVE_TMP="$(mktemp "$OUT_DIR/.AmneziaHeadless_${VERSION}_linux_x64_provisioning.tar.gz.XXXXXX")"
 GZIP=-n tar --create --gzip --file "$PACKAGE_ARCHIVE_TMP" --directory "$STAGE_DIR" \
-    --owner=0 --group=0 --numeric-owner --sort=name \
+    --owner=0 --group=0 --numeric-owner --sort=name --mode=u+rwX,go+rX,go-w \
     --mtime="@${ARCHIVE_MTIME}" headless-package
 mv -f -- "$PACKAGE_ARCHIVE_TMP" "$PACKAGE_ARCHIVE"
 chmod 0644 "$PACKAGE_ARCHIVE"

@@ -36,10 +36,12 @@ if(LINUX AND NOT ANDROID)
         @ONLY
     )
     list(APPEND CPACK_PRE_BUILD_SCRIPTS ${CMAKE_BINARY_DIR}/prune_unused_qtiff.cmake)
+    list(APPEND CPACK_PRE_BUILD_SCRIPTS ${CMAKE_CURRENT_LIST_DIR}/normalize_linux_runtime_permissions.cmake)
 endif()
 set(CPACK_POST_BUILD_SCRIPTS        ${CMAKE_CURRENT_LIST_DIR}/sign_packages.cmake)
 set(CPACK_PROJECT_CONFIG_FILE       ${CMAKE_CURRENT_LIST_DIR}/CPackOptions.cmake)
-set(CPACK_RESOURCE_FILE_LICENSE     ${CMAKE_SOURCE_DIR}/deploy/data/LICENSE.txt)
+configure_file("${CMAKE_SOURCE_DIR}/LICENSE" "${CMAKE_BINARY_DIR}/packaging/LICENSE.txt" COPYONLY)
+set(CPACK_RESOURCE_FILE_LICENSE     "${CMAKE_BINARY_DIR}/packaging/LICENSE.txt")
 
 list(PREPEND CPACK_COMPONENTS_ALL AmneziaVPN)
 

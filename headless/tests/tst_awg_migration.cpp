@@ -80,7 +80,8 @@ private slots:
         QByteArray bytes;
         QVERIFY(manager.readLegacy(source, bytes));
         QVERIFY(!manager.read(source, bytes)); // Private material remains 0600.
-        uint arbitraryGroup = 424242;
+        // Keep the foreign group inside the usual 16-bit container GID map.
+        uint arbitraryGroup = 65534;
         const group *trusted = ::getgrnam("amnezia");
         if (trusted && trusted->gr_gid == arbitraryGroup) ++arbitraryGroup;
         QVERIFY(::chown(source.toLocal8Bit().constData(), 0, arbitraryGroup) == 0);

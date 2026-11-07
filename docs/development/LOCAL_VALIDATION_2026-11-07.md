@@ -225,3 +225,36 @@ Paused Windows worktree и работающий VPN хоста не изменя
 Приватные ключи не экспортировались, приложение и его данные не изменялись.
 Это проверка условий обновления; установка нового Release и runtime acceptance
 ещё не выполнены.
+
+## Последующий Release-кандидат 5.0.3.19
+
+Все четыре native Release targets скомпилированы: Windows/MSVC, Linux GUI и
+headless на Ubuntu 24.04, Android ARM64/NDK 27.2. Их native Git label —
+`a052af70`; упаковка использует отдельно проверенные исправления metadata.
+Неизменные native bytes не пересобирались ради тестовых/документальных правок.
+
+Исправлены реальные границы packaging: unsigned Android OSS Release без
+keystore в облаке, отказ при частичных signing inputs и отдельный key password;
+публичные Linux runtime directories и tar permissions независимо от umask;
+regular license resource из корневого `LICENSE` вместо Git symlink на Windows.
+Release-проверки lifecycle теперь сохраняют C assertions; root group fixture
+использует доступный foreign GID; physical Android collector использует
+управляемый ADB вне закрытого пользовательского SDK.
+
+Объединённые source regressions: 224 PASS, 15 platform SKIP, 134 subtests PASS;
+четыре новых metadata consumer tests: PASS, ещё 2 subtests PASS. Реальные Gradle
+DSL cases и MSVC lifecycle Release/negative controls проверены отдельно.
+Linux GUI: 66/66 Release CTest entries PASS. Headless: 14/14 entries PASS,
+четыре root-only cases дополнительно выполнены в изолированном owned container.
+
+Android APK подписан на ПК production keystore; сертификат совпадает с
+установленной версией. Независимая проверка подписи, ZIP/16KiB и идентичности
+всех payload entries исходному unsigned APK прошла. Это не заменяет проверки
+установки/VPN на физическом телефоне. Положительные Windows privileged-pipe
+cases требуют local-interactive гостя: SSH NETWORK token корректно отклонён
+действующей DACL и не считался функциональным PASS.
+
+Windows/Linux guest acceptance и физический Android — отдельный текущий этап.
+Набор N-1 `5.0.3.18` проверен по signed manifest, фактическим artifact hashes и
+свежему verify-only provisioning receipt; исторические release PASS не
+подставлялись. Production release/publishable gate здесь не объявляется.

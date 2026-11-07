@@ -37,6 +37,19 @@ val qtVersionName = providers.gradleProperty("qtVersionName").orNull?.takeIf { i
     ?: androidManifestAttribute("versionName")
     ?: throw GradleException("qtVersionName must be provided by Qt/CMake for Android release builds")
 
+// Release APKs may be signed later on a separate machine. Configure signing
+// only when the complete identity is supplied; partial inputs are an error.
+val releaseKeystorePath = providers.environmentVariable("QT_ANDROID_KEYSTORE_PATH").orNull
+val releaseStorePassword = providers.environmentVariable("QT_ANDROID_KEYSTORE_STORE_PASS").orNull
+val releaseKeyAlias = providers.environmentVariable("QT_ANDROID_KEYSTORE_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("QT_ANDROID_KEYSTORE_KEY_PASS").orNull
+val releaseSigningRequired = listOf(releaseKeystorePath, releaseStorePassword, releaseKeyAlias)
+val releaseSigningRequested = (releaseSigningRequired + releaseKeyPassword).any { !it.isNullOrEmpty() }
+val releaseSigningConfigured = releaseSigningRequired.all { !it.isNullOrEmpty() }
+if (releaseSigningRequested && !releaseSigningConfigured) {
+    throw GradleException("Release signing requires QT_ANDROID_KEYSTORE_PATH, QT_ANDROID_KEYSTORE_STORE_PASS and QT_ANDROID_KEYSTORE_ALIAS together; omit all signing inputs for an unsigned APK")
+}
+
 android {
     namespace = "org.amnezia.vpn"
 
@@ -76,10 +89,10 @@ android {
 
     signingConfigs {
         register("release") {
-            storeFile = providers.environmentVariable("QT_ANDROID_KEYSTORE_PATH").orNull?.let { file(it) }
-            storePassword = providers.environmentVariable("QT_ANDROID_KEYSTORE_STORE_PASS").orNull
-            keyAlias = providers.environmentVariable("QT_ANDROID_KEYSTORE_ALIAS").orNull
-            keyPassword = providers.environmentVariable("QT_ANDROID_KEYSTORE_STORE_PASS").orNull
+            storeFile = releaseKeystorePath?.takeIf { it.isNotEmpty() }?.let { file(it) }
+            storePassword = releaseStorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword?.takeIf { it.isNotEmpty() } ?: releaseStorePassword
         }
     }
 
@@ -89,7 +102,7 @@ android {
             packaging {
                 resources.excludes += "DebugProbesKt.bin"
             }
-            signingConfig = signingConfigs["release"]
+            signingConfig = if (releaseSigningConfigured) signingConfigs["release"] else null
         }
 
         create("fdroid") {

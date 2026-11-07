@@ -21,7 +21,7 @@ import threading
 import time
 
 PACKAGE = "org.amnezia.vpn"
-PINNED_ADB = Path("C:/Users/ivano/Android/Sdk/platform-tools/adb.exe")
+PINNED_ADB = Path("C:/CodexBuild/tools/platform-tools/adb.exe")
 MAX_OUTPUT = 16 * 1024 * 1024
 MAX_CAPTURE_OUTPUT = 32 * 1024 * 1024
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}")

@@ -1,5 +1,9 @@
 #include "platforms/windows/daemon/windowstunnelservicepolicy.h"
 
+#ifdef NDEBUG
+#error "Windows tunnel service lifecycle tests require active assertions"
+#endif
+
 #include <cassert>
 #include <cstdint>
 #include <string>

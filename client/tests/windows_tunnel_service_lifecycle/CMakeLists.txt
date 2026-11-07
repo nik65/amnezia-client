@@ -12,6 +12,12 @@ add_executable(windows_tunnel_service_lifecycle_tests
 target_include_directories(windows_tunnel_service_lifecycle_tests PRIVATE
     "${REPO}/client")
 
+if(MSVC)
+    target_compile_options(windows_tunnel_service_lifecycle_tests PRIVATE /UNDEBUG)
+else()
+    target_compile_options(windows_tunnel_service_lifecycle_tests PRIVATE -UNDEBUG)
+endif()
+
 enable_testing()
 add_test(NAME windows_tunnel_service_lifecycle
          COMMAND windows_tunnel_service_lifecycle_tests)
