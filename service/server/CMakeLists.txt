@@ -492,6 +492,9 @@ if (WIN32)
 endif()
 
 # install target
+include("${CMAKE_SOURCE_DIR}/cmake/windows_runtime_dependencies.cmake")
+amnezia_runtime_dependency_directories(_amnezia_runtime_dependency_directories)
+
 install(TARGETS ${PROJECT}
     DESTINATION ${CMAKE_INSTALL_BINDIR}
     RUNTIME_DEPENDENCY_SET service_deps
@@ -517,7 +520,7 @@ install(RUNTIME_DEPENDENCY_SET service_deps
         [[^.*[\\/]system32[\\/].*\.dll$]]
         [[^/lib.*]]
         [[^/usr/lib.*]]
-    DIRECTORIES ${CONAN_RUNTIME_LIB_DIRS}
+    DIRECTORIES ${_amnezia_runtime_dependency_directories}
     COMPONENT AmneziaVPN
     DESTINATION "${RUNTIME_DEPS_DIR}"
 )
