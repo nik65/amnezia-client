@@ -39,8 +39,11 @@ class ActiveMigrationPaths(unittest.TestCase):
         periodic = service.split("private fun startTrafficStatsUpdateJob()", 1)[1].split("private fun stopTrafficStatsUpdateJob", 1)[0]
         self.assertIn("clientMessengers.values.toList()", periodic)
         self.assertIn('putString("migrationObservation", it)', periodic)
-        cleanup = service.index("protocol?.migrationCleanupObservation")
-        self.assertLess(cleanup, service.index("ServiceEvent.STATUS_CHANGED", cleanup))
+        handler = service.split("private fun launchProtocolStateHandler()", 1)[1]
+        captured = handler.index("val capturedProtocol = capturedSession?.protocol ?: vpnProto?.protocol")
+        cleanup = handler.index("capturedProtocol?.migrationCleanupObservation")
+        self.assertLess(captured, cleanup)
+        self.assertLess(cleanup, handler.index("ServiceEvent.STATUS_CHANGED", cleanup))
 
     def test_daemon_receipt_follows_native_cleanup_and_is_epoch_bound(self):
         daemon = source("daemon/daemonlocalserverconnection.cpp")

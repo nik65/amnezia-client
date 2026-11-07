@@ -61,6 +61,25 @@ int main(int argc, char *argv[])
     QCoreApplication app(argc, argv);
     TestRunner runner;
 
+    // Uploads may finish with fewer bytes than the boundary lookahead limit.
+    // QByteArray::first requires a full-length input; preserve short suffixes
+    // while still detecting a secret key split across the upload boundary.
+    const QByteArray shortBoundaryInput = QByteArrayLiteral("rd=x\n");
+    CHECK(shortBoundaryInput.size() < MaximumPrivateKeyMarkerBytes);
+    const StreamBoundary shortBoundary = inspectStreamBoundary(
+            QByteArrayLiteral("passwo"), shortBoundaryInput);
+    CHECK(shortBoundary.pendingSecretKind == PendingSecretKind::Scalar);
+    CHECK(shortBoundary.pendingSecretPhase == PendingSecretPhase::RedactingValue);
+    ChunkContext shortBoundaryContext;
+    shortBoundaryContext.startsInsideRecord = true;
+    shortBoundaryContext.boundaryPendingSecretKind = shortBoundary.pendingSecretKind;
+    shortBoundaryContext.boundaryPendingSecretPhase = shortBoundary.pendingSecretPhase;
+    shortBoundaryContext.boundaryPendingSecretCharacters =
+            shortBoundary.pendingSecretCharactersInInput;
+    const SanitizedChunk sanitizedShortBoundary = sanitize(
+            shortBoundaryInput, shortBoundaryContext);
+    CHECK(!sanitizedShortBoundary.data.contains("x"));
+
     const QString exactBootstrapToken = QStringLiteral("BOOTSTRAP-TOKEN-8f398d8fc17b");
     const QString installationUuid = QStringLiteral("123e4567-e89b-12d3-a456-426614174000");
     const QByteArray corpus = QByteArrayLiteral(

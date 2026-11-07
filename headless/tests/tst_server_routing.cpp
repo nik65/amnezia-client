@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QNetworkProxy>
 #include <QRegularExpression>
 #include <QScopeGuard>
 #include <QSet>
@@ -1501,7 +1502,16 @@ private slots:
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
         QTcpServer server;
-        QVERIFY(server.listen(QHostAddress::AnyIPv4));
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+        // Route-policy checks use a VPN-internal literal address. Transport is
+        // redirected through this local HTTP proxy so no host network address,
+        // installed route, or live VPN is needed by the fixture.
+        const QNetworkProxy previousProxy = QNetworkProxy::applicationProxy();
+        const auto restoreProxy = qScopeGuard([previousProxy] {
+            QNetworkProxy::setApplicationProxy(previousProxy);
+        });
+        QNetworkProxy::setApplicationProxy(QNetworkProxy(
+                QNetworkProxy::HttpProxy, QStringLiteral("127.0.0.1"), server.serverPort()));
         QByteArray response = QByteArrayLiteral(
                 "{\"serverExcept\":{\"8.8.8.8\":\"\"}}\n");
         QObject::connect(&server, &QTcpServer::newConnection, &server, [&]() {
@@ -1529,8 +1539,8 @@ private slots:
         profile.protocol = QStringLiteral("wireguard");
         profile.interfaceName = QStringLiteral("wg0");
         profile.routingMode = QStringLiteral("all-except");
-        profile.forwardRoutes = { QStringLiteral("172.29.0.0/16") };
-        profile.serverRulesUrl = QStringLiteral("http://172.29.119.207:%1/rules.json")
+        profile.forwardRoutes = { QStringLiteral("10.8.1.0/24") };
+        profile.serverRulesUrl = QStringLiteral("http://10.8.1.4:%1/rules.json")
                 .arg(server.serverPort());
 
         const RoutingResult connected = controller.connect(profile);

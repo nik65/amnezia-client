@@ -82,11 +82,8 @@ endif()
 target_sources(amnezia_headless_core PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/../client/core/utils/remoteLogSanitizer.cpp")
 if(NOT DEFINED HEADLESS_BUILD_VERSION OR HEADLESS_BUILD_VERSION STREQUAL "")
-    if(DEFINED AMNEZIAVPN_VERSION AND NOT AMNEZIAVPN_VERSION STREQUAL "")
-        set(HEADLESS_BUILD_VERSION "${AMNEZIAVPN_VERSION}")
-    else()
-        set(HEADLESS_BUILD_VERSION "5.0.1.37")
-    endif()
+    include("${CMAKE_CURRENT_LIST_DIR}/../cmake/version.cmake")
+    set(HEADLESS_BUILD_VERSION "${AMNEZIAVPN_VERSION}")
 endif()
 target_compile_definitions(amnezia_headless_core PUBLIC
     AMNEZIA_HEADLESS_VERSION="${HEADLESS_BUILD_VERSION}")

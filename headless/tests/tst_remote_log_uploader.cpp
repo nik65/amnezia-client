@@ -360,8 +360,16 @@ void RemoteLogUploaderTest::unsafeParentChainIsRejected()
 #else
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-    const QString sourcePath = directory.filePath(QStringLiteral("client.log"));
-    const QString configPath = directory.filePath(QStringLiteral("client-logs.json"));
+    // Make the parent itself unsafe explicitly; TMPDIR may be private in a
+    // developer environment and must not determine this test's expectation.
+    QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("unsafe")));
+    const QString unsafeParent = directory.filePath(QStringLiteral("unsafe"));
+    QVERIFY(QFile::setPermissions(unsafeParent, QFileDevice::ReadOwner
+                                 | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                                 | QFileDevice::ReadGroup | QFileDevice::WriteGroup
+                                 | QFileDevice::ExeGroup));
+    const QString sourcePath = QDir(unsafeParent).filePath(QStringLiteral("client.log"));
+    const QString configPath = QDir(unsafeParent).filePath(QStringLiteral("client-logs.json"));
     QVERIFY(appendBytes(sourcePath, QByteArrayLiteral("safe\n")));
     QVERIFY(writeConfig(configPath, sourcePath));
     HeadlessRemoteLogUploader uploader(configPath);

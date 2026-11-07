@@ -516,7 +516,17 @@ class ManagedRouteSourceContractTests(unittest.TestCase):
         self.assertIn("generation != m_pendingManagedRouteReconcileGeneration", acknowledgement)
         self.assertIn("connectionEpoch != m_cachedConnectionEpoch", acknowledgement)
         self.assertIn("m_managedRouteIncrementalBlocked = true", acknowledgement)
-        self.assertIn("return ManagedRouteUpdateResult::ReconnectDeferred", update)
+        finish = function_body(
+            update,
+            "const auto finish = [&](ManagedRouteUpdateResult result, Reason reason)",
+        )
+        self.assertEqual(finish.count("return "), 1)
+        self.assertIn("return result;", finish)
+        self.assertNotRegex(finish, r"\bresult\s*=")
+        self.assertIn(
+            "return finish(ManagedRouteUpdateResult::ReconnectDeferred, Reason::DnsPending);",
+            update,
+        )
         self.assertIn("invalidateAllSplitRouteResolutions()", shutdown)
         self.assertIn("++m_connectionEpoch", shutdown)
         self.assertIn("m_checkTimer.stop()", shutdown)

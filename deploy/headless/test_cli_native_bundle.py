@@ -85,8 +85,8 @@ class CliNativeBundleTests(unittest.TestCase):
   receipt=verifier.verify_manifest_and_bundle(signed,public,self.archive,manifest.sha256(public))
   self.assertIs(receipt['verified'],True);self.assertEqual(receipt['packageFiles'],list(manifest.HEADLESS_PROVISIONING_FILES))
  def test_cli_marker_activation_after_both_runtime_checks(self):
-  old=SOURCE.index('NATIVE_HELPER="$PACKAGE_ROOT/amnezia-headless-fs"')
-  new=SOURCE.index('NATIVE_HELPER="$PACKAGE_ROOT/amnezia-cli"')
+  old=SOURCE.index('NATIVE_HELPER="${BOOTSTRAP_HELPERS[amnezia-headless-fs]}"')
+  new=SOURCE.index('NATIVE_HELPER="${BOOTSTRAP_HELPERS[amnezia-cli]}"')
   self.assertGreater(old,SOURCE.index('native helper does not match authenticated checksums'))
   self.assertGreater(new,SOURCE.index('if ! version_output='));self.assertGreater(new,SOURCE.index('done\n',SOURCE.index('for binary in amneziad amnezia-cli; do')))
   self.assertLess(SOURCE.index('if [[ "$RECOVER_ONLY" -eq 1 ]]'),new)

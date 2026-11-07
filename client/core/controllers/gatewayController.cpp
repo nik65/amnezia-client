@@ -14,6 +14,7 @@
 #include "core/utils/constants/apiConstants.h"
 #include "core/utils/constants/apiKeys.h"
 #include "core/utils/api/apiUtils.h"
+#include "cryptoUtils.h"
 
 #ifdef AMNEZIA_DESKTOP
     #include "core/utils/ipcClient.h"
@@ -125,6 +126,21 @@ GatewayController::GatewayController(const QString &gatewayEndpoint, const bool 
 GatewayController::~GatewayController()
 {
     agw_client_destroy(m_client);
+}
+
+bool GatewayController::hasConfiguredPublicKey(bool isDevEnvironment)
+{
+    const QByteArray key = isDevEnvironment ? QByteArray(DEV_AGW_PUBLIC_KEY) : QByteArray(PROD_AGW_PUBLIC_KEY);
+    if (key.trimmed().isEmpty()) {
+        return false;
+    }
+    EVP_PKEY *publicKey = CryptoUtils::loadPublicKeyFromPem(key);
+    if (!publicKey) {
+        return false;
+    }
+    const bool isRsaKey = EVP_PKEY_base_id(publicKey) == EVP_PKEY_RSA;
+    EVP_PKEY_free(publicKey);
+    return isRsaKey;
 }
 
 bool GatewayController::isAvailable() const

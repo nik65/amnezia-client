@@ -14,7 +14,7 @@ endif()
 enable_testing()
 add_executable(android_service_discovery_contract test.cpp)
 target_link_libraries(android_service_discovery_contract PRIVATE Qt6::Core)
-target_include_directories(android_service_discovery_contract PRIVATE ../../../core/utils "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(android_service_discovery_contract PRIVATE ../../.. ../../../core/utils "${CMAKE_CURRENT_BINARY_DIR}")
 add_test(NAME android_service_discovery_contract COMMAND android_service_discovery_contract)
 set_tests_properties(android_service_discovery_contract PROPERTIES TIMEOUT 30)
 

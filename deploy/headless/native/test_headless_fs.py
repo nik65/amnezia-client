@@ -89,18 +89,29 @@ class NativeFsTest(unittest.TestCase):
 
     def test_installer_authentication_precedes_native_activation(self):
         source = (Path(__file__).parents[1] / "install_headless.sh").read_text()
-        activation = source.index('NATIVE_HELPER="$PACKAGE_ROOT/amnezia-headless-fs"')
-        self.assertGreater(activation, source.index('native helper does not match authenticated checksums'))
-        self.assertGreater(activation, source.index('supplied trust anchor fingerprint does not match'))
+        activations = [source.index(f'NATIVE_HELPER="${{BOOTSTRAP_HELPERS[{name}]}}"')
+                       for name in ("amnezia-headless-fs", "amnezia-cli")]
+        for activation in activations:
+            self.assertGreater(activation, source.index('native helper does not match authenticated checksums'))
+            self.assertGreater(activation, source.index('supplied trust anchor fingerprint does not match'))
+        # Dispatch uses the authenticated private snapshot, never a mutable
+        # package-root executable. The CLI variant also pins its subcommand.
+        self.assertNotIn('NATIVE_HELPER="$PACKAGE_ROOT/', source)
+        self.assertIn('NATIVE_HELPER_ARGS=(--provisioning-fs)', source)
+        bootstrap = source.index('BOOTSTRAP_HELPERS["$name"]="$BOOTSTRAP_HELPER_DIR/$name"')
+        self.assertLess(source.index('native helper checksums digest does not match'), bootstrap)
+        self.assertLess(source.index('native helper bytes do not match'), bootstrap)
         tree_call = source.index('verify_root_private_tree "$candidate" || exit 4')
-        self.assertGreater(tree_call, activation)
+        self.assertGreater(tree_call, max(activations))
         # Native error returns directly; no fallthrough to the Python reference.
         for command in ("fsync-directory", "fsync-file", "verify-root-private-tree"):
             self.assertIn(f'run_native_helper {command} "$1"\n        return $?', source)
         build = (Path(__file__).parents[1] / "build_headless_release.sh").read_text()
         self.assertIn('--target amneziad amnezia-cli --parallel', build)
         self.assertIn('"nativeHelper":"amnezia-cli"', build)
-        self.assertIn('runtime-dependencies.txt > SHA256SUMS', build)
+        self.assertIn('PACKAGE_CHECKSUM_FILES=(install_headless.sh amneziad amnezia-cli amneziad.service package-manifest.json runtime-dependencies.json runtime-dependencies.txt)', build)
+        self.assertIn('PACKAGE_CHECKSUM_FILES+=("$NATIVE_VERIFIER_NAME")', build)
+        self.assertIn('sha256sum "${PACKAGE_CHECKSUM_FILES[@]}" > SHA256SUMS', build)
 
     def test_actual_installer_receipt_block_rejects_unbound_helper(self):
         source = (Path(__file__).parents[1] / "install_headless.sh").read_text()

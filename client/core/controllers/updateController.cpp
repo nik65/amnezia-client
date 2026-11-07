@@ -2702,6 +2702,9 @@ bool UpdateController::checkForUpdates()
 
     if (isSelfHostedUpdateChannelConfigured()) {
         fetchSelfHostedManifest();
+    } else if (!GatewayController::hasConfiguredPublicKey(m_appSettingsRepository->isDevGatewayEnv())) {
+        logger.info() << "Gateway update channel is unavailable because its selected RSA key is not configured";
+        finishUpdateCheck();
     } else {
         fetchGatewayUrl();
     }

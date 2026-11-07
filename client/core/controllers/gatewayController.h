@@ -25,6 +25,7 @@ public:
                                QObject *parent = nullptr);
     ~GatewayController() override;
 
+    static bool hasConfiguredPublicKey(bool isDevEnvironment);
     bool isAvailable() const;
 
     amnezia::ErrorCode post(const QString &endpoint, const QJsonObject apiPayload, QByteArray &responseBody);

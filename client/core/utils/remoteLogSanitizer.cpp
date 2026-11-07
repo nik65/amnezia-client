@@ -1391,7 +1391,7 @@ namespace amnezia::remoteLogSanitizer
         const QString tail = QString::fromUtf8(
                 lookbehind.right(MaximumPrivateKeyMarkerBytes));
         const QString prefix = QString::fromUtf8(
-                input.first(MaximumPrivateKeyMarkerBytes));
+                input.left(MaximumPrivateKeyMarkerBytes));
         const QString combined = tail + prefix;
         const qsizetype boundary = tail.size();
 
