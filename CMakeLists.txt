@@ -64,7 +64,7 @@ foreach(_branding_var IN ITEMS
     endif()
 endforeach()
 # Keep the fork code monotonic beyond the upstream 5.0.3.0 code (2163).
-set(APP_ANDROID_VERSION_CODE 2204)
+set(APP_ANDROID_VERSION_CODE 2205)
 if(DEFINED APP_ANDROID_VERSION_CODE_OFFSET)
     math(EXPR APP_ANDROID_VERSION_CODE "${APP_ANDROID_VERSION_CODE} + ${APP_ANDROID_VERSION_CODE_OFFSET}")
 endif()
