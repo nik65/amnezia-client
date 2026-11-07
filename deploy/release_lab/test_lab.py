@@ -29,7 +29,10 @@ class ReleaseLabContractTests(unittest.TestCase):
 
     def test_private_link_root_port_is_initial_and_profile_scoped(self):
         source = (Path(__file__).parent / "lab.py").read_text(encoding="utf-8")
-        self.assertIn('private_link_root_port = profile_id in {"server-router", "linux-headless-x64"}', source)
+        self.assertTrue(
+            'private_link_root_port = profile_id in {"server-router", "linux-headless-x64", "linux-x64-gui"}' in source,
+            "private-link root port must be present at initial launch for the three owned Linux profiles",
+        )
         self.assertIn('pcie-root-port,id=amnezia-link-rp,chassis=31,slot=30', source)
         self.assertIn('if vm.get("private_link_root_port") is not None:', source)
 

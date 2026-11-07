@@ -6,9 +6,9 @@ from deploy.release_lab import nested_cuttlefish_private_link as private_link_mo
 
 def binding(profile,pid):
  return {"run_id":"run","profile":profile,"marker":f"amnezia-release-lab:run:{profile}","pid":pid,"start_ticks":pid*10,"uid":999,"uuid":profile,"qmp_socket":"/qmp/"+profile,"qga_socket":"/qga/"+profile}
-def plan():
+def plan(outer_profile="linux-headless-x64"):
  data=b"manifest"
- return PrivateLinkPlan("run","a"*48,"lnk","/var/lib/amnezia-release-lab/runs/run/n/l.sock","server-router","linux-headless-x64",binding("server-router",2),binding("linux-headless-x64",3),"02:aa:00:00:00:01","02:aa:00:00:00:02","172.31.40.1/30","172.31.40.2/30","http://10.8.1.0:17865",[HttpObject("/manifest.json",hashlib.sha256(data).hexdigest(),len(data))])
+ return PrivateLinkPlan("run","a"*48,"lnk","/var/lib/amnezia-release-lab/runs/run/n/l.sock","server-router",outer_profile,binding("server-router",2),binding(outer_profile,3),"02:aa:00:00:00:01","02:aa:00:00:00:02","172.31.40.1/30","172.31.40.2/30","http://10.8.1.0:17865",[HttpObject("/manifest.json",hashlib.sha256(data).hexdigest(),len(data))])
 class Qmp:
  def __init__(self,fail=None):self.fail=fail;self.calls=[]
  def request(self,c,a):
@@ -45,8 +45,8 @@ class BadHttpQga(Qga):
   value=super().guest_exec_wait(exe,args,timeout)
   if "urllib.request" in args[1]:value["stdout"]=json.dumps({"status":200,"sha256":"0"*64,"bytes":8,"eof":True})
   return value
-def harness(change=False,fail=None):
- p=plan(); state={"exists":False,"owned_parent":True}
+def harness(change=False,fail=None,outer_profile="linux-headless-x64"):
+ p=plan(outer_profile); state={"exists":False,"owned_parent":True}
  def sock(_):return dict(state)
  sq,oq=Qmp(fail),Qmp()
  def remove(_,expected):
@@ -59,8 +59,10 @@ def harness(change=False,fail=None):
   return value
  link._qmp=qmp
  return link,sq,oq
-def test_happy_start_probe_cleanup_exact_qmp_order():
- link,sq,oq=harness(); receipt=link.start_and_probe();assert receipt["ready"] is True and receipt["http"][0]["sha256"]==plan().http_objects[0].sha256
+@pytest.mark.parametrize("outer_profile",["linux-headless-x64","linux-x64-gui"])
+def test_happy_start_probe_cleanup_exact_qmp_order(outer_profile):
+ link,sq,oq=harness(outer_profile=outer_profile); receipt=link.start_and_probe();assert receipt["ready"] is True and receipt["http"][0]["sha256"]==plan().http_objects[0].sha256
+ assert receipt["outer_ownership"]==binding(outer_profile,3)|{"start_ticks":"30"}
  assert receipt["application_links"]["server"]["application_address"]=="10.8.1.0/32"
  assert receipt["application_links"]["outer"]["gateway"]=="172.31.40.1"
  clean=link.cleanup();assert clean["clean"] is True
@@ -69,6 +71,25 @@ def test_happy_start_probe_cleanup_exact_qmp_order():
  assert sq.calls[5][1]["bus"]=="amnezia-link-rp"
  assert oq.calls[4][1]["server"] is False and oq.calls[4][1]["addr"]=={"type":"unix","path":plan().socket_path}
  assert oq.calls[5][1]["bus"]=="amnezia-link-rp"
+
+@pytest.mark.parametrize("outer_profile",["windows-x64","android-arm64-v8a","server-router","foreign-linux"])
+def test_unsupported_consumer_role_blocks_before_transport(outer_profile):
+ with pytest.raises(PrivateLinkError,match="invalid link roles"):
+  harness(outer_profile=outer_profile)
+
+def test_gui_link_requires_gui_ownership_not_another_linux_binding():
+ p=plan("linux-x64-gui")
+ object.__setattr__(p,"outer_binding",binding("linux-headless-x64",3))
+ with pytest.raises(PrivateLinkError,match="invalid linux-x64-gui ownership binding"):
+  p.validate()
+
+@pytest.mark.parametrize("field,value",[("pid",4),("start_ticks",31),("uuid","replacement"),("marker","amnezia-release-lab:other:linux-x64-gui"),("profile","linux-headless-x64")])
+def test_gui_owner_replacement_blocks_before_qmp_or_qga(field,value):
+ link,sq,oq=harness(outer_profile="linux-x64-gui")
+ link.os=lambda:dict(link.p.outer_binding,**{field:value})
+ with pytest.raises(PrivateLinkError,match="ownership changed|invalid linux-x64-gui ownership binding"):
+  link.start_and_probe()
+ assert sq.calls==oq.calls==[]
 def test_identity_change_blocks_before_mutation():
  link,sq,_=harness(change=True)
  with pytest.raises(PrivateLinkError,match="ownership changed"):link.start_and_probe()

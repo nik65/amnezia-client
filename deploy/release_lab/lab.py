@@ -2966,7 +2966,7 @@ class LabController:
                 network_args = ("-netdev", f"user,id=labnet,restrict=on,hostfwd=tcp:127.0.0.1:{fixture_host_port}-:{CONSUMER_FIXTURE_GUEST_PORT}", "-device", "e1000,netdev=labnet,id=labnet-device")
         else:
             network_args = ("-nic", "none")
-        private_link_root_port = profile_id in {"server-router", "linux-headless-x64"}
+        private_link_root_port = profile_id in {"server-router", "linux-headless-x64", "linux-x64-gui"}
         root_port_args = ("-device", "pcie-root-port,id=amnezia-link-rp,chassis=31,slot=30") if private_link_root_port else ()
         argv = ("qemu-system-x86_64", "-uuid", vm_uuid, "-machine", str(profile.get("machine", "q35")), "-cpu", "host", "-accel", "kvm", "-name", f"amnezia-release-lab-{run_id}-{profile_id}", "-m", str(profile.get("memory_mb", 2048)), "-smp", str(profile.get("cpus", 2)), *disk_args, *root_port_args, *network_args, "-qmp", f"unix:{qmp},server=on,wait=off", "-chardev", f"socket,path={qga},server=on,wait=off,id=qga0", "-device", "virtio-serial", "-device", "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0", *video_args, *display_args)
         intent_path = self._qemu_spawn_intent_path(run_id, profile_id)

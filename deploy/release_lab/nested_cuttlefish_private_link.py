@@ -79,7 +79,7 @@ class PrivateLinkPlan:
     def validate(self) -> None:
         if not _ID.fullmatch(self.run_id) or not _NONCE.fullmatch(self.attempt_nonce) or not _ID.fullmatch(self.link_id):
             raise PrivateLinkError("invalid link identity")
-        if self.server_profile != "server-router" or self.outer_profile != "linux-headless-x64":
+        if self.server_profile != "server-router" or self.outer_profile not in {"linux-headless-x64", "linux-x64-gui"}:
             raise PrivateLinkError("invalid link roles")
         if self.root_port_id != "amnezia-link-rp":
             raise PrivateLinkError("invalid private-link root port")
