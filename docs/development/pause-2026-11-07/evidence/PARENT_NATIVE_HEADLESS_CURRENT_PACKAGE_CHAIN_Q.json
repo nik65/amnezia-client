@@ -1,0 +1,195 @@
+{
+  "scope": "Current static9e11 packaged as DATA with reviewed Y installer through actual U builder -> actual canonical signer/verifier -> actual canonical inert-main archive/stage/metadata -> exact actual Y guard/path-remap/probe span. CMake TESTdaemon/CLI and UID0-directory/OSprobe MODELS explicitly exclude actual app/root/runtime; never launch installer, packaged/static component or TESTmembers here. No product or canonical source changes.",
+  "createdUtc": "2026-11-07T15:34:16.253090+00:00",
+  "componentPass": true,
+  "allFunctionsPass": false,
+  "releasePass": false,
+  "published": false,
+  "sourceManifest": {
+    "path": "/mnt/c/Users/ivano/PycharmProjects/amnezia-client/dist/diagnostics/upstream-5106-continuation-a/final-build-readiness-q/native-headless-integration-parent/MATERIALIZED_PRODUCT_SOURCE_MANIFEST.json",
+    "sha256": "0830d940be4d89245fc695e7d8d3dffca5eb897b25bd8199449338941890d722",
+    "fileCount": 2635
+  },
+  "rawIndexes": {
+    "canonical": "01347bedcda9626cced1629915c32e65b2eddbd36ebf78880fafc4b84dfdb9c4",
+    "candidate": "3e5142545f4ff71fad593b63010998e3fcc45901b84c5f6197d491c704c9368b"
+  },
+  "attempts": {
+    "builder-current-role-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/builder-current-role-a/RESULT.json",
+      "sha256": "3528c0796f3ac1e9168b6ba5533a66f98aa96dbe2404f4d13253d0112568d11f",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 4,
+      "currentInputsUnchanged": true
+    },
+    "builder-current-legacy-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/builder-current-legacy-a/RESULT.json",
+      "sha256": "a3f1f2f97a6eb1fe89abb45173bed9988a8ae9e97d6f206f4995296b54a3b8d9",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 4,
+      "currentInputsUnchanged": true
+    },
+    "builder-control-legacy-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/builder-control-legacy-a/RESULT.json",
+      "sha256": "17a8e47ad0ee25ada1a2a4f57069ad5ccce78121cc6a30c85448c01825c4b781",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 4,
+      "currentInputsUnchanged": true
+    },
+    "signed-current-b": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/signed-current-b/RESULT.json",
+      "sha256": "c658cbdc54213b286dbf26bb858635f7f66aea3551c0a1b0b4c7cf0a5d9b9d2e",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 3137,
+      "currentInputsUnchanged": true
+    },
+    "signed-current-failedwork-b": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/signed-current-failedwork-b/RESULT.json",
+      "sha256": "c11c4f7471be998b5cbba125d2baaf21dcf358aab98c574821a5be2ee041a2b0",
+      "nativeExit": 23,
+      "componentPass": false,
+      "inputCount": 3137,
+      "currentInputsUnchanged": true
+    },
+    "stage-current-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/stage-current-a/RESULT.json",
+      "sha256": "1710c916823d81f6eb2d313f3f47ef1b24ed6905bb47c7e4e165353e5bdc75c3",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 3106,
+      "currentInputsUnchanged": true
+    },
+    "stage-current-failedwork-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/stage-current-failedwork-a/RESULT.json",
+      "sha256": "ee9bd18b1a00f7c0b9972eca0453c67f6fe01b98b1270619e16b94d8498b673d",
+      "nativeExit": 23,
+      "componentPass": false,
+      "inputCount": 3106,
+      "currentInputsUnchanged": true
+    },
+    "consumer-current-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/consumer-current-a/RESULT.json",
+      "sha256": "00942955c46fbe8ff0b342ddb364d626c954a68804ffdb6133acf5947fcc9b93",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 3157,
+      "currentInputsUnchanged": true
+    },
+    "consumer-current-failedwork-a": {
+      "path": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/consumer-current-failedwork-a/RESULT.json",
+      "sha256": "27d43178e987c5cd51db4c43034c0a1bf75b40cbf13ece962ed92868cf0de5e1",
+      "nativeExit": 23,
+      "componentPass": false,
+      "inputCount": 3157,
+      "currentInputsUnchanged": true
+    }
+  },
+  "rolePackage": {
+    "path": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/builder-current-role-a/artifacts/AmneziaHeadless_1.0.0.42_linux_x64_provisioning.tar.gz",
+    "sha256": "fbf2b36c1e49b654e62ef2841eb0b4b980bf51d265213ff043e74639a963728a",
+    "size": 2937269,
+    "memberCount": 9,
+    "selectedInstallerSha256": "b19da99c6a8e79c0a28c73162e8fac790426c8fc0f689e7c28d183e27ea25d4b"
+  },
+  "legacyArchiveSha256": "976e05e2dd6231d227ec66c398782244e0bf1a93ea43fe7aed1d78bb53de9e9c",
+  "legacyOptionalRoleAbsentByteIdentical": true,
+  "signatureFixtures": {
+    "legacy8": {
+      "manifestPath": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/signed-current-b/manifest-legacy8/manifest.json",
+      "manifestSha256": "de63d48e3b3675af3f73f9fc36e94ed7966cbb8ce63513f67c1646b6011ffd4f",
+      "archivePath": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/builder-current-legacy-a/artifacts/AmneziaHeadless_1.0.0.42_linux_x64_provisioning.tar.gz",
+      "archiveSha256": "976e05e2dd6231d227ec66c398782244e0bf1a93ea43fe7aed1d78bb53de9e9c",
+      "canonicalReceipt": {
+        "schema": 1,
+        "tool": "amnezia-verify-provisioning-v1",
+        "verified": true,
+        "manifestSha256": "de63d48e3b3675af3f73f9fc36e94ed7966cbb8ce63513f67c1646b6011ffd4f",
+        "publicKeySha256": "8df0fe47d42f509b79bc09ed6d6a4b74e7fe7d59a8955415ffce0f4e8815b64e",
+        "archiveSha256": "976e05e2dd6231d227ec66c398782244e0bf1a93ea43fe7aed1d78bb53de9e9c",
+        "archiveSize": 18513,
+        "version": "1.0.0.42",
+        "packageVersion": "1.0.0.42",
+        "packageFiles": [
+          "install_headless.sh",
+          "amneziad",
+          "amnezia-cli",
+          "amneziad.service",
+          "package-manifest.json",
+          "runtime-dependencies.json",
+          "runtime-dependencies.txt",
+          "SHA256SUMS"
+        ],
+        "packageManifestSha256": "94f787462262abc463df417c366629c4ffca481d648e657c396529da9bed957a",
+        "checksumsSha256": "4d6cf56f0aac4620a3b59c296c09459bc706e9f2b083749e7f3ed8b56a9d3623"
+      }
+    },
+    "role9": {
+      "manifestPath": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/signed-current-b/manifest-role9/manifest.json",
+      "manifestSha256": "1cbde7a3cf6909e9f0e0fef25c153ff35faeaca8c23484e969bc398e8c58b304",
+      "archivePath": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/builder-current-role-a/artifacts/AmneziaHeadless_1.0.0.42_linux_x64_provisioning.tar.gz",
+      "archiveSha256": "fbf2b36c1e49b654e62ef2841eb0b4b980bf51d265213ff043e74639a963728a",
+      "canonicalReceipt": {
+        "schema": 1,
+        "tool": "amnezia-verify-provisioning-v1",
+        "verified": true,
+        "manifestSha256": "1cbde7a3cf6909e9f0e0fef25c153ff35faeaca8c23484e969bc398e8c58b304",
+        "publicKeySha256": "8df0fe47d42f509b79bc09ed6d6a4b74e7fe7d59a8955415ffce0f4e8815b64e",
+        "archiveSha256": "fbf2b36c1e49b654e62ef2841eb0b4b980bf51d265213ff043e74639a963728a",
+        "archiveSize": 2937269,
+        "version": "1.0.0.42",
+        "packageVersion": "1.0.0.42",
+        "packageFiles": [
+          "install_headless.sh",
+          "amneziad",
+          "amnezia-cli",
+          "amneziad.service",
+          "package-manifest.json",
+          "runtime-dependencies.json",
+          "runtime-dependencies.txt",
+          "SHA256SUMS",
+          "amnezia-verify-provisioning-native"
+        ],
+        "packageManifestSha256": "a000ec489eaa7fc20bc6bb3ce0eccb756ba75b79dedc27a331e96fc1dc52eac5",
+        "checksumsSha256": "ec8232d7dc9087d480ce361a7a70bbbc9bf9b4fe192441a0df6500143b84fb69"
+      }
+    }
+  },
+  "publicKey": {
+    "path": "/home/ivano/amnezia-product-50318-q/native-headless-root-fixture-parent/signed-current-b/owned-TEST-public.pem",
+    "sha256": "8df0fe47d42f509b79bc09ed6d6a4b74e7fe7d59a8955415ffce0f4e8815b64e",
+    "size": 113
+  },
+  "currentArtifact": {
+    "path": "/home/ivano/amnezia-product-50318-q/native-headless-integration-parent/cmake-build-a/build/amnezia-verify-provisioning-native",
+    "size": 7769672,
+    "sha256": "9e11222529593f8276a5202e4e8569e54ca8383a84152aa438eea5c38171792a",
+    "executed": false,
+    "staticElf64X86_64": true,
+    "notFinalDelivery": true
+  },
+  "admission": "NOT_ADMITTED",
+  "guestStarted": false,
+  "runtimeAcceptance": "NOT_RUN",
+  "remaining": [
+    "BB existing-controller explicit headless kind/role staging/strict guest receipts",
+    "actual fresh owned Linux root staging and cleanup",
+    "Z initial installer helperkind/ELF/recovery cutover not accepted/integrated",
+    "AA independently authenticated automatic CURRENT not accepted",
+    "final static6pair/app/sign/fresh106/fourplatform/provisioning/peer/data-plane/manual-client publication"
+  ],
+  "preservedSetupFailures": {
+    "signed-current-a": {
+      "nativeExit": 1,
+      "reason": "negative fixture expected direct CalledProcessError but actual canonical bundle wrapper raises SystemExit with native CalledProcessError cause; no production crypto defect"
+    },
+    "signed-current-failedwork-a": {
+      "nativeExit": 1,
+      "reason": "same setup, failed body not reached"
+    }
+  },
+  "metadataAudit": "Native Linux paths required: Windows UNC cannot reliably resolve /usr/bin/c++ alternatives symlink; failed Windows-only preaggregation did not create or modify report/evidence."
+}

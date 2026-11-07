@@ -83,12 +83,30 @@ echo "headless artifact: $ARCHIVE"
 # unit is an operator-controlled installation action.
 PACKAGE_DIR="$STAGE_DIR/headless-package"
 mkdir -p "$PACKAGE_DIR"
+# Proposal U: optional standalone native verifier role.  The member name is
+# fixed and the role is declared explicitly in the signed schema-2 package
+# manifest, byte-bound by sha256 and size.  Absent input preserves the exact
+# legacy manifest, member set and checksum receipt.
+NATIVE_VERIFIER_NAME="amnezia-verify-provisioning-native"
+NATIVE_VERIFIER_FIELD=""
+if [[ -n "${AMNEZIA_HEADLESS_NATIVE_VERIFIER:-}" ]]; then
+    NATIVE_VERIFIER_INPUT="${AMNEZIA_HEADLESS_NATIVE_VERIFIER}"
+    [[ "$NATIVE_VERIFIER_INPUT" == /* && -f "$NATIVE_VERIFIER_INPUT" && ! -L "$NATIVE_VERIFIER_INPUT" ]] || {
+        echo "AMNEZIA_HEADLESS_NATIVE_VERIFIER must be an absolute regular non-symlink file" >&2
+        exit 2
+    }
+    install -m 0755 "$NATIVE_VERIFIER_INPUT" "$PACKAGE_DIR/$NATIVE_VERIFIER_NAME"
+    NATIVE_VERIFIER_SHA256="$(sha256sum "$PACKAGE_DIR/$NATIVE_VERIFIER_NAME" | awk '{print $1}')"
+    NATIVE_VERIFIER_SIZE="$(stat -c %s "$PACKAGE_DIR/$NATIVE_VERIFIER_NAME")"
+    [[ "$NATIVE_VERIFIER_SHA256" =~ ^[0-9a-f]{64}$ && "$NATIVE_VERIFIER_SIZE" =~ ^[1-9][0-9]*$ ]] || exit 2
+    NATIVE_VERIFIER_FIELD=",\"nativeVerifier\":{\"path\":\"$NATIVE_VERIFIER_NAME\",\"sha256\":\"$NATIVE_VERIFIER_SHA256\",\"size\":$NATIVE_VERIFIER_SIZE}"
+fi
 install -m 0755 "$ROOT_DIR/deploy/headless/install_headless.sh" "$PACKAGE_DIR/install_headless.sh"
 install -m 0755 "$STAGE_DIR/usr/local/bin/amneziad" "$PACKAGE_DIR/amneziad"
 install -m 0755 "$STAGE_DIR/usr/local/bin/amnezia-cli" "$PACKAGE_DIR/amnezia-cli"
 install -m 0644 "$STAGE_DIR/usr/local/lib/systemd/system/amneziad.service" "$PACKAGE_DIR/amneziad.service"
 cat > "$PACKAGE_DIR/package-manifest.json" <<EOF
-{"schema":2,"version":"$VERSION","platform":"linux-headless-x64","installModes":["fresh","upgrade"],"artifacts":["amneziad","amnezia-cli","amneziad.service"],"service":"amneziad.service","servicePaths":["/etc/systemd/system/amneziad.service","/run/systemd/system/amneziad.service","/usr/local/lib/systemd/system/amneziad.service","/usr/lib/systemd/system/amneziad.service","/lib/systemd/system/amneziad.service"],"trustAnchor":"external-ed25519-sha256-receipt","runtimeManifest":"runtime-dependencies.json","checksums":"SHA256SUMS","runtimeText":"runtime-dependencies.txt","nativeHelper":"amnezia-cli"}
+{"schema":2,"version":"$VERSION","platform":"linux-headless-x64","installModes":["fresh","upgrade"],"artifacts":["amneziad","amnezia-cli","amneziad.service"],"service":"amneziad.service","servicePaths":["/etc/systemd/system/amneziad.service","/run/systemd/system/amneziad.service","/usr/local/lib/systemd/system/amneziad.service","/usr/lib/systemd/system/amneziad.service","/lib/systemd/system/amneziad.service"],"trustAnchor":"external-ed25519-sha256-receipt","runtimeManifest":"runtime-dependencies.json","checksums":"SHA256SUMS","runtimeText":"runtime-dependencies.txt","nativeHelper":"amnezia-cli"$NATIVE_VERIFIER_FIELD}
 EOF
 cat > "$PACKAGE_DIR/runtime-dependencies.json" <<'EOF'
 {"schema":2,"distribution":"ubuntu","architectures":["amd64"],"releases":[
@@ -116,7 +134,9 @@ iproute2 (ip)
 tar (gzip support)
 WireGuard/AmneziaWG/OpenVPN/XRay backend binaries as used by imported profiles
 EOF
-(cd "$PACKAGE_DIR" && sha256sum install_headless.sh amneziad amnezia-cli amneziad.service package-manifest.json runtime-dependencies.json runtime-dependencies.txt > SHA256SUMS)
+PACKAGE_CHECKSUM_FILES=(install_headless.sh amneziad amnezia-cli amneziad.service package-manifest.json runtime-dependencies.json runtime-dependencies.txt)
+if [[ -n "$NATIVE_VERIFIER_FIELD" ]]; then PACKAGE_CHECKSUM_FILES+=("$NATIVE_VERIFIER_NAME"); fi
+(cd "$PACKAGE_DIR" && sha256sum "${PACKAGE_CHECKSUM_FILES[@]}" > SHA256SUMS)
 echo "headless package manifest sha256: $(sha256sum "$PACKAGE_DIR/package-manifest.json" | awk '{print $1}')"
 echo "headless package checksums sha256: $(sha256sum "$PACKAGE_DIR/SHA256SUMS" | awk '{print $1}')"
 PACKAGE_ARCHIVE="$OUT_DIR/AmneziaHeadless_${VERSION}_linux_x64_provisioning.tar.gz"

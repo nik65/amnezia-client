@@ -211,6 +211,12 @@ DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
 #   * For example: A user cannot expect ${Hostname} to be expanded, as it is an environment variable and will be
 #     treated as '${Hostname}' itself on the command line.
 
+# Opt-in reproducible cached builds when repository access is unavailable.
+# Gradle itself fails if a required dependency is absent; no substitute is fetched.
+if [ "${AMNEZIA_GRADLE_OFFLINE:-}" = "1" ]; then
+    set -- --offline "$@"
+fi
+
 set -- \
         "-Dorg.gradle.appname=$APP_BASE_NAME" \
         -classpath "$CLASSPATH" \

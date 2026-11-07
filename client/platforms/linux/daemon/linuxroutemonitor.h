@@ -13,6 +13,7 @@
 #include <QSocketNotifier>
 
 #include "ipaddress.h"
+#include "linuxgatewayroutereceipt.h"
 
 
 class LinuxRouteMonitor final : public QObject {
@@ -37,12 +38,26 @@ class LinuxRouteMonitor final : public QObject {
   EndpointRouteResult removeOwnedEndpointRoute(const IPAddress& prefix);
 
   bool deleteExclusionRoute(const IPAddress& prefix);
+  bool hasPendingGatewayRoutes() const { return !m_ownedGatewayRoutes.isEmpty(); }
  private:
   struct EndpointRouteReceipt {
     QString gateway;
     QString interfaceName;
     unsigned int interfaceIndex = 0;
+    uint32_t priority = amnezia::linux_routes::OwnedGatewayRoutePriority;
   };
+
+  enum class GatewayRouteOwner { Exclusion, Endpoint };
+  struct GatewayRouteState {
+    EndpointRouteReceipt receipt;
+    unsigned int exclusionReferences = 0;
+    unsigned int endpointReferences = 0;
+    bool uncertain = false;
+    bool creationConfirmed = false;
+  };
+  EndpointRouteResult acquireGatewayRoute(const IPAddress& prefix, GatewayRouteOwner owner);
+  EndpointRouteResult releaseGatewayRoute(const IPAddress& prefix, GatewayRouteOwner owner);
+  EndpointRouteResult verifyGatewayRoute(const IPAddress& prefix, const EndpointRouteReceipt& receipt);
 
   static QString addrToString(const struct sockaddr* sa);
   static QString addrToString(const QByteArray& data);
@@ -55,7 +70,7 @@ class LinuxRouteMonitor final : public QObject {
   int m_nlsock = -1;
   int m_nlseq = 0;
   QSocketNotifier* m_notifier = nullptr;
-  QHash<QString, EndpointRouteReceipt> m_ownedEndpointRoutes;
+  QHash<QString, GatewayRouteState> m_ownedGatewayRoutes;
 
  private slots:
     void nlsockReady();

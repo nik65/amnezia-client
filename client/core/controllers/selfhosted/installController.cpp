@@ -22,6 +22,7 @@
 
 #include "core/configurators/configuratorBase.h"
 #include "core/configurators/xrayConfigurator.h"
+#include "core/models/protocols/xrayProtocolConfig.h"
 #include "core/utils/containerEnum.h"
 #include "core/utils/containers/containerUtils.h"
 #include "core/utils/protocolEnum.h"
@@ -719,6 +720,70 @@ busybox httpd -f -p __SYNC_PORT__ -h /www
         return script.toUtf8();
     }
 
+    QString effectiveXrayPort(const XrayProtocolConfig *cfg)
+    {
+        if (!cfg || cfg->serverConfig.port.isEmpty()) {
+            return QString::fromLatin1(protocols::xray::defaultPort);
+        }
+        return cfg->serverConfig.port;
+    }
+
+    QString normalizeXrayRelease(QString raw)
+    {
+        raw = raw.trimmed();
+        if (raw.startsWith(QLatin1String("v"), Qt::CaseInsensitive)) {
+            raw.remove(0, 1);
+        }
+        return raw.trimmed();
+    }
+
+    QString parseXrayVersionOutput(const QString &output)
+    {
+        static const QRegularExpression re(QStringLiteral(R"(Xray\s+v?(\d+\.\d+\.\d+))"),
+                                           QRegularExpression::CaseInsensitiveOption);
+        const auto match = re.match(output);
+        if (!match.hasMatch()) {
+            return {};
+        }
+        return match.captured(1);
+    }
+
+    enum class XrayBinaryProbeResult {
+        Match,
+        Mismatch,
+        Failed
+    };
+
+    XrayBinaryProbeResult probeXrayServerBinary(const ServerCredentials &credentials, SshSession &sshSession)
+    {
+        const QString expected =
+                normalizeXrayRelease(QString::fromLatin1(protocols::xray::expectedServerXrayRelease));
+
+        QString stdOut;
+        auto collect = [&stdOut](const QString &data, libssh::Client &) {
+            stdOut += data;
+            return ErrorCode::NoError;
+        };
+        const QString script = SshSession::replaceVars(
+                QStringLiteral("sudo docker exec $CONTAINER_NAME xray version 2>/dev/null | head -1"),
+                amnezia::genBaseVars(credentials, DockerContainer::Xray, QString(), QString()));
+        const ErrorCode errorCode = sshSession.runScript(credentials, script, collect, collect);
+        const QString live = parseXrayVersionOutput(stdOut);
+
+        if (errorCode != ErrorCode::NoError || live.isEmpty()) {
+            return XrayBinaryProbeResult::Failed;
+        }
+        if (live != expected) {
+            return XrayBinaryProbeResult::Mismatch;
+        }
+        return XrayBinaryProbeResult::Match;
+    }
+
+    bool xrayServerBinaryMismatchesExpected(const ServerCredentials &credentials, SshSession &sshSession)
+    {
+        return probeXrayServerBinary(credentials, sshSession) == XrayBinaryProbeResult::Mismatch;
+    }
+
     bool dockerDaemonContainerMissing(const QString &out, const QString &containerDockerName)
     {
         if (!out.contains(QLatin1String("Error response from daemon"), Qt::CaseInsensitive)) {
@@ -734,11 +799,24 @@ busybox httpd -f -p __SYNC_PORT__ -h /www
         return false;
     }
 
+    bool containerKeepsIdentityInDataVolume(DockerContainer container)
+    {
+        return container == DockerContainer::MtProxy
+                || container == DockerContainer::Telemt
+                || container == DockerContainer::TProxy
+                || container == DockerContainer::Xray;
+    }
+
     QString buildRemoveContainerScript(const amnezia::ScriptVars &vars, bool removeDataVolume)
     {
         QString script = SshSession::replaceVars(amnezia::scriptData(SharedScriptType::remove_container), vars);
         if (removeDataVolume) {
-            script += QLatin1String("\nsudo docker volume rm -f $CONTAINER_NAME-data 2>/dev/null || true");
+            script += QLatin1String(
+                    "\nfor attempt in 1 2 3 4 5; do"
+                    "\n  sudo docker volume rm -f $CONTAINER_NAME-data && break"
+                    "\n  sleep 1"
+                    "\ndone"
+                    "\necho \"amnezia_volume_left=$(sudo docker volume ls -q -f name=^$CONTAINER_NAME-data$ | head -1)\"");
             script = SshSession::replaceVars(script, vars);
         }
         return script;
@@ -842,6 +920,12 @@ busybox httpd -f -p __SYNC_PORT__ -h /www
 
         return true;
     }
+
+    bool dataVolumeSurvivedRemoval(const QString &out)
+    {
+        static const QRegularExpression reLeft(QStringLiteral("amnezia_volume_left=(\\S+)"));
+        return reLeft.match(out).hasMatch();
+    }
 }
 
 InstallController::InstallController(SecureServersRepository *serversRepository,
@@ -867,17 +951,216 @@ ErrorCode InstallController::publishServerRoutingRules(const ServerCredentials &
 
 ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredentials &credentials,
         DockerContainer source, qint64 generation, const QString &expectedJournalSha256,
-        QJsonObject &result)
+        const AwgMaintenance::Selection &selection, QJsonObject &result)
 {
     result = {};
     const QRegularExpression hashPattern(QStringLiteral("^[a-f0-9]{64}$"));
+    const QRegularExpression directoryPattern(
+        QStringLiteral("^/tmp/amnezia-migration-(maintenance|upload)-[A-Za-z0-9]{24}$"));
     if (!credentials.isValid() || credentials.sshHostKeyFingerprint.isEmpty()
             || (source != DockerContainer::Awg && source != DockerContainer::Awg2)
             || generation < 1 || generation > 9007199254740991LL
-            || !hashPattern.match(expectedJournalSha256).hasMatch())
+            || !hashPattern.match(expectedJournalSha256).hasMatch()
+            || (selection.native()
+                && (selection.nativeControlVariant != QStringLiteral("native-control-http-v1")
+                    || !hashPattern.match(selection.currentControlSha256).hasMatch())))
         return ErrorCode::ServerCheckFailed;
     SshSession session;
-    const QString directory = QStringLiteral("/tmp/amnezia-migration-maintenance-%1").arg(Utils::getRandomString(24));
+    std::optional<amnezia::serverNative::Binary> selectedControl;
+    auto capture = [](QByteArray &target, int cap) {
+        return [&target, cap](const QString &data, libssh::Client &) {
+            const QByteArray bytes = data.toUtf8();
+            if (target.size() + bytes.size() > cap) return ErrorCode::ServerCheckFailed;
+            target += bytes;
+            return ErrorCode::NoError;
+        };
+    };
+    if (selection.native()) {
+        // The selected bundle is the only replacement-payload producer. It is
+        // independent of the journal and of the operator's current pin; a
+        // missing/invalid bundle fails closed instead of selecting Python.
+        const auto nativeBundle = amnezia::serverNative::loadResourceBundle();
+        if (!nativeBundle.present || !nativeBundle.valid) {
+            result.insert(QStringLiteral("reason"), QStringLiteral("native_bundle_invalid"));
+            return ErrorCode::ServerCheckFailed;
+        }
+        QByteArray architectureOutput;
+        const ErrorCode architectureError = session.runScript(credentials, QStringLiteral("uname -m"),
+            capture(architectureOutput, 128), [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+        if (architectureError != ErrorCode::NoError) return architectureError;
+        const auto architecture = amnezia::serverNative::parseArchitecture(
+                QString::fromLatin1(architectureOutput.trimmed()));
+        if (architecture) selectedControl = nativeBundle.find(QStringLiteral("awg-feed"), *architecture);
+        if (!selectedControl) {
+            result.insert(QStringLiteral("reason"), QStringLiteral("native_feed_architecture_unavailable"));
+            return ErrorCode::ServerCheckFailed;
+        }
+    }
+    const QString directory = QStringLiteral("/tmp/amnezia-migration-maintenance-%1")
+            .arg(Utils::getRandomString(24));
+    const QString upload = QStringLiteral("/tmp/amnezia-migration-upload-%1")
+            .arg(Utils::getRandomString(24));
+    // /tmp must itself be the root-owned sticky directory. The maintenance tree
+    // is created *by root* at the top level: there is no user-owned ancestor in
+    // which a rename or replacement could invalidate root-owned children.
+    if (selection.native()) {
+        if (!directoryPattern.match(directory).hasMatch() || !directoryPattern.match(upload).hasMatch())
+            return ErrorCode::InternalError;
+        QByteArray tmpStat;
+        const ErrorCode tmpError = session.runScript(credentials, QStringLiteral("stat -c '%u %g %a' /tmp"),
+            capture(tmpStat, 64), [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+        if (tmpError != ErrorCode::NoError || tmpStat.trimmed() != QByteArrayLiteral("0 0 1777")) {
+            result.insert(QStringLiteral("reason"), QStringLiteral("native_tmp_trust_failed"));
+            return ErrorCode::ServerCheckFailed;
+        }
+    }
+    const QString helperDirectory = directory + QStringLiteral("/helper");
+    const QString recipeDirectory = directory + QStringLiteral("/recipe");
+    const QString stagingDirectory = directory + QStringLiteral("/staging");
+    const QString helper = helperDirectory + QStringLiteral("/awg-feed");
+    const QString recipe = recipeDirectory + QStringLiteral("/awg-feed");
+    QString rootIdentity; // "uid gid mode dev inode" of the highest ancestor
+    bool rootCreated = false;
+    auto statRoot = [&]() -> ErrorCode {
+        QByteArray out;
+        const ErrorCode error = session.runScript(credentials,
+            QStringLiteral("sudo stat -c '%u %g %a %d %i' -- '%1'").arg(directory),
+            capture(out, 128), [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+        if (error != ErrorCode::NoError) return error;
+        const QList<QByteArray> fields = out.trimmed().split(' ');
+        if (fields.size() != 5 || fields.at(0) != "0" || fields.at(1) != "0" || fields.at(2) != "700")
+            return ErrorCode::ServerCheckFailed;
+        rootIdentity = QString::fromLatin1(out.trimmed());
+        return ErrorCode::NoError;
+    };
+    auto cleanupOwned = [&]() -> ErrorCode {
+        // Exact, independent cleanup of this invocation's owned state. Only a
+        // root-owned tree whose device/inode still matches the creation readback
+        // is touched; user-writable ancestors, globs and recursive deletion are
+        // never used. A failed trusted-identity readback refuses the tree but
+        // never skips the independent unprivileged upload removal.
+        ErrorCode cleanupError = ErrorCode::NoError;
+        bool rootTrusted = false;
+        if (rootCreated) {
+            QByteArray current;
+            const ErrorCode identityError = session.runScript(credentials,
+                QStringLiteral("sudo stat -c '%u %g %a %d %i' -- '%1'").arg(directory),
+                capture(current, 128), [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+            rootTrusted = identityError == ErrorCode::NoError
+                && QString::fromLatin1(current.trimmed()) == rootIdentity;
+            if (!rootTrusted) cleanupError = ErrorCode::ServerCheckFailed;
+        }
+        if (rootTrusted) {
+            // The real native subject leaves exactly these SHA-bound children in
+            // the private staging root after a successful control replacement:
+            // awg-feed-<new>.bin and context-<new>/{awg-feed,Dockerfile,image.iid}.
+            // The strict unchanged-bytes no-op writes none of them, so `rm -f`
+            // tolerates every missing exact path; no glob and no recursive delete.
+            const QString staged = stagingDirectory + QStringLiteral("/awg-feed-%1.bin")
+                .arg(selectedControl->sha256);
+            const QString context = stagingDirectory + QStringLiteral("/context-%1")
+                .arg(selectedControl->sha256);
+            if (session.runScript(credentials, QStringLiteral(
+                    "sudo rm -f -- '%1' '%2' '%3' '%4' '%5' '%6'")
+                    .arg(helper, recipe, staged, context + QStringLiteral("/awg-feed"),
+                         context + QStringLiteral("/Dockerfile"), context + QStringLiteral("/image.iid"))
+                    ) != ErrorCode::NoError)
+                cleanupError = ErrorCode::ServerCheckFailed;
+            if (selectedControl->sha256 != selection.currentControlSha256
+                    && session.runScript(credentials, QStringLiteral("sudo rmdir -- '%1'").arg(context))
+                    != ErrorCode::NoError)
+                cleanupError = ErrorCode::ServerCheckFailed;
+            if (session.runScript(credentials, QStringLiteral(
+                    "sudo rmdir -- '%1' '%2' '%3' '%4'")
+                    .arg(stagingDirectory, helperDirectory, recipeDirectory, directory))
+                    != ErrorCode::NoError)
+                cleanupError = ErrorCode::ServerCheckFailed;
+        }
+        // Outside the root-owned tree: always attempted, unprivileged.
+        if (session.runScript(credentials, QStringLiteral("rm -f -- '%1'").arg(upload))
+                != ErrorCode::NoError)
+            cleanupError = ErrorCode::ServerCheckFailed;
+        return cleanupError;
+    };
+    auto finish = [&](ErrorCode primary, bool retainRecoveryInputs) -> ErrorCode {
+        // Persisted native recovery state (journal controlMaintenance.new.stage
+        // and .context) lives inside the staging/recipe tree passed on argv. A
+        // failed or pending transaction may require --maintenance-recover, so
+        // those recovery inputs are retained, never deleted after the fact.
+        if (retainRecoveryInputs) {
+            if (primary == ErrorCode::NoError)
+                result.insert(QStringLiteral("reason"), QStringLiteral("native_recovery_inputs_retained"));
+            result.insert(QStringLiteral("retainedDirectory"), directory);
+            if (primary == ErrorCode::NoError) return ErrorCode::ServerCheckFailed;
+            return primary;
+        }
+        const ErrorCode cleanupError = cleanupOwned();
+        if (primary != ErrorCode::NoError) return primary;
+        if (cleanupError != ErrorCode::NoError)
+            result.insert(QStringLiteral("reason"), QStringLiteral("native_cleanup_failed"));
+        return cleanupError;
+    };
+    if (selection.native()) {
+        ErrorCode error = session.runScript(credentials, QStringLiteral(
+                "sudo install -d -o 0 -g 0 -m 0700 -- '%1' '%2' '%3' '%4'")
+                .arg(directory, helperDirectory, recipeDirectory, stagingDirectory));
+        if (error != ErrorCode::NoError) return error;
+        rootCreated = true;
+        error = statRoot();
+        if (error != ErrorCode::NoError) {
+            result.insert(QStringLiteral("reason"), QStringLiteral("native_program_directory_trust_failed"));
+            return finish(error, false);
+        }
+        error = session.uploadFileToHost(credentials, selectedControl->bytes, upload);
+        if (error != ErrorCode::NoError) return finish(error, false);
+        // Install from the untrusted upload into the root-private tree, then
+        // remove the upload. Content identity is not assumed: it is read back
+        // from the installed files below.
+        error = session.runScript(credentials, QStringLiteral(
+                "sudo install -o 0 -g 0 -m 0700 -- '%1' '%2' && "
+                "sudo install -o 0 -g 0 -m 0700 -- '%1' '%3'")
+                .arg(upload, helper, recipe));
+        if (error != ErrorCode::NoError) return finish(error, false);
+        QByteArray readback;
+        const ErrorCode readbackError = session.runScript(credentials, QStringLiteral(
+                "sudo sha256sum -- '%1' '%2'").arg(helper, recipe),
+            capture(readback, 512), [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+        const QString expectedReadback = QStringLiteral("%1  %2\n%1  %3\n")
+                .arg(selectedControl->sha256, helper, recipe);
+        if (readbackError != ErrorCode::NoError || readback != expectedReadback.toUtf8())
+            return finish(readbackError != ErrorCode::NoError ? readbackError
+                    : ErrorCode::ServerCheckFailed, false);
+        // Independent second identity readback immediately before first exec:
+        // the same root-owned highest ancestor (device/inode stable) still
+        // contains the verified bytes.
+        error = statRoot();
+        if (error != ErrorCode::NoError) return finish(error, false);
+        QByteArray finalReadback;
+        const ErrorCode finalError = session.runScript(credentials, QStringLiteral(
+                "sudo sha256sum -- '%1' '%2'").arg(helper, recipe),
+            capture(finalReadback, 512), [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+        if (finalError != ErrorCode::NoError || finalReadback != expectedReadback.toUtf8())
+            return finish(finalError != ErrorCode::NoError ? finalError : ErrorCode::ServerCheckFailed, false);
+        QByteArray output;
+        const QString command = QStringLiteral(
+            "sudo '%1' --maintenance --source '%2' --generation %3 --expected-journal-sha256 '%4'"
+            " --native-control-sha256 '%5' --native-control-replacement-sha256 '%6'"
+            " --control-staging-directory '%7' --recipe-directory '%8'")
+            .arg(helper, ContainerUtils::containerToString(source)).arg(generation)
+            .arg(expectedJournalSha256, selection.currentControlSha256, selectedControl->sha256,
+                 stagingDirectory, recipeDirectory);
+        error = session.runScript(credentials, command, capture(output, 16384),
+            [](const QString &, libssh::Client &) { return ErrorCode::NoError; }, 10 * 60 * 1000);
+        result = QJsonDocument::fromJson(output.trimmed()).object();
+        const bool pending = result.value(QStringLiteral("pendingRecovery")).toBool();
+        if (error != ErrorCode::NoError || pending
+                || !AwgMaintenance::validNativeReceipt(result, ContainerUtils::containerToString(source),
+                        generation, selection.currentControlSha256, selectedControl->sha256)) {
+            const ErrorCode validationError = error != ErrorCode::NoError ? error : ErrorCode::ServerCheckFailed;
+            return finish(validationError, true);
+        }
+        return finish(ErrorCode::NoError, false);
+    }
     ErrorCode error = session.runScript(credentials, QStringLiteral("umask 077; mkdir '%1'").arg(directory));
     if (error != ErrorCode::NoError) return error;
     const QStringList files {QStringLiteral("maintenance.py"), QStringLiteral("journal.py"),
@@ -902,12 +1185,8 @@ ErrorCode InstallController::maintainAwgMigrationControls(const ServerCredential
     const QString command = QStringLiteral(
         "sudo python3 -B '%1/maintenance.py' --source '%2' --generation %3 --expected-journal-sha256 '%4'")
         .arg(directory, ContainerUtils::containerToString(source)).arg(generation).arg(expectedJournalSha256);
-    error = session.runScript(credentials, command,
-        [&output](const QString &data, libssh::Client &) {
-            const QByteArray bytes = data.toUtf8();
-            if (output.size() + bytes.size() > 16384) return ErrorCode::ServerCheckFailed;
-            output += bytes; return ErrorCode::NoError;
-        }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; }, 10 * 60 * 1000);
+    error = session.runScript(credentials, command, capture(output, 16384),
+        [](const QString &, libssh::Client &) { return ErrorCode::NoError; }, 10 * 60 * 1000);
     cleanup();
     result = QJsonDocument::fromJson(output.trimmed()).object();
     if (error != ErrorCode::NoError) return error;
@@ -954,7 +1233,7 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
         return ErrorCode::ServerCheckFailed;
     }
     SshSession session;
-    std::optional<amnezia::serverNative::Binary> nativeFeed;
+    std::optional<amnezia::serverNative::Binary> nativeFeed, nativeCollector;
     if (nativeBundle.present) {
         QByteArray architectureOutput;
         const ErrorCode architectureError = session.runScript(credentials, QStringLiteral("uname -m"),
@@ -966,9 +1245,19 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
             }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
         if (architectureError != ErrorCode::NoError) return architectureError;
         const auto architecture = amnezia::serverNative::parseArchitecture(QString::fromLatin1(architectureOutput.trimmed()));
-        if (architecture) nativeFeed = nativeBundle.find(QStringLiteral("awg-feed"), *architecture);
+        if (architecture) {
+            nativeFeed = nativeBundle.find(QStringLiteral("awg-feed"), *architecture);
+            nativeCollector = nativeBundle.find(QStringLiteral("collector"), *architecture);
+        }
         if (!nativeFeed) {
             result.insert(QStringLiteral("reason"), QStringLiteral("native_feed_architecture_unavailable"));
+            return ErrorCode::ServerCheckFailed;
+        }
+        // PREPARE requires both programs from the single verified bundle for the
+        // observed architecture. A native feed without its collector fails
+        // closed instead of falling back to the Python recipe.
+        if (!nativeCollector) {
+            result.insert(QStringLiteral("reason"), QStringLiteral("native_collector_architecture_unavailable"));
             return ErrorCode::ServerCheckFailed;
         }
     }
@@ -976,55 +1265,186 @@ ErrorCode InstallController::prepareAwgMigration(const ServerCredentials &creden
     ErrorCode error = session.runScript(credentials,
             QStringLiteral("umask 077; mkdir '%1'").arg(directory));
     if (error != ErrorCode::NoError) return error;
-    auto cleanup = [&]() {
-        // Random, fixed-prefix directory created by this invocation only.
-        if (nativeFeed)
-            session.runScript(credentials, QStringLiteral("sudo rm -f '%1/native-feed'").arg(directory));
-        session.runScript(credentials, QStringLiteral("rm -f '%1/native-feed.upload' '%1/prepare.py' '%1/automatic.py' '%1/trusted_image.py' '%1/service.py' '%1/target.py' '%1/policy.py' '%1/journal.py' '%1/feeds.py' '%1/ready_validation.py'; rmdir '%1'").arg(directory));
+    QString programDirectory;
+    bool programDirectoryCreated = false;
+    auto cleanup = [&]() -> ErrorCode {
+        // Only the two random, fixed-prefix directories created by this
+        // invocation are removed, each by exact file names. A failure in one
+        // tree is recorded but never skips the remaining exact cleanup.
+        ErrorCode cleanupError = ErrorCode::NoError;
+        if (programDirectoryCreated) {
+            if (session.runScript(credentials, QStringLiteral(
+                    "sudo rm -f '%1/native-feed' '%1/native-collector'; sudo rmdir '%1'")
+                    .arg(programDirectory)) != ErrorCode::NoError) {
+                cleanupError = ErrorCode::ServerCheckFailed;
+            }
+        }
+        if (session.runScript(credentials, QStringLiteral("rm -f '%1/native-feed.upload' '%1/native-collector.upload' '%1/prepare.py' '%1/automatic.py' '%1/trusted_image.py' '%1/service.py' '%1/target.py' '%1/policy.py' '%1/journal.py' '%1/feeds.py' '%1/ready_validation.py'; rmdir '%1'").arg(directory))
+                != ErrorCode::NoError && cleanupError == ErrorCode::NoError) {
+            cleanupError = ErrorCode::ServerCheckFailed;
+        }
+        return cleanupError;
     };
-    for (const QString &name : {QStringLiteral("prepare.py"), QStringLiteral("automatic.py"), QStringLiteral("trusted_image.py"), QStringLiteral("service.py"), QStringLiteral("target.py"), QStringLiteral("policy.py"), QStringLiteral("journal.py"), QStringLiteral("feeds.py"), QStringLiteral("ready_validation.py")}) {
-        if (nativeFeed && name == QStringLiteral("feeds.py")) continue;
-        QFile resource(QStringLiteral(":/server_scripts/awg_migration/%1").arg(name));
-        if (!resource.open(QIODevice::ReadOnly)) { cleanup(); return ErrorCode::InternalError; }
-        error = session.uploadFileToHost(credentials, resource.readAll(), directory + QLatin1Char('/') + name);
-        if (error != ErrorCode::NoError) { cleanup(); return error; }
-    }
-    if (nativeFeed) {
-        error = session.uploadFileToHost(credentials, nativeFeed->bytes, directory + QStringLiteral("/native-feed.upload"));
-        if (error != ErrorCode::NoError) { cleanup(); return error; }
-        error = session.runScript(credentials, QStringLiteral(
-            "sudo install -o 0 -g 0 -m 0755 '%1/native-feed.upload' '%1/native-feed' && rm -f '%1/native-feed.upload'").arg(directory));
-        if (error != ErrorCode::NoError) { cleanup(); return error; }
+    auto finish = [&](ErrorCode primary) -> ErrorCode {
+        const ErrorCode cleanupError = cleanup();
+        // The primary work error always wins; cleanup adds a visible failure
+        // only when the work itself succeeded.
+        if (primary == ErrorCode::NoError && cleanupError != ErrorCode::NoError) {
+            result.insert(QStringLiteral("reason"), QStringLiteral("native_cleanup_failed"));
+        }
+        return primary != ErrorCode::NoError ? primary : cleanupError;
+    };
+    if (!nativeFeed) {
+        for (const QString &name : {QStringLiteral("prepare.py"), QStringLiteral("automatic.py"), QStringLiteral("trusted_image.py"), QStringLiteral("service.py"), QStringLiteral("target.py"), QStringLiteral("policy.py"), QStringLiteral("journal.py"), QStringLiteral("feeds.py"), QStringLiteral("ready_validation.py")}) {
+            QFile resource(QStringLiteral(":/server_scripts/awg_migration/%1").arg(name));
+            if (!resource.open(QIODevice::ReadOnly)) { return finish(ErrorCode::InternalError); }
+            error = session.uploadFileToHost(credentials, resource.readAll(), directory + QLatin1Char('/') + name);
+            if (error != ErrorCode::NoError) { return finish(error); }
+        }
     }
     QByteArray output;
-    QString script = automatic ? QStringLiteral(
-            "sudo python3 -B '%1/prepare.py' --source '%2' --host '%3' --automatic")
-            .arg(directory, ContainerUtils::containerToString(source), endpointHost) : QStringLiteral(
-            "sudo python3 -B '%1/prepare.py' --source '%2' --host '%3' --port %4 --image '%5' --generation %6")
-            .arg(directory, ContainerUtils::containerToString(source), endpointHost)
-            .arg(targetPort).arg(immutableAwgImage).arg(generation);
-    if (nativeFeed)
-        script += QStringLiteral(" --native-feed '%1/native-feed' --native-feed-sha256 '%2'").arg(directory, nativeFeed->sha256);
+    QString script;
+    if (nativeFeed) {
+        // /tmp itself must be a root-owned sticky directory, and the program
+        // tree is a separate root-created private sibling. The uploaded bytes
+        // never execute from the user-owned staging directory.
+        QByteArray tmpStat;
+        error = session.runScript(credentials, QStringLiteral("stat -c '%u %g %a' /tmp"),
+            [&tmpStat](const QString &data, libssh::Client &) {
+                const QByteArray bytes = data.toUtf8();
+                if (tmpStat.size() + bytes.size() > 64) return ErrorCode::ServerCheckFailed;
+                tmpStat += bytes;
+                return ErrorCode::NoError;
+            }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+        if (error != ErrorCode::NoError || tmpStat.trimmed() != QByteArrayLiteral("0 0 1777")) {
+            result.insert(QStringLiteral("reason"), QStringLiteral("native_program_directory_trust_failed"));
+            return finish(error != ErrorCode::NoError ? error : ErrorCode::ServerCheckFailed);
+        }
+        programDirectory = QStringLiteral("/tmp/amnezia-migration-programs-%1").arg(Utils::getRandomString(24));
+        error = session.runScript(credentials,
+                QStringLiteral("sudo mkdir -m 0700 '%1'").arg(programDirectory));
+        if (error != ErrorCode::NoError) {
+            result.insert(QStringLiteral("reason"), QStringLiteral("native_program_directory_trust_failed"));
+            return finish(error);
+        }
+        // mkdir failed on collision, so this exact random path is ours now.
+        programDirectoryCreated = true;
+        auto readPrivateDirectory = [&](const QString &path) -> ErrorCode {
+            QByteArray stat;
+            const ErrorCode statError = session.runScript(credentials,
+                QStringLiteral("sudo stat -c '%u %g %a' '%1'").arg(path),
+                [&stat](const QString &data, libssh::Client &) {
+                    const QByteArray bytes = data.toUtf8();
+                    if (stat.size() + bytes.size() > 64) return ErrorCode::ServerCheckFailed;
+                    stat += bytes;
+                    return ErrorCode::NoError;
+                }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+            if (statError != ErrorCode::NoError || stat.trimmed() != QByteArrayLiteral("0 0 700")) {
+                result.insert(QStringLiteral("reason"), QStringLiteral("native_program_directory_trust_failed"));
+                return statError != ErrorCode::NoError ? statError : ErrorCode::ServerCheckFailed;
+            }
+            return ErrorCode::NoError;
+        };
+        error = readPrivateDirectory(programDirectory);
+        if (error != ErrorCode::NoError) return finish(error);
+        // Root-owned delivery of the exact reviewed bytes: upload, install as
+        // root, then hash the installed file independently. Only a matching
+        // readback permits any native executable invocation.
+        auto installProgram = [&](const amnezia::serverNative::Binary &binary,
+                                  const QString &stagedName, const QString &failureReason) -> ErrorCode {
+            const QString uploadPath = directory + QLatin1Char('/') + stagedName + QStringLiteral(".upload");
+            error = session.uploadFileToHost(credentials, binary.bytes, uploadPath);
+            if (error != ErrorCode::NoError) {
+                result.insert(QStringLiteral("reason"), failureReason);
+                return error;
+            }
+            error = session.runScript(credentials, QStringLiteral(
+                "sudo install -o 0 -g 0 -m 0755 '%1' '%2/%3' && rm -f '%1'")
+                    .arg(uploadPath, programDirectory, stagedName));
+            if (error != ErrorCode::NoError) {
+                result.insert(QStringLiteral("reason"), failureReason);
+                return error;
+            }
+            const QString stagedPath = programDirectory + QLatin1Char('/') + stagedName;
+            QByteArray readback;
+            error = session.runScript(credentials, QStringLiteral("sudo sha256sum '%1'").arg(stagedPath),
+                [&readback](const QString &data, libssh::Client &) {
+                    const QByteArray bytes = data.toUtf8();
+                    if (readback.size() + bytes.size() > 4096) return ErrorCode::ServerCheckFailed;
+                    readback += bytes;
+                    return ErrorCode::NoError;
+                }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
+            const QStringList fields = QString::fromLatin1(readback).trimmed().split(
+                    QRegularExpression(QStringLiteral("\\s+")));
+            if (error != ErrorCode::NoError || fields.size() != 2
+                    || fields.at(0) != binary.sha256 || fields.at(1) != stagedPath) {
+                result.insert(QStringLiteral("reason"), QStringLiteral("native_program_readback_failed"));
+                return error != ErrorCode::NoError ? error : ErrorCode::ServerCheckFailed;
+            }
+            return ErrorCode::NoError;
+        };
+        error = installProgram(*nativeFeed, QStringLiteral("native-feed"),
+                               QStringLiteral("native_feed_upload_failed"));
+        if (error != ErrorCode::NoError) { return finish(error); }
+        error = installProgram(*nativeCollector, QStringLiteral("native-collector"),
+                               QStringLiteral("native_collector_upload_failed"));
+        if (error != ErrorCode::NoError) { return finish(error); }
+        // Re-verify the root-private directory immediately before any
+        // executable invocation, so its file names cannot have been swapped.
+        error = readPrivateDirectory(programDirectory);
+        if (error != ErrorCode::NoError) return finish(error);
+        const QString feedPath = programDirectory + QStringLiteral("/native-feed");
+        const QString collectorPath = programDirectory + QStringLiteral("/native-collector");
+        script = automatic ? QStringLiteral(
+                "sudo '%1' --prepare --source '%2' --host '%3' --automatic")
+                .arg(feedPath, ContainerUtils::containerToString(source), endpointHost) : QStringLiteral(
+                "sudo '%1' --prepare --source '%2' --host '%3' --port %4 --image '%5' --generation %6")
+                .arg(feedPath, ContainerUtils::containerToString(source), endpointHost)
+                .arg(targetPort).arg(immutableAwgImage).arg(generation);
+        script += QStringLiteral(" --native-control --native-feed '%1' --native-feed-sha256 '%2'")
+                .arg(feedPath, nativeFeed->sha256);
+        script += QStringLiteral(" --native-collector '%1' --native-collector-sha256 '%2'")
+                .arg(collectorPath, nativeCollector->sha256);
+    } else {
+        script = automatic ? QStringLiteral(
+                "sudo python3 -B '%1/prepare.py' --source '%2' --host '%3' --automatic")
+                .arg(directory, ContainerUtils::containerToString(source), endpointHost) : QStringLiteral(
+                "sudo python3 -B '%1/prepare.py' --source '%2' --host '%3' --port %4 --image '%5' --generation %6")
+                .arg(directory, ContainerUtils::containerToString(source), endpointHost)
+                .arg(targetPort).arg(immutableAwgImage).arg(generation);
+    }
     error = session.runScript(credentials, script + QStringLiteral(" --preflight"),
             [&output](const QString &data, libssh::Client &) {
-                if (output.size() + data.size() > 16384) return ErrorCode::ServerCheckFailed;
-                output += data.toUtf8(); return ErrorCode::NoError;
+                // Convert first, then enforce the byte cap so multi-byte UTF-8
+                // and split chunks can never grow past exactly 16384 bytes.
+                const QByteArray bytes = data.toUtf8();
+                if (bytes.size() > 16384 - output.size()) return ErrorCode::ServerCheckFailed;
+                output += bytes;
+                return ErrorCode::NoError;
             }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; });
     if (error != ErrorCode::NoError || !QJsonDocument::fromJson(output.trimmed()).object().value(QStringLiteral("eligible")).toBool()) {
         result = QJsonDocument::fromJson(output.trimmed()).object();
-        cleanup(); return error != ErrorCode::NoError ? error : ErrorCode::ServerCheckFailed;
+        return finish(error != ErrorCode::NoError ? error : ErrorCode::ServerCheckFailed);
     }
     const ErrorCode collectorError = ExportController::prepareMigrationSourceCollector(credentials, source);
-    if (collectorError != ErrorCode::NoError) { cleanup(); return collectorError; }
+    if (collectorError != ErrorCode::NoError) { return finish(collectorError); }
     output.clear();
     error = session.runScript(credentials, script,
             [&output](const QString &data, libssh::Client &) {
-                if (output.size() + data.size() > 16384) return ErrorCode::ServerCheckFailed;
-                output += data.toUtf8(); return ErrorCode::NoError;
+                // Convert first, then enforce the byte cap so multi-byte UTF-8
+                // and split chunks can never grow past exactly 16384 bytes.
+                const QByteArray bytes = data.toUtf8();
+                if (bytes.size() > 16384 - output.size()) return ErrorCode::ServerCheckFailed;
+                output += bytes;
+                return ErrorCode::NoError;
             }, [](const QString &, libssh::Client &) { return ErrorCode::NoError; }, 10 * 60 * 1000);
-    cleanup();
+    const ErrorCode cleanupError = cleanup();
     result = QJsonDocument::fromJson(output.trimmed()).object();
     if (error != ErrorCode::NoError) return error;
+    if (cleanupError != ErrorCode::NoError) {
+        result.insert(QStringLiteral("reason"), QStringLiteral("native_cleanup_failed"));
+        return ErrorCode::ServerCheckFailed;
+    }
     return result.value(QStringLiteral("prepared")).toBool(false)
             ? ErrorCode::NoError : ErrorCode::ServerCheckFailed;
 }
@@ -1591,7 +2011,7 @@ fi
 }
 
 ErrorCode InstallController::setupContainer(const ServerCredentials &credentials, DockerContainer container, ContainerConfig &config,
-                                            bool isUpdate)
+                                            bool isUpdate, bool acceptXrayKeyLoss)
 {
     SshSession sshSession;
     ErrorCode e = ErrorCode::NoError;
@@ -1618,17 +2038,47 @@ ErrorCode InstallController::setupContainer(const ServerCredentials &credentials
     if (e)
         return e;
 
+    QMap<QString, QString> xrayStateToMigrate;
+    if (isUpdate) {
+        if (!acceptXrayKeyLoss) {
+            e = readXrayStateBeforeVolumeMigration(credentials, container, sshSession, xrayStateToMigrate);
+            if (e)
+                return e;
+        }
+    }
+
     const amnezia::ScriptVars removeContainerVars =
             amnezia::genBaseVars(credentials, container, QString(), QString());
-    const bool removeDataVolume = !isUpdate && (container == DockerContainer::MtProxy
-            || container == DockerContainer::Telemt || container == DockerContainer::TProxy);
-    sshSession.runScript(credentials, buildRemoveContainerScript(removeContainerVars, removeDataVolume));
+    const bool removeDataVolume = !isUpdate && containerKeepsIdentityInDataVolume(container);
+    QString removeOut;
+    auto collectRemoveOut = [&removeOut](const QString &data, libssh::Client &) {
+        removeOut += data + "\n";
+        return ErrorCode::NoError;
+    };
+    const ErrorCode removeError =
+            sshSession.runScript(credentials, buildRemoveContainerScript(removeContainerVars, removeDataVolume),
+                                 collectRemoveOut, collectRemoveOut);
+    qDebug().noquote() << "InstallController::setupContainer removeContainer finished";
 
+    if (removeDataVolume) {
+        if (removeError != ErrorCode::NoError) {
+            return ErrorCode::ServerDataVolumeNotRemoved;
+        }
+        if (dataVolumeSurvivedRemoval(removeOut)) {
+            return ErrorCode::ServerDataVolumeNotRemoved;
+        }
+    }
+
+    qDebug().noquote() << "buildContainerWorker start";
     e = buildContainerWorker(credentials, container, config, sshSession);
     if (e)
         return e;
 
     e = runContainerWorker(credentials, container, config, sshSession);
+    if (e)
+        return e;
+
+    e = restoreXrayStateIntoDataVolume(credentials, container, sshSession, xrayStateToMigrate);
     if (e)
         return e;
 
@@ -1650,20 +2100,41 @@ ErrorCode InstallController::setupContainer(const ServerCredentials &credentials
 }
 
 ErrorCode InstallController::updateServerConfig(const QString &serverId, DockerContainer container, const ContainerConfig &oldConfig,
-                                                ContainerConfig &newConfig)
+                                                ContainerConfig &newConfig, bool acceptXrayKeyLoss)
 {
-    if (!isUpdateDockerContainerRequired(container, oldConfig, newConfig)) {
-        auto adminConfig = m_serversRepository->selfHostedAdminConfig(serverId);
-        if (!adminConfig.has_value()) {
+    const bool serverSettingsChanged = isUpdateDockerContainerRequired(container, oldConfig, newConfig);
+
+    auto adminConfig = m_serversRepository->selfHostedAdminConfig(serverId);
+    if (!adminConfig.has_value()) {
+        return ErrorCode::InternalError;
+    }
+    ServerCredentials credentials = adminConfig->credentials();
+    SshSession sshSession;
+
+    bool reinstallRequired = false;
+    bool portReinstall = false;
+    bool binaryMismatch = false;
+    if (serverSettingsChanged) {
+        if (!credentials.isValid()) {
             return ErrorCode::InternalError;
         }
+        portReinstall = isReinstallContainerRequired(container, oldConfig, newConfig);
+        reinstallRequired = portReinstall;
+    }
+    if (container == DockerContainer::Xray && serverSettingsChanged) {
+        if (credentials.isValid()) {
+            binaryMismatch = xrayServerBinaryMismatchesExpected(credentials, sshSession);
+            if (binaryMismatch) {
+                reinstallRequired = true;
+            }
+        }
+    }
+
+
+    if (!serverSettingsChanged && !reinstallRequired) {
         if (container == DockerContainer::MtProxy) {
-            ServerCredentials credentials = adminConfig->credentials();
-            SshSession sshSession;
             MtProxyInstaller::uploadClientSettingsSnapshot(sshSession, credentials, container, newConfig);
         } else if (container == DockerContainer::Telemt) {
-            ServerCredentials credentials = adminConfig->credentials();
-            SshSession sshSession;
             TelemtInstaller::uploadClientSettingsSnapshot(sshSession, credentials, container, newConfig);
         } else if (container == DockerContainer::TProxy) {
             ServerCredentials credentials = adminConfig->credentials();
@@ -1675,22 +2146,24 @@ ErrorCode InstallController::updateServerConfig(const QString &serverId, DockerC
         return ErrorCode::NoError;
     }
 
-    auto adminConfig = m_serversRepository->selfHostedAdminConfig(serverId);
-    if (!adminConfig.has_value()) {
-        return ErrorCode::InternalError;
-    }
-    ServerCredentials credentials = adminConfig->credentials();
     if (!credentials.isValid()) {
         return ErrorCode::InternalError;
     }
-    SshSession sshSession;
-
-    bool reinstallRequired = isReinstallContainerRequired(container, oldConfig, newConfig);
-    qDebug() << "InstallController::updateServerConfig for container" << container << "reinstall required is" << reinstallRequired;
 
     ErrorCode errorCode = ErrorCode::NoError;
     if (reinstallRequired) {
-        errorCode = setupContainer(credentials, container, newConfig, true);
+        if (container == DockerContainer::Xray) {
+            const QString oldPort = effectiveXrayPort(oldConfig.getXrayProtocolConfig());
+            const QString newPort = effectiveXrayPort(newConfig.getXrayProtocolConfig());
+            if (oldPort != newPort) {
+                errorCode = isServerPortBusy(credentials, container, newConfig, sshSession);
+                if (errorCode != ErrorCode::NoError) {
+                    return errorCode;
+                }
+            }
+        }
+
+        errorCode = setupContainer(credentials, container, newConfig, true, acceptXrayKeyLoss);
 
         // Reinstall pulls the latest container image, so the server runs the latest protocol version
         if (errorCode == ErrorCode::NoError && container == DockerContainer::Awg2) {
@@ -1698,7 +2171,12 @@ ErrorCode InstallController::updateServerConfig(const QString &serverId, DockerC
                 awgConfig->serverConfig.protocolVersion = protocols::awg::awgV3;
             }
         }
-    } else if (container != DockerContainer::Xray && container != DockerContainer::SSXray) {
+    } else if (container == DockerContainer::Xray) {
+        DnsSettings dnsSettings = { m_appSettingsRepository->primaryDns(), m_appSettingsRepository->secondaryDns() };
+        XrayConfigurator xrayConfigurator(&sshSession);
+        errorCode = xrayConfigurator.writeServerConfigForSetup(credentials, container, newConfig, dnsSettings,
+                                                               true);
+    } else if (container != DockerContainer::SSXray) {
         errorCode = configureContainerWorker(credentials, container, newConfig, sshSession);
         if (errorCode == ErrorCode::NoError) {
             errorCode = startupContainerWorker(credentials, container, newConfig, sshSession);
@@ -1721,7 +2199,9 @@ ErrorCode InstallController::updateServerConfig(const QString &serverId, DockerC
             TProxyInstaller::uploadClientSettingsSnapshot(sshSession, credentials, container, newConfig);
         }
         if (reinstallRequired) {
-            clearCachedProfile(serverId, container);
+            if (container != DockerContainer::Xray) {
+                clearCachedProfile(serverId, container);
+            }
         }
         adminConfig->updateContainerConfig(container, newConfig);
         m_serversRepository->editServer(serverId, adminConfig->toJson(), serverConfigUtils::ConfigType::SelfHostedAdmin);
@@ -1931,6 +2411,9 @@ ErrorCode InstallController::prepareContainerConfig(DockerContainer container, c
 void InstallController::adminAppendRequested(const QString &serverId, DockerContainer container,
                                              const ContainerConfig &containerConfig, const QString &clientName)
 {
+    if (container == DockerContainer::Xray) {
+        return;
+    }
     if (ContainerUtils::containerService(container) == ServiceType::Other
         || !containerConfig.protocolConfig.hasClientConfig()) {
         return;
@@ -2060,6 +2543,10 @@ ErrorCode InstallController::configureContainerWorker(const ServerCredentials &c
         return ErrorCode::ServerContainerMissingError;
     }
 
+    if (stdOut.contains(QLatin1String("amnezia_xray_keygen=failed"))) {
+        return ErrorCode::XrayKeyGenerationFailed;
+    }
+
     updateContainerConfigAfterInstallation(container, config, stdOut);
 
     if (container == DockerContainer::MtProxy) {
@@ -2094,6 +2581,127 @@ ErrorCode InstallController::startupContainerWorker(const ServerCredentials &cre
             sshSession.replaceVars("sudo docker exec -d $CONTAINER_NAME sh -c \"chmod a+x /opt/amnezia/start.sh && "
                                             "/opt/amnezia/start.sh\"",
                                             baseVars));
+}
+
+ErrorCode InstallController::readXrayStateBeforeVolumeMigration(const ServerCredentials &credentials,
+                                                                DockerContainer container, SshSession &sshSession,
+                                                                QMap<QString, QString> &outFiles)
+{
+    outFiles.clear();
+
+    if (container != DockerContainer::Xray) {
+        return ErrorCode::NoError;
+    }
+
+    const amnezia::ScriptVars vars = amnezia::genBaseVars(credentials, container, QString(), QString());
+
+    QString stdOut;
+    auto collect = [&stdOut](const QString &data, libssh::Client &) {
+        stdOut += data + "\n";
+        return ErrorCode::NoError;
+    };
+
+    const QString probe = QStringLiteral(
+            "echo \"amnezia_container=$(sudo docker ps -a -q -f name=^$CONTAINER_NAME$ | head -1)\"\n"
+            "if [ -n \"$(sudo docker ps -a -q -f name=^$CONTAINER_NAME$ | head -1)\" ] && "
+            "[ -z \"$(sudo docker ps -q -f name=^$CONTAINER_NAME$ | head -1)\" ]; then\n"
+            "  sudo docker start $CONTAINER_NAME > /dev/null 2>&1\n"
+            "  sleep 2\n"
+            "fi\n"
+            "echo \"amnezia_running=$(sudo docker ps -q -f name=^$CONTAINER_NAME$ | head -1)\"\n"
+            "echo \"amnezia_mounted=$(sudo docker inspect -f "
+            "'{{range .Mounts}}{{if and (eq .Destination \"%1\") "
+            "(eq .Name \"$CONTAINER_NAME-data\")}}yes{{end}}{{end}}' "
+            "$CONTAINER_NAME 2>/dev/null | head -1)\"")
+                                 .arg(QString::fromLatin1(amnezia::protocols::xray::dataDir));
+    ErrorCode errorCode = sshSession.runScript(credentials, SshSession::replaceVars(probe, vars), collect, collect);
+    if (errorCode != ErrorCode::NoError) {
+        return ErrorCode::XrayKeyMigrationFailed;
+    }
+
+    static const QRegularExpression reContainer(QStringLiteral("amnezia_container=(\\S+)"));
+    static const QRegularExpression reRunning(QStringLiteral("amnezia_running=(\\S+)"));
+    static const QRegularExpression reMounted(QStringLiteral("amnezia_mounted=(\\S+)"));
+    const bool containerExists = reContainer.match(stdOut).hasMatch();
+    const bool containerRunning = reRunning.match(stdOut).hasMatch();
+    const bool dataDirIsVolume = reMounted.match(stdOut).hasMatch();
+
+    if (!containerExists) {
+        return ErrorCode::NoError;
+    }
+    if (dataDirIsVolume) {
+        return ErrorCode::NoError;
+    }
+    if (!containerRunning) {
+        return ErrorCode::XrayKeyMigrationNeedsConfirm;
+    }
+
+    const QStringList requiredPaths = {
+        QString::fromLatin1(amnezia::protocols::xray::PrivateKeyPath),
+        QString::fromLatin1(amnezia::protocols::xray::PublicKeyPath),
+        QString::fromLatin1(amnezia::protocols::xray::uuidPath),
+        QString::fromLatin1(amnezia::protocols::xray::shortidPath),
+    };
+
+    for (const QString &path : requiredPaths) {
+        QString content;
+        bool read = false;
+        for (int attempt = 0; attempt < 3 && !read; ++attempt) {
+            ErrorCode fileError = ErrorCode::NoError;
+            content = QString::fromUtf8(sshSession.getTextFileFromContainer(container, credentials, path, fileError));
+            if (fileError == ErrorCode::NoError && !content.trimmed().isEmpty()) {
+                read = true;
+                break;
+            }
+            if (attempt < 2) {
+                QThread::msleep(500);
+            }
+        }
+        if (!read) {
+            return ErrorCode::XrayKeyMigrationFailed;
+        }
+        outFiles.insert(path, content);
+    }
+
+    QString serverConfig;
+    bool configRead = false;
+    for (int attempt = 0; attempt < 3 && !configRead; ++attempt) {
+        ErrorCode configError = ErrorCode::NoError;
+        serverConfig = QString::fromUtf8(sshSession.getTextFileFromContainer(
+                container, credentials, QString::fromLatin1(amnezia::protocols::xray::serverConfigPath), configError));
+        if (configError == ErrorCode::NoError && !serverConfig.trimmed().isEmpty()) {
+            configRead = true;
+            break;
+        }
+        if (attempt < 2) {
+            QThread::msleep(500);
+        }
+    }
+    if (!configRead) {
+        return ErrorCode::XrayKeyMigrationFailed;
+    }
+    outFiles.insert(QString::fromLatin1(amnezia::protocols::xray::serverConfigPath), serverConfig);
+
+    return ErrorCode::NoError;
+}
+
+ErrorCode InstallController::restoreXrayStateIntoDataVolume(const ServerCredentials &credentials,
+                                                            DockerContainer container, SshSession &sshSession,
+                                                            const QMap<QString, QString> &files)
+{
+    if (files.isEmpty()) {
+        return ErrorCode::NoError;
+    }
+
+    for (auto it = files.constBegin(); it != files.constEnd(); ++it) {
+        const ErrorCode errorCode = sshSession.uploadTextFileToContainer(
+                container, credentials, it.value(), it.key(), libssh::ScpOverwriteMode::ScpOverwriteExisting);
+        if (errorCode != ErrorCode::NoError) {
+            return ErrorCode::XrayKeyMigrationFailed;
+        }
+    }
+
+    return ErrorCode::NoError;
 }
 
 ErrorCode InstallController::isServerPortBusy(const ServerCredentials &credentials, DockerContainer container, const ContainerConfig &config, SshSession &sshSession)
@@ -2233,7 +2841,20 @@ bool InstallController::isReinstallContainerRequired(DockerContainer container, 
         }
     }
 
-    if (container == DockerContainer::Xray || container == DockerContainer::SSXray) {
+    if (container == DockerContainer::Xray) {
+        const auto *oldXrayConfig = oldConfig.getXrayProtocolConfig();
+        const auto *newXrayConfig = newConfig.getXrayProtocolConfig();
+
+        if (oldXrayConfig && newXrayConfig) {
+            const QString oldPort = effectiveXrayPort(oldXrayConfig);
+            const QString newPort = effectiveXrayPort(newXrayConfig);
+            if (oldPort != newPort) {
+                return true;
+            }
+        }
+    }
+
+    if (container == DockerContainer::SSXray) {
         const auto *oldXrayConfig = oldConfig.getXrayProtocolConfig();
         const auto *newXrayConfig = newConfig.getXrayProtocolConfig();
 
@@ -2505,6 +3126,43 @@ ErrorCode InstallController::rebootServer(const QString &serverId)
     return sshSession.runScript(credentials, script, cbReadStdOut, cbReadStdErr);
 }
 
+ErrorCode InstallController::updateServerPackages(const QString &serverId)
+{
+    const auto adminConfig = m_serversRepository->selfHostedAdminConfig(serverId);
+    if (!adminConfig.has_value()) {
+        return ErrorCode::InternalError;
+    }
+    ServerCredentials credentials = adminConfig->credentials();
+    if (!credentials.isValid()) {
+        return ErrorCode::InternalError;
+    }
+    SshSession sshSession;
+
+    ErrorCode errorCode = isServerDpkgBusy(credentials, sshSession);
+    if (errorCode != ErrorCode::NoError) {
+        return errorCode;
+    }
+
+    QString stdOut;
+    auto cbReadStdOut = [&](const QString &data, libssh::Client &) {
+        stdOut += data + "\n";
+        return ErrorCode::NoError;
+    };
+
+    errorCode = sshSession.runScript(credentials, amnezia::scriptData(SharedScriptType::update_server_packages),
+                                     cbReadStdOut, cbReadStdOut);
+    if (errorCode != ErrorCode::NoError) {
+        return errorCode;
+    }
+
+    if (!stdOut.contains("Packages update finished")) {
+        qDebug().noquote() << "InstallController::updateServerPackages" << stdOut;
+        return ErrorCode::ServerPacketManagerError;
+    }
+
+    return ErrorCode::NoError;
+}
+
 ErrorCode InstallController::removeAllContainers(const QString &serverId)
 {
     auto adminConfig = m_serversRepository->selfHostedAdminConfig(serverId);
@@ -2540,10 +3198,19 @@ ErrorCode InstallController::removeContainer(const QString &serverId, DockerCont
     SshSession sshSession;
     const amnezia::ScriptVars removeContainerVars =
             amnezia::genBaseVars(credentials, container, QString(), QString());
-    const bool removeDataVolume = (container == DockerContainer::MtProxy || container == DockerContainer::Telemt
-            || container == DockerContainer::TProxy);
-    ErrorCode errorCode =
-            sshSession.runScript(credentials, buildRemoveContainerScript(removeContainerVars, removeDataVolume));
+    const bool removeDataVolume = containerKeepsIdentityInDataVolume(container);
+    QString removeOut;
+    auto collectRemoveOut = [&removeOut](const QString &data, libssh::Client &) {
+        removeOut += data + "\n";
+        return ErrorCode::NoError;
+    };
+    ErrorCode errorCode = sshSession.runScript(
+            credentials, buildRemoveContainerScript(removeContainerVars, removeDataVolume), collectRemoveOut,
+            collectRemoveOut);
+
+    if (errorCode == ErrorCode::NoError && removeDataVolume && dataVolumeSurvivedRemoval(removeOut)) {
+        errorCode = ErrorCode::ServerDataVolumeNotRemoved;
+    }
 
     if (errorCode == ErrorCode::NoError) {
         QMap<DockerContainer, ContainerConfig> containers = adminConfig->containers;
@@ -2645,6 +3312,13 @@ bool InstallController::isUpdateDockerContainerRequired(DockerContainer containe
                 return false;
             }
         }
+    } else if (container == DockerContainer::Xray) {
+        const auto *oldXray = oldConfig.getXrayProtocolConfig();
+        const auto *newXray = newConfig.getXrayProtocolConfig();
+        if (oldXray && newXray && oldXray->serverConfig.hasEqualServerSettings(newXray->serverConfig)) {
+            return false;
+        }
+        return true;
     } else if (container == DockerContainer::MtProxy) {
         const auto *oldMt = oldConfig.getMtProxyProtocolConfig();
         const auto *newMt = newConfig.getMtProxyProtocolConfig();
@@ -3202,28 +3876,44 @@ ErrorCode InstallController::queryDockerContainerStatus(const QString &serverId,
     }
     const QString containerName = ContainerUtils::containerToString(container);
     QString stdOut;
+    bool stdOutOverflow = false;
     auto cbReadStdOut = [&](const QString &data, libssh::Client &) {
+        if (stdOut.size() + data.size() > 4096) {
+            stdOutOverflow = true;
+            return ErrorCode::NoError;
+        }
         stdOut += data;
         return ErrorCode::NoError;
     };
     SshSession sshSession;
+    const QString missingObject = QStringLiteral("Error: No such object: ") + containerName;
+    const QString missingContainer = QStringLiteral("Error: No such container: ") + containerName;
     const QString script = QStringLiteral(
-            "sudo docker inspect --format '{{.State.Status}}' %1 2>/dev/null || echo 'not_found'")
-            .arg(containerName);
+            "status=$(sudo docker inspect --format '{{.State.Status}}' %1 2>&1); rc=$?; "
+            "if [ $rc -eq 0 ]; then printf 'state:%s' \"$status\"; exit 0; fi; "
+            "trimmed=${status#\"${status%%[![:space:]]*}\"}; "
+            "if [ \"$trimmed\" = '%2' ] || [ \"$trimmed\" = '%3' ]; then echo not_found; exit 0; fi; "
+            "printf '%s\\n' \"$status\" >&2; exit $rc")
+            .arg(containerName, missingObject, missingContainer);
     const ErrorCode errorCode = sshSession.runScript(credentials, script, cbReadStdOut);
     if (errorCode != ErrorCode::NoError) {
         return errorCode;
     }
+    if (stdOutOverflow) {
+        statusOut = 3;
+        return ErrorCode::ServerCheckFailed;
+    }
     const QString status = stdOut.trimmed();
-    if (status == QLatin1String("running")) {
+    if (status == QLatin1String("state:running")) {
         statusOut = 1;
-    } else if (status == QLatin1String("not_found") || status.isEmpty()) {
+    } else if (status == QLatin1String("not_found")) {
         statusOut = 0;
-    } else if (status == QLatin1String("exited") || status == QLatin1String("created")
-               || status == QLatin1String("paused")) {
+    } else if (status == QLatin1String("state:exited") || status == QLatin1String("state:created")
+               || status == QLatin1String("state:paused")) {
         statusOut = 2;
     } else {
         statusOut = 3;
+        return ErrorCode::ServerCheckFailed;
     }
     return ErrorCode::NoError;
 }

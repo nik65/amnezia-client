@@ -1,0 +1,71 @@
+{
+  "createdUtc": "2026-11-07T16:11:16.666572+00:00",
+  "disposition": "NO_PRODUCTION_DELTA; strict-consumer characterization only; automatic CURRENT producer NOT_CLOSED",
+  "candidateSourceManifest": {
+    "path": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-integration-parent\\MATERIALIZED_PRODUCT_SOURCE_MANIFEST.json",
+    "sha256": "63bf398cc97d98d986f9cc99d2a07e1f49aa0f642b8540ab981c26e1259eeec9",
+    "fileCount": 2635
+  },
+  "workerReport": {
+    "path": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-current-authority-aa\\OUTCOME.json",
+    "sha256": "5ce0472c8dfe36063d6d1285fd1e73934f3aeb7f602810f32c15227200f84c1e"
+  },
+  "verifiedIdenticalMirrors": {
+    "test_current_authority.cpp": "828f23576dd956ce7637587bc71862118f3bb370fb7f2610bc704aa542ea816b",
+    "CMakeLists.txt": "ccb45dbfa029bb9cf72a613bdf49e9b8f5d4a0e40c285472d7a4a8096b127d5b",
+    "run_aa.sh": "1a10b52bdf3ddaa678d406574e4ef6b6369dd1b8b16c1496525b585582fd87f9",
+    "REFUSAL.json": "5e1219a925c1106f8ac225b04a610435b461492916736658f289ecc44988c663",
+    "RESULT.json": "4b5d7d732e46461b17596a0bb71339c8c3733d16b3b7d3b324e25e130d11af06"
+  },
+  "unchangedActualProductInputs": {
+    "maintenance_runtime.cpp": "3e44ed119f805beec92c6bc358fc8133b0ae6f3f3e8a56d32282ab2b71267593",
+    "maintenance_runtime.h": "fd18405c0f1be696d4066c8d10b8b56046288d6ab72580373f2841c1983a0308",
+    "transaction_journal.cpp": "7462725778e120780cc60fd70316a67e46d95aa4d0a3b25f68a4de334c83b12b",
+    "transaction_journal.h": "e75b43615c6c8dce2d29ec60ad79fd2904075a1c7abd5e0778ba97c107213f30"
+  },
+  "workerOnlyFixtureHash": "b6fc56c970bd9ca58a2d54f0e5b5147377fdea65c3131c1d15d2591ba283b166",
+  "sourceCorrections": [
+    {
+      "claim": "no automatic caller supplies --native-feed-sha256",
+      "finding": "Incorrect for initial AUTO PREPARE. UI invokes prepareAwgMigration(...,true); actual caller appends --native-control --native-feed-sha256 from verified embedded nativeBundle.find(awg-feed,architecture) to both automatic/manual command branches, after root-private installed-byte readback. This is not yet durable CURRENT handoff for later maintenance.",
+      "source": [
+        "client/ui/controllers/selfhosted/installUiController.cpp:435",
+        "client/core/controllers/selfhosted/installController.cpp:1230-1261",
+        "client/core/controllers/selfhosted/installController.cpp:1386-1407"
+      ]
+    },
+    {
+      "claim": "CURRENT and replacement equality is refused by whole maintenance consumer",
+      "finding": "Overbroad. Distinct-replacement subroutine697-704 refuses equality; actual runMaintenance1325-1337 handles equal trusted bytes as strict no-op before that subroutine. Preserve already-tested R no-op.",
+      "source": [
+        "client/server_scripts/awg_migration/native/maintenance_runtime.cpp:697-709",
+        "client/server_scripts/awg_migration/native/maintenance_runtime.cpp:1325-1337",
+        "client/core/controllers/selfhosted/awgMaintenanceReceipt.h:32-35"
+      ]
+    }
+  ],
+  "failedWorkDisposition": {
+    "qualified": false,
+    "reason": "AA test main simply returns23 after otherwise successful tests for --outer-fail-work; outer run_aa.sh ends with successful JSON writer and does not propagate failed build/green work. Parent actual unmodified shell under typed inert CMake boundary runs owned Python work23, writes FAILED, yet returns0.",
+    "parentRed": {
+      "path": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-current-authority-parent\\aa-outer-red-a\\RESULT.json",
+      "sha256": "1e465551ab7868816851422c11ef682cd73633bfc2c99a093bf26666daacd1d1",
+      "nativeExit": 1,
+      "actualOuterNativeExit": 0,
+      "actualWorkNativeExit": 23,
+      "actualVerdict": "FAILED"
+    }
+  },
+  "selfReportedWitness": {
+    "works": 5,
+    "checks": 25,
+    "greenExit": 0,
+    "parentReplay": "Not replayed: no production delta; preseeded FakeOps journal/explicit caller pin characterizes existing strict consumer, not real automatic producer. Prior R actual-caller proof retained."
+  },
+  "remainingBoundary": "Independent authenticated CURRENT binding preserved from a legitimate trusted caller across later maintenance/replacement/rollback/recovery/re-anchor remains unimplemented/unproven. Do not use replacement SHA, unsigned journal or loaded-control self receipt as authority. Do not infer new credentials/keys/authorization are required merely from AA static non-derivation. Trace actual producer and consumer before selecting a minimal implementation.",
+  "productChanges": [],
+  "runtimeAcceptance": "NOT_RUN",
+  "allFunctionsPass": false,
+  "releasePass": false,
+  "published": false
+}

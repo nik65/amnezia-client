@@ -17,7 +17,7 @@ class IBinder
 class Intent(val action:String?)
 const val SERVICE_INTERFACE="system"
 const val TAG="test"
-object Log {fun d(tag:String,message:String){}}
+object Log {fun d(tag:String,message:String){};fun w(tag:String,message:String){}}
 open class Base {open fun onBind(intent:Intent?):IBinder?=null;open fun onUnbind(intent:Intent?):Boolean=true;open fun onRebind(intent:Intent?) {}}
 class ServiceMessenger(val binder:IBinder=IBinder())
 class Messenger(val id:Int)
@@ -55,6 +55,43 @@ fun main()=runBlocking {
  val dispatcher=newSingleThreadContext("service-fixture")
  try { withContext(dispatcher) {
  val scope=CoroutineScope(SupervisorJob()+dispatcher)
+ // Actual requestDiscoveryStatus -> late framework observation onRebind -> CONNECT.
+ // Models the observed STATUS-before-onRebind ordering, with a verified retired owner.
+ run {
+  val x=AwgService(scope);val requester=Messenger(91);val c=Client();x.clientMessengers[requester]=c;x.observationClients.add(requester)
+  val id=NativeSessionIdentity("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","cccccccc-cccc-cccc-cccc-cccccccccccc")
+  val primary=Protocol(NativeIdleObservation(NativeIdleState.VERIFIED_RETIRED,7,id));VpnProto.AWG.cached=primary;VpnProto.WIREGUARD.cached=null
+  x.activeNativeSession=Fixture.ActiveNativeSession(primary,NativeSessionDescriptor(id,"server","AWG"))
+  x.isUnknown=false;x.isDisconnected=true
+  x.requestDiscoveryStatus(requester,"11111111-1111-1111-1111-111111111111","7");delay(50)
+  val event=c.events.last();check(event.getString("discoveryResult")=="IDLE")
+  val token=event.getString("discoveryGrant")!!
+  x.onRebind(Intent("org.amnezia.vpn.RESTORE_OBSERVATION"))
+  x.acceptDiscoveryConnect(Message(requester,Bundle().apply {putString("admissionRequestId",UUID.randomUUID().toString());putString("admissionGeneration","7");putString("discoveryGrant",token);putString(MSG_VPN_CONFIG,"AWG")}))
+  delay(50)
+  check(x.connects==1) {"lost CONNECT: an observation rebind invalidated its freshly issued IDLE grant"}
+  check(c.events.last().values["admissionAccepted"]==true)
+  VpnProto.AWG.cached=null
+ }
+ for (boundary in listOf("observation-unbind","control-rebind","epoch-changed","native-active","wrong-retired-identity")) {
+  val x=AwgService(scope);val requester=Messenger(92);val c=Client();x.clientMessengers[requester]=c;x.observationClients.add(requester)
+  val id=NativeSessionIdentity("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","cccccccc-cccc-cccc-cccc-cccccccccccc")
+  val primary=Protocol(NativeIdleObservation(NativeIdleState.VERIFIED_RETIRED,7,id));VpnProto.AWG.cached=primary;VpnProto.WIREGUARD.cached=null
+  x.activeNativeSession=Fixture.ActiveNativeSession(primary,NativeSessionDescriptor(id,"server","AWG"));x.isUnknown=false;x.isDisconnected=true
+  x.requestDiscoveryStatus(requester,"11111111-1111-1111-1111-111111111111","7");delay(50)
+  val token=c.events.last().getString("discoveryGrant")!!
+  when(boundary){
+   "observation-unbind"->x.onUnbind(Intent("org.amnezia.vpn.RESTORE_OBSERVATION"))
+   "control-rebind"->x.onRebind(Intent("control"))
+   "epoch-changed"->x.invalidateDiscoveryGrants()
+   "native-active"->primary.observation=NativeIdleObservation(NativeIdleState.ACTIVE,8)
+   "wrong-retired-identity"->primary.observation=NativeIdleObservation(NativeIdleState.VERIFIED_RETIRED,8,id.copy(serviceActivationId="dddddddd-dddd-dddd-dddd-dddddddddddd"))
+  }
+  x.acceptDiscoveryConnect(Message(requester,Bundle().apply {putString("admissionRequestId",UUID.randomUUID().toString());putString("admissionGeneration","7");putString("discoveryGrant",token);putString(MSG_VPN_CONFIG,"AWG")}));delay(50)
+  check(x.connects==0) {"unexpectedstartafter $boundary"};check(c.events.last().values["admissionAccepted"]==false)
+  VpnProto.AWG.cached=null
+ }
+ println("PASS late observer rebind + 5 ownership/admission negative boundaries")
  val f=AwgService(scope);val r=Messenger(1);val client=Client();f.clientMessengers[r]=client;f.observationClients.add(r)
  suspend fun probe():Bundle {f.requestDiscoveryStatus(r,"11111111-1111-1111-1111-111111111111","7");delay(30);return client.events.last()}
  fun command(token:String)=Message(r,Bundle().apply {putString("admissionRequestId",UUID.randomUUID().toString());putString("admissionGeneration","7");putString("discoveryGrant",token);putString(MSG_VPN_CONFIG,"AWG")})
@@ -100,6 +137,15 @@ fun main()=runBlocking {
  f.requestDiscoveryStatus(r,"11111111-1111-1111-1111-111111111111","11");delay(15);f.invalidateDiscoveryGrants();changedCleanup.complete();delay(30)
  check(client.events.last().getString("discoveryResult")=="UNKNOWN");check(client.events.last().getString("discoveryGrant")=="");f.disconnectionJob=null
  result=probe();check(result.getString("discoveryResult")=="IDLE")
+ // A DNS wrapper remains a third actual owner after both cached WG backends retired.
+ val wrapper=Protocol(NativeIdleObservation(NativeIdleState.ACTIVE,20))
+ f.activeNativeSession=Fixture.ActiveNativeSession(wrapper,NativeSessionDescriptor(identity,"server","AWG"))
+ result=probe();check(result.getString("discoveryResult")=="ACTIVE");check(result.getString("discoveryGrant")=="")
+ wrapper.observation=NativeIdleObservation(NativeIdleState.UNKNOWN,21)
+ result=probe();check(result.getString("discoveryResult")=="UNKNOWN")
+ wrapper.observation=NativeIdleObservation(NativeIdleState.VERIFIED_RETIRED,22,identity)
+ result=probe();check(result.getString("discoveryResult")=="IDLE")
+ f.activeNativeSession=Fixture.ActiveNativeSession(awg,NativeSessionDescriptor(identity,"server","AWG"))
  val token=result.getString("discoveryGrant")!!;val admitted=command(token);awg.pause=120;f.acceptDiscoveryConnect(admitted);f.acceptDiscoveryConnect(admitted)
  delay(10);val oldRequest=f.admissionRequests[r];f.acceptDiscoveryConnect(command(token));check(f.admissionRequests[r]==oldRequest)
  delay(160);awg.pause=0

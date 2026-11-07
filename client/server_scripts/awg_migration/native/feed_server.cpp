@@ -5,6 +5,9 @@
 #include "trusted_image_runtime.h"
 #include "config_generation_runtime.h"
 #include "control_runtime.h"
+#include "control_pid1.h"
+#include "control_live.h"
+#include "orchestration_entry.h"
 #include "network_topology_runtime.h"
 #include "policy_runtime.h"
 #include "routed_policy_epoch.h"
@@ -242,6 +245,21 @@ int listenOn(const std::string &address, unsigned port) {
 } // namespace
 
 int main(int argc, char **argv) {
+    int orchestrationStatus = 0;
+    if (amnezia::awgMigration::orchestration::runOrchestrationArgv(argc, argv, orchestrationStatus))
+        return orchestrationStatus;
+    int liveStatus = 0;
+    if (amnezia::awgMigration::controlPid1::runVerifyControlLiveArgv(argc, argv, liveStatus))
+        return liveStatus;
+    std::string nativeRole, nativeSha, nativeReceipt;
+    const auto nativeMode = amnezia::awgMigration::controlPid1::parseNativeControlArgv(
+        argc, argv, nativeRole, nativeSha, nativeReceipt);
+    using amnezia::awgMigration::controlPid1::NativeArgv;
+    if (nativeMode == NativeArgv::Invalid) return 2;
+    if (nativeMode == NativeArgv::ControlPid1)
+        return amnezia::awgMigration::controlPid1::controlPid1Main();
+    if (nativeMode == NativeArgv::VerifyLoaded)
+        return amnezia::awgMigration::controlPid1::verifyLoadedControlMain(nativeRole, nativeSha, nativeReceipt);
     if (argc >= 2 && std::string(argv[1]) == "--policy-epoch-capability")
         return argc == 2 ? amnezia::awgMigration::routedPolicyEpochCapabilityMain() : 2;
     if (argc >= 2 && std::string(argv[1]) == "--check-policy-epoch")

@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "linuxroutemonitor.h"
+#include "linuxgatewayroutereceipt.h"
 
 #include <QNetworkInterface>
 #include <QCoreApplication>
@@ -12,6 +13,7 @@
 #include <QTimer>
 
 #include <stdio.h>
+#include <limits>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <linux/netlink.h>
@@ -117,18 +119,43 @@ bool LinuxRouteMonitor::deleteRoute(const IPAddress& prefix) {
 }
 
 bool LinuxRouteMonitor::addExclusionRoute(const IPAddress& prefix) {
-    logger.debug() << "Adding exclusion route for"
-                   << prefix.toString();
-    const int flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_REPLACE | NLM_F_ACK;
-    return rtmSendRoute(RTM_NEWROUTE, flags, RTN_THROW, prefix) ==
-           EndpointRouteResult::Success;
+    return acquireGatewayRoute(prefix, GatewayRouteOwner::Exclusion) == EndpointRouteResult::Success;
 }
 
 LinuxRouteMonitor::EndpointRouteResult
 LinuxRouteMonitor::createEndpointRoute(const IPAddress& prefix) {
-    logger.debug() << "Adding owned endpoint route for" << prefix.toString();
+    return acquireGatewayRoute(prefix, GatewayRouteOwner::Endpoint);
+}
+
+LinuxRouteMonitor::EndpointRouteResult
+LinuxRouteMonitor::acquireGatewayRoute(const IPAddress& prefix, GatewayRouteOwner owner) {
+    // An EEXIST from the kernel never grants ownership. Sharing is permitted only
+    // through this monitor's receipt from its own successful exclusive creation.
+    if (m_nlsock < 0) return EndpointRouteResult::Failed;
+    const QString key = endpointRouteKey(prefix);
+    auto existing = m_ownedGatewayRoutes.find(key);
+    if (existing != m_ownedGatewayRoutes.end()) {
+        GatewayRouteState& state = existing.value();
+        // No new route mutation or hold occurred. Do not let the caller
+        // manufacture a new uncertain endpoint lease for an existing owner.
+        if (state.uncertain) return EndpointRouteResult::Failed;
+        const auto verified = verifyGatewayRoute(prefix, state.receipt);
+        if (verified != EndpointRouteResult::Success) {
+            // Missing or changed routes never authorize attaching another peer.
+            // Existing holders retain their receipt for checked cleanup/retry.
+            // This readback performed no mutation, so an unknown result must
+            // not manufacture an uncertain endpoint-creation ownership claim.
+            return verified == EndpointRouteResult::AlreadyExists
+                       ? EndpointRouteResult::AlreadyExists : EndpointRouteResult::Failed;
+        }
+        unsigned int& references = owner == GatewayRouteOwner::Endpoint
+                                       ? state.endpointReferences : state.exclusionReferences;
+        if (references == std::numeric_limits<unsigned int>::max()) return EndpointRouteResult::Failed;
+        ++references;
+        return EndpointRouteResult::Success;
+    }
     if (prefix.type() != QAbstractSocket::IPv4Protocol) {
-        logger.warning() << "Endpoint route requires an IPv4 prefix";
+        logger.warning() << "Gateway exclusion routes require an IPv4 prefix";
         return EndpointRouteResult::Failed;
     }
     const auto gatewayAndIface = NetworkUtilities::getGatewayAndIface();
@@ -137,68 +164,175 @@ LinuxRouteMonitor::createEndpointRoute(const IPAddress& prefix) {
     struct in_addr gatewayAddress;
     if (gateway.isEmpty() || !interface.isValid() || interface.name().isEmpty() ||
         inet_pton(AF_INET, gateway.toUtf8().constData(), &gatewayAddress) != 1) {
-        logger.warning() << "No valid IPv4 gateway interface for endpoint route";
+        logger.warning() << "No valid IPv4 gateway interface for exclusion route";
         return EndpointRouteResult::Failed;
     }
-    const unsigned int interfaceIndex =
-        if_nametoindex(interface.name().toUtf8().constData());
-    if (interfaceIndex == 0) {
-        logger.warning() << "Endpoint gateway interface has no index"
-                         << interface.name();
-        return EndpointRouteResult::Failed;
-    }
-    const EndpointRouteReceipt receipt {gateway, interface.name(), interfaceIndex};
+    const unsigned int interfaceIndex = if_nametoindex(interface.name().toUtf8().constData());
+    if (interfaceIndex == 0) return EndpointRouteResult::Failed;
+    const EndpointRouteReceipt receipt {gateway, interface.name(), interfaceIndex,
+        amnezia::linux_routes::OwnedGatewayRoutePriority};
     const int flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL | NLM_F_ACK;
-    const EndpointRouteResult result =
-        rtmSendRoute(RTM_NEWROUTE, flags, RTN_THROW, prefix, &receipt);
-    if (result == EndpointRouteResult::Success) {
-        m_ownedEndpointRoutes.insert(endpointRouteKey(prefix), receipt);
+    const EndpointRouteResult result = rtmSendRoute(RTM_NEWROUTE, flags, RTN_THROW, prefix, &receipt);
+    if (result == EndpointRouteResult::NotFound) return EndpointRouteResult::Failed;
+    if (result == EndpointRouteResult::Success || result == EndpointRouteResult::Uncertain) {
+        GatewayRouteState state;
+        state.receipt = receipt;
+        state.uncertain = result == EndpointRouteResult::Uncertain;
+        state.creationConfirmed = result == EndpointRouteResult::Success;
+        if (owner == GatewayRouteOwner::Endpoint) state.endpointReferences = 1;
+        else state.exclusionReferences = 1;
+        m_ownedGatewayRoutes.insert(key, state);
     }
     return result;
 }
 
 LinuxRouteMonitor::EndpointRouteResult
 LinuxRouteMonitor::removeOwnedEndpointRoute(const IPAddress& prefix) {
-    logger.debug() << "Removing owned endpoint route for"
-                   << prefix.toString();
-    const auto iterator = m_ownedEndpointRoutes.constFind(endpointRouteKey(prefix));
-    if (iterator == m_ownedEndpointRoutes.constEnd()) {
-        logger.warning() << "Refusing to remove endpoint route without ownership receipt"
-                         << prefix.toString();
+    return releaseGatewayRoute(prefix, GatewayRouteOwner::Endpoint);
+}
+
+LinuxRouteMonitor::EndpointRouteResult
+LinuxRouteMonitor::releaseGatewayRoute(const IPAddress& prefix, GatewayRouteOwner owner) {
+    auto iterator = m_ownedGatewayRoutes.find(endpointRouteKey(prefix));
+    if (iterator == m_ownedGatewayRoutes.end()) {
+        // A failed exclusive generic add may have reserved a daemon reference,
+        // but it never authorizes touching the preexisting foreign OS route.
+        return owner == GatewayRouteOwner::Exclusion
+                   ? EndpointRouteResult::NotFound : EndpointRouteResult::Uncertain;
+    }
+    GatewayRouteState& state = iterator.value();
+    // A lost creation acknowledgement is not proof that this process owns the
+    // installed object. Never adopt/delete a possibly foreign route by shape.
+    if (state.uncertain && !state.creationConfirmed) return EndpointRouteResult::Uncertain;
+    unsigned int& references = owner == GatewayRouteOwner::Endpoint
+                                   ? state.endpointReferences : state.exclusionReferences;
+    if (references == 0) return EndpointRouteResult::NotFound;
+    if (references > 1 || (owner == GatewayRouteOwner::Endpoint
+                             ? state.exclusionReferences : state.endpointReferences) > 0) {
+        --references;
+        return EndpointRouteResult::Success;
+    }
+    const EndpointRouteReceipt& receipt = state.receipt;
+    if (receipt.priority == 0) return EndpointRouteResult::Uncertain;
+    const QNetworkInterface interface = QNetworkInterface::interfaceFromName(receipt.interfaceName);
+    if (!interface.isValid() || if_nametoindex(receipt.interfaceName.toUtf8().constData()) != receipt.interfaceIndex || receipt.interfaceIndex == 0) {
         return EndpointRouteResult::Uncertain;
     }
-    const EndpointRouteReceipt& receipt = iterator.value();
-    const QNetworkInterface interface =
-        QNetworkInterface::interfaceFromName(receipt.interfaceName);
-    if (!interface.isValid()) {
-        logger.warning() << "Refusing to remove endpoint route: gateway interface is gone"
-                         << receipt.interfaceName;
-        return EndpointRouteResult::Uncertain;
-    }
-    const unsigned int currentInterfaceIndex =
-        if_nametoindex(receipt.interfaceName.toUtf8().constData());
-    if (currentInterfaceIndex == 0 || currentInterfaceIndex != receipt.interfaceIndex) {
-        logger.warning() << "Refusing to remove endpoint route: gateway interface changed"
-                         << receipt.interfaceName;
-        return EndpointRouteResult::Uncertain;
-    }
+    // The nonzero stored priority is essential: Linux treats fc_priority==0
+    // as a deletion wildcard. Other receipt fields plus priority1 select only
+    // our acknowledged tuple, without O(N^2) dumps during large cleanup.
     const int flags = NLM_F_REQUEST | NLM_F_ACK;
-    const EndpointRouteResult result =
-        rtmSendRoute(RTM_DELROUTE, flags, RTN_THROW, prefix, &receipt);
-    if (result == EndpointRouteResult::Success ||
-        result == EndpointRouteResult::NotFound) {
-        m_ownedEndpointRoutes.remove(iterator.key());
+    const EndpointRouteResult result = rtmSendRoute(RTM_DELROUTE, flags, RTN_THROW, prefix, &receipt);
+    if (result == EndpointRouteResult::Success || result == EndpointRouteResult::NotFound) {
+        m_ownedGatewayRoutes.erase(iterator);
+    } else if (result == EndpointRouteResult::Uncertain) {
+        state.uncertain = true;
     }
     return result;
 }
 
 bool LinuxRouteMonitor::deleteExclusionRoute(const IPAddress& prefix) {
-    logger.debug() << "Removing exclusion route for" << prefix.toString();
-    const int flags = NLM_F_REQUEST | NLM_F_ACK;
-    const EndpointRouteResult result =
-        rtmSendRoute(RTM_DELROUTE, flags, RTN_THROW, prefix);
-    return result == EndpointRouteResult::Success ||
-           result == EndpointRouteResult::NotFound;
+    const auto result = releaseGatewayRoute(prefix, GatewayRouteOwner::Exclusion);
+    return result == EndpointRouteResult::Success || result == EndpointRouteResult::NotFound;
+}
+
+LinuxRouteMonitor::EndpointRouteResult
+LinuxRouteMonitor::verifyGatewayRoute(const IPAddress& prefix,
+                                      const EndpointRouteReceipt& receipt) {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    if (receipt.priority != amnezia::linux_routes::OwnedGatewayRoutePriority ||
+        receipt.interfaceIndex == 0 ||
+        !QNetworkInterface::interfaceFromName(receipt.interfaceName).isValid() ||
+        if_nametoindex(receipt.interfaceName.toUtf8().constData()) != receipt.interfaceIndex) {
+        return EndpointRouteResult::Uncertain;
+    }
+    wg_allowedip destination;
+    struct in_addr gateway;
+    if (!buildAllowedIp(&destination, prefix) || destination.family != AF_INET ||
+        inet_pton(AF_INET, receipt.gateway.toUtf8().constData(), &gateway) != 1) {
+        return EndpointRouteResult::Uncertain;
+    }
+    const int requestSocket = socket(AF_NETLINK, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+                                     NETLINK_ROUTE);
+    if (requestSocket < 0) return EndpointRouteResult::Uncertain;
+    const auto guard = qScopeGuard([&] { close(requestSocket); });
+    struct sockaddr_nl localAddress {};
+    localAddress.nl_family = AF_NETLINK;
+    if (bind(requestSocket, reinterpret_cast<sockaddr*>(&localAddress),
+             sizeof(localAddress)) != 0) return EndpointRouteResult::Uncertain;
+    socklen_t addressLength = sizeof(localAddress);
+    if (getsockname(requestSocket, reinterpret_cast<sockaddr*>(&localAddress),
+                    &addressLength) != 0 || addressLength != sizeof(localAddress) ||
+        localAddress.nl_family != AF_NETLINK || localAddress.nl_pid == 0) {
+        return EndpointRouteResult::Uncertain;
+    }
+    struct {
+        nlmsghdr header;
+        rtmsg route;
+    } request {};
+    const uint32_t sequence = static_cast<uint32_t>(m_nlseq++);
+    request.header.nlmsg_len = NLMSG_LENGTH(sizeof(rtmsg));
+    request.header.nlmsg_type = RTM_GETROUTE;
+    request.header.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+    request.header.nlmsg_seq = sequence;
+    request.header.nlmsg_pid = localAddress.nl_pid;
+    // Request an unfiltered dump; the decoder selects the exact main-table
+    // IPv4 prefix. A kernel-reported filtered dump cannot prove absence.
+    request.route.rtm_family = AF_UNSPEC;
+    request.route.rtm_table = RT_TABLE_UNSPEC;
+    struct sockaddr_nl kernelAddress {};
+    kernelAddress.nl_family = AF_NETLINK;
+    if (sendto(requestSocket, &request, request.header.nlmsg_len, MSG_DONTWAIT,
+               reinterpret_cast<sockaddr*>(&kernelAddress), sizeof(kernelAddress)) !=
+        static_cast<ssize_t>(request.header.nlmsg_len)) return EndpointRouteResult::Uncertain;
+    amnezia::linux_routes::RouteReceipt expected;
+    expected.destination = destination.ip4.s_addr;
+    expected.prefixLength = destination.cidr;
+    expected.gateway = gateway.s_addr;
+    expected.interfaceIndex = receipt.interfaceIndex;
+    expected.priority = receipt.priority;
+    amnezia::linux_routes::RouteDumpParser parser(expected, sequence, localAddress.nl_pid);
+    while (!parser.complete()) {
+        const auto spent = elapsed.elapsed();
+        if (spent >= NETLINK_ACK_TIMEOUT_MS) {
+            logger.warning() << "Gateway route readback deadline exhausted";
+            return EndpointRouteResult::Uncertain;
+        }
+        const int remaining = NETLINK_ACK_TIMEOUT_MS - static_cast<int>(spent);
+        pollfd readiness {requestSocket, POLLIN, 0};
+        const int ready = poll(&readiness, 1, remaining);
+        if (ready < 0 && errno == EINTR) continue;
+        if (ready != 1 || !(readiness.revents & POLLIN) ||
+            (readiness.revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            return EndpointRouteResult::Uncertain;
+        }
+        char buffer[65536];
+        struct sockaddr_nl sender {};
+        iovec data {buffer, sizeof(buffer)};
+        msghdr message {};
+        message.msg_name = &sender;
+        message.msg_namelen = sizeof(sender);
+        message.msg_iov = &data;
+        message.msg_iovlen = 1;
+        const ssize_t received = recvmsg(requestSocket, &message, MSG_DONTWAIT);
+        if (received < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+        if (received <= 0 || message.msg_namelen != sizeof(sender) ||
+            sender.nl_family != AF_NETLINK || sender.nl_pid != 0 || sender.nl_groups != 0 ||
+            !parser.consume(buffer, static_cast<size_t>(received), sender.nl_pid, message.msg_flags)) {
+            logger.warning() << "Gateway route readback rejected:" << parser.reason();
+            return EndpointRouteResult::Uncertain;
+        }
+    }
+    if (elapsed.elapsed() > NETLINK_ACK_TIMEOUT_MS) return EndpointRouteResult::Uncertain;
+    using ReadbackResult = amnezia::linux_routes::ReadbackResult;
+    switch (parser.result()) {
+    case ReadbackResult::Match: return EndpointRouteResult::Success;
+    case ReadbackResult::Absent: return EndpointRouteResult::NotFound;
+    case ReadbackResult::Changed: return EndpointRouteResult::AlreadyExists;
+    case ReadbackResult::Unknown: return EndpointRouteResult::Uncertain;
+    }
+    return EndpointRouteResult::Uncertain;
 }
 
 LinuxRouteMonitor::EndpointRouteResult LinuxRouteMonitor::rtmSendRoute(
@@ -249,7 +383,8 @@ LinuxRouteMonitor::EndpointRouteResult LinuxRouteMonitor::rtmSendRoute(
         return EndpointRouteResult::Failed;
     }
     nlmsg_append_attr32(nlmsg, sizeof(buf), RTA_OIF, index);
-    nlmsg_append_attr32(nlmsg, sizeof(buf), RTA_PRIORITY, 1);
+    nlmsg_append_attr32(nlmsg, sizeof(buf), RTA_PRIORITY,
+                           amnezia::linux_routes::TunnelRoutePriority);
     }
 
     if (rtm->rtm_type == RTN_THROW) {
@@ -266,7 +401,13 @@ LinuxRouteMonitor::EndpointRouteResult LinuxRouteMonitor::rtmSendRoute(
         return EndpointRouteResult::Failed;
     }
     nlmsg_append_attr(nlmsg, sizeof(buf), RTA_GATEWAY, &ip4, sizeof(ip4));
-    nlmsg_append_attr32(nlmsg, sizeof(buf), RTA_PRIORITY, 0);
+    const uint32_t priority = endpointReceipt ? endpointReceipt->priority
+        : amnezia::linux_routes::OwnedGatewayRoutePriority;
+    if (priority == 0) {
+        logger.warning() << "Refusing wildcard gateway route priority";
+        return EndpointRouteResult::Failed;
+    }
+    nlmsg_append_attr32(nlmsg, sizeof(buf), RTA_PRIORITY, priority);
     if (endpointReceipt) {
         if (endpointReceipt->interfaceIndex == 0) {
             logger.warning() << "Endpoint route receipt has no interface index";
@@ -383,7 +524,8 @@ LinuxRouteMonitor::EndpointRouteResult LinuxRouteMonitor::rtmSendRoute(
             if (error->error == -EEXIST) {
             return EndpointRouteResult::AlreadyExists;
             }
-            if (error->error == -ENOENT) {
+            if (action == RTM_DELROUTE &&
+                (error->error == -ENOENT || error->error == -ESRCH)) {
             return EndpointRouteResult::NotFound;
             }
             return EndpointRouteResult::Failed;

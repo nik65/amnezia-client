@@ -66,6 +66,8 @@ HEADLESS_PROVISIONING_FILES = (
 )
 HEADLESS_NATIVE_HELPER = "amnezia-headless-fs"
 HEADLESS_CLI_NATIVE_HELPER = "amnezia-cli"
+HEADLESS_NATIVE_VERIFIER = "amnezia-verify-provisioning-native"
+HEADLESS_NATIVE_VERIFIER_MEMBER_BUDGET = 8 * 1024 * 1024
 HEADLESS_NATIVE_PROVISIONING_FILES = HEADLESS_PROVISIONING_FILES + (HEADLESS_NATIVE_HELPER,)
 HEADLESS_PACKAGE_MANIFEST_KEYS = {
     "schema", "version", "platform", "installModes", "artifacts", "service",
@@ -257,10 +259,27 @@ def inspect_headless_provisioning(
     has_native_helper = isinstance(package_manifest, dict) and "nativeHelper" in package_manifest
     if has_native_helper and package_manifest["nativeHelper"] not in (HEADLESS_NATIVE_HELPER, HEADLESS_CLI_NATIVE_HELPER):
         raise SystemExit("headless package-manifest.json has an invalid exact package contract")
-    package_files = (HEADLESS_NATIVE_PROVISIONING_FILES
-                     if has_native_helper and package_manifest["nativeHelper"] == HEADLESS_NATIVE_HELPER
-                     else HEADLESS_PROVISIONING_FILES)
-    expected_keys = HEADLESS_PACKAGE_MANIFEST_KEYS | ({"nativeHelper"} if has_native_helper else set())
+    has_native_verifier = isinstance(package_manifest, dict) and "nativeVerifier" in package_manifest
+    native_verifier = package_manifest.get("nativeVerifier") if isinstance(package_manifest, dict) else None
+    if has_native_verifier:
+        if not isinstance(native_verifier, dict) or set(native_verifier) != {"path", "sha256", "size"}:
+            raise SystemExit("headless package-manifest.json has an invalid nativeVerifier contract")
+        if native_verifier["path"] != HEADLESS_NATIVE_VERIFIER:
+            raise SystemExit("headless package-manifest.json has an invalid nativeVerifier path")
+        if not isinstance(native_verifier["sha256"], str) or not SHA256_RE.fullmatch(native_verifier["sha256"]):
+            raise SystemExit("headless package-manifest.json has an invalid nativeVerifier sha256")
+        verifier_size = native_verifier["size"]
+        if isinstance(verifier_size, bool) or not isinstance(verifier_size, int) or not 0 < verifier_size <= HEADLESS_NATIVE_VERIFIER_MEMBER_BUDGET:
+            raise SystemExit("headless package-manifest.json has an invalid nativeVerifier size")
+    package_files = list(HEADLESS_PROVISIONING_FILES)
+    if has_native_helper and package_manifest["nativeHelper"] == HEADLESS_NATIVE_HELPER:
+        package_files.append(HEADLESS_NATIVE_HELPER)
+    if has_native_verifier:
+        package_files.append(HEADLESS_NATIVE_VERIFIER)
+    package_files = tuple(package_files)
+    expected_keys = (HEADLESS_PACKAGE_MANIFEST_KEYS
+                     | ({"nativeHelper"} if has_native_helper else set())
+                     | ({"nativeVerifier"} if has_native_verifier else set()))
     expected_members = {f"headless-package/{name}" for name in package_files}
     if set(names) != expected_members:
         raise SystemExit(
@@ -311,6 +330,15 @@ def inspect_headless_provisioning(
     for name, expected_digest in checksums.items():
         if hashlib.sha256(files[name]).hexdigest() != expected_digest:
             raise SystemExit(f"headless provisioning inner checksum mismatch: {name}")
+    if has_native_verifier:
+        if modes[HEADLESS_NATIVE_VERIFIER] != 0o755:
+            raise SystemExit("native provisioning verifier must have mode 0755")
+        verifier_bytes = files[HEADLESS_NATIVE_VERIFIER]
+        if (len(verifier_bytes) != verifier_size
+                or hashlib.sha256(verifier_bytes).hexdigest() != native_verifier["sha256"]):
+            raise SystemExit("native provisioning verifier does not match the signed role binding")
+        if checksums.get(HEADLESS_NATIVE_VERIFIER) != native_verifier["sha256"]:
+            raise SystemExit("native provisioning verifier checksum row does not match the signed role binding")
 
     return {
         "version": package_version,
@@ -1268,7 +1296,10 @@ def verify_manifest(
             or provisioning["version"] != expected_version
             or provisioning["packageVersion"] != expected_version
             or provisioning["packageFiles"] not in (
-                list(HEADLESS_PROVISIONING_FILES), list(HEADLESS_NATIVE_PROVISIONING_FILES)
+                list(HEADLESS_PROVISIONING_FILES),
+                list(HEADLESS_NATIVE_PROVISIONING_FILES),
+                list(HEADLESS_PROVISIONING_FILES) + [HEADLESS_NATIVE_VERIFIER],
+                list(HEADLESS_NATIVE_PROVISIONING_FILES) + [HEADLESS_NATIVE_VERIFIER],
             )
             or not isinstance(provisioning["packageManifestSha256"], str)
             or not SHA256_RE.fullmatch(provisioning["packageManifestSha256"])

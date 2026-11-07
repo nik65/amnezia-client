@@ -189,6 +189,13 @@ PageType {
                                      : qsTr("Collector response: no HTTP result reported"),
             retry !== "" ? qsTr("Next retry: %1").arg(retry)
                          : qsTr("Next retry: no retry time reported")];
+        if (controller.redactionLabel !== undefined) {
+            details.push(qsTr("Payload privacy: %1").arg(String(controller.redactionLabel)));
+        }
+        var redactionCount = Number(controller.redactionCount);
+        if (Number.isFinite(redactionCount) && redactionCount >= 0) {
+            details.push(qsTr("Redaction events reported: %1").arg(redactionCount));
+        }
         if (delivered === "" && Number(controller.state) === 4) {
             details.push(qsTr("No delivery has been confirmed. This status alone does not establish a network failure or whether an upload has been attempted."));
         }

@@ -953,6 +953,10 @@ bool HeadlessRoutingController::saveState() const
     if (!QDir().mkpath(info.absolutePath())) return false;
     QSaveFile file(m_statePath);
     if (!file.open(QIODevice::WriteOnly)) return false;
+    // Runtime receipts retain the service owner/group access contract even when
+    // QSaveFile inherits an older mode or the process has a different umask.
+    if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                             | QFileDevice::ReadGroup | QFileDevice::WriteGroup)) return false;
     const QJsonObject object {
         { QStringLiteral("version"), 2 },
         { QStringLiteral("activeProfile"), m_activeProfile },

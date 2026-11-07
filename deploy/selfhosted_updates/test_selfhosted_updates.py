@@ -1557,15 +1557,18 @@ class SourceContractTests(unittest.TestCase):
             update_controller,
         )
         self.assertIn("totalDeadlineTimer->setInterval(kInstallerTotalDeadlineMs);", update_controller)
-        self.assertIn("auto *file = new QSaveFile(installerPath);", update_controller)
-        self.assertIn("file->setDirectWriteFallback(false);", update_controller)
+        # Staging is now owned by shared RAII state, including early reply or
+        # controller destruction; the executable lifetime fixture covers it.
+        self.assertIn("QSaveFile file;", update_controller)
+        self.assertIn("std::make_shared<DownloadState>(installerPath)", update_controller)
+        self.assertIn("state->file.setDirectWriteFallback(false);", update_controller)
         self.assertIn("&QIODevice::readyRead", update_controller)
-        self.assertIn("hash->addData(chunk);", update_controller)
+        self.assertIn("state->hash.addData(chunk);", update_controller)
         self.assertIn("const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();", update_controller)
         self.assertIn("reply->error() != QNetworkReply::NoError || statusCode < 200 || statusCode >= 300", update_controller)
         self.assertIn("Self-hosted installer size differs from manifest", update_controller)
-        self.assertIn("if (m_selectedArtifact.size >= 0 && *bytesWritten != m_selectedArtifact.size) {\n            logger.error()", update_controller)
-        self.assertIn("if (!file->commit()) {", update_controller)
+        self.assertIn("if (m_selectedArtifact.size >= 0 && state->bytesWritten != m_selectedArtifact.size) {\n            logger.error()", update_controller)
+        self.assertIn("if (!state->file.commit()) {", update_controller)
         self.assertNotIn("expectedSha256Matches", update_controller + update_controller_h)
         self.assertIn("startBackgroundUpdateChecks();", update_controller)
         self.assertIn("QTimer::singleShot(kInitialBackgroundUpdateCheckMs, this, &UpdateController::checkForUpdates);", update_controller)
@@ -2156,13 +2159,13 @@ class SourceContractTests(unittest.TestCase):
             "                        stopRemoteLogUploader()",
             android_service,
         )
-        self.assertIn(
-            "CONNECTED -> {\n"
-            "                        if (this@AmneziaVpnService.protocolState.value != CONNECTED) return@collect\n"
-            "                        networkState.bindNetworkListener()\n"
-            "                        configureRemoteLogUploader(activeVpnConfig)",
-            android_service,
+        connected_branch = re.search(
+            r"(?m)^\s+CONNECTED -> \{([\s\S]*?)^\s+DISCONNECTED ->", android_service
         )
+        self.assertIsNotNone(connected_branch)
+        self.assertRegex(connected_branch.group(1),
+            r"if \(this@AmneziaVpnService.protocolState.value != CONNECTED\) return@collect"
+            r"[\s\S]*networkState\.bindNetworkListener\(\)\s+configureRemoteLogUploader\(activeVpnConfig\)")
         self.assertIn("configureRemoteLogUploader(activeVpnConfig)", android_service)
         self.assertIn("private fun stopRemoteLogUploader()", android_service)
         self.assertIn(
@@ -3179,9 +3182,9 @@ class SourceContractTests(unittest.TestCase):
         client_rc = (REPO_ROOT / "client/platforms/windows/amneziavpn.rc.in").read_text(encoding="utf-8")
         service_rc = (REPO_ROOT / "service/server/amneziavpn-service.rc.in").read_text(encoding="utf-8")
 
-        version_fixture = json.loads((REPO_ROOT / "deploy/selfhosted_updates/fixtures/release_version_5.0.3.14.json").read_text(encoding="utf-8"))
         version = re.search(r"set\(AMNEZIAVPN_VERSION\s+([0-9.]+)", cmake).group(1)
         android_code = int(re.search(r"set\(APP_ANDROID_VERSION_CODE\s+(\d+)\)", cmake).group(1))
+        version_fixture = json.loads((REPO_ROOT / f"deploy/selfhosted_updates/fixtures/release_version_{version}.json").read_text(encoding="utf-8"))
         self.assertEqual(version, version_fixture["candidateVersion"])
         self.assertEqual(android_code, version_fixture["candidateAndroidVersionCode"])
         self.assertGreater(tuple(map(int, version.split("."))), tuple(map(int, version_fixture["baselineVersion"].split("."))))
@@ -7553,7 +7556,13 @@ class ManagedRoutesSourceContractTests(unittest.TestCase):
         self.assertIsNotNone(site_cap, "managed route policy must expose a shared site-count cap")
         assert site_cap
         self.assertGreater(int(site_cap.group(1)), 0)
-        self.assertLessEqual(int(site_cap.group(1)), 2048)
+        # Since 5.0.3.14, direct IP sites can use the full shared route budget.
+        # Keep both bounds: site capacity must not exceed the bounded route set.
+        route_cap = re.search(r"maximumTotalRouteCount\s*=\s*(\d+)", managed_policy)
+        self.assertIsNotNone(route_cap, "managed route policy must expose a shared route-count cap")
+        assert route_cap
+        self.assertLessEqual(int(site_cap.group(1)), int(route_cap.group(1)))
+        self.assertLessEqual(int(route_cap.group(1)), 4096)
         self.assertIn("managedRoutePolicy::canonicalSourceSites(value, &valid)", connection_controller)
 
     def test_managed_policy_http_sync_streams_into_a_bounded_buffer_with_deadline(self) -> None:

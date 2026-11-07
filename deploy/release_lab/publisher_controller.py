@@ -14,12 +14,13 @@ import json
 import os
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import urllib.parse
 import urllib.request
 import urllib.error
-from pathlib import PurePosixPath
+from pathlib import PurePosixPath, PureWindowsPath
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 
@@ -55,6 +56,112 @@ class PublisherOps(Protocol):
     def cleanup(self, run_id: str, case_id: str) -> Mapping[str, Any]: ...
 
     def recover_attempt(self, run_id: str, attempt: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+
+# The guest capture is bounded to 256 KiB, but JSON escaping is not: each
+# control character expands to a six-byte escape in the encoded document,
+# so the old fixed 1 MiB refusal silently discarded realistic captures.
+# 4 MiB admits the fully escaped bounded server capture plus the client
+# envelope; anything larger is stored as a bounded head/tail record.
+_PRIVATE_SNAPSHOT_MAX_BYTES = 4 * 1024 * 1024
+_PRIVATE_SNAPSHOT_STRING_BYTES = 262144
+
+
+def _snapshot_json(binding: Mapping[str, Any]) -> bytes:
+    return (json.dumps(binding, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _snapshot_fragment(data: bytes, half: int, label: str) -> dict[str, Any]:
+    return {"_snapshot_truncated": {
+        "label": label, "encoding": "base64",
+        "original_bytes": len(data), "original_sha256": hashlib.sha256(data).hexdigest(),
+        "head": base64.b64encode(data[:half]).decode("ascii"),
+        "tail": base64.b64encode(data[-half:]).decode("ascii"),
+    }}
+
+
+def _snapshot_bounded_value(value: Any, limit: int) -> Any:
+    """Head/tail truncate long strings while keeping the JSON shape readable."""
+    if isinstance(value, str):
+        data = value.encode("utf-8", "surrogatepass")
+        if len(data) <= limit:
+            return value
+        return _snapshot_fragment(data, max(limit // 2, 1024), "string")
+    if isinstance(value, Mapping):
+        return {str(key): _snapshot_bounded_value(item, limit) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_snapshot_bounded_value(item, limit) for item in value]
+    return value
+
+
+def _private_publication_snapshot(root: Path, run_id: str, case_id: str, nonce: str, label: str, value: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Best-effort immutable private diagnostics, never publication authority.
+
+    The exact serialized bytes are persisted when they fit the bounded
+    ceiling; otherwise long strings keep a base64 head/tail plus the original
+    size and digest so a pathological JSON expansion cannot lose the record.
+    """
+    try:
+        if os.name != "posix" or not hasattr(os, "geteuid"):
+            return {"status": "unavailable-platform"}
+        if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", run_id)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", case_id)
+                or not re.fullmatch(r"[0-9a-f]{48}", nonce) or label not in {"client", "server"}):
+            return {"status": "unavailable-identity"}
+        root = Path(root).absolute()
+        if any(stat.S_ISLNK(path.lstat().st_mode) for path in (root, *root.parents)):
+            return {"status": "unavailable-path"}
+        uid = os.geteuid()
+        info = root.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_mode & 0o022:
+            return {"status": "unavailable-root"}
+        directory = root
+        for component in ("exports", run_id, "publication", nonce, "private-pre-http"):
+            directory = directory / component
+            try:
+                directory.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != uid or info.st_mode & 0o022:
+                return {"status": "unavailable-path"}
+        if directory.stat().st_mode & 0o077:
+            return {"status": "unavailable-permissions"}
+        binding = {"schema": 1, "run_id": run_id, "case_id": case_id, "attempt_nonce": nonce,
+                   "diagnostic_only": True, "label": label, "raw": value}
+        raw = _snapshot_json(binding)
+        record: dict[str, Any] = {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+        if len(raw) > _PRIVATE_SNAPSHOT_MAX_BYTES:
+            full_sha256, full_size = record["sha256"], record["size"]
+            limit = _PRIVATE_SNAPSHOT_STRING_BYTES
+            while limit >= 1024:
+                candidate = _snapshot_json({**binding, "raw": _snapshot_bounded_value(value, limit)})
+                if len(candidate) <= _PRIVATE_SNAPSHOT_MAX_BYTES:
+                    raw = candidate
+                    break
+                limit //= 2
+            else:
+                half = _PRIVATE_SNAPSHOT_MAX_BYTES // 8
+                candidate = _snapshot_json({**binding, "raw": _snapshot_fragment(raw, half, "document")})
+                raw = candidate if len(candidate) <= _PRIVATE_SNAPSHOT_MAX_BYTES else b""
+            if not raw:
+                return {"status": "oversize-not-persisted", "sha256": full_sha256, "size": full_size}
+            record = {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw),
+                      "truncated": True, "full_sha256": full_sha256, "full_size": full_size}
+        path = directory / (label + "-" + secrets.token_hex(16) + ".json")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if path.read_bytes() != raw or stat.S_IMODE(path.stat().st_mode) != 0o600:
+            raise OSError("snapshot readback differs")
+        return {"status": "preserved", "path": str(path), **record}
+    except Exception:
+        return {"status": "unavailable"}
+
+
+_PUBLISHER_SERVER_DIAGNOSTIC_COMMAND = "set +e; { printf '%s\\n' '--- ssh stderr'; cat /tmp/amnezia-release-lab-publisher-ssh.stderr 2>&1; printf '%s\\n' '--- attempt marker'; cat /tmp/amnezia-release-lab-publisher-attempt.json 2>&1; printf '%s\\n' '--- paths'; find /opt/amnezia -maxdepth 3 -type f -printf '%p|%u:%g|%m|%s\\n' 2>&1; printf '%s\\n' '--- containers'; docker ps -a --no-trunc 2>&1; printf '%s\\n' '--- networks'; docker network ls --no-trunc 2>&1; printf '%s\\n' '--- ports'; ss -ltn 2>&1; printf '%s\\n' '--- publication history'; for state in /opt/amnezia/client-updates/.publish-history.*; do test -f \"$state\" || continue; printf 'FILE=%s\\n' \"$state\"; cat \"$state\"; done; } | head -c 262144; exit 0"
 
 
 class PublisherError(LabError):
@@ -114,6 +221,10 @@ class ConcretePublisherOps:
         self.controller = controller
         self._key = None
         self._client_raw: dict[str, Any] = {}
+        self._client_raw_nonce = ""
+        self._publish_result_snapshot: Mapping[str, Any] | None = None
+        self._publish_result_snapshot_nonce = ""
+        self._pre_http_diagnostics: Mapping[str, Any] | None = None
         self._relays_started = False
         self._server_started = False
         self._child_started = False
@@ -205,17 +316,98 @@ class ConcretePublisherOps:
             else: os.environ["AMNEZIA_LAB_RELAY_FIXED_ENDPOINTS"] = previous
         return {"uuid": vm["uuid"], "qmp_socket": vm["qmp_socket"], "qga_socket": vm["qga_socket"], "qmp_observed": True, "qga_observed": True, "observation": observation}
 
+    @staticmethod
+    def _require_host_plan(value: Mapping[str, Any]) -> Mapping[str, Any]:
+        if (not isinstance(value, Mapping) or type(value.get("schema")) is not int or value.get("schema") != 1
+                or value.get("backend") != "hyperv" or value.get("profile") != "windows-x64"
+                or value.get("transport") != "hyperv-powershell-direct" or value.get("ready") is not True
+                or value.get("parent_state") != "Off" or value.get("host_network_mutation") is not False
+                or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("parent_sha256", "")))
+                or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", str(value.get("parent_vm_id", "")))):
+            raise PublisherError("sealed Hyper-V host plan is invalid")
+        parent = PureWindowsPath(str(value.get("parent_vhdx", "")))
+        if (parent.parent != PureWindowsPath(r"C:\ProgramData\AmneziaReleaseLab\hyperv\windows-x64")
+                or parent.suffix.lower() != ".vhdx"
+                or PureWindowsPath(str(value.get("child_root", ""))) != PureWindowsPath(r"C:\ProgramData\AmneziaReleaseLab\hyperv\runs\RUN_ID\windows-x64\cases\CASE_ID")
+                or not isinstance(value.get("cases"), list) or "publisher-clean" not in value["cases"]):
+            raise PublisherError("sealed Hyper-V host plan paths/cases differ")
+        return value
+
+    @staticmethod
+    def _require_owned_host_envelope(value: Mapping[str, Any], action: str, *, run_id: str,
+                                    case_id: str, parent: Mapping[str, Any], expected_child: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+        if (not isinstance(value, Mapping) or action not in {"create-child", "start"}
+                or value.get("action") != action or value.get("origin") not in (None, "controller")
+                or ("injected" in value and value["injected"] is not False)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}", run_id)
+                or case_id != "publisher-clean"):
+            raise PublisherError("owned Hyper-V host command envelope is invalid")
+        child, configuration = value.get("child"), value.get("configuration")
+        if not isinstance(child, Mapping) or not isinstance(configuration, Mapping):
+            raise PublisherError("owned Hyper-V host child/configuration missing")
+        expected_root = PureWindowsPath(r"C:\ProgramData\AmneziaReleaseLab\hyperv\runs") / run_id / "windows-x64" / "cases" / case_id
+        expected_disk = expected_root / "disk" / "child.vhdx"
+        vm_id = child.get("vm_id")
+        name_hash = hashlib.sha256((run_id + "|" + case_id).encode()).hexdigest()[:12]
+        expected_name = ("AmneziaLab-" + run_id[:32] + "-" + case_id + "-" + name_hash)[:80]
+        state = "created" if action == "create-child" else "running"
+        if (type(child.get("schema")) is not int or child["schema"] != 1
+                or child.get("backend") != "hyperv" or child.get("profile") != "windows-x64"
+                or child.get("run_id") != run_id or child.get("case_id") != case_id
+                or not isinstance(vm_id, str) or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", vm_id)
+                or child.get("vm_name") != expected_name or child.get("state") != state
+                or child.get("transport") != "hyperv-powershell-direct"
+                or PureWindowsPath(str(child.get("run_root", ""))) != expected_root
+                or PureWindowsPath(str(child.get("child_vhdx", ""))) != expected_disk
+                or PureWindowsPath(str(child.get("parent_vhdx", ""))) != PureWindowsPath(parent["parent_vhdx"])
+                or child.get("parent_vm_id") != parent["parent_vm_id"]
+                or any(child.get(k) != parent["parent_sha256"] for k in ("parent_sha256", "parent_sha256_before", "parent_sha256_after"))):
+            raise PublisherError("owned Hyper-V child marker/run/parent binding differs")
+        fixed = configuration.get("fixed_memory_readback")
+        numeric = {"generation": 2, "processors": 4, "memory_bytes": 8589934592,
+                   "network_adapter_count": 0, "dvd_count": 0}
+        if (configuration.get("vm_id") != vm_id or configuration.get("state") != ("Off" if action == "create-child" else "Running")
+                or any(type(configuration.get(k)) is not int or configuration[k] != expected for k, expected in numeric.items())
+                or any(configuration.get(k) is not True for k in ("secure_boot", "vtp_enabled", "key_protector_present"))
+                or configuration.get("secure_boot_template") != "MicrosoftWindows"
+                or configuration.get("vhd_type") != "Differencing"
+                or PureWindowsPath(str(configuration.get("child_vhdx", ""))) != expected_disk
+                or PureWindowsPath(str(configuration.get("parent_vhdx", ""))) != PureWindowsPath(parent["parent_vhdx"])
+                or not isinstance(fixed, Mapping) or fixed.get("dynamic_memory_enabled") is not False
+                or type(fixed.get("startup_bytes")) is not int or fixed["startup_bytes"] != 8589934592):
+            raise PublisherError("owned Hyper-V host configuration differs")
+        if action == "create-child":
+            readback = value.get("parent_readback")
+            expected = {"before_sha256": parent["parent_sha256"], "after_sha256": parent["parent_sha256"],
+                        "before_vm_id": parent["parent_vm_id"], "after_vm_id": parent["parent_vm_id"]}
+            if (not isinstance(readback, Mapping) or any(readback.get(k) != expected_value for k, expected_value in expected.items())
+                    or any(PureWindowsPath(str(readback.get(k, ""))) != PureWindowsPath(parent["parent_vhdx"]) for k in ("before_vhdx", "after_vhdx"))):
+                raise PublisherError("sealed parent changed across owned child creation")
+        else:
+            worker = value.get("worker")
+            if (not isinstance(expected_child, Mapping) or vm_id != expected_child.get("vm_id")
+                    or value.get("parent_sha256") != parent["parent_sha256"]
+                    or not isinstance(worker, Mapping) or type(worker.get("process_pid")) is not int or worker["process_pid"] <= 0
+                    or worker.get("process_uuid") != vm_id or worker.get("source") != "Msvm_ComputerSystem.ProcessID"
+                    or not isinstance(worker.get("process_start_time"), str) or not worker["process_start_time"]
+                    or any(child.get(k) != worker.get(k) for k in ("process_pid", "process_uuid", "process_start_time"))):
+                raise PublisherError("started Hyper-V child worker identity differs")
+        return value
+
     def start_child(self, run_id: str, case_id: str) -> Mapping[str, Any]:
         self._child_started = True
+        parent = self._require_host_plan(self.controller.hyperv_call("plan", run_id=run_id))
         made = self.controller.hyperv_call("create-child", run_id=run_id, CaseId=case_id)
-        self._require_envelope(made, "create-child")
+        self._require_owned_host_envelope(made, "create-child", run_id=run_id, case_id=case_id, parent=parent)
         child = dict(made.get("child") or {})
         self.controller._record_hyperv_case(run_id, "windows-x64", case_id, "created", vm_id=child.get("vm_id"), parent_sha256=child.get("parent_sha256"), run_root=child.get("run_root"), child_vhdx=child.get("child_vhdx"))
         started = self.controller.hyperv_call("start", run_id=run_id, CaseId=case_id, credential=True)
-        self._require_envelope(started, "start", vm_id=str(child.get("vm_id")))
+        self._require_owned_host_envelope(started, "start", run_id=run_id, case_id=case_id, parent=parent, expected_child=child)
         child.update(started.get("child") or {})
         probe = self.controller.hyperv_call("probe", run_id=run_id, CaseId=case_id, credential=True)
         self._require_envelope(probe, "probe", vm_id=str(child.get("vm_id")))
+        if probe.get("parent_sha256") != parent["parent_sha256"]:
+            raise PublisherError("guest probe sealed parent differs from owned host child")
         record = {"vm_id": child.get("vm_id"), "parent_sha256": child.get("parent_sha256"), "process_pid": child.get("process_pid", child.get("pid")), "process_uuid": child.get("process_uuid", child.get("uuid")), "marker": child.get("marker", f"amnezia-release-lab:{run_id}:windows-x64"), "case_id": case_id}
         self._child_record = dict(record)
         self.controller._record_hyperv_case(run_id, "windows-x64", case_id, "running", vm_id=record["vm_id"], parent_sha256=record["parent_sha256"], run_root=child.get("run_root"), child_vhdx=child.get("child_vhdx"))
@@ -324,15 +516,26 @@ class ConcretePublisherOps:
         return relay, supervisor, task
 
     def _with_publisher_key(self, key: str, action: str, **kwargs: Any) -> Mapping[str, Any]:
-        previous = os.environ.get("AMNEZIA_LAB_PUBLISHER_KEY_B64")
-        os.environ["AMNEZIA_LAB_PUBLISHER_KEY_B64"] = base64.b64encode(key.encode("utf-8")).decode("ascii")
+        variable = "AMNEZIA_LAB_PUBLISHER_KEY_B64"
+        previous = os.environ.get(variable)
+        previous_wslenv = os.environ.get("WSLENV")
+        # WSL does not forward Linux environment variables to Win32 children
+        # unless WSLENV explicitly opts them in. The key is data, never a path.
+        entries = [entry for entry in (previous_wslenv or "").split(":")
+                   if entry and entry.split("/", 1)[0].upper() != variable]
+        os.environ[variable] = base64.b64encode(key.encode("utf-8")).decode("ascii")
+        os.environ["WSLENV"] = ":".join([*entries, variable + "/w"])
         try:
             return self.controller.hyperv_call(action, run_id=kwargs.pop("run_id"), credential=True, **kwargs)
         finally:
             if previous is None:
-                os.environ.pop("AMNEZIA_LAB_PUBLISHER_KEY_B64", None)
+                os.environ.pop(variable, None)
             else:
-                os.environ["AMNEZIA_LAB_PUBLISHER_KEY_B64"] = previous
+                os.environ[variable] = previous
+            if previous_wslenv is None:
+                os.environ.pop("WSLENV", None)
+            else:
+                os.environ["WSLENV"] = previous_wslenv
 
     def seed_lab_profile(self, run_id: str, case_id: str, server: Mapping[str, Any], nonce: str) -> Mapping[str, Any]:
         self._attempt_nonce = nonce
@@ -387,16 +590,60 @@ class ConcretePublisherOps:
 
     def publish_once(self, run_id: str, case_id: str) -> Mapping[str, Any]:
         result = self.controller.hyperv_call("publish", run_id=run_id, CaseId=case_id, credential=True, AttemptNonce=self._attempt_nonce)
-        self._require_envelope(result, "publish", vm_id=str(self._child_record.get("vm_id")))
+        # Persist the real adapter result before the ownership envelope (or a
+        # later lifecycle failure) can trigger finally-cleanup.
         self._client_raw = dict(result)
+        self._client_raw_nonce = self._attempt_nonce
+        try:
+            self._publish_result_snapshot = _private_publication_snapshot(self.controller.root, run_id, case_id, self._attempt_nonce, "client", self._client_raw)
+        except Exception:
+            self._publish_result_snapshot = {"status": "unavailable"}
+        self._publish_result_snapshot_nonce = self._attempt_nonce
+        self._require_envelope(result, "publish", vm_id=str(self._child_record.get("vm_id")))
         return result
+
+    def _capture_pre_http_diagnostics(self, run_id: str, case_id: str, server: Mapping[str, Any], nonce: str) -> Mapping[str, Any]:
+        client = getattr(self, "_publish_result_snapshot", None)
+        if (getattr(self, "_publish_result_snapshot_nonce", None) != nonce
+                or not isinstance(client, Mapping) or client.get("status") != "preserved"):
+            value: Mapping[str, Any] = {}
+            if getattr(self, "_client_raw_nonce", None) == nonce:
+                raw_value = getattr(self, "_client_raw", None)
+                if isinstance(raw_value, Mapping):
+                    value = dict(raw_value)
+            client = _private_publication_snapshot(self.controller.root, run_id, case_id, nonce, "client", value)
+            self._publish_result_snapshot = client
+            self._publish_result_snapshot_nonce = nonce
+        try:
+            qga = QgaClient(Path(str(server["qga_socket"])), timeout=10)
+            if not qga.sync():
+                raise PublisherError("diagnostic QGA unavailable")
+            raw = qga.guest_exec_wait("/usr/bin/bash", ["-lc", _PUBLISHER_SERVER_DIAGNOSTIC_COMMAND], timeout=30)
+        except Exception as exc:
+            # No exception text/locals: raw output can contain private data.
+            raw = {"diagnostic_capture_failed": True, "error_type": type(exc).__name__}
+        saved = _private_publication_snapshot(self.controller.root, run_id, case_id, nonce, "server", raw)
+        diagnostics = {"attempt_nonce": nonce, "diagnostic_only": True, "client": client, "server": saved}
+        self._pre_http_diagnostics = diagnostics
+        return diagnostics
 
     def collect_readback(self, run_id: str, case_id: str, server: Mapping[str, Any], nonce: str) -> Mapping[str, Any]:
         if nonce != self._attempt_nonce or not re.fullmatch(r"[0-9a-f]{48}", nonce):
             raise PublisherError("publication readback nonce is not bound to the seeded attempt")
         run = self.controller.get_run(run_id)
+        # Preserve the actual client result and bounded owned-server evidence
+        # before any HTTP failure can lead finally-cleanup to reset the guest.
+        # The original later QGA/HTTP/phase verification remains mandatory.
+        try:
+            self._pre_http_diagnostics = self._capture_pre_http_diagnostics(run_id, case_id, server, nonce)
+        except Exception:
+            self._pre_http_diagnostics = {"attempt_nonce": nonce, "diagnostic_only": True, "status": "unavailable"}
+        try:
+            _merge_attempt(self.controller, run_id, pre_http_diagnostics=self._pre_http_diagnostics)
+        except Exception:
+            pass  # A diagnostic pointer must never mask the real HTTP failure.
         base = "http://127.0.0.1:17865/"
-        opener = urllib.request.build_opener(_NoRedirect)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
         def fetch(path: str, expected_size: int) -> bytes:
             parsed = urllib.parse.urlparse(path)
             pure = PurePosixPath(parsed.path)
@@ -455,7 +702,7 @@ class ConcretePublisherOps:
         qga = QgaClient(Path(str(server["qga_socket"])), timeout=10)
         if not qga.sync():
             raise PublisherError("server QGA is not responsive during publication readback")
-        command = "set +e; { printf '%s\\n' '--- ssh stderr'; cat /tmp/amnezia-release-lab-publisher-ssh.stderr 2>&1; printf '%s\\n' '--- attempt marker'; cat /tmp/amnezia-release-lab-publisher-attempt.json 2>&1; printf '%s\\n' '--- paths'; find /opt/amnezia -maxdepth 3 -type f -printf '%p|%u:%g|%m|%s\\n' 2>&1; printf '%s\\n' '--- containers'; docker ps -a --no-trunc 2>&1; printf '%s\\n' '--- networks'; docker network ls --no-trunc 2>&1; printf '%s\\n' '--- ports'; ss -ltn 2>&1; printf '%s\\n' '--- publication history'; for state in /opt/amnezia/client-updates/.publish-history.*; do test -f \"$state\" || continue; printf 'FILE=%s\\n' \"$state\"; cat \"$state\"; done; } | head -c 262144; exit 0"
+        command = _PUBLISHER_SERVER_DIAGNOSTIC_COMMAND
         server_raw = qga.guest_exec_wait("/usr/bin/bash", ["-lc", command], timeout=30)
         marker_match = re.search(r"--- attempt marker\s*\n(\{[^\n]+\})", str(server_raw.get("stdout", "")))
         try:
@@ -512,22 +759,199 @@ class ConcretePublisherOps:
 
     @staticmethod
     def _planned_publish_metadata(run: Mapping[str, Any], payload: Mapping[str, Any]) -> tuple[str, int]:
-        lines = ["amnezia-bundled-publish-v1", str(run.get("manifest", {}).get("sha256", "")), str(run.get("candidate_version", "")), str(payload.get("schema", "")), str(((payload.get("releasePolicy") or {}).get("generation", 0))),]
-        records: list[tuple[str, Mapping[str, Any]]] = []
-        for metadata in (payload.get("platforms") or {}).values():
-            if isinstance(metadata, Mapping) and metadata.get("openExternal") is not True:
-                records.append(("A", metadata))
+        # Exact mirror of the shipped C++ producer (selfHostedUpdateBootstrapper.cpp
+        # loadPayload -> publishNow).  The signed payload's URL is validated and
+        # decoded to the same local relative path that the client uploads and
+        # enumerates in publish.meta; the raw signed URL is not wire metadata.
+        if not isinstance(run, Mapping) or not isinstance(payload, Mapping):
+            raise PublisherError("publication metadata inputs are not mappings")
+
+        def canonical_sha(value: Any) -> bool:
+            return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+        def canonical_decimal(value: Any) -> bool:
+            if not isinstance(value, str):
+                return False
+            return re.fullmatch(r"0|[1-9][0-9]*", value) is not None
+
+        def canonical_version(value: Any) -> bool:
+            if not isinstance(value, str):
+                return False
+            parts = value.split(".")
+            return (len(parts) == 4
+                    and all(len(part) <= 10 and canonical_decimal(part) and int(part) <= 2147483647
+                            for part in parts))
+
+        def strict_url_path(value: Any) -> str:
+            # QUrl(..., QUrl::StrictMode).path(QUrl::FullyDecoded): reject the
+            # characters/URL forms StrictMode rejects, then decode UTF-8 escapes.
+            if not isinstance(value, str) or not value:
+                raise PublisherError("publication metadata URL is missing")
+            if value.startswith("/") or value.startswith("\\") or value.startswith("//"):
+                raise PublisherError("publication metadata URL is absolute or has an authority")
+            if re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", value):
+                raise PublisherError("publication metadata URL has a scheme")
+            if "?" in value or "#" in value:
+                raise PublisherError("publication metadata URL has a query or fragment")
+            if any(ch in value for ch in '"<>^`{|}\\'):
+                raise PublisherError("publication metadata URL has a StrictMode-invalid character")
+            if any(ord(ch) <= 0x20 or ord(ch) == 0x7F for ch in value):
+                raise PublisherError("publication metadata URL has whitespace or a control character")
+            if re.search(r"%(?![0-9A-Fa-f]{2})", value):
+                raise PublisherError("publication metadata URL has an invalid percent escape")
+            return urllib.parse.unquote(value, encoding="utf-8", errors="replace")
+
+        def valid_filename(value: str) -> bool:
+            if value in {"", ".", ".."} or ":" in value or "\\" in value or "/" in value:
+                return False
+            return not any(ord(ch) <= 0x1F or 0x7F <= ord(ch) <= 0x9F for ch in value)
+
+        def digest_and_size(metadata: Mapping[str, Any], label: str) -> tuple[str, int]:
+            digest = metadata.get("sha256")
+            if not canonical_sha(digest):
+                raise PublisherError(f"publication metadata has an invalid sha256 for {label}")
+            size = metadata.get("size")
+            if type(size) is not int or size <= 0 or size > 9223372036854775807:
+                raise PublisherError(f"publication metadata has an invalid size for {label}")
+            return digest, size
+
+        def artifact_record(metadata: Mapping[str, Any], label: str) -> tuple[str, str, int]:
+            digest, size = digest_and_size(metadata, label)
+            segments = strict_url_path(metadata.get("url")).split("/")
+            if (len(segments) != 4 or segments[0] != "files" or segments[1] != "artifacts"
+                    or segments[2] != digest):
+                raise PublisherError(f"publication metadata has an invalid artifact path for {label}")
+            if not valid_filename(segments[3]):
+                raise PublisherError(f"publication metadata has an invalid artifact name for {label}")
+            relative = f"files/artifacts/{digest}/{segments[3]}"
+            if len(relative.encode("utf-8")) > 1024:
+                raise PublisherError(f"publication metadata path is too long for {label}")
+            return relative, digest, size
+
+        def rollback_record(metadata: Mapping[str, Any], generation: str,
+                            rollback_version: str, label: str) -> tuple[str, str, int]:
+            digest, size = digest_and_size(metadata, label)
+            segments = strict_url_path(metadata.get("url")).split("/")
+            if (len(segments) != 5 or segments[0] != "files" or segments[1] != "rollback"
+                    or segments[2] != generation or not canonical_decimal(segments[2])
+                    or segments[3] != rollback_version or not canonical_version(segments[3])):
+                raise PublisherError(f"publication metadata has an invalid rollback path for {label}")
+            if not valid_filename(segments[4]):
+                raise PublisherError(f"publication metadata has an invalid rollback name for {label}")
+            relative = f"files/rollback/{segments[2]}/{segments[3]}/{segments[4]}"
+            if len(relative.encode("utf-8")) > 1024:
+                raise PublisherError(f"publication metadata path is too long for {label}")
+            return relative, digest, size
+
+        def sorted_keys(mapping: Mapping[str, Any]) -> list[str]:
+            if any(not isinstance(key, str) for key in mapping):
+                raise PublisherError("publication metadata contains a non-string platform key")
+            # QJsonObject iterates keys in UTF-16 code-unit order, independent of
+            # the JSON source order.
+            return sorted(mapping, key=lambda key: key.encode("utf-16-be", "surrogatepass"))
+
+        manifest = run.get("manifest")
+        if not isinstance(manifest, Mapping) or not canonical_sha(manifest.get("sha256")):
+            raise PublisherError("publication metadata has no canonical manifest sha256")
+        manifest_sha = manifest["sha256"]
+
+        schema = payload.get("schema")
+        if type(schema) is not int or schema not in {1, 2}:
+            raise PublisherError("publication metadata has an unsupported payload schema")
+        version = payload.get("version")
+        if not canonical_version(version):
+            raise PublisherError("publication metadata has a non-canonical payload version")
+        if "candidate_version" in run and run.get("candidate_version") != version:
+            raise PublisherError("publication metadata candidate version differs from the signed payload")
+
+        policy = payload.get("releasePolicy")
+        if schema == 1:
+            generation = "0"
+        else:
+            if not isinstance(policy, Mapping) or policy.get("schema") != 2:
+                raise PublisherError("publication metadata schema-2 policy is invalid")
+            raw_generation = policy.get("generation")
+            if type(raw_generation) is not int or not (1 <= raw_generation <= 9007199254740991):
+                raise PublisherError("publication metadata schema-2 generation is invalid")
+            generation = str(raw_generation)
+
+        platforms = payload.get("platforms")
+        if not isinstance(platforms, Mapping) or not platforms:
+            raise PublisherError("publication metadata has no signed platforms")
+        records: list[tuple[str, str, str, int]] = []
+        seen_paths: set[str] = set()
+        for platform in sorted_keys(platforms):
+            metadata = platforms[platform]
+            if not isinstance(metadata, Mapping) or not metadata:
+                raise PublisherError(f"publication metadata platform entry is invalid: {platform}")
+            if "headless" in platform.lower() and platform != "linux-headless-x64":
+                raise PublisherError(f"publication metadata platform entry is non-canonical: {platform}")
+            if platform == "linux-headless-x64":
+                if "openExternal" in metadata and type(metadata["openExternal"]) is not bool:
+                    raise PublisherError("publication metadata headless openExternal is invalid")
+                if metadata.get("openExternal") is True:
+                    raise PublisherError("publication metadata headless platform cannot be external")
+            if metadata.get("openExternal") is True:
+                continue
+            relative, digest, size = artifact_record(metadata, platform)
+            if relative in seen_paths:
+                raise PublisherError(f"publication metadata repeats an artifact path: {relative}")
+            seen_paths.add(relative)
+            records.append(("A", relative, digest, size))
+
+        provisioning_present = "headlessProvisioning" in payload
         provisioning = payload.get("headlessProvisioning")
-        if isinstance(provisioning, Mapping):
-            records.append(("A", provisioning))
-        rollback = ((payload.get("releasePolicy") or {}).get("rollback") or {}).get("platforms")
-        if isinstance(rollback, Mapping):
-            records.extend(("R", metadata) for metadata in rollback.values() if isinstance(metadata, Mapping))
-        lines[5:5] = [str(len(records))]
+        if provisioning_present:
+            if not isinstance(provisioning, Mapping) or not provisioning:
+                raise PublisherError("publication metadata provisioning entry is invalid")
+        if ("linux-headless-x64" in platforms) != provisioning_present:
+            raise PublisherError("publication metadata does not bind the headless platform to provisioning")
+        if provisioning_present:
+            relative, digest, size = artifact_record(provisioning, "headlessProvisioning")
+            if relative in seen_paths:
+                raise PublisherError(f"publication metadata repeats an artifact path: {relative}")
+            seen_paths.add(relative)
+            records.append(("A", relative, digest, size))
+
+        if isinstance(policy, Mapping) and "rollback" in policy:
+            if schema != 2:
+                raise PublisherError("publication metadata schema-1 payload has a rollback policy")
+            rollback = policy.get("rollback")
+            if not isinstance(rollback, Mapping) or not rollback:
+                raise PublisherError("publication metadata rollback policy is invalid")
+            rollback_version = rollback.get("version")
+            if not canonical_version(rollback_version) or rollback_version != policy.get("previousVersion"):
+                raise PublisherError("publication metadata rollback version is invalid")
+            rollback_platforms = rollback.get("platforms")
+            if not isinstance(rollback_platforms, Mapping) or not rollback_platforms:
+                raise PublisherError("publication metadata rollback platforms are invalid")
+            for platform in sorted_keys(rollback_platforms):
+                metadata = rollback_platforms[platform]
+                if not isinstance(metadata, Mapping) or not metadata:
+                    raise PublisherError(f"publication metadata rollback entry is invalid: {platform}")
+                if "headless" in platform.lower() and platform != "linux-headless-x64":
+                    raise PublisherError(f"publication metadata rollback entry is non-canonical: {platform}")
+                if "openExternal" in metadata and type(metadata["openExternal"]) is not bool:
+                    raise PublisherError("publication metadata rollback openExternal is invalid")
+                if metadata.get("openExternal") is True:
+                    raise PublisherError("publication metadata rollback artifact cannot be external")
+                relative, digest, size = rollback_record(
+                    metadata, generation, rollback_version, "rollback:" + platform)
+                if relative in seen_paths:
+                    raise PublisherError(f"publication metadata repeats an artifact path: {relative}")
+                seen_paths.add(relative)
+                records.append(("R", relative, digest, size))
+
+        if not records or len(records) > 64:
+            raise PublisherError("publication metadata has an unsupported file count")
+        lines = ["amnezia-bundled-publish-v1", manifest_sha, version, str(schema), generation,
+                 str(len(records))]
         metadata_lines = ["\t".join(lines)]
-        for kind, metadata in records:
-            metadata_lines.append("\t".join((kind, str(metadata.get("url", "")), str(metadata.get("sha256", "")), str(metadata.get("size", "")))))
+        metadata_lines.extend("\t".join((kind, relative, digest, str(size)))
+                              for kind, relative, digest, size in records)
         metadata = ("\n".join(metadata_lines) + "\n").encode("utf-8")
+        if len(metadata) > 64 * 1024:
+            raise PublisherError("publication metadata exceeds the supported size")
         return hashlib.sha256(metadata).hexdigest(), len(records)
 
     def cleanup(self, run_id: str, case_id: str) -> Mapping[str, Any]:
@@ -535,8 +959,8 @@ class ConcretePublisherOps:
         errors: list[str] = []
         if self._relays_started:
             try:
-                _, supervisor, task = self._relay_helper_paths()
-                stopped = self.controller.hyperv_call("relays-stop", run_id=run_id, CaseId=case_id, credential=True, AttemptNonce=self._attempt_nonce, RelaySupervisorPath=windows_path_for_wsl(supervisor), RelayGuestTaskPath=windows_path_for_wsl(task))
+                relay, supervisor, task = self._relay_helper_paths()
+                stopped = self.controller.hyperv_call("relays-stop", run_id=run_id, CaseId=case_id, credential=True, AttemptNonce=self._attempt_nonce, RelaySupervisorPath=windows_path_for_wsl(supervisor), RelayGuestTaskPath=windows_path_for_wsl(task), RelayHelperPath=windows_path_for_wsl(relay), RelayHelperSha256=self.RELAY_HELPER_SHA256, RelayGuestTaskSha256=sha256_file(task)[0])
                 result["relays_stopped"] = stopped.get("relays_stopped") is True
                 result["relay_registry_unregistered"] = stopped.get("relay_registry_unregistered") is True
                 if not result["relays_stopped"] or not result["relay_registry_unregistered"]:
@@ -645,6 +1069,9 @@ class ControllerPublisher:
             },
         }
         _persist_attempt(self.controller, run_id, attempt)
+        # Diagnostic pointers belong to exactly one nonce; never carry a
+        # previous attempt's preserved evidence into this attempt.
+        self.ops._pre_http_diagnostics = None
         server: Mapping[str, Any] | None = None
         child: Mapping[str, Any] | None = None
         ack: dict[str, Any] = {}
@@ -652,7 +1079,7 @@ class ControllerPublisher:
         cleanup: Mapping[str, Any] = {}
         pending: tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]] | None = None
         result: dict[str, Any] | None = None
-        primary: Exception | None = None
+        primary: BaseException | None = None
         cleanup_error: Exception | None = None
         phase = "start-server"
         try:
@@ -704,6 +1131,9 @@ class ControllerPublisher:
             attempt["phase"] = phase
             _persist_attempt(self.controller, run_id, attempt)
             readback = self.ops.collect_readback(run_id, case_id, server, nonce)
+            diagnostics = getattr(self.ops, "_pre_http_diagnostics", None)
+            if isinstance(diagnostics, Mapping) and diagnostics.get("attempt_nonce") == nonce:
+                attempt["pre_http_diagnostics"] = dict(diagnostics)
             if readback.get("attempt_nonce") != nonce:
                 raise PublisherError("publication readback nonce does not match the durable attempt ledger")
             phase_receipts = readback.get("phase_receipts")
@@ -716,10 +1146,21 @@ class ControllerPublisher:
             ack = {phase: dict(phase_receipts[phase]) for phase in ("prepare", "commit", "finalize")}
             raw = dict(readback.get("raw_sources") or {})
             pending = (child, server, ack, readback, raw)
-        except Exception as exc:
+        except BaseException as exc:
             primary = exc
+            diagnostics = getattr(self.ops, "_pre_http_diagnostics", None)
+            if phase in {"publish", "readback"} and server is not None and not (
+                    isinstance(diagnostics, Mapping) and diagnostics.get("attempt_nonce") == nonce):
+                diagnostic_capture = getattr(self.ops, "_capture_pre_http_diagnostics", None)
+                if callable(diagnostic_capture):
+                    try:
+                        diagnostics = diagnostic_capture(run_id, case_id, server, nonce)
+                    except Exception:
+                        diagnostics = {"attempt_nonce": nonce, "diagnostic_only": True, "status": "unavailable"}
+            if isinstance(diagnostics, Mapping) and diagnostics.get("attempt_nonce") == nonce:
+                attempt["pre_http_diagnostics"] = dict(diagnostics)
             capture = getattr(self.controller, "capture_hyperv_failure", None)
-            if child is not None and capture is not None:
+            if isinstance(exc, Exception) and child is not None and capture is not None:
                 try:
                     capture(run_id, "windows-x64", case_id, phase, artifact, exc)
                 except Exception as capture_exc:
@@ -790,7 +1231,7 @@ class ControllerPublisher:
         archive_dir = self.controller.root / "exports" / run_id / "publication" / nonce
         archive_dir.mkdir(parents=True, exist_ok=True)
         evidence = {"schema": 1, "controller_created": True, "live": True, "publisher_diagnostic": run.get("lane") == "publisher-diagnostic", "release_passed": False, "run_id": run_id, "case_id": case_id, "attempt_nonce": readback.get("attempt_nonce"), "outer_artifact_sha256": artifact["sha256"], "manifest_sha256": manifest["sha256"], "windows_child": dict(child), "server": dict(server), "client_acknowledgements": dict(ack), "http_readback": dict(readback.get("http_readback") or {}), "raw_sources": dict(raw), "cleanup": dict(cleanup), "archive": {"origin": "controller", "immutable": True}}
-        core_sha = hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        core_sha = hashlib.sha256(json.dumps({key: value for key, value in evidence.items() if key != "archive"}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         archive_path = archive_dir / "evidence.json"
         immutable_json_dump(archive_path, {"run_id": run_id, "controller_created": True, "evidence_sha256": core_sha})
         archive_sha, _ = sha256_file(archive_path)

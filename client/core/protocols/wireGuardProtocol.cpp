@@ -62,8 +62,10 @@ WireguardProtocol::~WireguardProtocol()
 
 void WireguardProtocol::stop()
 {
+    if (guardStop()) {
+        return;
+    }
     stopMzImpl();
-    return;
 }
 
 ErrorCode WireguardProtocol::startMzImpl()
@@ -96,5 +98,6 @@ ErrorCode WireguardProtocol::stopMzImpl()
 
 ErrorCode WireguardProtocol::start()
 {
+    resetStopGuard();
     return startMzImpl();
 }

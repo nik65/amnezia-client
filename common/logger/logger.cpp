@@ -2,12 +2,10 @@
 
 #include <QDateTime>
 #include <QDebug>
-#include <QDesktopServices>
 #include <QDir>
 #include <QJsonDocument>
 #include <QMetaEnum>
 #include <QStandardPaths>
-#include <QUrl>
 
 #include "version.h"
 
@@ -16,7 +14,7 @@
 #endif
 
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
-    #include <AmneziaVPN-Swift.h>
+    #include "core/utils/swiftBridge.h"
 #endif
 
 QRecursiveMutex Logger::m_fileMutex;
@@ -173,54 +171,40 @@ QString Logger::serviceLogsFilePath()
     return systemLogDir() + QDir::separator() + m_serviceLogFileName;
 }
 
+// Compatibility readers for the fork's remote uploader. The UI uses
+// LogsController's stream API; retain the same App/Tunnel separation here.
 QString Logger::getLogFile()
 {
-    QString qtLog;
-    {
-        const QMutexLocker lock(&m_fileMutex);
-        if (m_file.isOpen()) {
-            m_file.flush();
-        }
-        QFile file(userLogsFilePath());
-        file.open(QIODevice::ReadOnly);
-        qtLog = file.readAll();
+    const QMutexLocker lock(&m_fileMutex);
+    if (m_file.isOpen()) {
+        m_file.flush();
     }
-
+    QString result;
+    QFile qtLog(userLogsFilePath());
+    if (qtLog.open(QIODevice::ReadOnly)) {
+        result = QString::fromUtf8(qtLog.readAll());
+    }
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
-    return QString().fromStdString(AmneziaVPN::swiftUpdateLogData(qtLog.toStdString()));
-#else
-    return qtLog;
+    QFile swiftLog(QString::fromStdString(SWIFT_BRIDGE_NAMESPACE::swiftAppLogPath()));
+    if (swiftLog.open(QIODevice::ReadOnly)) {
+        result += QString::fromUtf8(swiftLog.readAll());
+    }
 #endif
+    return result;
 }
 
 QString Logger::getServiceLogFile()
 {
-    QString qtLog;
-    {
-        const QMutexLocker lock(&m_fileMutex);
-        if (m_file.isOpen()) {
-            m_file.flush();
-        }
-        QFile file(serviceLogsFilePath());
-        file.open(QIODevice::ReadOnly);
-        qtLog = file.readAll();
+    const QMutexLocker lock(&m_fileMutex);
+    if (m_file.isOpen()) {
+        m_file.flush();
     }
-
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
-    return QString().fromStdString(AmneziaVPN::swiftUpdateLogData(qtLog.toStdString()));
+    QFile file(QString::fromStdString(SWIFT_BRIDGE_NAMESPACE::swiftTunnelLogPath()));
 #else
-    return qtLog;
+    QFile file(serviceLogsFilePath());
 #endif
-}
-
-bool Logger::openLogsFolder(bool isServiceLogger)
-{
-    QString path = isServiceLogger ? systemLogDir() : userLogsDir();
-    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path))) {
-        qWarning() << "Can't open url:" << path;
-        return false;
-    }
-    return true;
+    return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
 }
 
 void Logger::clearLogs(bool isServiceLogger)
@@ -234,10 +218,6 @@ void Logger::clearLogs(bool isServiceLogger)
     file.open(QIODevice::WriteOnly | QIODevice::Truncate);
     file.resize(0);
     file.close();
-
-#if defined(Q_OS_IOS) || defined(MACOS_NE)
-    AmneziaVPN::swiftDeleteLog();
-#endif
 
     if (isLogActive) {
         init(isServiceLogger);

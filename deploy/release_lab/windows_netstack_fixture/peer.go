@@ -104,7 +104,15 @@ type peer struct {
 	bind    conn.Bind
 }
 
+type peerOptions struct{ RandomTrailers bool }
+
+// Preserve the explicit true/true AWG3 capability tests. Live fixtures select
+// the framing actually used by their imported client profile.
 func newPeer(bind conn.Bind, address, privateKey, remoteKey, remoteAddress, remoteEndpoint string) (*peer, error) {
+	return newPeerWithOptions(bind, address, privateKey, remoteKey, remoteAddress, remoteEndpoint, peerOptions{RandomTrailers: true})
+}
+
+func newPeerWithOptions(bind conn.Bind, address, privateKey, remoteKey, remoteAddress, remoteEndpoint string, options peerOptions) (*peer, error) {
 	for _, k := range []string{privateKey, remoteKey} {
 		v, e := hex.DecodeString(k)
 		if e != nil || len(v) != 32 {
@@ -128,7 +136,7 @@ func newPeer(bind conn.Bind, address, privateKey, remoteKey, remoteAddress, remo
 		return nil, err
 	}
 	d := device.NewDevice(t, bind, device.NewLogger(device.LogLevelSilent, ""))
-	config := "private_key=" + privateKey + "\nrandom_trailers=true\ndisable_cookies=true\npublic_key=" + remoteKey + "\nallowed_ip=" + remote.String() + "/32\n"
+	config := "private_key=" + privateKey + "\nrandom_trailers=" + strconv.FormatBool(options.RandomTrailers) + "\ndisable_cookies=true\npublic_key=" + remoteKey + "\nallowed_ip=" + remote.String() + "/32\n"
 	if remoteEndpoint != "" {
 		config += "endpoint=" + remoteEndpoint + "\n"
 	}

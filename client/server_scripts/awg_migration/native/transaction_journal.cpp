@@ -162,6 +162,16 @@ void TransactionJournal::validate() const {
 }
 void TransactionJournal::checkpoint(const std::string& point)const {if(fault_)fault_(point);}
 std::string TransactionJournal::snapshot()const{return json_object_to_json_string_ext(value_.get(),JSON_C_TO_STRING_PLAIN);}
+const std::filesystem::path& TransactionJournal::directory() const { return directory_; }
+void TransactionJournal::replaceValue(const std::string& raw) { value_=parse(raw); validate(); save(); }
+std::string TransactionJournal::ownedSnapshot(const std::string& name) const {
+    auto observed=owned(name);
+    return observed?json_object_to_json_string_ext(observed.get(),JSON_C_TO_STRING_PLAIN):"null";
+}
+std::string TransactionJournal::inspectSnapshot(const std::string& id) const {
+    auto observed=inspect(id);
+    return observed?json_object_to_json_string_ext(observed.get(),JSON_C_TO_STRING_PLAIN):"null";
+}
 void TransactionJournal::save(const std::string& phase) {
     if(!phase.empty())put(value_.get(),"phase",phase);
     validate();auto raw=snapshot();
@@ -236,6 +246,34 @@ void TransactionJournal::sourceRules(bool remove) {
             "iptables "+std::string(check)+" "+rule.second+" 2>/dev/null || iptables "+rule.first+" "+rule.second;
         command({"docker","exec",str(value_.get(),"sourceId"),"sh","-c",shell});
         if(!remove)command({"docker","exec",str(value_.get(),"sourceId"),"sh","-c","iptables "+std::string(check)+" "+rule.second});}
+}
+void TransactionJournal::activateSourceRules() {
+    if(boolean(value_.get(),"sourceRules"))return;
+    json_object_object_add(value_.get(),"sourceRules",json_object_new_boolean(1));
+    save("activating");
+    sourceRules(false);
+}
+void TransactionJournal::finalizeNativeControl(const std::string& receiptJson,
+                                               const std::string& nativeControlJson) {
+    auto receipt=parse(receiptJson);
+    auto native=parse(nativeControlJson);
+    if(!json_object_is_type(receipt.get(),json_type_object)
+        || !json_object_is_type(native.get(),json_type_object)
+        || !boolean(receipt.get(),"prepared")
+        || str(native.get(),"variant")!="native-control-http-v1"
+        || str(native.get(),"protocol")!="control-http-v1")
+        throw JournalError("invalid native control final state");
+    auto target=owned(str(value_.get(),"target"));
+    if(!target)throw JournalError("native control target missing");
+    auto* targetState=field(target.get(),"State",json_type_object);
+    const auto targetEpoch=str(targetState,"StartedAt");
+    if(!boolean(targetState,"Running")||targetEpoch.empty())
+        throw JournalError("native control target not running");
+    put(value_.get(),"targetEpoch",targetEpoch);
+    json_object_object_add(value_.get(),"receipt",json_object_get(receipt.get()));
+    json_object_object_add(value_.get(),"nativeControl",json_object_get(native.get()));
+    json_object_object_add(value_.get(),"controlLoadedReceipt",json_object_new_boolean(1));
+    save("ready");
 }
 void TransactionJournal::cleanup() {
     if(has(value_.get(),"controlMaintenance"))throw JournalError("control maintenance recovery required");

@@ -162,16 +162,19 @@ ServerDescription buildServerDescription(const ApiV2ServerConfig &server, bool /
     row.hasWriteAccess = false;
 
     row.serverName = server.displayName;
-    row.baseDescription = server.apiConfig.serverCountryCode.isEmpty() ? server.description : server.apiConfig.serverCountryName;
+    const bool showServerCountry = !server.isFree() && !server.apiConfig.serverCountryCode.isEmpty();
+    row.baseDescription = showServerCountry ? server.apiConfig.serverCountryName : server.description;
 
-    row.isCountrySelectionAvailable = !server.apiConfig.availableCountries.isEmpty();
+    row.isCountrySelectionAvailable = !server.isFree() && !server.apiConfig.availableCountries.isEmpty();
     row.apiAvailableCountries = server.apiConfig.availableCountries;
-    row.apiServerCountryCode = server.apiConfig.serverCountryCode;
-    row.apiServerCountryCodeL10n = server.apiConfig.serverCountryCodeL10n;
+    if (showServerCountry) {
+        row.apiServerCountryCode = server.apiConfig.serverCountryCode;
+        row.apiServerCountryCodeL10n = server.apiConfig.serverCountryCodeL10n;
+    }
     row.apiServiceProtocol = server.apiConfig.serviceProtocol;
     for (const QJsonValue &countryValue : server.apiConfig.availableCountries) {
         const QJsonObject country = countryValue.toObject();
-        if (country.value(apiDefs::key::serverCountryCode).toString() != row.apiServerCountryCode) {
+        if (country.value(apiDefs::key::serverCountryCode).toString() != server.apiConfig.serverCountryCode) {
             continue;
         }
         for (const QJsonValue &protocolValue : country.value(apiDefs::key::availableProtocols).toArray()) {

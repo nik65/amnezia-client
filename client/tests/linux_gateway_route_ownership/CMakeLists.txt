@@ -1,0 +1,23 @@
+cmake_minimum_required(VERSION 3.16)
+project(linux_gateway_route_ownership_tests LANGUAGES CXX)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+ message(FATAL_ERROR "Linux netlink fixture tests require Linux")
+endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+enable_testing()
+set(PRODUCTION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../platforms/linux/daemon")
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated_regression.cpp"
+ COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/generate_ownership_fixture.py" "${CMAKE_CURRENT_BINARY_DIR}/generated_regression.cpp"
+ DEPENDS generate_ownership_fixture.py harness_prefix.cpp harness_tests.cpp "${PRODUCTION_DIR}/linuxroutemonitor.cpp" "${PRODUCTION_DIR}/linuxroutemonitor.h" "${PRODUCTION_DIR}/wireguardutilslinux.cpp" "${PRODUCTION_DIR}/wireguardutilslinux.h"
+ VERBATIM)
+add_executable(gateway_ownership_tests "${CMAKE_CURRENT_BINARY_DIR}/generated_regression.cpp")
+add_executable(gateway_route_receipt_tests test_gateway_route_receipt.cpp)
+foreach(target gateway_ownership_tests gateway_route_receipt_tests)
+ set_target_properties(${target} PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+ target_compile_options(${target} PRIVATE -Wall -Wextra -Werror -pedantic -UNDEBUG)
+ target_include_directories(${target} PRIVATE "${PRODUCTION_DIR}")
+ add_test(NAME ${target} COMMAND ${target})
+endforeach()

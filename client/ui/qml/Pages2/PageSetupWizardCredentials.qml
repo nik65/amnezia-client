@@ -13,288 +13,216 @@ import "../Controls2/TextTypes"
 PageType {
     id: root
 
-    BackButtonType {
-        id: backButton
-
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.topMargin: 20 + PageController.safeAreaTopMargin
-
-        onFocusChanged: {
-            if (this.activeFocus) {
-                listView.positionViewAtBeginning()
-            }
-
-        }
-    }
-
-    ListViewType {
-        id: listView
-
-        anchors.top: backButton.bottom
-        anchors.bottom: parent.bottom
-        anchors.right: parent.right
-        anchors.left: parent.left
-
-        header: ColumnLayout {
-            width: listView.width
-
-            BaseHeaderType {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.bottomMargin: 16
-
-                headerText: qsTr("Configure your server")
-            }
-        }
-
-        model: inputFields
-        spacing: 16
-
-        delegate: ColumnLayout {
-            width: listView.width
-
-            TextFieldWithHeaderType {
-                id: delegate
-
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-
-                headerText: title
-                textField.echoMode: hideContent ? TextInput.Password : TextInput.Normal
-                textField.placeholderText: placeholderContent
-                textField.text: textField.text
-
-                rightButtonClickedOnEnter: true
-
-                clickedFunc: function () {
-                    clickedHandler()
-                    buttonImageSource = textField.text !== "" ? imageSource : ""
-                }
-
-                textField.onFocusChanged: {
-                    textField.text = textField.text.replace(/^\s+|\s+$/g, '')
-                }
-
-                textField.onTextChanged: {
-                    if (headerText === qsTr("Password or SSH private key")) {
-                        buttonImageSource = textField.text !== "" ? imageSource : ""
-                    }
-                }
-            }
-
-            WarningType {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.topMargin: 8
-
-                visible: title === qsTr("Password or SSH private key")
-                backGroundColor: AmneziaStyle.color.translucentWhite
-                iconPath: "qrc:/images/controls/alert-circle.svg"
-                textString: qsTr("SSH key requirements: supported key types are ED25519 and RSA in PEM format. Paste the private key, including the BEGIN/END lines. If your key doesn’t work, generate a compatible one")
-            }
-
-            WarningType {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.topMargin: 8
-
-                visible: title === qsTr("SSH server host key fingerprint")
-                backGroundColor: AmneziaStyle.color.translucentWhite
-                iconPath: "qrc:/images/controls/alert-circle.svg"
-                textString: qsTr("Verify this SHA-256 fingerprint through an independent trusted channel before entering credentials. Amnezia never trusts a new SSH server key automatically")
-            }
-        }
-
-        footer: ColumnLayout {
-            width: listView.width
-
-            BasicButtonType {
-                id: continueButton
-
-                Layout.fillWidth: true
-                Layout.topMargin: 32
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-
-                text: qsTr("Continue")
-
-                clickedFunc: function() {
-                    if (!root.isCredentialsFilled()) {
-                        return
-                    }
-
-                    var _hostname = listView.itemAtIndex(vars.hostnameIndex).children[0].textField.text
-                    var _username = listView.itemAtIndex(vars.usernameIndex).children[0].textField.text
-                    var _secretData = listView.itemAtIndex(vars.secretDataIndex).children[0].textField.text
-                    var _sshHostKeyFingerprint = listView.itemAtIndex(vars.sshHostKeyFingerprintIndex).children[0].textField.text
-
-                    InstallController.setProcessedServerCredentials(_hostname, _username, _secretData, _sshHostKeyFingerprint)
-                    ServersUiController.setProcessedServerId("")
-
-                    PageController.showBusyIndicator(true)
-                    var isConnectionOpened = InstallController.checkSshConnection()
-                    PageController.showBusyIndicator(false)
-                    if (!isConnectionOpened) {
-                        return
-                    }
-
-                    PageController.goToPage(PageEnum.PageSetupWizardEasy)
-                }
-            }
-
-            LabelTextType {
-                Layout.fillWidth: true
-                Layout.topMargin: 24
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.bottomMargin: 16
-
-                text: qsTr("All data you enter will remain strictly confidential and will not be shared or disclosed to the Amnezia or any third parties")
-            }
-
-            CardWithIconsType {
-                id: hostLink
-
-                visible: GC.isDesktop() && !IsMacOsNeBuild
-
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.bottomMargin: 8
-
-                headerText: qsTr("Don't have a server?")
-                bodyText: qsTr("Amnezia hosting. VPN servers without complicated settings and headaches")
-
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
-                leftImageSource: "qrc:/images/controls/amnezia.svg"
-
-                onClicked: {
-                    Qt.openUrlExternally(LanguageUiController.getCurrentHostUrl())
-                }
-
-                Keys.onEnterPressed: this.clicked()
-                Keys.onReturnPressed: this.clicked()
-            }
-
-            CardWithIconsType {
-                id: siteLink
-
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.bottomMargin: 16
-
-                headerText: qsTr("How to run your VPN server")
-                bodyText: qsTr("Where to get connection data, step-by-step instructions for buying a VPS")
-
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
-                leftImageSource: "qrc:/images/controls/help-circle.svg"
-
-                onClicked: {
-                    Qt.openUrlExternally(LanguageUiController.getCurrentSiteUrl("starter-guide"))
-                }
-
-                Keys.onEnterPressed: this.clicked()
-                Keys.onReturnPressed: this.clicked()
-            }
-        }
+    function trimField(field) {
+        field.textField.text = field.textField.text.replace(/^\s+|\s+$/g, '')
     }
 
     function isCredentialsFilled() {
         var hasEmptyField = false
 
-        var hostnameItem = listView.itemAtIndex(vars.hostnameIndex).children[0]
-        if (hostnameItem.textField.text === "") {
-            hostnameItem.errorText = qsTr("Ip address cannot be empty")
+        if (hostnameField.textField.text === "") {
+            hostnameField.errorText = qsTr("Ip address cannot be empty")
             hasEmptyField = true
-        } else if (!hostnameItem.textField.acceptableInput) {
-            hostnameItem.errorText = qsTr("Enter the address in the format 255.255.255.255:88")
+        } else if (!hostnameField.textField.acceptableInput) {
+            hostnameField.errorText = qsTr("Enter the address in the format 255.255.255.255:88")
         }
 
-        var usernameItem = listView.itemAtIndex(vars.usernameIndex).children[0]
-        if (usernameItem.textField.text === "") {
-            usernameItem.errorText = qsTr("Login cannot be empty")
+        if (sshHostKeyFingerprintField.textField.text === "") {
+            sshHostKeyFingerprintField.errorText = qsTr("SSH host key fingerprint cannot be empty")
             hasEmptyField = true
-        }
-
-        var sshHostKeyFingerprintItem = listView.itemAtIndex(vars.sshHostKeyFingerprintIndex).children[0]
-        var sshHostKeyFingerprint = sshHostKeyFingerprintItem.textField.text
-        if (sshHostKeyFingerprint === "") {
-            sshHostKeyFingerprintItem.errorText = qsTr("SSH host key fingerprint cannot be empty")
-            hasEmptyField = true
-        } else if (!/^SHA256:[A-Za-z0-9+\/]{42}[AEIMQUYcgkosw048]$/.test(sshHostKeyFingerprint)) {
-            sshHostKeyFingerprintItem.errorText = qsTr("Enter a canonical SHA256 fingerprint without spaces or padding")
+        } else if (!/^SHA256:[A-Za-z0-9+\/]{42}[AEIMQUYcgkosw048]$/.test(sshHostKeyFingerprintField.textField.text)) {
+            sshHostKeyFingerprintField.errorText = qsTr("Enter a canonical SHA256 fingerprint without spaces or padding")
             hasEmptyField = true
         }
 
-        var secretDataItem = listView.itemAtIndex(vars.secretDataIndex).children[0]
-        if (secretDataItem.textField.text === "") {
-            secretDataItem.errorText = qsTr("Password/private key cannot be empty")
+        if (usernameField.textField.text === "") {
+            usernameField.errorText = qsTr("Login cannot be empty")
+            hasEmptyField = true
+        }
+
+        if (secretDataField.textField.text === "") {
+            secretDataField.errorText = qsTr("Password/private key cannot be empty")
             hasEmptyField = true
         }
 
         return !hasEmptyField
     }
 
-    property list<QtObject> inputFields: [
-        hostnameObject,
-        sshHostKeyFingerprintObject,
-        usernameObject,
-        secretDataObject
-    ]
+    FlickableType {
+        id: flickable
 
-    QtObject {
-        id: hostnameObject
+        anchors.top: parent.top
+        anchors.bottom: bottomBar.top
 
-        property string title: qsTr("Server IP address [:port]")
-        readonly property string placeholderContent: qsTr("255.255.255.255:22")
-        property bool hideContent: false
-        readonly property var clickedHandler: undefined
-    }
+        contentHeight: content.implicitHeight + 16
 
-    QtObject {
-        id: sshHostKeyFingerprintObject
+        ColumnLayout {
+            id: content
 
-        property string title: qsTr("SSH server host key fingerprint")
-        readonly property string placeholderContent: "SHA256:..."
-        property bool hideContent: false
-        readonly property var clickedHandler: undefined
-    }
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
 
-    QtObject {
-        id: usernameObject
+            spacing: 0
 
-        property string title: qsTr("SSH Username")
-        readonly property string placeholderContent: "root"
-        property bool hideContent: false
-        readonly property var clickedHandler: undefined
-    }
+            NavigationBarType {
+                Layout.fillWidth: true
 
-    QtObject {
-        id: secretDataObject
+                title: qsTr("Configure your server")
+                description: qsTr("You'll need server credentials. Enter the server IP and password")
+            }
 
-        property string title: qsTr("Password or SSH private key")
-        readonly property string placeholderContent: ""
-        property bool hideContent: true
-        property string imageSource: "qrc:/images/controls/eye.svg"
-        readonly property var clickedHandler: function() {
-            hideContent = !hideContent
-            imageSource = hideContent ? "qrc:/images/controls/eye.svg" : "qrc:/images/controls/eye-off.svg"
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+
+                spacing: 24
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+
+                    spacing: 12
+
+                    TextFieldType {
+                        id: hostnameField
+
+                        Layout.fillWidth: true
+
+                        headerText: qsTr("Server IP address [:port]")
+                        textField.placeholderText: qsTr("255.255.255.255:22")
+
+                        textField.onEditingFinished: root.trimField(hostnameField)
+                    }
+
+                    TextFieldType {
+                        id: sshHostKeyFingerprintField
+                        Layout.fillWidth: true
+                        headerText: qsTr("SSH server host key fingerprint")
+                        textField.placeholderText: "SHA256:..."
+                        textField.onEditingFinished: root.trimField(sshHostKeyFingerprintField)
+                    }
+                    NotificationType {
+                        Layout.fillWidth: true
+                        text: qsTr("Verify this SHA-256 fingerprint through an independent trusted channel before entering credentials. Amnezia never trusts a new SSH server key automatically")
+                    }
+
+                    TextFieldType {
+                        id: usernameField
+
+                        Layout.fillWidth: true
+
+                        headerText: qsTr("SSH Username")
+                        textField.placeholderText: "root"
+
+                        textField.onEditingFinished: root.trimField(usernameField)
+                    }
+
+                    TextFieldType {
+                        id: secretDataField
+
+                        Layout.fillWidth: true
+
+                        headerText: qsTr("Password or SSH private key")
+                        passwordToggle: true
+
+                        textField.onEditingFinished: root.trimField(secretDataField)
+                    }
+
+                    NotificationType {
+                        Layout.fillWidth: true
+
+                        text: qsTr("SSH key requirements: supported key types are ED25519 and RSA in PEM format. Paste the private key, including the BEGIN/END lines. If your key doesn’t work, generate a compatible one")
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+
+                    spacing: 12
+
+                    BasicCardType {
+                        id: hostLink
+
+                        Layout.fillWidth: true
+
+                        visible: GC.isDesktop() && !IsMacOsNeBuild
+
+                        text: qsTr("Don't have a server?")
+                        subtitle: qsTr("Amnezia Hosting - VPN servers without complicated settings")
+
+                        icon.source: "qrc:/images/controls/amnezia.svg"
+
+                        onClicked: {
+                            Qt.openUrlExternally(LanguageUiController.getCurrentHostUrl())
+                        }
+                    }
+
+                    BasicCardType {
+                        id: siteLink
+
+                        Layout.fillWidth: true
+
+                        text: qsTr("How to run your VPN server")
+                        subtitle: qsTr("Where to get connection data, step-by-step instructions for buying a VPS")
+
+                        icon.source: "qrc:/images/controls/help-circle.svg"
+
+                        onClicked: {
+                            Qt.openUrlExternally(LanguageUiController.getCurrentSiteUrl("starter-guide"))
+                        }
+                    }
+                }
+            }
         }
     }
 
-    QtObject {
-        id: vars
+    BottomBarType {
+        id: bottomBar
 
-        readonly property int hostnameIndex: 0
-        readonly property int sshHostKeyFingerprintIndex: 1
-        readonly property int usernameIndex: 2
-        readonly property int secretDataIndex: 3
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+
+        filled: true
+
+        ButtonType {
+            id: continueButton
+
+            Layout.fillWidth: true
+
+            text: qsTr("Continue")
+
+            onClicked: {
+                if (!root.isCredentialsFilled()) {
+                    return
+                }
+
+                InstallController.setProcessedServerCredentials(hostnameField.textField.text,
+                                                                usernameField.textField.text,
+                                                                secretDataField.textField.text,
+                                                                sshHostKeyFingerprintField.textField.text)
+                ServersUiController.setProcessedServerId("")
+
+                PageController.showBusyIndicator(true)
+                var isConnectionOpened = InstallController.checkSshConnection()
+                PageController.showBusyIndicator(false)
+                if (!isConnectionOpened) {
+                    return
+                }
+
+                PageController.goToPage(PageEnum.PageSetupWizardEasy)
+            }
+        }
+
+        CaptionTextType {
+            Layout.fillWidth: true
+            Layout.topMargin: 16
+            Layout.bottomMargin: 12
+
+            horizontalAlignment: Text.AlignHCenter
+
+            text: qsTr("All data you enter will remain strictly confidential and will not be shared or disclosed to the Amnezia or any third parties")
+        }
     }
 }

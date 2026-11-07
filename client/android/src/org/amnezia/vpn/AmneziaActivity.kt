@@ -15,6 +15,8 @@ import android.content.ServiceConnection
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
@@ -48,6 +50,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
+import java.io.OutputStream
 import kotlin.LazyThreadSafetyMode.NONE
 import kotlin.coroutines.CoroutineContext
 import kotlin.text.RegexOption.IGNORE_CASE
@@ -108,6 +111,7 @@ private sealed interface ApkInstallCandidateInspection {
     data class Valid(val candidate: ApkInstallCandidate) : ApkInstallCandidateInspection
     data class Invalid(val reason: String) : ApkInstallCandidateInspection
 }
+private const val FILE_PROVIDER_AUTHORITY = "org.amnezia.vpn.qtprovider"
 
 class AmneziaActivity : QtActivity() {
 
@@ -143,6 +147,9 @@ class AmneziaActivity : QtActivity() {
     }
 
     private fun publishDiscovery(phase: String, component: String = "NONE", reason: String = "NONE") {
+        // Lifecycle invalidation clears the request. Late status/death callbacks
+        // cannot publish a correlated result without a live foreground request.
+        if (phase != "PENDING" && (!discoveryForeground || !NativeSessionWire.uuid(discoveryRequestId))) return
         discoveryPhase = phase
         discoveryComponent = component
         val generation = discoveryGeneration
@@ -153,6 +160,16 @@ class AmneziaActivity : QtActivity() {
                 QtAndroidController.onServiceDiscovery(ServiceDiscoveryWire.snapshot(request, generation, phase, component, reason))
             }
         }
+    }
+
+    private fun retireDisconnectedControlBinding() {
+        // Called only after the current per-Binder receiver gate accepted a terminal
+        // status. A completed stop must not leave a stale control binding that
+        // turns the next explicit connect into STATUS_UNPROVEN. This retires the
+        // binding, not native ownership: subsequent discovery still samples the
+        // real service inventory and requires its normal idle/start admission.
+        doUnbindService()
+        invalidateDiscoveryLifecycle()
     }
 
     private fun invalidateDiscoveryLifecycle() {
@@ -175,6 +192,15 @@ class AmneziaActivity : QtActivity() {
             if (own.any { !it.started }) null else own.map { it.service }.distinct()
         }
     } catch (_: RuntimeException) { null }
+
+    private fun ownVpnNetworkAbsenceProven(): Boolean = try {
+        val manager = getSystemService(CONNECTIVITY_SERVICE) as? ConnectivityManager
+        manager != null && manager.allNetworks.all { network ->
+            // Any visible VPN prevents an absence claim. Unknown capabilities are
+            // uncertainty, including API levels without reliable owner-UID fields.
+            manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == false
+        }
+    } catch (_: RuntimeException) { false }
 
     private fun componentKind(component: ComponentName) = when (component.className) {
         AwgService::class.java.name -> "AWG"
@@ -228,7 +254,16 @@ class AmneziaActivity : QtActivity() {
             return
         }
         doUnbindService()
-        if (inventory.isEmpty()) { publishDiscovery("EMPTY"); return }
+        if (inventory.isEmpty()) {
+            if (!ownVpnNetworkAbsenceProven()) { publishDiscovery("UNCERTAIN", reason = "STATUS_UNPROVEN"); return }
+            // A start/service can appear while sampling connectivity. Neither the
+            // first empty inventory nor a terminal old Binder proves it absent.
+            val finalInventory = ownServiceInventory()
+            if (finalInventory == null) publishDiscovery("UNCERTAIN", reason = "INVENTORY_ERROR")
+            else if (finalInventory.isNotEmpty()) publishDiscovery("UNCERTAIN", reason = "STATUS_UNPROVEN")
+            else publishDiscovery("EMPTY")
+            return
+        }
         val attempt = DiscoveryAttempt(discoveryGeneration, inventory.single())
         discoveryAttempt = attempt
         attempt.connection = object : ServiceConnection {
@@ -277,7 +312,12 @@ class AmneziaActivity : QtActivity() {
 
     private fun failDiscoveryAttempt(attempt: DiscoveryAttempt, reason: String) {
         if (discoveryAttempt !== attempt || attempt.generation != discoveryGeneration) { attempt.release(); return }
+        val generation = discoveryGeneration
+        val request = discoveryRequestId
         doUnbindService()
+        // UNREGISTER can synchronously report a dead Binder and invalidate the
+        // lifecycle. Do not turn that reset into a result for the old request.
+        if (generation != discoveryGeneration || request != discoveryRequestId || !discoveryForeground) return
         publishDiscovery("UNCERTAIN", reason = reason)
     }
 
@@ -299,6 +339,22 @@ class AmneziaActivity : QtActivity() {
     private var restoreBindingGeneration = NativeSessionWire.nextBindingGeneration()
     private var restoreReadySentGeneration = 0L
     private var pendingRestoreRequest: String? = null
+    private val dnsTransportNoticeGate = org.amnezia.vpn.protocol.DnsTransportNoticeGate()
+
+    private fun observeDnsTransportStatus(status: String?, connected: Boolean) {
+        if (!isServiceConnected || !isBoundNativeService || status == null || status.length > 1024) return
+        val value = runCatching { JSONObject(status) }.getOrNull() ?: return
+        if (value.optString("transport") != "dns") return
+        val generation = value.opt("nativeGeneration") as? String ?: return
+        if (!dnsTransportNoticeGate.needsRefresh(generation, connected)) return
+        // The notice revokes old challenges. Only the separately challenged schema2 snapshot
+        // can prove the new native transport and authorize restored UI control.
+        invalidateRestoreRequest()
+        dnsTransportNoticeGate.remember(generation, connected)
+        notifyNativeSessionObservedWhenQtReady(restoreBindingGeneration)
+        notifyRestoreServiceReadyWhenQtReady()
+    }
+
     private var legacyStatusRequestGeneration: Long? = null
     private var isBoundNativeService = false
     private var nativeObservedSentGeneration = 0L
@@ -317,6 +373,7 @@ class AmneziaActivity : QtActivity() {
         restoreBindingGeneration = NativeSessionWire.nextBindingGeneration()
         pendingRestoreRequest = null
         legacyStatusRequestGeneration = null
+        dnsTransportNoticeGate.reset()
     }
     private fun notifyServiceDisconnectedWhenQtReady() {
         val generation = restoreBindingGeneration
@@ -370,8 +427,11 @@ class AmneziaActivity : QtActivity() {
                     ServiceEvent.STATUS_CHANGED -> {
                         msg.data?.getStatus()?.let { (state) ->
                             Log.d(TAG, "Handle protocol state: $state")
+                            observeDnsTransportStatus(msg.data?.getString("dnsFallbackStatus"), state.name == "CONNECTED")
+                            // Retire Java's exact control binding before notifying Qt: its
+                            // synchronous JNI callback may immediately request a new discovery.
+                            if (state.name == "DISCONNECTED") retireDisconnectedControlBinding()
                             QtAndroidController.onVpnStateChanged(state.ordinal)
-                            if (state.name == "DISCONNECTED") invalidateDiscoveryLifecycle()
                         }
                     }
 
@@ -707,7 +767,7 @@ class AmneziaActivity : QtActivity() {
 
     override fun onPause() {
         // Notify Qt to stop rendering BEFORE super.onPause() destroys the EGL surface.
-        // Using a coroutine here would be too late — the surface is gone by the time
+        // Using a coroutine here would be too late вЂ” the surface is gone by the time
         // the coroutine runs. A direct synchronous call gives Qt's render thread the
         // best chance to process visible=false before surface destruction.
         if (qtInitialized.isCompleted) {
@@ -1132,13 +1192,14 @@ class AmneziaActivity : QtActivity() {
         mainScope.launch {
             qtInitialized.await()
             if (!isServiceConnected || bindingGeneration != restoreBindingGeneration || !NativeSessionWire.uuid(requestId)) return@launch
+            val receiver = boundActivityMessenger ?: return@launch
             pendingRestoreRequest = requestId
-            vpnServiceMessenger.send {
+            vpnServiceMessenger.send(
                 Action.REQUEST_STATUS.packToMessage {
                     putString("restoreRequestId", requestId)
                     putString("restoreBindingGeneration", bindingGeneration.toString())
-                }
-            }
+                }, replyTo = receiver
+            )
         }
     }
 
@@ -1186,7 +1247,7 @@ class AmneziaActivity : QtActivity() {
         val proto = getVpnProto(request.config)
         val inventory = ownServiceInventory()
         val valid = discoveryForeground && request.generation == discoveryGeneration.toString() && proto != null && inventory != null &&
-            ((discoveryPhase == "EMPTY" && inventory.isEmpty()) ||
+            ((discoveryPhase == "EMPTY" && inventory.isEmpty() && ownVpnNetworkAbsenceProven() && ownServiceInventory()?.isEmpty() == true) ||
              (discoveryGrant != null && inventory.size == 1 && inventory.single() == discoveryAttempt?.component && proto.serviceClass.name == inventory.single().className))
         if (!valid || proto == null) { finishStart(request, "REJECTED", "STALE"); return }
         invalidateRestoreRequest()
@@ -1257,28 +1318,69 @@ class AmneziaActivity : QtActivity() {
     @Suppress("unused")
     fun saveFile(fileName: String, data: String) {
         Log.d(TAG, "Save file $fileName")
+        createFile(fileName, "text/*") { os -> os.bufferedWriter().use { it.write(data) } }
+    }
+
+    @Suppress("unused")
+    fun saveFileBytes(fileName: String, data: ByteArray, mime: String) {
+        Log.d(TAG, "Save file $fileName, ${data.size} bytes, $mime")
+        createFile(fileName, mime) { os -> os.write(data) }
+    }
+
+    private fun createFile(fileName: String, mime: String, write: (OutputStream) -> Unit) {
         mainScope.launch {
             Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
-                type = "text/*"
+                type = mime
                 putExtra(Intent.EXTRA_TITLE, fileName)
             }.also {
                 try {
                     startActivityForResult(it, CREATE_FILE_ACTION_CODE, ActivityResultHandler(
                         onSuccess = {
-                            it?.data?.let { uri ->
+                            val uri = it?.data
+                            var saved = false
+                            if (uri != null) {
                                 Log.v(TAG, "Save file to $uri")
                                 try {
                                     contentResolver.openOutputStream(uri)?.use { os ->
-                                        os.bufferedWriter().use { it.write(data) }
+                                        write(os)
+                                        saved = true
                                     }
                                 } catch (e: IOException) {
                                     Log.e(TAG, "Failed to save file $uri: $e")
-                                    // todo: send error to Qt
                                 }
                             }
+                            QtAndroidController.onFileSaved(saved, false)
+                        },
+                        onFail = {
+                            QtAndroidController.onFileSaved(false, true)
                         }
                     ))
+                } catch (_: ActivityNotFoundException) {
+                    Toast.makeText(this@AmneziaActivity, "Unsupported", Toast.LENGTH_LONG).show()
+                    QtAndroidController.onFileSaved(false, false)
+                }
+            }
+        }
+    }
+
+    @Suppress("unused")
+    fun shareFile(path: String, mime: String) {
+        Log.d(TAG, "Share file $path, $mime")
+        mainScope.launch {
+            val uri = try {
+                FileProvider.getUriForFile(this@AmneziaActivity, FILE_PROVIDER_AUTHORITY, File(path))
+            } catch (e: IllegalArgumentException) {
+                Log.e(TAG, "Failed to share file $path: $e")
+                return@launch
+            }
+            Intent(Intent.ACTION_SEND).apply {
+                type = mime
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }.also {
+                try {
+                    startActivity(Intent.createChooser(it, null))
                 } catch (_: ActivityNotFoundException) {
                     Toast.makeText(this@AmneziaActivity, "Unsupported", Toast.LENGTH_LONG).show()
                 }

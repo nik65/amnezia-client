@@ -88,11 +88,11 @@ private:
     bool restartService(QString *error) const;
     bool retireAcknowledgedJournal(QString *error);
     bool restoreRollback(QString *error);
-    bool loadState();
+    bool loadState(bool *pendingUpdateJournalValidated = nullptr);
     bool saveState() const;
     bool writeJournal(const QJsonObject &journal, QString *error) const;
     bool writeRollbackReceipt(QString *error) const;
-    bool loadRollbackReceipt();
+    bool loadRollbackReceipt(bool pendingUpdateJournalValidated = false);
     bool verifyTrustedKey(const QString &configuredPath, QByteArray *keyBytes,
                           QString *error) const;
     bool ensureSecureDirectory(const QString &path, QString *error) const;

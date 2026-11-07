@@ -104,6 +104,7 @@ bool AndroidController::initialize()
         {"authorizeApkInstallerLaunch", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Z", reinterpret_cast<void *>(authorizeApkInstallerLaunch)},
         {"onApkInstallerStarted", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onApkInstallerStarted)},
         {"onApkInstallerStartFailed", "(Ljava/lang/String;Ljava/lang/String;)V", reinterpret_cast<void *>(onApkInstallerStartFailed)},
+        {"onFileSaved", "(ZZ)V", reinterpret_cast<void *>(onFileSaved)},
         {"onConfigImported", "(Ljava/lang/String;)V", reinterpret_cast<void *>(onConfigImported)},
         {"onAuthResult", "(Z)V", reinterpret_cast<void *>(onAuthResult)},
         {"decodeQrCode", "(Ljava/lang/String;)Z", reinterpret_cast<bool *>(decodeQrCode)},
@@ -321,6 +322,46 @@ void AndroidController::saveFile(const QString &fileName, const QString &data)
     callActivityMethod("saveFile", "(Ljava/lang/String;Ljava/lang/String;)V",
                        QJniObject::fromString(fileName).object<jstring>(),
                        QJniObject::fromString(data).object<jstring>());
+}
+
+bool AndroidController::saveFile(const QString &fileName, const QByteArray &data, const QString &mime, bool *cancelled)
+{
+    QJniEnvironment env;
+    const jsize size = static_cast<jsize>(data.size());
+    jbyteArray bytes = env->NewByteArray(size);
+    if (!bytes) {
+        env.checkAndClearExceptions();
+        qCritical() << "AndroidController::saveFile: cannot allocate byte array of size" << size;
+        return false;
+    }
+    env->SetByteArrayRegion(bytes, 0, size, reinterpret_cast<const jbyte *>(data.constData()));
+
+    QEventLoop wait;
+    bool saved = false;
+    bool saveCancelled = false;
+    connect(this, &AndroidController::fileSaved, this,
+            [&saved, &saveCancelled, &wait](bool success, bool isCancelled) {
+                saved = success;
+                saveCancelled = isCancelled;
+                wait.quit();
+            },
+            static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::SingleShotConnection));
+    callActivityMethod("saveFileBytes", "(Ljava/lang/String;[BLjava/lang/String;)V",
+                       QJniObject::fromString(fileName).object<jstring>(), bytes,
+                       QJniObject::fromString(mime).object<jstring>());
+    env->DeleteLocalRef(bytes);
+    wait.exec();
+    if (cancelled) {
+        *cancelled = saveCancelled;
+    }
+    return saved;
+}
+
+void AndroidController::shareFile(const QString &path, const QString &mime)
+{
+    callActivityMethod("shareFile", "(Ljava/lang/String;Ljava/lang/String;)V",
+                       QJniObject::fromString(path).object<jstring>(),
+                       QJniObject::fromString(mime).object<jstring>());
 }
 
 QString AndroidController::openFile(const QString &filter)
@@ -625,6 +666,48 @@ void AndroidController::messageHandler(QtMsgType type, const QMessageLogContext 
                                        QJniObject::fromString(formattedMessage).object<jstring>());
 }
 
+// static
+jclass AndroidController::findLogClass()
+{
+    if (log != nullptr) {
+        return log;
+    }
+    return QJniEnvironment().findClass(ANDROID_LOG_CLASS);
+}
+
+// static
+QStringList AndroidController::logFiles(int stream)
+{
+    const jclass logClass = findLogClass();
+    if (logClass == nullptr) {
+        return {};
+    }
+    const QString files =
+        QJniObject::callStaticObjectMethod(logClass, "getLogFiles", "(I)Ljava/lang/String;", static_cast<jint>(stream))
+            .toString();
+    return files.split('\n', Qt::SkipEmptyParts);
+}
+
+// static
+QString AndroidController::deviceInfo()
+{
+    const jclass logClass = findLogClass();
+    if (logClass == nullptr) {
+        return {};
+    }
+    return QJniObject::callStaticObjectMethod(logClass, "getDeviceInfo", "()Ljava/lang/String;").toString();
+}
+
+// static
+void AndroidController::clearLogStream(int stream)
+{
+    const jclass logClass = findLogClass();
+    if (logClass == nullptr) {
+        return;
+    }
+    QJniObject::callStaticMethod<void>(logClass, "clearStream", "(I)V", static_cast<jint>(stream));
+}
+
 void AndroidController::qtAndroidControllerInitialized()
 {
     callActivityMethod("qtAndroidControllerInitialized", "()V");
@@ -801,6 +884,15 @@ void AndroidController::onApkInstallerStartFailed(JNIEnv *env, jobject thiz, jst
     emit AndroidController::instance()->apkInstallerStartFailed(
             AndroidUtils::convertJString(env, fileName),
             AndroidUtils::convertJString(env, reason));
+}
+
+// static
+void AndroidController::onFileSaved(JNIEnv *env, jobject thiz, jboolean success, jboolean cancelled)
+{
+    Q_UNUSED(env);
+    Q_UNUSED(thiz);
+
+    emit AndroidController::instance()->fileSaved(success, cancelled);
 }
 
 // static

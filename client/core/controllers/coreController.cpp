@@ -1,6 +1,7 @@
 #include "coreController.h"
 
 #include <QDateTime>
+#include <QCoreApplication>
 #include <QDirIterator>
 #include <QNetworkAccessManager>
 #include <QNetworkProxy>
@@ -29,7 +30,7 @@
 #endif
 
 #if defined(Q_OS_IOS) || defined(MACOS_NE)
-    #include <AmneziaVPN-Swift.h>
+    #include "core/utils/swiftBridge.h"
 #endif
 
 namespace
@@ -181,6 +182,12 @@ void CoreController::initModels()
     m_apiCountryModel = new ApiCountryModel(this);
     setQmlContextProperty("ApiCountryModel", m_apiCountryModel);
 
+    m_apiCountryListModel = new ApiCountryListModel(m_apiCountryModel, "picker", this);
+    setQmlContextProperty("ApiCountryListModel", m_apiCountryListModel);
+
+    m_apiConfigsCountryListModel = new ApiCountryListModel(m_apiCountryModel, "nativeConfigs", this);
+    setQmlContextProperty("ApiConfigsCountryListModel", m_apiConfigsCountryListModel);
+
     m_apiSubscriptionPlansModel = new ApiSubscriptionPlansModel(this);
     setQmlContextProperty("ApiSubscriptionPlansModel", m_apiSubscriptionPlansModel);
 
@@ -316,6 +323,7 @@ void CoreController::initCoreControllers()
                     break;
                 }
             });
+    m_localProxyController = new LocalProxyController(m_serversRepository, m_appSettingsRepository, m_subscriptionController, this);
 }
 
 void CoreController::initControllers()
@@ -327,7 +335,6 @@ void CoreController::initControllers()
 
     if (m_engine) {
         m_focusController = new FocusController(m_engine, this);
-        setQmlContextProperty("FocusController", m_focusController);
     }
 
     m_installUiController = new InstallUiController(m_installController, m_serversController, m_settingsController, m_protocolsModel, m_usersController,
@@ -351,6 +358,12 @@ void CoreController::initControllers()
 
     m_settingsUiController = new SettingsUiController(m_settingsController, m_serversController, this);
     setQmlContextProperty("SettingsController", m_settingsUiController);
+
+    m_localProxyUiController = new LocalProxyUiController(m_localProxyController, this);
+    setQmlContextProperty("LocalProxyController", m_localProxyUiController);
+
+    m_logsUiController = new LogsUiController(m_settingsController, this);
+    setQmlContextProperty("LogsController", m_logsUiController);
 
     m_pageController = new PageController(m_serversController, m_settingsController, this);
     setQmlContextProperty("PageController", m_pageController);
@@ -453,11 +466,8 @@ void CoreController::initAppleController()
 #ifdef Q_OS_IOS
     IosController::Instance()->initialize();
 #endif
-#if defined(Q_OS_IOS) || defined(MACOS_NE)
-    AmneziaVPN::toggleLogging(true);
-#endif
 #ifdef Q_OS_IOS
-    QTimer::singleShot(0, this, [this]() { AmneziaVPN::toggleScreenshots(m_appSettingsRepository->isScreenshotsEnabled()); });
+    QTimer::singleShot(0, this, [this]() { SWIFT_BRIDGE_NAMESPACE::toggleScreenshots(m_appSettingsRepository->isScreenshotsEnabled()); });
 #endif
 }
 
@@ -655,6 +665,9 @@ void CoreController::initLogging()
 #endif
 #if !defined(Q_OS_ANDROID) && !defined(Q_OS_IOS)
     Logger::setServiceLogsEnabled(true);
+#endif
+#if defined(Q_OS_IOS) || defined(MACOS_NE)
+    SWIFT_BRIDGE_NAMESPACE::toggleLogging(true);
 #endif
 }
 

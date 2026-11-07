@@ -251,6 +251,8 @@ namespace amnezia::secureSettingsPolicy
         }
         const QString key = canonicalKey(rawKey);
         return key.compare(QLatin1String("Servers/serversList"), Qt::CaseInsensitive) == 0
+                || key.compare(QLatin1String("Conf/favoriteLocations"), Qt::CaseInsensitive) == 0
+                || key.compare(QLatin1String("Conf/proxyUrls/agw_state"), Qt::CaseInsensitive) == 0
                 || isSameSettingOrChild(key, QStringLiteral("Conf/remoteLogTokens"))
                 || isSameSettingOrChild(key, QStringLiteral("Conf/awgMigration"));
     }
@@ -316,7 +318,10 @@ public:
     };
 
     explicit SecureQSettings(const QString &organization, const QString &application = QString(),
-                             QObject *parent = nullptr, AccessMode accessMode = AccessMode::ReadWrite);
+                             QObject *parent = nullptr, AccessMode accessMode = AccessMode::ReadWrite,
+                             bool enableEncryption = true);
+    SecureQSettings(const QString &organization, const QString &application,
+                    QObject *parent, bool enableEncryption);
 
     QVariant value(const QString &key, const QVariant &defaultValue = QVariant()) const;
     void setValue(const QString &key, const QVariant &value);
@@ -334,6 +339,7 @@ private:
     bool encryptionRequired() const;
     bool hasEncryptedPayloads() const;
     bool migrateEncryptedSettings();
+    bool isExcludedFromBackup(const QString &key) const;
 
     QByteArray getEncKey(bool allowCreate) const;
     QByteArray getEncIv(bool allowCreate) const;
@@ -352,6 +358,10 @@ private:
         "Conf/", "Servers/",
     };
 
+    QStringList m_fieldsExcludedFromBackup = {
+        "Conf/installationUuid", "Conf/proxyUrls/",
+    };
+
     mutable QByteArray m_key;
     mutable QByteArray m_iv;
     mutable bool m_keyReadAttempted = false;
@@ -360,6 +370,7 @@ private:
     const QByteArray magicString { "EncData" }; // Magic keyword used for mark encrypted QByteArray
 
     const AccessMode m_accessMode;
+    const bool m_encryptionEnabled;
 
     mutable QRecursiveMutex m_mutex;
 };

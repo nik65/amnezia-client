@@ -1,0 +1,1718 @@
+[
+  {
+    "exportPath": "docs/development/pause-2026-11-07/evidence/PARENT_NATIVE_HEADLESS_INSTALLER_INTEGRATION_Q.json",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\PARENT_NATIVE_HEADLESS_INSTALLER_INTEGRATION_Q.json",
+    "originalSha256": "97008bcd00b222752b5a39c6a579e453f40237cd1fadbb6313a1e00a3de497a8",
+    "exportSha256": "97008bcd00b222752b5a39c6a579e453f40237cd1fadbb6313a1e00a3de497a8"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/evidence/PARENT_NATIVE_HEADLESS_CURRENT_PACKAGE_CHAIN_Q.json",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\PARENT_NATIVE_HEADLESS_CURRENT_PACKAGE_CHAIN_Q.json",
+    "originalSha256": "f10e637bd3b660fb714939574e741780058d90aa6567ff035b32ae03b3e7b9e2",
+    "exportSha256": "f10e637bd3b660fb714939574e741780058d90aa6567ff035b32ae03b3e7b9e2"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/evidence/PARENT_NATIVE_CURRENT_AUTHORITY_AA_DISPOSITION_Q.json",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\PARENT_NATIVE_CURRENT_AUTHORITY_AA_DISPOSITION_Q.json",
+    "originalSha256": "f7d9ffe0c898556713c8da8b6ebea55121117b5ba79ae62b920533cfa28858eb",
+    "exportSha256": "f7d9ffe0c898556713c8da8b6ebea55121117b5ba79ae62b920533cfa28858eb"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/evidence/PARENT_NATIVE_HEADLESS_INITIAL_Z_DISPOSITION_Q.json",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\PARENT_NATIVE_HEADLESS_INITIAL_Z_DISPOSITION_Q.json",
+    "originalSha256": "4940f95fc8a6b77424f1be84297827b1bfa1737b4526c5d02ffcef3af332cf30",
+    "exportSha256": "4940f95fc8a6b77424f1be84297827b1bfa1737b4526c5d02ffcef3af332cf30"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/evidence/PARENT_NATIVE_HEADLESS_INTEGRATION_Q.json",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\PARENT_NATIVE_HEADLESS_INTEGRATION_Q.json",
+    "originalSha256": "e299ac679db522bc8a9741a39afb020abfb109ab0bb159cc9e929de6b38abbe2",
+    "exportSha256": "e299ac679db522bc8a9741a39afb020abfb109ab0bb159cc9e929de6b38abbe2"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/evidence/PARENT_NATIVE_HEADLESS_STAGE_MODE_REVIEW_Q.json",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\PARENT_NATIVE_HEADLESS_STAGE_MODE_REVIEW_Q.json",
+    "originalSha256": "939c68df769147c6e4444b50e68537561a0a661e968fbe425ea2ea2b637ee2db",
+    "exportSha256": "939c68df769147c6e4444b50e68537561a0a661e968fbe425ea2ea2b637ee2db"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/evidence/MATERIALIZED_PRODUCT_SOURCE_MANIFEST.json",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-integration-parent\\MATERIALIZED_PRODUCT_SOURCE_MANIFEST.json",
+    "originalSha256": "63bf398cc97d98d986f9cc99d2a07e1f49aa0f642b8540ab981c26e1259eeec9",
+    "exportSha256": "63bf398cc97d98d986f9cc99d2a07e1f49aa0f642b8540ab981c26e1259eeec9"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/PRE_PAUSE_STATE.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\CURRENT_STATE.md",
+    "originalSha256": "9164b63adcbc610c8558a7819cc46473eb5f7ec46615e1ed00d0ed76d6fe704a",
+    "exportSha256": "9164b63adcbc610c8558a7819cc46473eb5f7ec46615e1ed00d0ed76d6fe704a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-integration-parent/audit_current_chain.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-integration-parent\\audit_current_chain.py",
+    "originalSha256": "5243083ed5a74833a5d2009daf337a416b93f13e69b9b849cd5d3289e9efb57e",
+    "exportSha256": "5243083ed5a74833a5d2009daf337a416b93f13e69b9b849cd5d3289e9efb57e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-integration-parent/build_native.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-integration-parent\\build_native.py",
+    "originalSha256": "0976bd8a6d1fda524cb338e2d3046a829e142ead0b149ccb52e4249aaf36205a",
+    "exportSha256": "0976bd8a6d1fda524cb338e2d3046a829e142ead0b149ccb52e4249aaf36205a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-integration-parent/prepare_root_fixture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-integration-parent\\prepare_root_fixture.py",
+    "originalSha256": "59031e108eb21846e9806d40cf98bfcc37558bc8ce732dc2bfaec36757a6124e",
+    "exportSha256": "59031e108eb21846e9806d40cf98bfcc37558bc8ce732dc2bfaec36757a6124e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-integration-parent/sign_current_fixture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-integration-parent\\sign_current_fixture.py",
+    "originalSha256": "c8bbc92ab1c0a80291db711963af25d82c5ca822d3491e199bad62f2ffc84a1e",
+    "exportSha256": "c8bbc92ab1c0a80291db711963af25d82c5ca822d3491e199bad62f2ffc84a1e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-integration-parent/verify_consumer_y.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-integration-parent\\verify_consumer_y.py",
+    "originalSha256": "29d45959ccb435a467cc92caec0e2801fb39e11b751de8e91cfab7f1ef09747b",
+    "exportSha256": "29d45959ccb435a467cc92caec0e2801fb39e11b751de8e91cfab7f1ef09747b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-integration-parent/verify_probe_input.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-integration-parent\\verify_probe_input.py",
+    "originalSha256": "a10081e2c656313b24cb32ca867006ab7580b90c0c8750ae30f232626c8ae0fc",
+    "exportSha256": "a10081e2c656313b24cb32ca867006ab7580b90c0c8750ae30f232626c8ae0fc"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-installer-integration-parent/final_gate.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-integration-parent\\final_gate.py",
+    "originalSha256": "7d87e12a317e9e63e70ff651739500e2e153b0b03e08501eebb52a4f3318d5ea",
+    "exportSha256": "7d87e12a317e9e63e70ff651739500e2e153b0b03e08501eebb52a4f3318d5ea"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-installer-integration-parent/baseline/deploy/headless/build_headless_release.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-integration-parent\\baseline\\deploy\\headless\\build_headless_release.sh",
+    "originalSha256": "5447fecd61e288fd099520f7f31b6240fdd78e91ce3c594c6ba3eed671b86855",
+    "exportSha256": "5447fecd61e288fd099520f7f31b6240fdd78e91ce3c594c6ba3eed671b86855"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-installer-integration-parent/baseline/deploy/headless/install_headless.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-integration-parent\\baseline\\deploy\\headless\\install_headless.sh",
+    "originalSha256": "61fab91ab09cc95555b6ee2a19b3d3ab62a11049a9c7d92abe5eecfe8cac5a80",
+    "exportSha256": "61fab91ab09cc95555b6ee2a19b3d3ab62a11049a9c7d92abe5eecfe8cac5a80"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-current-authority-parent/verify_aa_outer.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-current-authority-parent\\verify_aa_outer.py",
+    "originalSha256": "1656168d6fe8506c7a644d1b4dc3965a94493704fb0113ffac42e4a1e38c0f98",
+    "exportSha256": "1656168d6fe8506c7a644d1b4dc3965a94493704fb0113ffac42e4a1e38c0f98"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-stage-parent/stage_io_model.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\stage_io_model.cpp",
+    "originalSha256": "fc1fd256ae49a29bec5a923d1dd7a9f9425de64000fbafb85f2bc3adb46b0851",
+    "exportSha256": "fc1fd256ae49a29bec5a923d1dd7a9f9425de64000fbafb85f2bc3adb46b0851"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-stage-parent/verify_stage.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\verify_stage.py",
+    "originalSha256": "622b2f89aa7961f179ee355677620717aa4a86a874b6effc2b32dc57c17a422c",
+    "exportSha256": "622b2f89aa7961f179ee355677620717aa4a86a874b6effc2b32dc57c17a422c"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-stage-parent/selected-a/src/bootstrap_n.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\selected-a\\src\\bootstrap_n.cpp",
+    "originalSha256": "4c7f844c1b97e6dd373831576dabe07caa7bdf962a4cbb113380ba2fb1e3b7f9",
+    "exportSha256": "4c7f844c1b97e6dd373831576dabe07caa7bdf962a4cbb113380ba2fb1e3b7f9"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-stage-parent/selected-a/src/host_runtime.inc",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\selected-a\\src\\host_runtime.inc",
+    "originalSha256": "c1c142d7d9ddc41c58a939d7d9e2c83a538f99f36ac150b315113a242bd959a9",
+    "exportSha256": "c1c142d7d9ddc41c58a939d7d9e2c83a538f99f36ac150b315113a242bd959a9"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-stage-parent/selected-a/src/preauth_modes.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\selected-a\\src\\preauth_modes.cpp",
+    "originalSha256": "ab9df3d42b0fb0dc492d32d77189f87364f202e773eecd6154aadcc00ccb19d9",
+    "exportSha256": "ab9df3d42b0fb0dc492d32d77189f87364f202e773eecd6154aadcc00ccb19d9"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-stage-parent/selected-a/src/verify_provisioning.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\selected-a\\src\\verify_provisioning.cpp",
+    "originalSha256": "cdc507e09126461038bbd575c80f6ccff998544d95d0ca1646998c61c20bf222",
+    "exportSha256": "cdc507e09126461038bbd575c80f6ccff998544d95d0ca1646998c61c20bf222"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-stage-parent/selected-a/tests/native_role_model.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\selected-a\\tests\\native_role_model.cpp",
+    "originalSha256": "83c63fa718701da673b1d5d62fe93862f0aa8ca9bef3d167d43ef160e8f38f6a",
+    "exportSha256": "83c63fa718701da673b1d5d62fe93862f0aa8ca9bef3d167d43ef160e8f38f6a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-stage-parent/selected-a/tests/parent_verify_metadata_role.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\selected-a\\tests\\parent_verify_metadata_role.py",
+    "originalSha256": "261dead428848519a6635249050ca476948a413795bcc397abd9a563127bd90d",
+    "exportSha256": "261dead428848519a6635249050ca476948a413795bcc397abd9a563127bd90d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-stage-parent/selected-a/tests/run_n.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\selected-a\\tests\\run_n.py",
+    "originalSha256": "d0dd613dc9273693be3ebfa05b940876665caa66ece30c2802d331a77eca1cfa",
+    "exportSha256": "d0dd613dc9273693be3ebfa05b940876665caa66ece30c2802d331a77eca1cfa"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-stage-parent/selected-a/tests/test_boundary.inc",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\selected-a\\tests\\test_boundary.inc",
+    "originalSha256": "87ea4bf8a0114ebcc124f3677ee279191cfcfae3a0bf4f5408014a02b4c70792",
+    "exportSha256": "87ea4bf8a0114ebcc124f3677ee279191cfcfae3a0bf4f5408014a02b4c70792"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-stage-parent/selected-a/tests/verify_native_role_w.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-stage-parent\\selected-a\\tests\\verify_native_role_w.py",
+    "originalSha256": "4f3aaa5ca5c9467fc023e5969b3b282ffacf26e6330bc26424ebf32fe3fd9010",
+    "exportSha256": "4f3aaa5ca5c9467fc023e5969b3b282ffacf26e6330bc26424ebf32fe3fd9010"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-delivery-parent/dynamic_fixture.c",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-delivery-parent\\dynamic_fixture.c",
+    "originalSha256": "5d489e071efbfbc162e686a6ae70b079a289066b41238539ae7274a4374afa04",
+    "exportSha256": "5d489e071efbfbc162e686a6ae70b079a289066b41238539ae7274a4374afa04"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-delivery-parent/verify_builder.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-delivery-parent\\verify_builder.py",
+    "originalSha256": "1502274a50325fb9fe75c187fba86e369dbfa2e7d9413e3c5cc58c07400ddb69",
+    "exportSha256": "1502274a50325fb9fe75c187fba86e369dbfa2e7d9413e3c5cc58c07400ddb69"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-delivery-parent/verify_metadata_role.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-delivery-parent\\verify_metadata_role.py",
+    "originalSha256": "261dead428848519a6635249050ca476948a413795bcc397abd9a563127bd90d",
+    "exportSha256": "261dead428848519a6635249050ca476948a413795bcc397abd9a563127bd90d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-delivery-parent/verify_prefix.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-delivery-parent\\verify_prefix.py",
+    "originalSha256": "e537342fe3e0e06789493bd3e64e458184c40403ef54ff044080a6a222498ca7",
+    "exportSha256": "e537342fe3e0e06789493bd3e64e458184c40403ef54ff044080a6a222498ca7"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-delivery-parent/selected-a/build_headless_release.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-delivery-parent\\selected-a\\build_headless_release.sh",
+    "originalSha256": "328aabd988b9a802fa51c00754b0b3db43321f04ad5f2779021b2fcc4a32fe1d",
+    "exportSha256": "328aabd988b9a802fa51c00754b0b3db43321f04ad5f2779021b2fcc4a32fe1d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-delivery-parent/selected-a/install_headless.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-delivery-parent\\selected-a\\install_headless.sh",
+    "originalSha256": "aea8355300ff2f4f8f216724db886765fe13d4ec6252f6b23e534407d51c8251",
+    "exportSha256": "aea8355300ff2f4f8f216724db886765fe13d4ec6252f6b23e534407d51c8251"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-installer-consumer-y/REPORT.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-consumer-y\\REPORT.md",
+    "originalSha256": "f1fae3cc8de1458b0235e5965f3d35138d5ef70ef5c4e61e964accdf9f6d790a",
+    "exportSha256": "f1fae3cc8de1458b0235e5965f3d35138d5ef70ef5c4e61e964accdf9f6d790a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-installer-consumer-y/src/install_headless.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-consumer-y\\src\\install_headless.sh",
+    "originalSha256": "b19da99c6a8e79c0a28c73162e8fac790426c8fc0f689e7c28d183e27ea25d4b",
+    "exportSha256": "b19da99c6a8e79c0a28c73162e8fac790426c8fc0f689e7c28d183e27ea25d4b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-installer-consumer-y/tests/run_y.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-consumer-y\\tests\\run_y.py",
+    "originalSha256": "1ab886453a3ef0d2a01d3ab623ad74b5fee47b02541e05d88c6e2b5c7c66bc54",
+    "exportSha256": "1ab886453a3ef0d2a01d3ab623ad74b5fee47b02541e05d88c6e2b5c7c66bc54"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-initial-consumer-z/REPORT.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-initial-consumer-z\\REPORT.md",
+    "originalSha256": "52d60621f8993bfacd0a021bc077834c2c8f0b3843d05187a6d18a4fa48358d3",
+    "exportSha256": "52d60621f8993bfacd0a021bc077834c2c8f0b3843d05187a6d18a4fa48358d3"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-initial-consumer-z/src/install_headless.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-initial-consumer-z\\src\\install_headless.sh",
+    "originalSha256": "b19da99c6a8e79c0a28c73162e8fac790426c8fc0f689e7c28d183e27ea25d4b",
+    "exportSha256": "b19da99c6a8e79c0a28c73162e8fac790426c8fc0f689e7c28d183e27ea25d4b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-initial-consumer-z/tests/run_z.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-initial-consumer-z\\tests\\run_z.py",
+    "originalSha256": "0cab1812f781c30d2d175fdfe69171d28bd7e186ca7a45ed008df41ccc71928b",
+    "exportSha256": "0cab1812f781c30d2d175fdfe69171d28bd7e186ca7a45ed008df41ccc71928b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-current-authority-aa/CMakeLists.txt",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-current-authority-aa\\CMakeLists.txt",
+    "originalSha256": "ccb45dbfa029bb9cf72a613bdf49e9b8f5d4a0e40c285472d7a4a8096b127d5b",
+    "exportSha256": "ccb45dbfa029bb9cf72a613bdf49e9b8f5d4a0e40c285472d7a4a8096b127d5b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-current-authority-aa/maintenance_runtime.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-current-authority-aa\\maintenance_runtime.cpp",
+    "originalSha256": "3e44ed119f805beec92c6bc358fc8133b0ae6f3f3e8a56d32282ab2b71267593",
+    "exportSha256": "3e44ed119f805beec92c6bc358fc8133b0ae6f3f3e8a56d32282ab2b71267593"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-current-authority-aa/maintenance_runtime.h",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-current-authority-aa\\maintenance_runtime.h",
+    "originalSha256": "fd18405c0f1be696d4066c8d10b8b56046288d6ab72580373f2841c1983a0308",
+    "exportSha256": "fd18405c0f1be696d4066c8d10b8b56046288d6ab72580373f2841c1983a0308"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-current-authority-aa/run_aa.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-current-authority-aa\\run_aa.sh",
+    "originalSha256": "1a10b52bdf3ddaa678d406574e4ef6b6369dd1b8b16c1496525b585582fd87f9",
+    "exportSha256": "1a10b52bdf3ddaa678d406574e4ef6b6369dd1b8b16c1496525b585582fd87f9"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-current-authority-aa/test_current_authority.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-current-authority-aa\\test_current_authority.cpp",
+    "originalSha256": "828f23576dd956ce7637587bc71862118f3bb370fb7f2610bc704aa542ea816b",
+    "exportSha256": "828f23576dd956ce7637587bc71862118f3bb370fb7f2610bc704aa542ea816b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-current-authority-aa/test_fixture.h",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-current-authority-aa\\test_fixture.h",
+    "originalSha256": "b6fc56c970bd9ca58a2d54f0e5b5147377fdea65c3131c1d15d2591ba283b166",
+    "exportSha256": "b6fc56c970bd9ca58a2d54f0e5b5147377fdea65c3131c1d15d2591ba283b166"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-current-authority-aa/transaction_journal.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-current-authority-aa\\transaction_journal.cpp",
+    "originalSha256": "7462725778e120780cc60fd70316a67e46d95aa4d0a3b25f68a4de334c83b12b",
+    "exportSha256": "7462725778e120780cc60fd70316a67e46d95aa4d0a3b25f68a4de334c83b12b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-current-authority-aa/transaction_journal.h",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-current-authority-aa\\transaction_journal.h",
+    "originalSha256": "e75b43615c6c8dce2d29ec60ad79fd2904075a1c7abd5e0778ba97c107213f30",
+    "exportSha256": "e75b43615c6c8dce2d29ec60ad79fd2904075a1c7abd5e0778ba97c107213f30"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/apply_delta.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\apply_delta.py",
+    "originalSha256": "cb3b0c627ae4249ce545d1ab35b75e2d9302a98d192c9e46d14a218ae40e1dda",
+    "exportSha256": "cb3b0c627ae4249ce545d1ab35b75e2d9302a98d192c9e46d14a218ae40e1dda"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/lab.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\lab.py",
+    "originalSha256": "2c516fdb9259388dc4ec1a12a807bc8023ce7b9bd28ec32579b819654096ee13",
+    "exportSha256": "2c516fdb9259388dc4ec1a12a807bc8023ce7b9bd28ec32579b819654096ee13"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/headless/verify_provisioning_bundle.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\headless\\verify_provisioning_bundle.py",
+    "originalSha256": "df49c2d5832877d79365a43aea029b2ccef9f795bb630a15ea9aaf1de891d11a",
+    "exportSha256": "df49c2d5832877d79365a43aea029b2ccef9f795bb630a15ea9aaf1de891d11a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/android_dependency_equivalence.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\android_dependency_equivalence.py",
+    "originalSha256": "795dd619ff2bc22c003860581cccf59d74a2a2847e0bf74e52dd8f8e16ec568c",
+    "exportSha256": "795dd619ff2bc22c003860581cccf59d74a2a2847e0bf74e52dd8f8e16ec568c"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/android_real_device_acceptance.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\android_real_device_acceptance.py",
+    "originalSha256": "70dda9c8c3d11c02ab52d8dfa116264c5179a1898e0f8fb5cc5272b44030cde4",
+    "exportSha256": "70dda9c8c3d11c02ab52d8dfa116264c5179a1898e0f8fb5cc5272b44030cde4"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/android_real_device_acquisition.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\android_real_device_acquisition.py",
+    "originalSha256": "26eb1256cf540fe7c60d0e703aaa8f45542f925c4867e71f375e63a92eda28f3",
+    "exportSha256": "26eb1256cf540fe7c60d0e703aaa8f45542f925c4867e71f375e63a92eda28f3"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/android_stage_progress_probe.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\android_stage_progress_probe.py",
+    "originalSha256": "e8877092458ff557e69e33c7b0e75fe4e46e7df066c00bf9bdbc80be851f26b3",
+    "exportSha256": "e8877092458ff557e69e33c7b0e75fe4e46e7df066c00bf9bdbc80be851f26b3"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/android_visual_handshake.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\android_visual_handshake.py",
+    "originalSha256": "6b593df45638a59330d16ffa4ff2404ee234f441166083c904d99befcdc69518",
+    "exportSha256": "6b593df45638a59330d16ffa4ff2404ee234f441166083c904d99befcdc69518"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/automatic_migration_fixture_network.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\automatic_migration_fixture_network.py",
+    "originalSha256": "7ce9b3b3a63ffe189c2d5ef1e67012ad14f983f8448ae6675fe3bb6c5c67dee5",
+    "exportSha256": "7ce9b3b3a63ffe189c2d5ef1e67012ad14f983f8448ae6675fe3bb6c5c67dee5"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/awg_automatic.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\awg_automatic.py",
+    "originalSha256": "9ef9b17f26a2b6da98bf9a9a03c857297399b57166d42d607330ade0a03b8e28",
+    "exportSha256": "9ef9b17f26a2b6da98bf9a9a03c857297399b57166d42d607330ade0a03b8e28"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/awg_automatic_guest.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\awg_automatic_guest.py",
+    "originalSha256": "8ae4f454e0c35297db8beb708b1cc9030531b0e1f7ca6c7c2dcc2d61fbf0cf9d",
+    "exportSha256": "8ae4f454e0c35297db8beb708b1cc9030531b0e1f7ca6c7c2dcc2d61fbf0cf9d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/awg_migration_gui.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\awg_migration_gui.py",
+    "originalSha256": "9beaac1f22ccb47eac19ec0e32c997b78a8305980c713dfa5b16db0570290c85",
+    "exportSha256": "9beaac1f22ccb47eac19ec0e32c997b78a8305980c713dfa5b16db0570290c85"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/awg_migration_gui_guest.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\awg_migration_gui_guest.py",
+    "originalSha256": "30bb1acc02d1fe860501f8c33f172766eb8bd07e968158fc6c3eaa1cc9056015",
+    "exportSha256": "30bb1acc02d1fe860501f8c33f172766eb8bd07e968158fc6c3eaa1cc9056015"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/awg_migration_gui_observer.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\awg_migration_gui_observer.py",
+    "originalSha256": "67425d4f1ab826a8a90f50b5eee66743d8ff8ace9410a1926e6852c91c2ae22b",
+    "exportSha256": "67425d4f1ab826a8a90f50b5eee66743d8ff8ace9410a1926e6852c91c2ae22b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/awg_migration_native.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\awg_migration_native.py",
+    "originalSha256": "25084611e34e3d2107614538885ab00881b172f76bc88332ca6cab0d31b86e90",
+    "exportSha256": "25084611e34e3d2107614538885ab00881b172f76bc88332ca6cab0d31b86e90"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/awg_migration_native_guest.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\awg_migration_native_guest.py",
+    "originalSha256": "41348025a1ab27eaa7d2f2de5eb6edc45cbaec09bf4f2f705b27b8020e4fcd09",
+    "exportSha256": "41348025a1ab27eaa7d2f2de5eb6edc45cbaec09bf4f2f705b27b8020e4fcd09"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/bootstrap_guest.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\bootstrap_guest.py",
+    "originalSha256": "d6c85bad8a386b1de55ebdda6d01eff13553949a4c521135462983c1fdc92e68",
+    "exportSha256": "d6c85bad8a386b1de55ebdda6d01eff13553949a4c521135462983c1fdc92e68"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/bootstrap_guest.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\bootstrap_guest.sh",
+    "originalSha256": "152657e3ef22010a266c54ac052c82cddf8e6e64590296b6de50401c9fa18a85",
+    "exportSha256": "152657e3ef22010a266c54ac052c82cddf8e6e64590296b6de50401c9fa18a85"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/bootstrap_wsl.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\bootstrap_wsl.sh",
+    "originalSha256": "2072253fc6838e61ed9550aa809af48ee1db72682b1a3a715c7994fcb545542e",
+    "exportSha256": "2072253fc6838e61ed9550aa809af48ee1db72682b1a3a715c7994fcb545542e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/CONTROLLER_INTEGRATION.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\CONTROLLER_INTEGRATION.md",
+    "originalSha256": "6ef1586984802db1cbcb691d7a7d0dd4c9b4b23c8d430eb1227de1ae20d3e350",
+    "exportSha256": "6ef1586984802db1cbcb691d7a7d0dd4c9b4b23c8d430eb1227de1ae20d3e350"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/coordinated_acquisition_contract.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\coordinated_acquisition_contract.py",
+    "originalSha256": "34106aa5e8b67886a12c2369ac720d76c37df1fa11751052ea5fe0a23c6a5541",
+    "exportSha256": "34106aa5e8b67886a12c2369ac720d76c37df1fa11751052ea5fe0a23c6a5541"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/coordinated_headless_registration.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\coordinated_headless_registration.py",
+    "originalSha256": "1f646bc3cb831d6b6e4aabee17488e48837a214d27c1a69119dfef12c70d224d",
+    "exportSha256": "1f646bc3cb831d6b6e4aabee17488e48837a214d27c1a69119dfef12c70d224d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/coordinated_linux_live_acquisition.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\coordinated_linux_live_acquisition.py",
+    "originalSha256": "0758026b75951b17dafe1719f922aeeb6af7aa70ff7acf2c02b705594d03b7d0",
+    "exportSha256": "0758026b75951b17dafe1719f922aeeb6af7aa70ff7acf2c02b705594d03b7d0"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/coordinated_release_acceptance.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\coordinated_release_acceptance.py",
+    "originalSha256": "af2773ddec4be13c8c5ecd9b2c113a75cdb14feb46634c4199384c38937a00c4",
+    "exportSha256": "af2773ddec4be13c8c5ecd9b2c113a75cdb14feb46634c4199384c38937a00c4"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_coordinated_http_fixture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_coordinated_http_fixture.py",
+    "originalSha256": "ff51b645bd712f615ba979d9815258cb56701d9ab6f0e1dcfcb2fb0c23adce69",
+    "exportSha256": "ff51b645bd712f615ba979d9815258cb56701d9ab6f0e1dcfcb2fb0c23adce69"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_coordinated_rollback_acceptance.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_coordinated_rollback_acceptance.py",
+    "originalSha256": "84636c295f379c422ab23043349daaf11371689bf007217e816589539f658009",
+    "exportSha256": "84636c295f379c422ab23043349daaf11371689bf007217e816589539f658009"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_coordinated_rollback_collector.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_coordinated_rollback_collector.py",
+    "originalSha256": "febc87919935766dfc5c212640f468186631297893af53fb9be7085602ac4025",
+    "exportSha256": "febc87919935766dfc5c212640f468186631297893af53fb9be7085602ac4025"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_coordinated_rollback_driver.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_coordinated_rollback_driver.py",
+    "originalSha256": "bd0c0efbe0b7d534080f1ebdb50776ec159a54e3c1fb25516168d938c904f666",
+    "exportSha256": "bd0c0efbe0b7d534080f1ebdb50776ec159a54e3c1fb25516168d938c904f666"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_native_acceptance.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_native_acceptance.py",
+    "originalSha256": "83eae918276ee08070e40d83ad058770569893f154f887e904e3f41cab33621a",
+    "exportSha256": "83eae918276ee08070e40d83ad058770569893f154f887e904e3f41cab33621a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_native_e2e_driver.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_native_e2e_driver.py",
+    "originalSha256": "a154a99f705a8a4b8a9f57b727fc6876346b84f2e98211a9c7a2f7eef36f46de",
+    "exportSha256": "a154a99f705a8a4b8a9f57b727fc6876346b84f2e98211a9c7a2f7eef36f46de"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_native_fixture_server.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_native_fixture_server.py",
+    "originalSha256": "4375d1c749719859460e879e64cd8c3491ac708274d7942bbe12ec6723f820d0",
+    "exportSha256": "4375d1c749719859460e879e64cd8c3491ac708274d7942bbe12ec6723f820d0"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_native_http_fixture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_native_http_fixture.py",
+    "originalSha256": "afa97dea1cf7deacd704556063b5c792e58f60e38665c5df58bf7215cb458d13",
+    "exportSha256": "afa97dea1cf7deacd704556063b5c792e58f60e38665c5df58bf7215cb458d13"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_native_qga_adapter.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_native_qga_adapter.py",
+    "originalSha256": "38f85c1545b813f8827f05ea34cf81950df9d1a88b0f933d11beb85a475551a1",
+    "exportSha256": "38f85c1545b813f8827f05ea34cf81950df9d1a88b0f933d11beb85a475551a1"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_native_reboot_collector.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_native_reboot_collector.py",
+    "originalSha256": "3fd85d5e7e1ed5e495a8c286bcc0642cd35ad6cd662b03fd9333a20b54bf91d6",
+    "exportSha256": "3fd85d5e7e1ed5e495a8c286bcc0642cd35ad6cd662b03fd9333a20b54bf91d6"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_pending_observer.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_pending_observer.py",
+    "originalSha256": "5b891174d07fc701d6133094c69cafcd0f50d711d7e1e62fa90f68754a76cea0",
+    "exportSha256": "5b891174d07fc701d6133094c69cafcd0f50d711d7e1e62fa90f68754a76cea0"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_preexisting_fixture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_preexisting_fixture.py",
+    "originalSha256": "06e66428317a90a8466c272922993fae2a81c73d2f5b84c7e74bc7691bd051b5",
+    "exportSha256": "06e66428317a90a8466c272922993fae2a81c73d2f5b84c7e74bc7691bd051b5"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/headless_preexisting_fixture_guest.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\headless_preexisting_fixture_guest.py",
+    "originalSha256": "2583eeb9a72195f274c60360e68d412e4840fe9cc8dd8e71b8c31d2b328f1bbd",
+    "exportSha256": "2583eeb9a72195f274c60360e68d412e4840fe9cc8dd8e71b8c31d2b328f1bbd"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/lab.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\lab.py",
+    "originalSha256": "2c516fdb9259388dc4ec1a12a807bc8023ce7b9bd28ec32579b819654096ee13",
+    "exportSha256": "2c516fdb9259388dc4ec1a12a807bc8023ce7b9bd28ec32579b819654096ee13"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/linux_desktop_readiness.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\linux_desktop_readiness.py",
+    "originalSha256": "7fbe2fc5f61d0d29272120ae59811903eaa6e4e5b97d14a17770eef3f2a56736",
+    "exportSha256": "7fbe2fc5f61d0d29272120ae59811903eaa6e4e5b97d14a17770eef3f2a56736"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/linux_gui_driver.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\linux_gui_driver.py",
+    "originalSha256": "f6561462fabba450a710351d8dcefa95db79e48e0befb80b6a4c188f6bd0b967",
+    "exportSha256": "f6561462fabba450a710351d8dcefa95db79e48e0befb80b6a4c188f6bd0b967"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/linux_gui_fixture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\linux_gui_fixture.py",
+    "originalSha256": "14af240e37275be77e17b20b1d8ba006a8bea9bc9dbc75262477f9e3ceb8d5e1",
+    "exportSha256": "14af240e37275be77e17b20b1d8ba006a8bea9bc9dbc75262477f9e3ceb8d5e1"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/linux_gui_payload.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\linux_gui_payload.py",
+    "originalSha256": "5e459b06fc0bbaf2ee90e6b138a9718b50abb8d3a174db97c40c4b8e19aa3259",
+    "exportSha256": "5e459b06fc0bbaf2ee90e6b138a9718b50abb8d3a174db97c40c4b8e19aa3259"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/linux_gui_visual_ack.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\linux_gui_visual_ack.py",
+    "originalSha256": "9055ac1416879cd8e21025987cc22909ad8d0b7371af7cbbdab51b41fc81ec32",
+    "exportSha256": "9055ac1416879cd8e21025987cc22909ad8d0b7371af7cbbdab51b41fc81ec32"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/linux_headless_driver.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\linux_headless_driver.py",
+    "originalSha256": "e7f0d1001c6445d1c59c307022b4338e343d554fcd0c1c4a824f92b2cb50352e",
+    "exportSha256": "e7f0d1001c6445d1c59c307022b4338e343d554fcd0c1c4a824f92b2cb50352e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/linux_live_acquisition.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\linux_live_acquisition.py",
+    "originalSha256": "c64286b79a648a51d92f4c3bc22cf6378948be9e1458f972b3e8354532907c39",
+    "exportSha256": "c64286b79a648a51d92f4c3bc22cf6378948be9e1458f972b3e8354532907c39"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/live_acquisition.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\live_acquisition.py",
+    "originalSha256": "cad607f0a598ad38c39187f7e80cd9d45222c6007e6f6670149d8b83e46f7b25",
+    "exportSha256": "cad607f0a598ad38c39187f7e80cd9d45222c6007e6f6670149d8b83e46f7b25"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/nested_cuttlefish_app_executor.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\nested_cuttlefish_app_executor.py",
+    "originalSha256": "7bde5aa428fd7e9b9ebc34995a099823e0f850a61f7fd990d7e0e4bade310c31",
+    "exportSha256": "7bde5aa428fd7e9b9ebc34995a099823e0f850a61f7fd990d7e0e4bade310c31"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/nested_cuttlefish_common_adapter.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\nested_cuttlefish_common_adapter.py",
+    "originalSha256": "5feb073bd30322ad6dd0d259dba026f775ac056f266ef7d75a95e314910e7daf",
+    "exportSha256": "5feb073bd30322ad6dd0d259dba026f775ac056f266ef7d75a95e314910e7daf"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/nested_cuttlefish_host_dependencies.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\nested_cuttlefish_host_dependencies.py",
+    "originalSha256": "cd9d60bd077e2c49c04179d77708e4a8a872cf76a4c01488e54b377edc2f8948",
+    "exportSha256": "cd9d60bd077e2c49c04179d77708e4a8a872cf76a4c01488e54b377edc2f8948"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/nested_cuttlefish_lldb.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\nested_cuttlefish_lldb.py",
+    "originalSha256": "8cc9cdc1d31965389508606f0595d762ea55d165a3e3d343694a6768006fa653",
+    "exportSha256": "8cc9cdc1d31965389508606f0595d762ea55d165a3e3d343694a6768006fa653"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/nested_cuttlefish_lldb_controller.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\nested_cuttlefish_lldb_controller.py",
+    "originalSha256": "ed34db05d15a4e8b04c44feb829c2afaf44a3eded1c532314a148f63adf9333a",
+    "exportSha256": "ed34db05d15a4e8b04c44feb829c2afaf44a3eded1c532314a148f63adf9333a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/nested_cuttlefish_private_link.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\nested_cuttlefish_private_link.py",
+    "originalSha256": "a703e47823eaaf8ce7776d046edbbb3e1537147d8101be6d2a1b66e5e42535b4",
+    "exportSha256": "a703e47823eaaf8ce7776d046edbbb3e1537147d8101be6d2a1b66e5e42535b4"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/nested_cuttlefish_qga_bridge.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\nested_cuttlefish_qga_bridge.py",
+    "originalSha256": "6c4ff245d3fa1e4b7eb1f00a7670d26adcde94c43b94af19ece44a1b20fde309",
+    "exportSha256": "6c4ff245d3fa1e4b7eb1f00a7670d26adcde94c43b94af19ece44a1b20fde309"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/nested_cuttlefish_runner.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\nested_cuttlefish_runner.py",
+    "originalSha256": "427b96c79036ec1ecce436071adea72a07248927210415dd8d2888716c49f21d",
+    "exportSha256": "427b96c79036ec1ecce436071adea72a07248927210415dd8d2888716c49f21d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/nested_cuttlefish_server_fixture_adapter.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\nested_cuttlefish_server_fixture_adapter.py",
+    "originalSha256": "694a8200995394fd13ca3529c4c701a1feb6f72ec6e29165e70c44581693eb19",
+    "exportSha256": "694a8200995394fd13ca3529c4c701a1feb6f72ec6e29165e70c44581693eb19"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/nested_cuttlefish_wayland_dependency.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\nested_cuttlefish_wayland_dependency.py",
+    "originalSha256": "7de900930eedfca6f37c1b309fb2c0e7491c794ce61a9b6f0501716cceeee72b",
+    "exportSha256": "7de900930eedfca6f37c1b309fb2c0e7491c794ce61a9b6f0501716cceeee72b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/prepare_windows_payload_lab.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\prepare_windows_payload_lab.py",
+    "originalSha256": "952b02e858c6531a3df3e9875569c7c2a6cd3c75dc0b6aa848ba4f8f264748c6",
+    "exportSha256": "952b02e858c6531a3df3e9875569c7c2a6cd3c75dc0b6aa848ba4f8f264748c6"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/probe_server_router_capabilities.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\probe_server_router_capabilities.py",
+    "originalSha256": "5cc1904782234899822eaeb29d1a906b3906be7551330ded3d2b73d4ca1658f0",
+    "exportSha256": "5cc1904782234899822eaeb29d1a906b3906be7551330ded3d2b73d4ca1658f0"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/provision_linux_guest.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\provision_linux_guest.sh",
+    "originalSha256": "38eb41e0b2301ffc896b22d5387b2d7bc72971c8793921127bb73d0fa92c81d9",
+    "exportSha256": "38eb41e0b2301ffc896b22d5387b2d7bc72971c8793921127bb73d0fa92c81d9"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/provision_server_router.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\provision_server_router.sh",
+    "originalSha256": "49e2c5857d80fc60587611cc624cd6cda639df681f6191de09f3644cf324c15f",
+    "exportSha256": "49e2c5857d80fc60587611cc624cd6cda639df681f6191de09f3644cf324c15f"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/provision_windows_guest.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\provision_windows_guest.ps1",
+    "originalSha256": "82fe7cfbe06cf77e6015cad903b259deb6b6d400b055d414ae884361ce3e628f",
+    "exportSha256": "82fe7cfbe06cf77e6015cad903b259deb6b6d400b055d414ae884361ce3e628f"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/publication_acceptance.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\publication_acceptance.py",
+    "originalSha256": "f724dd9baaa176c8874e9a90e01347b8709ab73ee7d4de6bc740045d5f566705",
+    "exportSha256": "f724dd9baaa176c8874e9a90e01347b8709ab73ee7d4de6bc740045d5f566705"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/publisher_controller.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\publisher_controller.py",
+    "originalSha256": "d0a422588e0508090f63dd996a43157b9fe4b08335ca56f175ee9a2dea973a50",
+    "exportSha256": "d0a422588e0508090f63dd996a43157b9fe4b08335ca56f175ee9a2dea973a50"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/publisher_filemap.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\publisher_filemap.py",
+    "originalSha256": "b0f6c2a006f85134bf1a98e367d8e551a22881fb274ba84f341639c0316b4d89",
+    "exportSha256": "b0f6c2a006f85134bf1a98e367d8e551a22881fb274ba84f341639c0316b4d89"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/README.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\README.md",
+    "originalSha256": "c9f1cf39558338ee3b2333a89e39cc51484cd4f738facd5932722d1c244c4788",
+    "exportSha256": "c9f1cf39558338ee3b2333a89e39cc51484cd4f738facd5932722d1c244c4788"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/relay_smoke_controller.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\relay_smoke_controller.py",
+    "originalSha256": "12ed072e22a784e8d5b65b952375210f070e7459969d399ec7308be815a39073",
+    "exportSha256": "12ed072e22a784e8d5b65b952375210f070e7459969d399ec7308be815a39073"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_absent_autoupdate.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_absent_autoupdate.py",
+    "originalSha256": "97c7bf113818bad3fd0e88a446cc538ccd47361538cd316ac0056c8932fca5b9",
+    "exportSha256": "97c7bf113818bad3fd0e88a446cc538ccd47361538cd316ac0056c8932fca5b9"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_android_dependency_equivalence.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_android_dependency_equivalence.py",
+    "originalSha256": "554ccc68d3d57190104a9ebece706ae50d5d65fc8fe65a2789ec7111399d67ea",
+    "exportSha256": "554ccc68d3d57190104a9ebece706ae50d5d65fc8fe65a2789ec7111399d67ea"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_android_real_device_acceptance.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_android_real_device_acceptance.py",
+    "originalSha256": "a04381777f47a0f15f35d9119859ee0f61aa7c547e2cf6e1145a7096700cda5d",
+    "exportSha256": "a04381777f47a0f15f35d9119859ee0f61aa7c547e2cf6e1145a7096700cda5d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_android_real_device_acquisition.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_android_real_device_acquisition.py",
+    "originalSha256": "c3fce3bf23d52a5666bca67974b43448d8a9aea24ea579619b8a0da79b5b7b34",
+    "exportSha256": "c3fce3bf23d52a5666bca67974b43448d8a9aea24ea579619b8a0da79b5b7b34"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_android_visual_handshake.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_android_visual_handshake.py",
+    "originalSha256": "4330fd5130b13c79bb9690530f05e732afe2881a70db6baa98da992711722fae",
+    "exportSha256": "4330fd5130b13c79bb9690530f05e732afe2881a70db6baa98da992711722fae"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_automatic_migration_fixture_network.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_automatic_migration_fixture_network.py",
+    "originalSha256": "97481041fb3ce7298d1be077322a9ddddc7bc324f9c612aad8bae21bbf34dcb9",
+    "exportSha256": "97481041fb3ce7298d1be077322a9ddddc7bc324f9c612aad8bae21bbf34dcb9"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_awg_migration_gui_components.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_awg_migration_gui_components.py",
+    "originalSha256": "e6e2e694fa759725a8f69a9c259f17a8b13109d817b292f606258d69de2300fc",
+    "exportSha256": "e6e2e694fa759725a8f69a9c259f17a8b13109d817b292f606258d69de2300fc"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_awg_migration_gui_controller.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_awg_migration_gui_controller.py",
+    "originalSha256": "7d4a8c393552d011720b9472e44673dc0565844e6d26aec734684dc8ef74d5f2",
+    "exportSha256": "7d4a8c393552d011720b9472e44673dc0565844e6d26aec734684dc8ef74d5f2"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_awg_migration_native.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_awg_migration_native.py",
+    "originalSha256": "3fe703bfd82aa3d157c69b8d7fc80f5a1b2e39c315de958d49e406d8f99367da",
+    "exportSha256": "3fe703bfd82aa3d157c69b8d7fc80f5a1b2e39c315de958d49e406d8f99367da"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_canonical_marker_rearm.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_canonical_marker_rearm.py",
+    "originalSha256": "bf9d2746afc91f6481fd4b7bf5d03c037e67d530213df31e2c5e437f5d8de654",
+    "exportSha256": "bf9d2746afc91f6481fd4b7bf5d03c037e67d530213df31e2c5e437f5d8de654"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_coordinated_acquisition_contract.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_coordinated_acquisition_contract.py",
+    "originalSha256": "20ba98bb1c29bc80b339d8c577714970479b675008c330b59370d528443cf3a8",
+    "exportSha256": "20ba98bb1c29bc80b339d8c577714970479b675008c330b59370d528443cf3a8"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_coordinated_cli_output.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_coordinated_cli_output.py",
+    "originalSha256": "4512f54ebc74471903123531433762d790f2609943e8ca401588ab81b6a52aed",
+    "exportSha256": "4512f54ebc74471903123531433762d790f2609943e8ca401588ab81b6a52aed"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_coordinated_headless_registration.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_coordinated_headless_registration.py",
+    "originalSha256": "5f7505820d36cfd510858e10fb4c48ff15cf409f1f7de021b25f81ac2f978d32",
+    "exportSha256": "5f7505820d36cfd510858e10fb4c48ff15cf409f1f7de021b25f81ac2f978d32"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_coordinated_http_completeness.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_coordinated_http_completeness.py",
+    "originalSha256": "f4a5ed3d7631b0957e0ac4b25ab5b3fd8c51ca916541dd1406c4699071f66677",
+    "exportSha256": "f4a5ed3d7631b0957e0ac4b25ab5b3fd8c51ca916541dd1406c4699071f66677"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_coordinated_http_stat_rejection.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_coordinated_http_stat_rejection.py",
+    "originalSha256": "017d8247844f1f9f452b58e772a8a75a8423d0b269c5b2e24757af4049de0f21",
+    "exportSha256": "017d8247844f1f9f452b58e772a8a75a8423d0b269c5b2e24757af4049de0f21"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_coordinated_linux_live_acquisition.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_coordinated_linux_live_acquisition.py",
+    "originalSha256": "60a082943754d0e1b42557bda440dbe3bca94ef7a9c8a0efff77f611ebbd928b",
+    "exportSha256": "60a082943754d0e1b42557bda440dbe3bca94ef7a9c8a0efff77f611ebbd928b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_coordinated_release_acceptance.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_coordinated_release_acceptance.py",
+    "originalSha256": "7a1a14f14ebf63953793e922f9650bdf38f52c745310604351289b9a913fa638",
+    "exportSha256": "7a1a14f14ebf63953793e922f9650bdf38f52c745310604351289b9a913fa638"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_coordinated_release_acceptance_integration.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_coordinated_release_acceptance_integration.py",
+    "originalSha256": "ad6b0937012f38e83a89260f94ffcd2d42492115710a5174aeff5193a59e6eb3",
+    "exportSha256": "ad6b0937012f38e83a89260f94ffcd2d42492115710a5174aeff5193a59e6eb3"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_create_manifest_binding.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_create_manifest_binding.py",
+    "originalSha256": "d2f41b1be0c025721a78d0dbec50244d84b648e84e3994e2117aeb8cdff5b585",
+    "exportSha256": "d2f41b1be0c025721a78d0dbec50244d84b648e84e3994e2117aeb8cdff5b585"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_exact_native_plan_capture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_exact_native_plan_capture.py",
+    "originalSha256": "d8ecb88d1f5b3ca37e918a092ec6c8f6283223f413447ebbf73946cae9156597",
+    "exportSha256": "d8ecb88d1f5b3ca37e918a092ec6c8f6283223f413447ebbf73946cae9156597"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_guest_assets.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_guest_assets.py",
+    "originalSha256": "df6d6257cace37736a88010fbf175787289b61e199aab126135ca83a2ca26afe",
+    "exportSha256": "df6d6257cace37736a88010fbf175787289b61e199aab126135ca83a2ca26afe"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_guest_invocation_timestamp.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_guest_invocation_timestamp.py",
+    "originalSha256": "59588d2c6c555b057835c10763a8ad37f71cc7d4c2c0ae9ecf818970c493a8a3",
+    "exportSha256": "59588d2c6c555b057835c10763a8ad37f71cc7d4c2c0ae9ecf818970c493a8a3"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_guest_runners.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_guest_runners.py",
+    "originalSha256": "184772da9a22df0400b94d114858d9321e55d27d82727aa9b1c326da07d317bd",
+    "exportSha256": "184772da9a22df0400b94d114858d9321e55d27d82727aa9b1c326da07d317bd"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_gui_session_parser.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_gui_session_parser.py",
+    "originalSha256": "0bdbf23c82a1ef7bc7a0bfbd7532cffac69cbfcef2e8161b339bbd00589ea46b",
+    "exportSha256": "0bdbf23c82a1ef7bc7a0bfbd7532cffac69cbfcef2e8161b339bbd00589ea46b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_coordinated_http_fixture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_coordinated_http_fixture.py",
+    "originalSha256": "d0922ba8237984bf2735604d5e8c88148f07d389ced1f1b5a770c85d4ad72826",
+    "exportSha256": "d0922ba8237984bf2735604d5e8c88148f07d389ced1f1b5a770c85d4ad72826"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_coordinated_rollback_acceptance.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_coordinated_rollback_acceptance.py",
+    "originalSha256": "8825d36d59dcaca123daec5207126cb0e58a1fdb6676f93f889803b35310df7b",
+    "exportSha256": "8825d36d59dcaca123daec5207126cb0e58a1fdb6676f93f889803b35310df7b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_coordinated_rollback_collector.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_coordinated_rollback_collector.py",
+    "originalSha256": "cf523189342a557f341f4d413ee71de19cb86109fa102a35dfdaca7b33f90968",
+    "exportSha256": "cf523189342a557f341f4d413ee71de19cb86109fa102a35dfdaca7b33f90968"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_coordinated_rollback_driver.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_coordinated_rollback_driver.py",
+    "originalSha256": "7dc09332cac84808a61df3d4da88cd92081f0fbc6dc3b38f663335face80bbe5",
+    "exportSha256": "7dc09332cac84808a61df3d4da88cd92081f0fbc6dc3b38f663335face80bbe5"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_http_lifecycle.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_http_lifecycle.py",
+    "originalSha256": "7d4e1fb75602e978412e35ef6c4f6e425feda8655d9c51f2a42d51cdfdbc1fd1",
+    "exportSha256": "7d4e1fb75602e978412e35ef6c4f6e425feda8655d9c51f2a42d51cdfdbc1fd1"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_lock_lifecycle.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_lock_lifecycle.py",
+    "originalSha256": "911547e3a017a3fe16357d5a6209cf94277ccb2bccb0ca7a70b3a1e6eac4c9ed",
+    "exportSha256": "911547e3a017a3fe16357d5a6209cf94277ccb2bccb0ca7a70b3a1e6eac4c9ed"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_native_acceptance.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_native_acceptance.py",
+    "originalSha256": "aa304ec299547fb943e95420a5c79526b49aa79e3ddf70cb4e53e81a6d668a60",
+    "exportSha256": "aa304ec299547fb943e95420a5c79526b49aa79e3ddf70cb4e53e81a6d668a60"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_native_e2e_driver.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_native_e2e_driver.py",
+    "originalSha256": "c786af6d94e81224711ae7c0aeeaaaf758a73e4730872d7feb459949fb48c18a",
+    "exportSha256": "c786af6d94e81224711ae7c0aeeaaaf758a73e4730872d7feb459949fb48c18a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_native_http_fixture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_native_http_fixture.py",
+    "originalSha256": "f901fa73d2f3b6b26974f240ed44a74902ea14b3694336ee1c10ec0991cfe089",
+    "exportSha256": "f901fa73d2f3b6b26974f240ed44a74902ea14b3694336ee1c10ec0991cfe089"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_native_qga_adapter.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_native_qga_adapter.py",
+    "originalSha256": "7988e47b000a908d882cdcf015d3b6f8f95e4f82102772053c6c39bf5ec040c8",
+    "exportSha256": "7988e47b000a908d882cdcf015d3b6f8f95e4f82102772053c6c39bf5ec040c8"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_native_reboot_collector.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_native_reboot_collector.py",
+    "originalSha256": "5bf571c31ac23969d74dc7231c41d2ff9e162e39f4907e2319f7a8c088bad357",
+    "exportSha256": "5bf571c31ac23969d74dc7231c41d2ff9e162e39f4907e2319f7a8c088bad357"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_native_runtime_contracts.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_native_runtime_contracts.py",
+    "originalSha256": "23049cf0341e7fd14c47789350ef2128ff9498a20b79b8e1d46b41a40b06b91c",
+    "exportSha256": "23049cf0341e7fd14c47789350ef2128ff9498a20b79b8e1d46b41a40b06b91c"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_pending_closure.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_pending_closure.py",
+    "originalSha256": "7b1eaffbc80781b4af1e80532e43d943abc629b1cf4da41da506088300e16db8",
+    "exportSha256": "7b1eaffbc80781b4af1e80532e43d943abc629b1cf4da41da506088300e16db8"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_pending_failure_capture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_pending_failure_capture.py",
+    "originalSha256": "0371975e109419145ec4482668dab507f4d582ea230b1b4a9c5afc9975f8e324",
+    "exportSha256": "0371975e109419145ec4482668dab507f4d582ea230b1b4a9c5afc9975f8e324"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_pending_observer.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_pending_observer.py",
+    "originalSha256": "12343a373e34a3e43876e9ff8745dfdac026edd764a440d38e4aff7b494609ef",
+    "exportSha256": "12343a373e34a3e43876e9ff8745dfdac026edd764a440d38e4aff7b494609ef"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_preexisting_fixture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_preexisting_fixture.py",
+    "originalSha256": "1742447ab00962a3946313b98ee17507670663ef82d222659bd161165eedbb69",
+    "exportSha256": "1742447ab00962a3946313b98ee17507670663ef82d222659bd161165eedbb69"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_preexisting_fixture_guest.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_preexisting_fixture_guest.py",
+    "originalSha256": "09a5d0b786a47e12eacc139a018ddec9a2f8aa3be42682d348da56150558ccff",
+    "exportSha256": "09a5d0b786a47e12eacc139a018ddec9a2f8aa3be42682d348da56150558ccff"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_prevalidation_capture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_prevalidation_capture.py",
+    "originalSha256": "c046810c331d463b921e8f7b116213bf45eea5cd7dd584759d1a777522369e29",
+    "exportSha256": "c046810c331d463b921e8f7b116213bf45eea5cd7dd584759d1a777522369e29"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_protected_fixture_inputs.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_protected_fixture_inputs.py",
+    "originalSha256": "fab5f0ef47b060050744b9e2838a3928030b6a625e556673ac8d687e59defa31",
+    "exportSha256": "fab5f0ef47b060050744b9e2838a3928030b6a625e556673ac8d687e59defa31"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_stable_update_contract.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_stable_update_contract.py",
+    "originalSha256": "2a6172510cc83ee84ffc5b673d2ae16b7f739e047fbcc92204f6f3c7bae3cad7",
+    "exportSha256": "2a6172510cc83ee84ffc5b673d2ae16b7f739e047fbcc92204f6f3c7bae3cad7"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_strace_contract.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_strace_contract.py",
+    "originalSha256": "29cce0904d4e5085686af731c66c8a1c2296744e2d6a3ed10dc57d79c12bbb54",
+    "exportSha256": "29cce0904d4e5085686af731c66c8a1c2296744e2d6a3ed10dc57d79c12bbb54"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_headless_underlay_fixture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_headless_underlay_fixture.py",
+    "originalSha256": "0a9896c1ec4bcc231d8ca11bb762d3d67d27eb5cba55c0d7a54191e1035aa5eb",
+    "exportSha256": "0a9896c1ec4bcc231d8ca11bb762d3d67d27eb5cba55c0d7a54191e1035aa5eb"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_hyperv_backend.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_hyperv_backend.py",
+    "originalSha256": "0716fb58c9148fc813a7dd27d3a3d09a8e4a6ef9ef69dd3870efa4db35073096",
+    "exportSha256": "0716fb58c9148fc813a7dd27d3a3d09a8e4a6ef9ef69dd3870efa4db35073096"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_hyperv_capture_freshness.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_hyperv_capture_freshness.py",
+    "originalSha256": "10a52a1cc3d8ccf00d4eb490d18b72f216ccf2472ebabf81b44677d0d67dd49e",
+    "exportSha256": "10a52a1cc3d8ccf00d4eb490d18b72f216ccf2472ebabf81b44677d0d67dd49e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_kvm_readiness.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_kvm_readiness.py",
+    "originalSha256": "90bbecedb89161e17d3be8a4acd7a969cb8d0b8b6051516918ade539f95cfcbd",
+    "exportSha256": "90bbecedb89161e17d3be8a4acd7a969cb8d0b8b6051516918ade539f95cfcbd"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_lab.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_lab.py",
+    "originalSha256": "50c4ff78761f99c4effe3311440b8f2d4edc3d9ee11555fac4261fcdc0940d72",
+    "exportSha256": "50c4ff78761f99c4effe3311440b8f2d4edc3d9ee11555fac4261fcdc0940d72"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_desktop_readiness.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_desktop_readiness.py",
+    "originalSha256": "67f544f4d1aa21aa4e384ad390c75d49060a8d8b7e08103f52eef755e9fc4bc1",
+    "exportSha256": "67f544f4d1aa21aa4e384ad390c75d49060a8d8b7e08103f52eef755e9fc4bc1"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_continuous.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_continuous.py",
+    "originalSha256": "c5a665a63ead3c9847e7af6b4f1e7175b712dd94f1bfb637d06a78ad819dfec6",
+    "exportSha256": "c5a665a63ead3c9847e7af6b4f1e7175b712dd94f1bfb637d06a78ad819dfec6"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_crash_capture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_crash_capture.py",
+    "originalSha256": "c2a86908c376a304778b4822c36722d962c6b7923b4dd676cce2bc2a20857056",
+    "exportSha256": "c2a86908c376a304778b4822c36722d962c6b7923b4dd676cce2bc2a20857056"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_dpkg_lock.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_dpkg_lock.py",
+    "originalSha256": "29e815e341a7ce6a3fb9e932209dcf2920f4a8800ec8960ec1ebab262a485213",
+    "exportSha256": "29e815e341a7ce6a3fb9e932209dcf2920f4a8800ec8960ec1ebab262a485213"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_driver.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_driver.py",
+    "originalSha256": "c2aa6a0563073a16489398248ff00f295f08fcd66f35d248aeccab8e8e03c603",
+    "exportSha256": "c2aa6a0563073a16489398248ff00f295f08fcd66f35d248aeccab8e8e03c603"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_fixture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_fixture.py",
+    "originalSha256": "67f7faffa9c705055a830dc00daa7bf131596ebef823c053856de79dd7ec9901",
+    "exportSha256": "67f7faffa9c705055a830dc00daa7bf131596ebef823c053856de79dd7ec9901"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_offline_boot.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_offline_boot.py",
+    "originalSha256": "5ef9968e95b56b961cea6d532b7dd714b5821e7de9e8706f49d1ece0186604ef",
+    "exportSha256": "5ef9968e95b56b961cea6d532b7dd714b5821e7de9e8706f49d1ece0186604ef"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_payload.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_payload.py",
+    "originalSha256": "8bdf838859c9a9425135e02f0847e3b9d8c2c74f86b932ba5e13ff5c20b2bbae",
+    "exportSha256": "8bdf838859c9a9425135e02f0847e3b9d8c2c74f86b932ba5e13ff5c20b2bbae"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_procfs_reads.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_procfs_reads.py",
+    "originalSha256": "bffd7dc2673a5f6d380506063083c1af1f3ad5d1131dc5a68a247d8d6b48f22a",
+    "exportSha256": "bffd7dc2673a5f6d380506063083c1af1f3ad5d1131dc5a68a247d8d6b48f22a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_readiness_probe.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_readiness_probe.py",
+    "originalSha256": "969da8208b9f930e2953fc6cf38429937ccc1d31868370eaa29997674c0a2a65",
+    "exportSha256": "969da8208b9f930e2953fc6cf38429937ccc1d31868370eaa29997674c0a2a65"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_renderer_policy.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_renderer_policy.py",
+    "originalSha256": "f852e24b3262159979ed257c0d98b519f334268cf1d376283cca6a79a5367b66",
+    "exportSha256": "f852e24b3262159979ed257c0d98b519f334268cf1d376283cca6a79a5367b66"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_session_lock.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_session_lock.py",
+    "originalSha256": "d94ca8635fe35745910c408bbc615fc2f8fca230df0446ced2d0433e2f6286be",
+    "exportSha256": "d94ca8635fe35745910c408bbc615fc2f8fca230df0446ced2d0433e2f6286be"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_visual_ack.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_visual_ack.py",
+    "originalSha256": "43f2b3a3888381565cbdbbe1c0f4f28e954f807ba44a365b45843ac5888278a5",
+    "exportSha256": "43f2b3a3888381565cbdbbe1c0f4f28e954f807ba44a365b45843ac5888278a5"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_window_evidence.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_window_evidence.py",
+    "originalSha256": "d48091a0d7cd83f92c1cfb52be0b40363ab2348945134c70f24eaf0a00032a00",
+    "exportSha256": "d48091a0d7cd83f92c1cfb52be0b40363ab2348945134c70f24eaf0a00032a00"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_gui_xres_dependency.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_gui_xres_dependency.py",
+    "originalSha256": "fc9ce99a4446f3e779a285e1b71a1d084fb50e86ccb2a5ff4bc68221cdaeabd3",
+    "exportSha256": "fc9ce99a4446f3e779a285e1b71a1d084fb50e86ccb2a5ff4bc68221cdaeabd3"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_headless_driver.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_headless_driver.py",
+    "originalSha256": "19b8f4e173feabe6a1b85bbfcdaf4748d1e9f440e173e8d25f135008c2901cdb",
+    "exportSha256": "19b8f4e173feabe6a1b85bbfcdaf4748d1e9f440e173e8d25f135008c2901cdb"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_headless_staging.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_headless_staging.py",
+    "originalSha256": "ace9b7bc26e4afc8090efa638b997bacabd46cd4c139d6f3a5cef26de1942cff",
+    "exportSha256": "ace9b7bc26e4afc8090efa638b997bacabd46cd4c139d6f3a5cef26de1942cff"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_live_acquisition.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_live_acquisition.py",
+    "originalSha256": "3ddf8f945246542d7f29cd9c7bca1b826e1a5fdf8b2b0133807ff3e06ebd291f",
+    "exportSha256": "3ddf8f945246542d7f29cd9c7bca1b826e1a5fdf8b2b0133807ff3e06ebd291f"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_linux_private_failure_archive.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_linux_private_failure_archive.py",
+    "originalSha256": "28833cda2aa0fbde7072b12830cc93f756a0dafcdb566dd6d36e640af1fcaf22",
+    "exportSha256": "28833cda2aa0fbde7072b12830cc93f756a0dafcdb566dd6d36e640af1fcaf22"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_live_acquisition.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_live_acquisition.py",
+    "originalSha256": "d9bfbfdf46ecf84754cc280007d14edd8a44b89cede38bc56b01fb8c7aae2a90",
+    "exportSha256": "d9bfbfdf46ecf84754cc280007d14edd8a44b89cede38bc56b01fb8c7aae2a90"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_app_executor.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_app_executor.py",
+    "originalSha256": "f3b2718199c6ae3b77d52acf392f691da8aa97d8bc914fa4723f25eca8500cfb",
+    "exportSha256": "f3b2718199c6ae3b77d52acf392f691da8aa97d8bc914fa4723f25eca8500cfb"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_common_adapter.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_common_adapter.py",
+    "originalSha256": "52638da017f02aa97961d34b07c20872bc9343764ec5d03b93fbb8ea89fc7212",
+    "exportSha256": "52638da017f02aa97961d34b07c20872bc9343764ec5d03b93fbb8ea89fc7212"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_host_dependencies.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_host_dependencies.py",
+    "originalSha256": "cd5b22547eacf04b931e912f7c4cb1001e80b17b8a3daa66504d71f4c467ff21",
+    "exportSha256": "cd5b22547eacf04b931e912f7c4cb1001e80b17b8a3daa66504d71f4c467ff21"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_lab_integration.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_lab_integration.py",
+    "originalSha256": "5ef2597df24ad93017f222915530dd99f5ca69974ace9e038d4a5a0d888f82f3",
+    "exportSha256": "5ef2597df24ad93017f222915530dd99f5ca69974ace9e038d4a5a0d888f82f3"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_lldb.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_lldb.py",
+    "originalSha256": "6d28dc48bcd75ab416545fb0aa358ac24797741142271bcf1ef4f99e16ab7b96",
+    "exportSha256": "6d28dc48bcd75ab416545fb0aa358ac24797741142271bcf1ef4f99e16ab7b96"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_lldb_controller.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_lldb_controller.py",
+    "originalSha256": "dfc88affb0072d63a256b1daf7447df1c14b9ca479d67f02906eac65b2f7e9d4",
+    "exportSha256": "dfc88affb0072d63a256b1daf7447df1c14b9ca479d67f02906eac65b2f7e9d4"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_preflight_integration.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_preflight_integration.py",
+    "originalSha256": "bc4eb7b6c396fdf626df1791f9eb4257761afd7a2c5fd6bdef635d835136cc77",
+    "exportSha256": "bc4eb7b6c396fdf626df1791f9eb4257761afd7a2c5fd6bdef635d835136cc77"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_private_link.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_private_link.py",
+    "originalSha256": "635988f4d646052d68e8d47eb8d4b383c79d4f81980b5d9649a67d0a133ad518",
+    "exportSha256": "635988f4d646052d68e8d47eb8d4b383c79d4f81980b5d9649a67d0a133ad518"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_qga_bridge.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_qga_bridge.py",
+    "originalSha256": "f4839caed1e2547bf4ea0f4bf2b5109104ef04dfd6dd512daa468413a7c5bbc4",
+    "exportSha256": "f4839caed1e2547bf4ea0f4bf2b5109104ef04dfd6dd512daa468413a7c5bbc4"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_runner.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_runner.py",
+    "originalSha256": "e0db5a77d408466bcc136bf19bee97641ba3c2c5093ee9a258b54eb51467df1d",
+    "exportSha256": "e0db5a77d408466bcc136bf19bee97641ba3c2c5093ee9a258b54eb51467df1d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_server_fixture_adapter.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_server_fixture_adapter.py",
+    "originalSha256": "41158d1d993d522c0b30c49c24b800be797efec55f20d38f0edb3cee19d90152",
+    "exportSha256": "41158d1d993d522c0b30c49c24b800be797efec55f20d38f0edb3cee19d90152"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_nested_cuttlefish_wayland_dependency.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_nested_cuttlefish_wayland_dependency.py",
+    "originalSha256": "f4259fe1213528d684332e8148f0f810b38c52cb012765a211d3bc7ac1f7175e",
+    "exportSha256": "f4259fe1213528d684332e8148f0f810b38c52cb012765a211d3bc7ac1f7175e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_precise_resume_boundary.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_precise_resume_boundary.py",
+    "originalSha256": "057bf9e25df86582d8d270668bc4b203198069c0c6044a2a4014407de3cd3bb7",
+    "exportSha256": "057bf9e25df86582d8d270668bc4b203198069c0c6044a2a4014407de3cd3bb7"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_prepare_windows_payload_lab.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_prepare_windows_payload_lab.py",
+    "originalSha256": "2c158b52488c8787ec1325bde5dc3d5f298457fbd13459da4489bf7197c9c81f",
+    "exportSha256": "2c158b52488c8787ec1325bde5dc3d5f298457fbd13459da4489bf7197c9c81f"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_publisher_controller.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_publisher_controller.py",
+    "originalSha256": "3341e20d5c7ef8250c78df63b0a13ae1bdbec16194ebb67dd4a1c5a00a1a4e1a",
+    "exportSha256": "3341e20d5c7ef8250c78df63b0a13ae1bdbec16194ebb67dd4a1c5a00a1a4e1a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_publisher_filemap.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_publisher_filemap.py",
+    "originalSha256": "f913814bb81c8d0d3bd2e9c80f77eb488a237252480cff40bbb37e05cbef22d1",
+    "exportSha256": "f913814bb81c8d0d3bd2e9c80f77eb488a237252480cff40bbb37e05cbef22d1"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_qga_admission_capture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_qga_admission_capture.py",
+    "originalSha256": "c53bdb8231b0c1a4a8edc6f638a6187abcdd548ed24bb8417cdeab17b43e1fb4",
+    "exportSha256": "c53bdb8231b0c1a4a8edc6f638a6187abcdd548ed24bb8417cdeab17b43e1fb4"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_qga_failure_capture.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_qga_failure_capture.py",
+    "originalSha256": "2dfda64c730135b66aa79444372e601c5a7766b89567f80caf9dfe9fe1025be3",
+    "exportSha256": "2dfda64c730135b66aa79444372e601c5a7766b89567f80caf9dfe9fe1025be3"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_relay_smoke_controller.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_relay_smoke_controller.py",
+    "originalSha256": "fae72d05da2a9cf74563f1e20e8c9032cf98a7c38aa5e8c6e0ce061d04ea1773",
+    "exportSha256": "fae72d05da2a9cf74563f1e20e8c9032cf98a7c38aa5e8c6e0ce061d04ea1773"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_trusted_acceptance_handoff.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_trusted_acceptance_handoff.py",
+    "originalSha256": "1d01654bb863a283ac2241a3dd9ce8b8ff15d6d02daea7ae2a077dd94bb0195d",
+    "exportSha256": "1d01654bb863a283ac2241a3dd9ce8b8ff15d6d02daea7ae2a077dd94bb0195d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_trusted_acquisition_export.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_trusted_acquisition_export.py",
+    "originalSha256": "effc207703f7fc8f19f83a20cc01e270b5ffe95a41ea40d0be1e27835bb88a7c",
+    "exportSha256": "effc207703f7fc8f19f83a20cc01e270b5ffe95a41ea40d0be1e27835bb88a7c"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_trusted_windows_acquisition.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_trusted_windows_acquisition.py",
+    "originalSha256": "06493e192c92f0bc4e334d5227374f96905230c2b7826856878193046a66a87e",
+    "exportSha256": "06493e192c92f0bc4e334d5227374f96905230c2b7826856878193046a66a87e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_windows_credential_preparation.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_windows_credential_preparation.py",
+    "originalSha256": "0d27d2f1f02db094d8e25660c7d466a2b8353e455052d0406a5346a83a26b18c",
+    "exportSha256": "0d27d2f1f02db094d8e25660c7d466a2b8353e455052d0406a5346a83a26b18c"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_windows_evidence_archive.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_windows_evidence_archive.py",
+    "originalSha256": "b765fe6832f879ab350ad7348d0e4dbfc1a66585302f1d2ff4f53a59b5bfbd73",
+    "exportSha256": "b765fe6832f879ab350ad7348d0e4dbfc1a66585302f1d2ff4f53a59b5bfbd73"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_windows_installed_payload_contract.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_windows_installed_payload_contract.py",
+    "originalSha256": "e73b3c002aa54efa21df72fabf79c588ba2e34da41c7c6f4df3668086b60a450",
+    "exportSha256": "e73b3c002aa54efa21df72fabf79c588ba2e34da41c7c6f4df3668086b60a450"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_windows_netstack_fixture_contract.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_windows_netstack_fixture_contract.py",
+    "originalSha256": "cfdd546c1479b66220eda1874e2b45df42a4cdfbe0adf0553b1a5c7c67c41d8d",
+    "exportSha256": "cfdd546c1479b66220eda1874e2b45df42a4cdfbe0adf0553b1a5c7c67c41d8d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_windows_netstack_fixture_independent.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_windows_netstack_fixture_independent.py",
+    "originalSha256": "4af2de0caf64ceb75c32ace0290b641f25b0fe262ce78632ae2526a31dd03109",
+    "exportSha256": "4af2de0caf64ceb75c32ace0290b641f25b0fe262ce78632ae2526a31dd03109"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/trusted_acceptance_handoff.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\trusted_acceptance_handoff.py",
+    "originalSha256": "9b29922f4eed35758f71b64bb67c92cbd6f75eabbb03b269ad6958b9159d5637",
+    "exportSha256": "9b29922f4eed35758f71b64bb67c92cbd6f75eabbb03b269ad6958b9159d5637"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/trusted_acquisition_export.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\trusted_acquisition_export.py",
+    "originalSha256": "7a610d960b8cd02919dc4f9ff9bd4caf5c4b1b55a55e86b2b332715f6c9d9232",
+    "exportSha256": "7a610d960b8cd02919dc4f9ff9bd4caf5c4b1b55a55e86b2b332715f6c9d9232"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/trusted_windows_acquisition.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\trusted_windows_acquisition.py",
+    "originalSha256": "3eaf64fd85a18a9c9c76044db7226125f584445be4c63156dceea62c52755797",
+    "exportSha256": "3eaf64fd85a18a9c9c76044db7226125f584445be4c63156dceea62c52755797"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_consent_visual.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_consent_visual.py",
+    "originalSha256": "0a7b1c345258ab2344c72b6dcf52242d815dc91e0c062b0248588a39236cb3e6",
+    "exportSha256": "0a7b1c345258ab2344c72b6dcf52242d815dc91e0c062b0248588a39236cb3e6"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_credential_preparation.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_credential_preparation.md",
+    "originalSha256": "efda8e9beab51a3075a3a769c6cd2284bd19ae5754dad7df01e05dc2ff66a404",
+    "exportSha256": "efda8e9beab51a3075a3a769c6cd2284bd19ae5754dad7df01e05dc2ff66a404"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_credential_preparation.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_credential_preparation.py",
+    "originalSha256": "620ece83ab556f9222fe19545f83d6e0086a16405e1101407004550a5c141681",
+    "exportSha256": "620ece83ab556f9222fe19545f83d6e0086a16405e1101407004550a5c141681"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_evidence_archive.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_evidence_archive.py",
+    "originalSha256": "0327d09b683eacff5b19f0f6187a48f97ee80e2bc6f4e026b2ff23898324cd01",
+    "exportSha256": "0327d09b683eacff5b19f0f6187a48f97ee80e2bc6f4e026b2ff23898324cd01"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_installed_payload_contract.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_installed_payload_contract.py",
+    "originalSha256": "27872d321c39b3f2891b1600b339ec9ee28fc0f1c22b53812ba922a9219f7bb3",
+    "exportSha256": "27872d321c39b3f2891b1600b339ec9ee28fc0f1c22b53812ba922a9219f7bb3"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_netstack_fixture_contract.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_netstack_fixture_contract.py",
+    "originalSha256": "42dad49d554e10e401b9a8ebdde7646750402d03418602755af03f60df523b10",
+    "exportSha256": "42dad49d554e10e401b9a8ebdde7646750402d03418602755af03f60df523b10"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/__init__.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\__init__.py",
+    "originalSha256": "73be3cf43ada36f78b3015536b756c01fe5a5f7176cac2b69ebf51b6d6797a3e",
+    "exportSha256": "73be3cf43ada36f78b3015536b756c01fe5a5f7176cac2b69ebf51b6d6797a3e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/selfhosted_updates/make_manifest.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\selfhosted_updates\\make_manifest.py",
+    "originalSha256": "b52194dadd373ddc403c603c4b46128815ba25053ad215220c3ca28ca27cdf82",
+    "exportSha256": "b52194dadd373ddc403c603c4b46128815ba25053ad215220c3ca28ca27cdf82"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/android/android-lab-windows.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\android\\android-lab-windows.ps1",
+    "originalSha256": "b478592571bb9d20301a5df43d8bb96e449db54e78ee25ecd6ddc61fa035bc12",
+    "exportSha256": "b478592571bb9d20301a5df43d8bb96e449db54e78ee25ecd6ddc61fa035bc12"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/android/android-lab.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\android\\android-lab.sh",
+    "originalSha256": "29646738b9fc6656a7968ce0198628d96bebc54216e7f62a493c166438c9215c",
+    "exportSha256": "29646738b9fc6656a7968ce0198628d96bebc54216e7f62a493c166438c9215c"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/android/consumer_fixture_server.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\android\\consumer_fixture_server.py",
+    "originalSha256": "34d49eefa126cae2419f2ba4184b094b12a3eff4eb87cc91fd8ad2ebbd2f53ee",
+    "exportSha256": "34d49eefa126cae2419f2ba4184b094b12a3eff4eb87cc91fd8ad2ebbd2f53ee"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/android/README.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\android\\README.md",
+    "originalSha256": "c6b497cbdba29979a7cff68fac22d56b15bfa9ec1fb7e24d9e9ebb4fc9fa9d2a",
+    "exportSha256": "c6b497cbdba29979a7cff68fac22d56b15bfa9ec1fb7e24d9e9ebb4fc9fa9d2a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/guest_helpers/linux_gui_continuous.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\guest_helpers\\linux_gui_continuous.py",
+    "originalSha256": "8eed0517829447e54d699ba97b15fd29968904a4e9476e409e9a0a41e112ce37",
+    "exportSha256": "8eed0517829447e54d699ba97b15fd29968904a4e9476e409e9a0a41e112ce37"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/guest_helpers/linux_gui_readiness_probe.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\guest_helpers\\linux_gui_readiness_probe.py",
+    "originalSha256": "478781e260f25746221be361c443e5ed31fa0498b9dac1ab88bd6f22a45c8454",
+    "exportSha256": "478781e260f25746221be361c443e5ed31fa0498b9dac1ab88bd6f22a45c8454"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/guest_helpers/linux_gui_softpipe_setup.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\guest_helpers\\linux_gui_softpipe_setup.py",
+    "originalSha256": "5ce46995e0192c60754a408ed72b83b10f4d5ebd73496bbbbba11fe4c7f44f17",
+    "exportSha256": "5ce46995e0192c60754a408ed72b83b10f4d5ebd73496bbbbba11fe4c7f44f17"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/guest_helpers/linux_gui_window_evidence.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\guest_helpers\\linux_gui_window_evidence.py",
+    "originalSha256": "892f62a351adc289920a8f4de5026205f922e66e5acf0bfbec4399e88568513b",
+    "exportSha256": "892f62a351adc289920a8f4de5026205f922e66e5acf0bfbec4399e88568513b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/guest_helpers/linux_gui_xres_dependency.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\guest_helpers\\linux_gui_xres_dependency.py",
+    "originalSha256": "7e7792c74c1ac61d89f9eeab5ac36bcc7b61b2f4c0f2b68035a3c4d74a19c064",
+    "exportSha256": "7e7792c74c1ac61d89f9eeab5ac36bcc7b61b2f4c0f2b68035a3c4d74a19c064"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/guest_helpers/linux_gui_xres_probe.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\guest_helpers\\linux_gui_xres_probe.py",
+    "originalSha256": "07437f2bc2333487a138cdf75a4e1a45fa08bfbb4705517957e6723ed7927727",
+    "exportSha256": "07437f2bc2333487a138cdf75a4e1a45fa08bfbb4705517957e6723ed7927727"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/guest_helpers/native_component_probe.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\guest_helpers\\native_component_probe.py",
+    "originalSha256": "ea1be8d81d7e69c20a960f25310441f044fe2fc4013a04ed373b0fecdbd32864",
+    "exportSha256": "ea1be8d81d7e69c20a960f25310441f044fe2fc4013a04ed373b0fecdbd32864"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/guest_helpers/native_headless_verifier_probe.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\guest_helpers\\native_headless_verifier_probe.py",
+    "originalSha256": "e40822b5556ccb68b54bebab443443665e09b33e0c9338673cd84952bf25e3e1",
+    "exportSha256": "e40822b5556ccb68b54bebab443443665e09b33e0c9338673cd84952bf25e3e1"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/guest_runners/linux-release-lab.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\guest_runners\\linux-release-lab.sh",
+    "originalSha256": "980bea68d8308c9b15f0e1dc870ef9f05ff415447c921ef5634fd60badac7328",
+    "exportSha256": "980bea68d8308c9b15f0e1dc870ef9f05ff415447c921ef5634fd60badac7328"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/guest_runners/windows-release-lab.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\guest_runners\\windows-release-lab.ps1",
+    "originalSha256": "65f093c1960fb790e032e475d37cabc8ee6b71cb010a227e757627a27fdf509d",
+    "exportSha256": "65f093c1960fb790e032e475d37cabc8ee6b71cb010a227e757627a27fdf509d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/images/download_official_images.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\images\\download_official_images.sh",
+    "originalSha256": "926d2eb72bdf9a3a161b061d91ae119cf4385e6abfc267159a4dc673b2420f94",
+    "exportSha256": "926d2eb72bdf9a3a161b061d91ae119cf4385e6abfc267159a4dc673b2420f94"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/images/verify_images.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\images\\verify_images.sh",
+    "originalSha256": "1ac8512aaa24b6e503e4817420db85b0f5c41f03822a6840ab404c2e839335cd",
+    "exportSha256": "1ac8512aaa24b6e503e4817420db85b0f5c41f03822a6840ab404c2e839335cd"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/profiles/README.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\profiles\\README.md",
+    "originalSha256": "2b07695b7bded720f6a39030823cecfe7f5c81b48f6a0145a0e06a45c573320f",
+    "exportSha256": "2b07695b7bded720f6a39030823cecfe7f5c81b48f6a0145a0e06a45c573320f"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/readiness/guest-readiness.sh",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\readiness\\guest-readiness.sh",
+    "originalSha256": "798809e60a87cace8afaae16b7ea617e461dfda24be20c2df67019cfd68ca365",
+    "exportSha256": "798809e60a87cace8afaae16b7ea617e461dfda24be20c2df67019cfd68ca365"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/readiness/README.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\readiness\\README.md",
+    "originalSha256": "7956b9ac8955330c821b4b69e09be686df11e96ff2e644e464c13c2e7bf647a3",
+    "exportSha256": "7956b9ac8955330c821b4b69e09be686df11e96ff2e644e464c13c2e7bf647a3"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/test_fixtures/lldb_signal_fixture.c",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\test_fixtures\\lldb_signal_fixture.c",
+    "originalSha256": "f17b7935f5ee2e0d9e6de675d2303e2f662aa094ce91734462557403e4114d0b",
+    "exportSha256": "f17b7935f5ee2e0d9e6de675d2303e2f662aa094ce91734462557403e4114d0b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/CMakeLists.txt",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\CMakeLists.txt",
+    "originalSha256": "2ff09724d80ce7af85c670b6b553e18d5a87e1478a56467fe22f4e9a17a3b57f",
+    "exportSha256": "2ff09724d80ce7af85c670b6b553e18d5a87e1478a56467fe22f4e9a17a3b57f"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/credential_preparation.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\credential_preparation.ps1",
+    "originalSha256": "f4a51412b78bd77336e985f49b033430d89b11ad0c881c80a53e0313529efa2e",
+    "exportSha256": "f4a51412b78bd77336e985f49b033430d89b11ad0c881c80a53e0313529efa2e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/enable_hyperv.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\enable_hyperv.ps1",
+    "originalSha256": "16b2d1aee60a297d60593de03b7ec5bdd9eea29c43e1238cea18800cb9de2872",
+    "exportSha256": "16b2d1aee60a297d60593de03b7ec5bdd9eea29c43e1238cea18800cb9de2872"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/hyperv_adapter.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\hyperv_adapter.ps1",
+    "originalSha256": "8289b926a74c11e49afade85055d4e363bef6503f70b249e3736aa43a1db854b",
+    "exportSha256": "8289b926a74c11e49afade85055d4e363bef6503f70b249e3736aa43a1db854b"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/hyperv_backend.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\hyperv_backend.ps1",
+    "originalSha256": "a31969b917c3c6cc243d177c5eefadcd1d4d3d723285ee3f38240e5c321f5146",
+    "exportSha256": "a31969b917c3c6cc243d177c5eefadcd1d4d3d723285ee3f38240e5c321f5146"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/hyperv_interactive_launcher.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\hyperv_interactive_launcher.ps1",
+    "originalSha256": "ab2e79140284260e7f4783283c001bced5f423d3e3d88c0d57484eaa35498c33",
+    "exportSha256": "ab2e79140284260e7f4783283c001bced5f423d3e3d88c0d57484eaa35498c33"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/hyperv_relay_guest_task.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\hyperv_relay_guest_task.ps1",
+    "originalSha256": "6123fa2cb173017dc2ec37cecfb17682451603bb523f41a937ce5f7ee6a791a0",
+    "exportSha256": "6123fa2cb173017dc2ec37cecfb17682451603bb523f41a937ce5f7ee6a791a0"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/hyperv_relay_smoke.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\hyperv_relay_smoke.ps1",
+    "originalSha256": "7c8ea5fa4994c5ded3715e3c4be1e50ecfdfc64f48d489261a1a3c28c61f8536",
+    "exportSha256": "7c8ea5fa4994c5ded3715e3c4be1e50ecfdfc64f48d489261a1a3c28c61f8536"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/hyperv_socket_relay.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\hyperv_socket_relay.cpp",
+    "originalSha256": "7e3ca4a1e14c2092629ff4c1e3f23363ea865f3aa6b122dca1bcc04654ff45fb",
+    "exportSha256": "7e3ca4a1e14c2092629ff4c1e3f23363ea865f3aa6b122dca1bcc04654ff45fb"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/hyperv_socket_relay.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\hyperv_socket_relay.ps1",
+    "originalSha256": "99b78eaa6a4e034fb55653854493c6735d932a4a48e31ac7181980ea1403ca8e",
+    "exportSha256": "99b78eaa6a4e034fb55653854493c6735d932a4a48e31ac7181980ea1403ca8e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/hyperv_socket_relay_supervisor.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\hyperv_socket_relay_supervisor.cpp",
+    "originalSha256": "d08f7cfd24a9592014d27f5510dae375550d88dc1d5fe710661c32b7adc49b82",
+    "exportSha256": "d08f7cfd24a9592014d27f5510dae375550d88dc1d5fe710661c32b7adc49b82"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/hyperv_ui_helper.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\hyperv_ui_helper.ps1",
+    "originalSha256": "3d40e685d4963156b01e8e6199df7e6c91ca6bc3890fe8b5adb6d1d424e4d3d3",
+    "exportSha256": "3d40e685d4963156b01e8e6199df7e6c91ca6bc3890fe8b5adb6d1d424e4d3d3"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/installed_payload_action.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\installed_payload_action.ps1",
+    "originalSha256": "e7352f6421a4c18c181f2b2b2f147a101d0364c149ab5319eb5b446f4029194a",
+    "exportSha256": "e7352f6421a4c18c181f2b2b2f147a101d0364c149ab5319eb5b446f4029194a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/prepare_hyperv_windows_vm.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\prepare_hyperv_windows_vm.ps1",
+    "originalSha256": "f9aa2f52112917188ecc318c15d97e8fa083b928ebec3e2abd632172f3fdfc02",
+    "exportSha256": "f9aa2f52112917188ecc318c15d97e8fa083b928ebec3e2abd632172f3fdfc02"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/README.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\README.md",
+    "originalSha256": "a6b482bb85d2e4ffe78bafa2971441fcd7055087b1a9e4ee71d92b826dfa73de",
+    "exportSha256": "a6b482bb85d2e4ffe78bafa2971441fcd7055087b1a9e4ee71d92b826dfa73de"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/test_credential_preparation_focus.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\test_credential_preparation_focus.ps1",
+    "originalSha256": "4971a6b6067d22ed9dc3d6df587aec57889e34f5beb8f89a47006866c5b44942",
+    "exportSha256": "4971a6b6067d22ed9dc3d6df587aec57889e34f5beb8f89a47006866c5b44942"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/test_credential_preparation_ownership.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\test_credential_preparation_ownership.ps1",
+    "originalSha256": "197682824e87ec7a7a8b858f3493c55b415e47201c382b55662058989acd1f5c",
+    "exportSha256": "197682824e87ec7a7a8b858f3493c55b415e47201c382b55662058989acd1f5c"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/test_hyperv_backend.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\test_hyperv_backend.ps1",
+    "originalSha256": "af4bcd2446aed0c101b59f6fbd56bc18ed7d629049571484213a69c297414778",
+    "exportSha256": "af4bcd2446aed0c101b59f6fbd56bc18ed7d629049571484213a69c297414778"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/test_hyperv_relay_smoke.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\test_hyperv_relay_smoke.py",
+    "originalSha256": "3cf125b3a2feae11b107cdd269d61863202dfb7be7619c9389c4091d4c301c3a",
+    "exportSha256": "3cf125b3a2feae11b107cdd269d61863202dfb7be7619c9389c4091d4c301c3a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/test_hyperv_socket_relay.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\test_hyperv_socket_relay.py",
+    "originalSha256": "7b24c3435fee9bc40cafebe7e8c2c566f2347c7475a6bd31c0f9859bfd8e76a5",
+    "exportSha256": "7b24c3435fee9bc40cafebe7e8c2c566f2347c7475a6bd31c0f9859bfd8e76a5"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/test_interactive_readiness.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\test_interactive_readiness.ps1",
+    "originalSha256": "1cc5a0cac3c1d97be913e71347896e3dc2d3f705da45ddc8660ccda8928d2e71",
+    "exportSha256": "1cc5a0cac3c1d97be913e71347896e3dc2d3f705da45ddc8660ccda8928d2e71"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_host/test_seed_account_lifetime.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_host\\test_seed_account_lifetime.ps1",
+    "originalSha256": "bd13dc7f55f134e4f1f40ec527c38f098e32cdfe9be5232c488eecacc5f502f0",
+    "exportSha256": "bd13dc7f55f134e4f1f40ec527c38f098e32cdfe9be5232c488eecacc5f502f0"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_netstack_fixture/adapter_action.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_netstack_fixture\\adapter_action.ps1",
+    "originalSha256": "ccf50a7a79e8c5622a7258471b980b2961c4cb8f95792be8e331b09ae8c36b6a",
+    "exportSha256": "ccf50a7a79e8c5622a7258471b980b2961c4cb8f95792be8e331b09ae8c36b6a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_netstack_fixture/prepare_capsule.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_netstack_fixture\\prepare_capsule.py",
+    "originalSha256": "7d1638eb05bbe9c6bc96ba94f0669bf0901202c83e8eb8c66942ad052b032538",
+    "exportSha256": "7d1638eb05bbe9c6bc96ba94f0669bf0901202c83e8eb8c66942ad052b032538"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_netstack_fixture/product_observer.ps1",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_netstack_fixture\\product_observer.ps1",
+    "originalSha256": "729134b2e29a54d7c8a0b994b8dc08f34ac07ce76043d043b20bbca3c259ec3e",
+    "exportSha256": "729134b2e29a54d7c8a0b994b8dc08f34ac07ce76043d043b20bbca3c259ec3e"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/windows_netstack_fixture/README.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\windows_netstack_fixture\\README.md",
+    "originalSha256": "760e051a093d1be8395f655732e7a03fb434fd13bffe309563d9584056389730",
+    "exportSha256": "760e051a093d1be8395f655732e7a03fb434fd13bffe309563d9584056389730"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/guest_templates/windows11/README.md",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\guest_templates\\windows11\\README.md",
+    "originalSha256": "0a4190134861b573ac9407793a5c4bc3f081329d17d8bb4c62a2944a1a5fbab6",
+    "exportSha256": "0a4190134861b573ac9407793a5c4bc3f081329d17d8bb4c62a2944a1a5fbab6"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/release_lab/android/tests/test_android_lab_profile.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\release_lab\\android\\tests\\test_android_lab_profile.py",
+    "originalSha256": "b6914997efaf16e39e0775ddd791cb5be6c6a581d2ec85d47d8d5c603be87e47",
+    "exportSha256": "b6914997efaf16e39e0775ddd791cb5be6c6a581d2ec85d47d8d5c603be87e47"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/headless/native/provisioning_verifier/bootstrap_n.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\headless\\native\\provisioning_verifier\\bootstrap_n.cpp",
+    "originalSha256": "4c7f844c1b97e6dd373831576dabe07caa7bdf962a4cbb113380ba2fb1e3b7f9",
+    "exportSha256": "4c7f844c1b97e6dd373831576dabe07caa7bdf962a4cbb113380ba2fb1e3b7f9"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/headless/native/provisioning_verifier/CMakeLists.txt",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\headless\\native\\provisioning_verifier\\CMakeLists.txt",
+    "originalSha256": "c1abe19a655afb3108da3c5fdeb2f01db2b58e203e62293f5e075e07de544614",
+    "exportSha256": "c1abe19a655afb3108da3c5fdeb2f01db2b58e203e62293f5e075e07de544614"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/headless/native/provisioning_verifier/host_runtime.inc",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\headless\\native\\provisioning_verifier\\host_runtime.inc",
+    "originalSha256": "c1c142d7d9ddc41c58a939d7d9e2c83a538f99f36ac150b315113a242bd959a9",
+    "exportSha256": "c1c142d7d9ddc41c58a939d7d9e2c83a538f99f36ac150b315113a242bd959a9"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/headless/native/provisioning_verifier/preauth_modes.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\headless\\native\\provisioning_verifier\\preauth_modes.cpp",
+    "originalSha256": "ab9df3d42b0fb0dc492d32d77189f87364f202e773eecd6154aadcc00ccb19d9",
+    "exportSha256": "ab9df3d42b0fb0dc492d32d77189f87364f202e773eecd6154aadcc00ccb19d9"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-component-lab-bb/source/deploy/headless/native/provisioning_verifier/verify_provisioning.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-component-lab-bb\\source\\deploy\\headless\\native\\provisioning_verifier\\verify_provisioning.cpp",
+    "originalSha256": "cdc507e09126461038bbd575c80f6ccff998544d95d0ca1646998c61c20bf222",
+    "exportSha256": "cdc507e09126461038bbd575c80f6ccff998544d95d0ca1646998c61c20bf222"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-maintenance-integration-parent/delta_r.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-maintenance-integration-parent\\delta_r.py",
+    "originalSha256": "ec45f1392b1a395bea1f16ef1d02a359027b044385862034cd9b73acff8a3275",
+    "exportSha256": "ec45f1392b1a395bea1f16ef1d02a359027b044385862034cd9b73acff8a3275"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-maintenance-integration-parent/final_gate.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-maintenance-integration-parent\\final_gate.py",
+    "originalSha256": "3e8b007505024ecea630faf551a0739d084c85b91536863d7b5f0934b240becf",
+    "exportSha256": "3e8b007505024ecea630faf551a0739d084c85b91536863d7b5f0934b240becf"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-maintenance-integration-parent/review_r.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-maintenance-integration-parent\\review_r.py",
+    "originalSha256": "b42340a951d87ff1a18f76f49a681616960f5e8720c7a655ea0025a3cf1fd61c",
+    "exportSha256": "b42340a951d87ff1a18f76f49a681616960f5e8720c7a655ea0025a3cf1fd61c"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-authority-parent/parse_driver.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-authority-parent\\parse_driver.cpp",
+    "originalSha256": "7492795ea34a1a14a0558ae52f716ac1fe935ade2a6be8985d18966758f4b903",
+    "exportSha256": "7492795ea34a1a14a0558ae52f716ac1fe935ade2a6be8985d18966758f4b903"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-authority-parent/verify_authority.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-authority-parent\\verify_authority.py",
+    "originalSha256": "6be375149a8ad8bb91dadd8b76954677062d71668de4f7d011a8aa3361a1f976",
+    "exportSha256": "6be375149a8ad8bb91dadd8b76954677062d71668de4f7d011a8aa3361a1f976"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-authority-parent/selected-a/headless/headlessUpdateManager.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-authority-parent\\selected-a\\headless\\headlessUpdateManager.cpp",
+    "originalSha256": "62f656d80e37638c6f293fb1e626517b171484803bdabeb363ae3ca5d7546fd2",
+    "exportSha256": "62f656d80e37638c6f293fb1e626517b171484803bdabeb363ae3ca5d7546fd2"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-authority-parent/selected-a/headless/tests/tst_headless_updates.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-authority-parent\\selected-a\\headless\\tests\\tst_headless_updates.cpp",
+    "originalSha256": "e68d5513a976bb1075cfeb1a704b3249d15b5cc02276353274885a737dffb15d",
+    "exportSha256": "e68d5513a976bb1075cfeb1a704b3249d15b5cc02276353274885a737dffb15d"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-authority-parent/selected-a/deploy/selfhosted_updates/make_manifest.py",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-authority-parent\\selected-a\\deploy\\selfhosted_updates\\make_manifest.py",
+    "originalSha256": "f4dc562ce33c0d1bf8c1ec88aa44c70abf8b1b583c17641f7a7015881beb4283",
+    "exportSha256": "f4dc562ce33c0d1bf8c1ec88aa44c70abf8b1b583c17641f7a7015881beb4283"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-authority-parent/selected-a/client/tests/headless_provisioning_contract/tst_headless_provisioning_contract.cpp",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-authority-parent\\selected-a\\client\\tests\\headless_provisioning_contract\\tst_headless_provisioning_contract.cpp",
+    "originalSha256": "6814e0d2cfb8bc81ae0afcc5a849c2a4ab06f9b145accf54d4018c6f1514b85a",
+    "exportSha256": "6814e0d2cfb8bc81ae0afcc5a849c2a4ab06f9b145accf54d4018c6f1514b85a"
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/verification/native-headless-authority-parent/selected-a/client/core/controllers/selfhosted/headlessProvisioning.h",
+    "originalLocalPath": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-authority-parent\\selected-a\\client\\core\\controllers\\selfhosted\\headlessProvisioning.h",
+    "originalSha256": "c9f5e2aaaab4c6bc2b66602859ff766b325842cdf7c91e5b193cf596c8fb32dc",
+    "exportSha256": "c9f5e2aaaab4c6bc2b66602859ff766b325842cdf7c91e5b193cf596c8fb32dc"
+  }
+]

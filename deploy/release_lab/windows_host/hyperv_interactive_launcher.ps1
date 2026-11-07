@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)] [string] $RunId,
     [Parameter(Mandatory = $true)] [string] $CaseId,
@@ -11,6 +11,32 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2.0
 Import-Module Microsoft.PowerShell.Utility -Force -ErrorAction Stop
 function Fail([string] $Message) { throw "hyperv-interactive-launcher: $Message" }
+
+function Write-LaunchFailurePending([string] $Path, [object] $Request, [Management.Automation.ErrorRecord] $Failure) {
+    $exception=$Failure.Exception; $nativeCode=$null; $cursor=$exception
+    for($depth=0;$depth-lt8-and$null-ne$cursor;$depth++) {
+        if($cursor-is[ComponentModel.Win32Exception]){$nativeCode=[int]$cursor.NativeErrorCode;break}
+        $cursor=$cursor.InnerException
+    }
+    $type=[string]$exception.GetType().FullName
+    if($type.Length-gt256){$type=$type.Substring(0,256)}
+    $message=[string]$exception.Message
+    if($message.Length-gt512){$message=$message.Substring(0,512)}
+    $Request['state']='launch-failed';$Request['installer_pid']=$null;$Request['exit_code']=$null
+    $Request['completed_at']=[DateTime]::UtcNow.ToString('o')
+    $Request['launch_error']=[ordered]@{stage='Start-Process';error_type=$type;native_error_code=$nativeCode;hresult=[int]$exception.HResult;message=$message}
+    $temporary=$Path+'.launch-failure-'+[Guid]::NewGuid().ToString('N')+'.tmp'
+    try {
+        $bytes=(New-Object Text.UTF8Encoding($true)).GetBytes(($Request|ConvertTo-Json -Depth 8))
+        $stream=[IO.File]::Open($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+        # Pending was already written before Start-Process. Replace requires it
+        # still to exist and atomically preserves its DACL; no overwrite fallback.
+        [IO.File]::Replace($temporary,$Path,[NullString]::Value)
+    } finally {
+        if([IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}
+    }
+}
 if ($RunId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$' -or $CaseId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$') { Fail 'run/case identity is invalid' }
 $markerPath = Join-Path $GuestRoot 'run-marker.txt'
 if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { Fail 'guest case marker is missing' }
@@ -31,7 +57,14 @@ $request = [ordered]@{
     launcher_user = [string]$identity.Name; launcher_user_sid = [string]$identity.User.Value; installer_pid = $null; created_at = [DateTime]::UtcNow.ToString('o')
 }
 $tmp = "$PendingPath.tmp"; $request | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding UTF8; Move-Item -LiteralPath $tmp -Destination $PendingPath -Force
-$process = Start-Process -FilePath $ArtifactPath -ArgumentList @('--accept-messages','--accept-licenses','--confirm-command','install','AmneziaSelfHostedUpdate=true') -PassThru -WindowStyle Normal
+try {
+    $process = Start-Process -FilePath $ArtifactPath -ArgumentList @('--accept-messages','--accept-licenses','--confirm-command','install','AmneziaSelfHostedUpdate=true') -PassThru -WindowStyle Normal -ErrorAction Stop
+} catch {
+    $launchFailure=$_
+    try { Write-LaunchFailurePending $PendingPath $request $launchFailure }
+    catch { [Console]::Error.WriteLine('launcher failure receipt could not be persisted: '+$_.Exception.GetType().FullName) }
+    throw $launchFailure
+}
 $request.installer_pid = [int]$process.Id; $request.installer_start_time = [string]$process.StartTime.ToUniversalTime().ToString('o'); $request.state = 'running'; $tmp = "$PendingPath.tmp"; $request | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $tmp -Encoding UTF8; Move-Item -LiteralPath $tmp -Destination $PendingPath -Force
 $completed = $process.WaitForExit(900000)
 if (-not $completed) {

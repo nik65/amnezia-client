@@ -14,6 +14,9 @@ public:
     explicit RecordingProtocol(QStringList &history) : history(history) {}
     void setLastError(ErrorCode error) {
         lastError = error;
+        const QPointer<RecordingProtocol> guard(this);
+        emit protocolError(error);
+        if (!guard) return;
         history.append(QStringLiteral("state"));
     }
     QStringList &history;
@@ -56,7 +59,7 @@ private slots:
         RecordingProtocol protocol(history);
         connect(&protocol, &RecordingProtocol::protocolError, this, [&](ErrorCode error) {
             QCOMPARE(error, ErrorCode::AndroidCombinedRoutingRequiresAndroid10);
-            QCOMPARE(protocol.lastError, ErrorCode::NoError);
+            QCOMPARE(protocol.lastError, ErrorCode::AndroidCombinedRoutingRequiresAndroid10);
             history.append(QStringLiteral("reason"));
         });
         QVERIFY(AndroidProtocolBinding::deliverServiceError(QPointer(&protocol), &protocol, 7, 7,
@@ -83,8 +86,32 @@ private slots:
         connect(&protocol, &RecordingProtocol::protocolError, this, [&](ErrorCode) { history.append("reason"); });
         QVERIFY(AndroidProtocolBinding::deliverServiceError(QPointer(&protocol), &protocol, 7, 7,
                 AndroidProtocolBinding::errorForServiceReason(0), [&] { history.append("generic"); }));
-        QCOMPARE(history, QStringList({"generic"}));
+        QCOMPARE(history, QStringList({"reason", "generic"}));
         QCOMPARE(protocol.lastError, ErrorCode::NoError);
+    }
+    void zeroServiceErrorCannotSurfaceSuccess() {
+        QStringList history;
+        RecordingProtocol protocol(history);
+        connect(&protocol, &RecordingProtocol::protocolError, this, [&](ErrorCode error) {
+            QCOMPARE(error, ErrorCode::UnknownError);
+            history.append("reason");
+        });
+        QVERIFY(AndroidProtocolBinding::deliverServiceError(QPointer(&protocol), &protocol, 7, 7,
+                ErrorCode::NoError, [&] { history.append("generic"); }));
+        QCOMPARE(history, QStringList({"reason", "generic"}));
+    }
+    void genericDirectObserverCanRetireProtocol() {
+        QStringList history;
+        QPointer<RecordingProtocol> protocol = new RecordingProtocol(history);
+        QObject *identity = protocol.data();
+        connect(protocol.data(), &RecordingProtocol::protocolError, this, [&](ErrorCode) {
+            history.append("reason");
+            delete protocol.data();
+        });
+        QVERIFY(AndroidProtocolBinding::deliverServiceError(protocol, identity, 7, 7,
+                ErrorCode::UnknownError, [&] { history.append("generic"); }));
+        QVERIFY(protocol.isNull());
+        QCOMPARE(history, QStringList({"reason"}));
     }
     void retiredEpochAndProtocolAreIgnored() {
         QStringList history;

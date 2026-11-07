@@ -1,0 +1,75 @@
+{
+  "createdUtc": "2026-11-07T16:19:44.486707+00:00",
+  "disposition": "Source already integrated as exact Y; no new production delta. Z old-context guard-span corroboration only; no initial whole-installer/ELF/root/runtime closure.",
+  "verifiedIdenticalMirrors": {
+    "src/install_headless.sh": "b19da99c6a8e79c0a28c73162e8fac790426c8fc0f689e7c28d183e27ea25d4b",
+    "tests/run_z.py": "0cab1812f781c30d2d175fdfe69171d28bd7e186ca7a45ed008df41ccc71928b",
+    "REPORT.md": "52d60621f8993bfacd0a021bc077834c2c8f0b3843d05187a6d18a4fa48358d3",
+    "RESULT.json": "299c151bb7dca0d24c5c17d93089a82108752875779ecaf85e8873a70a10ad41"
+  },
+  "currentSourceManifest": {
+    "path": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-installer-integration-parent\\MATERIALIZED_PRODUCT_SOURCE_MANIFEST.json",
+    "sha256": "63bf398cc97d98d986f9cc99d2a07e1f49aa0f642b8540ab981c26e1259eeec9",
+    "fileCount": 2635
+  },
+  "historicalZSourceManifestSha256": "0830d940be4d89245fc695e7d8d3dffca5eb897b25bd8199449338941890d722",
+  "alreadyIntegratedSourceSha256": "b19da99c6a8e79c0a28c73162e8fac790426c8fc0f689e7c28d183e27ea25d4b",
+  "currentIndependentParentProof": {
+    "path": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\PARENT_NATIVE_HEADLESS_INSTALLER_INTEGRATION_Q.json",
+    "sha256": "97008bcd00b222752b5a39c6a579e453f40237cd1fadbb6313a1e00a3de497a8",
+    "inputCount": 3197,
+    "canonicalPositiveExit": 0,
+    "ownFailedBodyExit": 23
+  },
+  "scopeFindings": [
+    {
+      "finding": "Baseline RED is asymmetric ownership-model refusal, not demonstrated missing-native feature failure",
+      "evidencePath": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-initial-consumer-z\\green-20261107T145542Z\\red-base-actual-legacy-stage.stderr",
+      "sha256": "9329c957afb9e7ffab77e1aa0cfd78837e31dff19407f914e009587f75c0c880",
+      "actualError": "private package-input directory must be root-owned and mode 0700\nunable to copy authenticated package inputs into the private root-owned directory",
+      "reason": "Python stage sees actual uid1000; only native lstat gets uid0 MODEL. Preserve strict root guard; never label this old installer functional defect."
+    },
+    {
+      "finding": "Post-chain Python read(4) of TEST data is harness-added, not existing ELF/runtime validator",
+      "source": "tests/run_z.py:124-138",
+      "actualReadelfOrVersionExecution": false,
+      "reason": "It does not close the requested actual existing ELF-check boundary; prefix/activation/recovery remain excluded."
+    },
+    {
+      "finding": "Failed-work returns unconditional mapped23 under flag, not preserved native work23",
+      "source": "tests/run_z.py:151-155",
+      "actualConsumerFailureExit": 3,
+      "outerMappedExit": 23,
+      "reason": "It remains a nonzero no-fallback negative, but flag would return23 even if body succeeded. Retain qualified independent parent actual-work23->outer23/false instead."
+    },
+    {
+      "finding": "Input-after closure is not enforced by the submitted run_z.py finalizer",
+      "reason": "Runner records selected7input hashes but does not rehash them before returning. Do not promote report-only whole current source closure."
+    }
+  ],
+  "observedHistoricalGreen": {
+    "path": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-initial-consumer-z\\green-20261107T145542Z\\RESULT.json",
+    "sha256": "deafb4fe4f0974d6806dde221f9e64c542c2e820ff2527c1b4aba462c524b07b",
+    "actualConsumerExit": 0,
+    "modeledBoundaryCount": 15,
+    "model": "Exact dir lstat UID0 and pure dpkg worker only; actualuid1000; product/static CMake binary never executed"
+  },
+  "observedHistoricalFailure": {
+    "path": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-initial-consumer-z\\failedwork-20261107T145542Z\\RESULT.json",
+    "sha256": "aa43e2c9c8590916b862f93413c9bc77f04bde58b217020875779923af60013a",
+    "actualConsumerExit": 3,
+    "outerExit": 23,
+    "componentPass": false
+  },
+  "productChanges": [],
+  "allFunctionsPass": false,
+  "releasePass": false,
+  "published": false,
+  "runtimeAcceptance": "NOT_RUN",
+  "open": [
+    "NATIVE_HELPER_KIND remains Python",
+    "actual existing ELF/runtime guards/whole initial installer not exercised by Z",
+    "root activation/private persistent root/trusted recovery",
+    "independent CURRENT authority and full final acceptance"
+  ]
+}

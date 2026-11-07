@@ -66,3 +66,27 @@ python3 deploy/serverx_client_logs_route/test_reconcile.py
 Tests execute a copy with fixed fixture paths, a private fake Docker executable
 and fake procfs. They never invoke real Docker, VPN operations or host networking.
 The deployed helper has no path/environment override mechanism.
+
+## Reviewed retention source pin (28 October)
+
+The reviewed collector update changes only MAX_FILES_PER_CLIENT from512 to4096:
+reversing that one assignment in the captured bytes reproduces the previous
+pinned SHA256 exactly. The source pin now names the reviewed4096-file-limit version
+(SHA256 11f90cc0849a66823607af2b8db7fcf292433f060c4f01694e57be724737b0c4).
+The current generated collector recipe differs only by an explanatory comment.
+No guard, ownership condition, image/key allowlist or mutation policy is relaxed.
+
+This is a repository source update; server deployment remains pending. The
+captured service failures are collector_hash refusals, not proof of a VPN fault
+or lost client traffic. Installation/restart was not performed by this audit.
+The existing changed-source rejection test and a controlled512-to4096 fixture
+verify refusal before Docker calls until the exact reviewed pin is supplied.
+
+The normal legacy collector export uploads the generated recipe and installs it
+over collector.py. That generated recipe has one reviewed explanatory comment,
+so its exact SHA256246a0009b79ce106d778b91023ad3cd04439fc4dd07236dbd07e59640d646fde
+is also accepted alongside the exact live4096 source pin. This is a closed two-
+hash allowlist, not automatic repinning or a semantic/source-code bypass.
+A source-render regression pins both byte variants; any further collector body
+or comment change requires review. The native collector path is not adopted by
+this ServerX-only Python-sidecar helper. Server deployment remains pending.

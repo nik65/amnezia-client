@@ -49,8 +49,14 @@ set(SOURCES ${SOURCES}
 
 
 find_package(awg-android REQUIRED)
-set(LIBS ${LIBS} amnezia::awg-android)
-set_property(TARGET ${PROJECT} APPEND PROPERTY QT_ANDROID_EXTRA_LIBS ${AMNEZIA_ANDROID_LIBWG_PATH} ${AMNEZIA_ANDROID_LIBWG_QUICK_PATH})
+set_property(TARGET ${PROJECT} APPEND PROPERTY QT_ANDROID_EXTRA_LIBS
+    $<TARGET_FILE:amnezia::awg-android>
+    ${AMNEZIA_ANDROID_LIBWG_PATH}
+    ${AMNEZIA_ANDROID_LIBWG_QUICK_PATH}
+)
+
+include(${CMAKE_CURRENT_LIST_DIR}/dns_transport.cmake)
+amnezia_bundle_android_dns_transport(${PROJECT})
 
 set(_amnezia_android_shader_tools_lib "")
 set(_amnezia_android_shader_tools_candidates)
@@ -99,8 +105,13 @@ file(LOCK "${_libxray_lock_dir}/libxray-aar-copy.lock" GUARD FILE TIMEOUT 600)
 configure_file(${AMNEZIA_LIBXRAY_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/android/xray/libXray/libxray.aar COPYONLY)
 
 find_package(openvpn-pt-android REQUIRED)
-set(LIBS ${LIBS} amnezia::openvpn-pt-android)
-set_property(TARGET ${PROJECT} APPEND PROPERTY QT_ANDROID_EXTRA_LIBS ${OPENVPN_PT_ANDROID_LIBCK_OVPN_PLUGIN_PATH})
+get_filename_component(OPENVPN_PT_ANDROID_LIB_DIR ${OPENVPN_PT_ANDROID_LIBCK_OVPN_PLUGIN_PATH} DIRECTORY)
+set_property(TARGET ${PROJECT} APPEND PROPERTY QT_ANDROID_EXTRA_LIBS
+    ${OPENVPN_PT_ANDROID_LIBCK_OVPN_PLUGIN_PATH}
+    ${OPENVPN_PT_ANDROID_LIB_DIR}/libovpn3.so
+    ${OPENVPN_PT_ANDROID_LIB_DIR}/libovpnutil.so
+    ${OPENVPN_PT_ANDROID_LIB_DIR}/librsapss.so
+)
 
 set(_amnezia_selfhosted_update_sync_host "$ENV{SELFHOSTED_UPDATE_SYNC_HOST}")
 if(_amnezia_selfhosted_update_sync_host STREQUAL "")

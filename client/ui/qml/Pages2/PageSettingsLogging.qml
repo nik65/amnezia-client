@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Dialogs
 
 import QtCore
 
@@ -16,196 +15,198 @@ import "../Controls2/TextTypes"
 PageType {
     id: root
 
-    BackButtonType {
-        id: backButton
+    property bool exportPending: false
+
+    Component.onCompleted: {
+        LogsController.refreshSizes()
+    }
+
+    onVisibleChanged: {
+        if (visible) {
+            LogsController.refreshSizes()
+        }
+    }
+
+    function saveAll() {
+        var fileName = ""
+        if (GC.isMobile()) {
+            fileName = LogsController.defaultFileName("all")
+        } else {
+            fileName = SystemController.getFileName(qsTr("Save"),
+                                                    qsTr("Archive files (*.zip)"),
+                                                    StandardPaths.standardLocations(StandardPaths.DocumentsLocation) + "/" + LogsController.defaultFileName("all"),
+                                                    true,
+                                                    ".zip")
+        }
+        if (fileName !== "") {
+            root.exportPending = true
+            LogsController.saveAll(fileName)
+        }
+    }
+
+    function clearAll() {
+        PageController.showBusyIndicator(true)
+        SettingsController.clearLogs()
+        LogsController.refreshSizes()
+        PageController.showBusyIndicator(false)
+        PageController.showNotificationMessage(qsTr("Local logs have been cleaned up"))
+    }
+
+    AlertDialogType {
+        id: clearAllDialog
+
+        headerText: qsTr("Clear all logs?")
+        descriptionText: qsTr("This clears local log files. Remote copies remain on the server until retention cleanup.")
+        confirmButtonText: qsTr("Clear")
+        role: AlertDialogType.Destructive
+
+        onConfirmed: {
+            root.clearAll()
+        }
+    }
+
+    Connections {
+        target: LogsController
+
+        function onBusyChanged() {
+            PageController.showBusyIndicator(LogsController.busy)
+        }
+
+        function onExportFinished(success, cancelled) {
+            if (!root.exportPending) {
+                return
+            }
+            root.exportPending = false
+            if (success) {
+                PageController.showNotificationMessage(qsTr("Logs file saved"))
+            } else if (!cancelled) {
+                PageController.showNotificationMessage(qsTr("Failed to save logs. Try again later"))
+            }
+        }
+    }
+
+    FlickableType {
+        id: flickable
 
         anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.topMargin: 20 + PageController.safeAreaTopMargin
 
-        onFocusChanged: {
-            if (this.activeFocus) {
-                listView.positionViewAtBeginning()
+        contentHeight: content.implicitHeight
+
+        ColumnLayout {
+            id: content
+
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+
+            spacing: 0
+
+            NavigationBarType {
+                Layout.fillWidth: true
+
+                title: qsTr("Logging")
+                description: qsTr("Logs help support figure out what's wrong")
             }
-        }
-    }
 
-    ListViewType {
-        id: listView
-
-        anchors.top: backButton.bottom
-        anchors.bottom: parent.bottom
-        anchors.right: parent.right
-        anchors.left: parent.left
-
-        header: ColumnLayout {
-            width: listView.width
-
-            BaseHeaderType {
+            ColumnLayout {
                 Layout.fillWidth: true
                 Layout.leftMargin: 16
                 Layout.rightMargin: 16
+                Layout.bottomMargin: 24 + PageController.safeAreaBottomMargin
 
-                headerText: qsTr("Logging")
-                descriptionText: qsTr("Application and service logs are saved automatically and sent to the configured server.")
-            }
+                spacing: 24
 
-            DividerType {}
+                ListGroupType {
+                    Layout.fillWidth: true
 
-            LabelWithButtonType {
-                Layout.fillWidth: true
-                Layout.topMargin: -8
-
-                text: qsTr("Clear logs")
-                leftImageSource: "qrc:/images/controls/trash.svg"
-                isSmallLeftImage: true
-
-                clickedFunction: function() {
-                    var headerText = qsTr("Clear logs?")
-                    var descriptionText = qsTr("This clears local log files. Remote copies remain on the server until retention cleanup.")
-                    var yesButtonText = qsTr("Continue")
-                    var noButtonText = qsTr("Cancel")
-
-                    var yesButtonFunction = function() {
-                        PageController.showBusyIndicator(true)
-                        SettingsController.clearLogs()
-                        PageController.showBusyIndicator(false)
-                        PageController.showNotificationMessage(qsTr("Local logs have been cleaned up"))
+                    ListItemType {
+                        Layout.fillWidth: true
+                        text: qsTr("Record logs")
+                        subtitle: qsTr("Application and service logs are saved automatically and sent to the configured server.")
                     }
-
-                    var noButtonFunction = function() {
-
-                    }
-
-                    showQuestionDrawer(headerText, descriptionText, yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
                 }
-            }
-        }
 
-        model: logTypes
+                ColumnLayout {
+                    Layout.fillWidth: true
 
-        snapMode: ListView.SnapOneItem
+                    spacing: 12
 
-        delegate: ColumnLayout {
-            id: delegateContent
+                    BodyTextType {
+                        Layout.fillWidth: true
 
-            width: listView.width
+                        text: qsTr("Logs")
+                        color: AmneziaStyle.color.textTertiary
+                    }
 
-            enabled: isVisible
+                    ListGroupType {
+                        Layout.fillWidth: true
 
-            ListItemTitleType {
-                Layout.fillWidth: true
-                Layout.topMargin: 8
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
+                        ListItemType {
+                            id: tunnelLogsRow
 
-                text: title
-            }
+                            Layout.fillWidth: true
 
-            ParagraphTextType {
-                Layout.fillWidth: true
-                Layout.topMargin: 8
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
+                            text: qsTr("Tunnel")
+                            subtitle: qsTr("Connection events") + " · " + LogsController.tunnelLogSize
+                            trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                color: AmneziaStyle.color.mutedGray
+                            onClicked: {
+                                LogsController.viewerStream = "tunnel"
+                                PageController.goToPage(PageEnum.PageSettingsLogViewer)
+                            }
+                        }
 
-                text: description
-            }
+                        ListItemType {
+                            id: appLogsRow
 
-            LabelWithButtonType {
-                Layout.fillWidth: true
-                Layout.topMargin: -8
-                Layout.bottomMargin: -8
+                            Layout.fillWidth: true
 
-                visible: !GC.isMobile()
+                            text: qsTr("Application")
+                            subtitle: qsTr("App events") + " · " + LogsController.appLogSize
+                            trailingIconSource: "qrc:/images/controls/chevron-right.svg"
 
-                text: qsTr("Open logs folder")
-                leftImageSource: "qrc:/images/controls/folder-open.svg"
-                isSmallLeftImage: true
+                            onClicked: {
+                                LogsController.viewerStream = "app"
+                                PageController.goToPage(PageEnum.PageSettingsLogViewer)
+                            }
+                        }
+                    }
+                }
 
-                clickedFunction: openLogsHandler
-            }
+                ListGroupType {
+                    Layout.fillWidth: true
 
-            DividerType {}
+                    ListItemType {
+                        id: saveAllRow
 
-            LabelWithButtonType {
-                Layout.fillWidth: true
-                Layout.topMargin: -8
-                Layout.bottomMargin: -8
+                        Layout.fillWidth: true
 
-                text: qsTr("Export logs")
-                leftImageSource: "qrc:/images/controls/save.svg"
-                isSmallLeftImage: true
+                        enabled: LogsController.hasLogs
+                        text: qsTr("Save all logs")
+                        subtitle: qsTr(".zip archive with both logs")
+                        icon.source: "qrc:/images/controls/save.svg"
 
-                clickedFunction: exportLogsHandler
-            }
+                        onClicked: {
+                            root.saveAll()
+                        }
+                    }
 
-            DividerType {}
-        }
-    }
+                    ListItemType {
+                        id: clearAllRow
 
-    // Show service logs only if this is NOT a macOS build with
-    // Network-Extension (IsMacOsNeBuild is injected from C++ at run-time)
-    // or if this is NOT a mobile build
-    property list<QtObject> logTypes: (IsMacOsNeBuild || GC.isMobile()) ? [
-        clientLogs
-    ] : [
-        clientLogs,
-        serviceLogs
-    ]
+                        Layout.fillWidth: true
 
-    QtObject {
-        id: clientLogs
+                        enabled: LogsController.hasLogs
+                        text: qsTr("Clear all logs")
+                        destructive: true
+                        icon.source: "qrc:/images/controls/trash-2.svg"
+                        icon.color: AmneziaStyle.color.statusDestructive
 
-        readonly property string title: qsTr("Client logs")
-        readonly property string description: qsTr("AmneziaVPN logs")
-        readonly property bool isVisible: true
-        readonly property var openLogsHandler: function() {
-            SettingsController.openLogsFolder()
-        }
-        readonly property var exportLogsHandler: function() {
-            var fileName = ""
-            if (GC.isMobile()) {
-                fileName = "AmneziaVPN.log"
-            } else {
-                fileName = SystemController.getFileName(qsTr("Save"),
-                                                        qsTr("Logs files (*.log)"),
-                                                        StandardPaths.standardLocations(StandardPaths.DocumentsLocation) + "/AmneziaVPN",
-                                                        true,
-                                                        ".log")
-            }
-            if (fileName !== "") {
-                PageController.showBusyIndicator(true)
-                SettingsController.exportLogsFile(fileName)
-                PageController.showBusyIndicator(false)
-                PageController.showNotificationMessage(qsTr("Logs file saved"))
-            }
-        }
-    }
-
-    QtObject {
-        id: serviceLogs
-
-        readonly property string title: qsTr("Service logs")
-        readonly property string description: qsTr("AmneziaVPN-service logs")
-        readonly property bool isVisible: !GC.isMobile() && !IsMacOsNeBuild
-        readonly property var openLogsHandler: function() {
-            SettingsController.openServiceLogsFolder()
-        }
-        readonly property var exportLogsHandler: function() {
-            var fileName = ""
-            fileName = SystemController.getFileName(qsTr("Save"),
-                                                    qsTr("Logs files (*.log)"),
-                                                    StandardPaths.standardLocations(StandardPaths.DocumentsLocation) + "/AmneziaVPN-service",
-                                                    true,
-                                                    ".log")
-            if (fileName !== "") {
-                PageController.showBusyIndicator(true)
-                SettingsController.exportServiceLogsFile(fileName)
-                PageController.showBusyIndicator(false)
-                PageController.showNotificationMessage(qsTr("Logs file saved"))
+                        onClicked: {
+                            clearAllDialog.open()
+                        }
+                    }
+                }
             }
         }
     }

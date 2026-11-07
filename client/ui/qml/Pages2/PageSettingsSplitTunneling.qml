@@ -21,13 +21,30 @@ PageType {
     id: root
 
     property var isServerFromTelegramApi: ServersUiController.isServerFromApi(ServersUiController.defaultServerId)
-    
+
     property bool pageEnabled
     property bool defaultManagedSplitTunnelingForceEnabled: false
+
+    readonly property var routeModes: [
+        { type: 1, segmentName: qsTr("Via VPN"), name: qsTr("Only the sites listed here will be accessed through the VPN") },
+        { type: 2, segmentName: qsTr("Directly"), name: qsTr("Addresses from the list should not be accessed via VPN") }
+    ]
+
+    readonly property int routeModeIndex: IpSplitTunnelingController.routeMode === 2 ? 1 : 0
 
     function reloadDefaultManagedRules() {
         SitesController.reloadDefaultManagedSites()
         root.defaultManagedSplitTunnelingForceEnabled = SitesController.isDefaultManagedSplitTunnelingForceEnabled()
+    }
+
+    function isManagedExceptListVisible() {
+        if (proxyManagedExceptSitesModel.count === 0) {
+            return false
+        }
+        if (!IpSplitTunnelingController.isSplitTunnelingEnabled) {
+            return root.defaultManagedSplitTunnelingForceEnabled
+        }
+        return root.routeModeIndex === 1
     }
 
     Component.onCompleted: {
@@ -46,7 +63,7 @@ PageType {
     Connections {
         target: ServersUiController
 
-        function onDefaultServerIndexChanged() {
+        function onDefaultServerIdChanged() {
             root.reloadDefaultManagedRules()
         }
     }
@@ -55,9 +72,9 @@ PageType {
         target: ConnectionController
 
         function onServerRoutingRulesChanged(serverIndex) {
-            if (serverIndex === ServersUiController.defaultIndex) {
-                root.reloadDefaultManagedRules()
-            }
+            // The ID-based UI exposes no default index. Reload only the current
+            // default through SitesController, regardless of the event's index.
+            root.reloadDefaultManagedRules()
         }
     }
 
@@ -81,142 +98,13 @@ PageType {
         }
     }
 
-    QtObject {
-        id: routeMode
-        property int allSites: 0
-        property int onlyForwardSites: 1
-        property int allExceptSites: 2
-    }
-
-    property list<QtObject> routeModesModel: [
-        onlyForwardSites,
-        allExceptSites
-    ]
-
-    QtObject {
-        id: onlyForwardSites
-        property string name: qsTr("Only the sites listed here will be accessed through the VPN")
-        property int type: routeMode.onlyForwardSites
-    }
-    QtObject {
-        id: allExceptSites
-        property string name: qsTr("Addresses from the list should not be accessed via VPN")
-        property int type: routeMode.allExceptSites
-    }
-
-    function getRouteModesModelIndex() {
-        var currentRouteMode = IpSplitTunnelingController.routeMode
-        if ((routeMode.onlyForwardSites === currentRouteMode) || (routeMode.allSites === currentRouteMode)) {
-            return 0
-        } else if (routeMode.allExceptSites === currentRouteMode) {
-            return 1
-        }
-    }
-
-    function isManagedExceptListVisible() {
-        if (proxyManagedExceptSitesModel.count === 0) {
-            return false
-        }
-        if (!IpSplitTunnelingController.isSplitTunnelingEnabled) {
-            return root.defaultManagedSplitTunnelingForceEnabled
-        }
-        return getRouteModesModelIndex() === 1
-    }
-
-    ColumnLayout {
-        id: header
+    ListViewType {
+        id: listView
 
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-
-        anchors.topMargin: 20 + PageController.safeAreaTopMargin
-
-        BackButtonType {
-            id: backButton
-        }
-
-        HeaderTypeWithSwitcher {
-            Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-
-            headerText: qsTr("Split tunneling")
-
-            enabled: root.pageEnabled
-            showSwitcher: true
-            switcher {
-                checked: IpSplitTunnelingController.isSplitTunnelingEnabled
-                enabled: root.pageEnabled
-            }
-            switcherFunction: function(checked) {
-                IpSplitTunnelingController.toggleSplitTunneling(checked)
-                selector.text = root.routeModesModel[getRouteModesModelIndex()].name
-            }
-        }
-
-        DropDownType {
-            id: selector
-
-            Layout.fillWidth: true
-            Layout.topMargin: 32
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-
-            drawerHeight: 0.4375
-            drawerParent: root
-
-            enabled: root.pageEnabled
-
-            headerText: qsTr("Mode")
-
-            listView: ListViewWithRadioButtonType {
-                rootWidth: root.width
-
-                model: root.routeModesModel
-
-                selectedIndex: getRouteModesModelIndex()
-
-                clickedFunction: function() {
-                    selector.text = selectedText
-                    selector.closeTriggered()
-                    if (IpSplitTunnelingController.routeMode !== root.routeModesModel[selectedIndex].type) {
-                        IpSplitTunnelingController.routeMode = root.routeModesModel[selectedIndex].type
-                    }
-                }
-
-                Component.onCompleted: {
-                    if (root.routeModesModel[selectedIndex].type === IpSplitTunnelingController.routeMode) {
-                        selector.text = selectedText
-                    } else {
-                        selector.text = root.routeModesModel[0].name
-                    }
-                }
-
-                Connections {
-                    target: IpSplitTunnelingController
-                    function onRouteModeChanged() {
-                        selectedIndex = getRouteModesModelIndex()
-                    }
-                }
-            }
-        }
-    }
-
-    ListViewType {
-        id: listView
-
-        ScrollBar.vertical: ScrollBarType { policy: ScrollBar.AlwaysOn }
-
-        anchors.top: header.bottom
-        anchors.topMargin: 16
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: addSiteButton.implicitHeight + 48 + (searchField.textField.activeFocus ? 0 : PageController.imeHeight)
-
-        width: parent.width
-
-        enabled: root.pageEnabled
-        clip: true
+        anchors.bottom: addSitePanel.top
 
         SortFilterProxyModel {
             id: proxyManagedExceptSitesModel
@@ -225,12 +113,12 @@ PageType {
                 AnyOf {
                     RegExpFilter {
                         roleName: "url"
-                        pattern: ".*" + searchField.textField.text + ".*"
+                        pattern: ".*" + addSitePanel.textField.text + ".*"
                         caseSensitivity: Qt.CaseInsensitive
                     }
                     RegExpFilter {
                         roleName: "ip"
-                        pattern: ".*" + searchField.textField.text + ".*"
+                        pattern: ".*" + addSitePanel.textField.text + ".*"
                         caseSensitivity: Qt.CaseInsensitive
                     }
                 }
@@ -244,35 +132,148 @@ PageType {
                 AnyOf {
                     RegExpFilter {
                         roleName: "url"
-                        pattern: ".*" + searchField.textField.text + ".*"
+                        pattern: ".*" + addSitePanel.textField.text + ".*"
                         caseSensitivity: Qt.CaseInsensitive
                     }
                     RegExpFilter {
                         roleName: "ip"
-                        pattern: ".*" + searchField.textField.text + ".*"
+                        pattern: ".*" + addSitePanel.textField.text + ".*"
                         caseSensitivity: Qt.CaseInsensitive
                     }
                 }
             ]
         }
 
-        model: (root.isManagedExceptListVisible() ? proxyManagedExceptSitesModel.count + 1 : 0)
+        model: (root.isManagedExceptListVisible() ? proxyManagedExceptSitesModel.count : 0)
                + proxyIpSplitTunnelingModel.count
+
+        header: ColumnLayout {
+            width: listView.width
+
+            z: 2
+
+            spacing: 0
+
+            onHeightChanged: {
+                if (!listView.moving) {
+                    Qt.callLater(listView.positionViewAtBeginning)
+                }
+            }
+
+            NavigationBarType {
+                id: navigationBar
+
+                Layout.fillWidth: true
+
+                title: qsTr("Split tunneling")
+            }
+
+            ListItemType {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+
+                enabled: root.pageEnabled
+
+                text: qsTr("Split tunneling")
+
+                onClicked: {
+                    splitTunnelingSwitch.toggle()
+                    splitTunnelingSwitch.toggled()
+                }
+
+                SwitchType {
+                    id: splitTunnelingSwitch
+
+                    focusPolicy: Qt.NoFocus
+
+                    checked: IpSplitTunnelingController.isSplitTunnelingEnabled
+
+                    onToggled: IpSplitTunnelingController.toggleSplitTunneling(checked)
+                }
+            }
+
+            SegmentedControlType {
+                id: modeSelector
+
+                Layout.fillWidth: true
+                Layout.topMargin: 24
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+
+                enabled: root.pageEnabled
+
+                model: root.routeModes.map(function(mode) { return mode.segmentName })
+                currentIndex: root.routeModeIndex
+
+                onActivated: function(index) {
+                    if (IpSplitTunnelingController.routeMode !== root.routeModes[index].type) {
+                        IpSplitTunnelingController.routeMode = root.routeModes[index].type
+                    }
+                }
+
+                Connections {
+                    target: IpSplitTunnelingController
+
+                    function onRouteModeChanged() {
+                        modeSelector.currentIndex = root.routeModeIndex
+                    }
+                }
+            }
+
+            BodyTextType {
+                Layout.fillWidth: true
+                Layout.topMargin: 8
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.bottomMargin: 24
+
+                text: root.routeModes[modeSelector.currentIndex].name
+                color: AmneziaStyle.color.textSecondary
+            }
+
+            Header2Type {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.topMargin: 8
+                Layout.bottomMargin: 4
+
+                visible: root.isManagedExceptListVisible()
+
+                headerText: qsTr("Managed by server")
+            }
+
+            Label {
+                Layout.fillWidth: true
+                Layout.leftMargin: 16
+                Layout.rightMargin: 16
+                Layout.bottomMargin: 8
+
+                visible: root.isManagedExceptListVisible()
+
+                wrapMode: Text.WordWrap
+                color: AmneziaStyle.color.textSecondary
+                text: qsTr("Server-managed rules are locked. They are used only when this server is active and the current split tunneling mode applies this list.")
+            }
+        }
 
         delegate: Loader {
             id: rowLoader
 
+            enabled: root.pageEnabled
+
             width: listView.width
+            height: item ? item.implicitHeight : 0
 
             readonly property bool managedListVisible: root.isManagedExceptListVisible()
-            readonly property int managedHeaderRows: managedListVisible ? 1 : 0
             readonly property int managedRows: managedListVisible ? proxyManagedExceptSitesModel.count : 0
-            readonly property int managedModelIndex: index - managedHeaderRows
-            readonly property int localModelIndex: index - managedHeaderRows - managedRows
+            readonly property int managedModelIndex: index
+            readonly property int localModelIndex: index - managedRows
 
-            sourceComponent: managedListVisible && index === 0
-                             ? managedHeaderDelegate
-                             : (managedListVisible && index <= managedRows ? managedRuleDelegate : localRuleDelegate)
+            sourceComponent: managedListVisible && index < managedRows
+                             ? managedRuleDelegate
+                             : localRuleDelegate
 
             function syncItemIndexes() {
                 if (!item) {
@@ -289,352 +290,167 @@ PageType {
         }
 
         Component {
-            id: managedHeaderDelegate
-
-            ColumnLayout {
-                width: listView.width
-                property int managedModelIndex: -1
-                property int localModelIndex: -1
-
-                Header2Type {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 16
-                    Layout.rightMargin: 16
-                    Layout.topMargin: 8
-                    Layout.bottomMargin: 4
-
-                    headerText: qsTr("Managed by server")
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: 16
-                    Layout.rightMargin: 16
-                    Layout.bottomMargin: 8
-
-                    wrapMode: Text.WordWrap
-                    color: AmneziaStyle.color.mutedGray
-                    text: qsTr("Server-managed rules are locked. They are used only when this server is active and the current split tunneling mode applies this list.")
-                }
-            }
-        }
-
-        Component {
             id: managedRuleDelegate
 
-            ColumnLayout {
+            ListItemType {
                 width: listView.width
+
                 property int managedModelIndex: -1
                 property int localModelIndex: -1
 
                 readonly property var managedRule: managedModelIndex >= 0 && managedModelIndex < proxyManagedExceptSitesModel.count
                                                    ? proxyManagedExceptSitesModel.get(managedModelIndex)
-                                                   : { "url": "", "ip": "" }
+                                                   : null
 
-                LabelWithButtonType {
-                    Layout.fillWidth: true
+                enabled: false
+                interactive: false
 
-                    enabled: false
-                    text: managedRule.url || ""
-                    descriptionText: managedRule.ip || ""
-                }
-
-                DividerType {}
+                text: managedRule ? (managedRule.url || "") : ""
+                subtitle: managedRule ? (managedRule.ip || "") : ""
             }
         }
 
         Component {
             id: localRuleDelegate
 
-            ColumnLayout {
+            ListItemType {
+                id: site
+
                 width: listView.width
+
                 property int managedModelIndex: -1
                 property int localModelIndex: -1
 
                 readonly property var localRule: localModelIndex >= 0 && localModelIndex < proxyIpSplitTunnelingModel.count
                                                  ? proxyIpSplitTunnelingModel.get(localModelIndex)
-                                                 : { "url": "", "ip": "" }
+                                                 : null
 
-                LabelWithButtonType {
-                    id: site
-                    Layout.fillWidth: true
+                text: localRule ? (localRule.url || "") : ""
+                subtitle: localRule ? (localRule.ip || "") : ""
+                trailingIconSource: "qrc:/images/controls/trash.svg"
 
-                    text: localRule.url || ""
-                    descriptionText: localRule.ip || ""
-                    rightImageSource: "qrc:/images/controls/trash.svg"
-                    rightImageColor: AmneziaStyle.color.paleGray
-
-                    clickedFunction: function() {
-                        var headerText = qsTr("Remove ") + (localRule.url || "") + "?"
-                        var yesButtonText = qsTr("Continue")
-                        var noButtonText = qsTr("Cancel")
-
-                        var yesButtonFunction = function() {
-                            IpSplitTunnelingController.removeSite(proxyIpSplitTunnelingModel.mapToSource(localModelIndex))
-                            if (!GC.isMobile()) {
-                                site.rightButton.forceActiveFocus()
-                            }
-                        }
-                        var noButtonFunction = function() {
-                            if (!GC.isMobile()) {
-                                site.rightButton.forceActiveFocus()
-                            }
-                        }
-
-                        showQuestionDrawer(headerText, "", yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
-                    }
-                }
-
-                DividerType {}
-            }
-        }
-    }
-
-    Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        
-        height: addSiteButton.implicitHeight + 48
-        
-        color: AmneziaStyle.color.midnightBlack
-        
-        RowLayout {
-            id: addSiteButton
-
-            enabled: root.pageEnabled
-
-            anchors.bottom: parent.bottom
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.topMargin: 24
-            anchors.rightMargin: 16
-            anchors.leftMargin: 16
-            anchors.bottomMargin: 24
-
-            TextFieldWithHeaderType {
-                id: searchField
-
-                Layout.fillWidth: true
-                rightButtonClickedOnEnter: true
-
-                textField.placeholderText: qsTr("website or IP")
-                buttonImageSource: "qrc:/images/controls/plus.svg"
-
-                clickedFunc: function() {
-                    PageController.showBusyIndicator(true)
-                    IpSplitTunnelingController.addSite(textField.text)
-                    textField.text = ""
-                    PageController.showBusyIndicator(false)
-                }
-            }
-
-            ImageButtonType {
-                id: addSiteButtonImage
-                implicitWidth: 56
-                implicitHeight: 56
-
-                image: "qrc:/images/controls/more-vertical.svg"
-                imageColor: AmneziaStyle.color.paleGray
-
-                onClicked: function () {
-                    moreActionsDrawer.openTriggered()
-                }
-
-                Keys.onReturnPressed: addSiteButtonImage.clicked()
-                Keys.onEnterPressed: addSiteButtonImage.clicked()
-            }
-        }
-    }
-
-    DrawerType2 {
-        id: moreActionsDrawer
-
-        anchors.fill: parent
-        expandedHeight: parent.height * 0.4375
-
-        expandedStateContent: ColumnLayout {
-            id: moreActionsDrawerContent
-
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
-
-            Header2Type {
-                Layout.fillWidth: true
-                Layout.margins: 16
-
-                headerText: qsTr("Additional options")
-            }
-
-            LabelWithButtonType {
-                id: importSitesButton
-                Layout.fillWidth: true
-
-                text: qsTr("Import")
-                rightImageSource: "qrc:/images/controls/chevron-right.svg"
-
-                clickedFunction: function() {
-                    importSitesDrawer.openTriggered()
-                }
-            }
-
-            DividerType {}
-
-            LabelWithButtonType {
-                id: exportSitesButton
-                Layout.fillWidth: true
-                text: qsTr("Save site list")
-
-                clickedFunction: function() {
-                    var fileName = ""
-                    if (GC.isMobile()) {
-                        fileName = "amnezia_sites.json"
-                    } else {
-                        fileName = SystemController.getFileName(qsTr("Save sites"),
-                                                                qsTr("Sites files (*.json)"),
-                                                                StandardPaths.standardLocations(StandardPaths.DocumentsLocation) + "/amnezia_sites",
-                                                                true,
-                                                                ".json")
-                    }
-                    if (fileName !== "") {
-                        PageController.showBusyIndicator(true)
-                        IpSplitTunnelingController.exportSites(fileName)
-                        moreActionsDrawer.closeTriggered()
-                        PageController.showBusyIndicator(false)
-                    }
-                }
-            }
-
-            DividerType {}
-            
-            LabelWithButtonType {
-                id: clearSitesButton
-                Layout.fillWidth: true
-
-                text: qsTr("Clear site list")
-
-                clickedFunction: function() {
-                    var headerText = qsTr("Clear site list?")
-                    var descriptionText = qsTr("All sites will be removed from list.")
+                onClicked: {
+                    var headerText = qsTr("Remove ") + (localRule ? (localRule.url || "") : "") + "?"
                     var yesButtonText = qsTr("Continue")
                     var noButtonText = qsTr("Cancel")
 
                     var yesButtonFunction = function() {
-                        PageController.showBusyIndicator(true)
-                        IpSplitTunnelingController.removeSites()
-                        PageController.showBusyIndicator(false)
+                        IpSplitTunnelingController.removeSite(proxyIpSplitTunnelingModel.mapToSource(localModelIndex))
                     }
-                    var noButtonFunction = function() {
-                        
-                    }
+                    var noButtonFunction = function() {}
 
-                    showQuestionDrawer(headerText, descriptionText, yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
-                }
-            }
-
-            DividerType {}
-        }
-    }
-
-    DrawerType2 {
-        id: importSitesDrawer
-
-        anchors.fill: parent
-        expandedHeight: parent.height * 0.4375
-
-        expandedStateContent: Item {
-            implicitHeight: importSitesDrawer.expandedHeight
-
-            BackButtonType {
-                id: importSitesDrawerBackButton
-
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.topMargin: 16
-
-                backButtonFunction: function() {
-                    importSitesDrawer.closeTriggered()
-                }
-                
-                onFocusChanged: {
-                    if (this.activeFocus) {
-                        importSitesDrawerListView.positionViewAtBeginning()
-                    }
-                }
-            }
-
-            ListViewType {
-                id: importSitesDrawerListView
-
-                anchors.top: importSitesDrawerBackButton.bottom
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-
-                header: ColumnLayout {
-                    width: importSitesDrawerListView.width
-
-                    Header2Type {
-                        Layout.fillWidth: true
-                        Layout.margins: 16
-
-                        headerText: qsTr("Import a list of sites")
-                    }
-                }
-
-                model: importOptions
-
-                delegate: ColumnLayout {
-                    width: importSitesDrawerListView.width
-
-                    LabelWithButtonType {
-                        Layout.fillWidth: true
-                        Layout.leftMargin: 16
-                        Layout.rightMargin: 16
-
-                        text: title
-
-                        clickedFunction: function() {
-                            clickedHandler()
-                        }
-                    }
-
-                    DividerType {}
+                    Dialogs.askQuestion(headerText, "", yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
                 }
             }
         }
     }
 
-    property list<QtObject> importOptions: [
-        replaceOption,
-        addOption,
-    ]
+    AddSitePanel {
+        id: addSitePanel
 
-    QtObject {
-        id: replaceOption
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: addSitePanel.textField.activeFocus ? 0 : PageController.imeHeight
 
-        readonly property string title: qsTr("Replace site list")
-        readonly property var clickedHandler: function() {
-            var fileName = SystemController.getFileName(qsTr("Open sites file"),
-                                                        qsTr("Sites files (*.json)"))
-            if (fileName !== "") {
-                root.importSites(fileName, true)
+        enabled: root.pageEnabled
+        placeholderText: qsTr("website or IP")
+        moreButtonAccessibleName: qsTr("Additional options")
+
+        onAddClicked: function(text) {
+            PageController.showBusyIndicator(true)
+            IpSplitTunnelingController.addSite(text)
+            PageController.showBusyIndicator(false)
+        }
+
+        onMoreClicked: {
+            moreActionsMenu.openAbove(addSitePanel.moreButton)
+        }
+    }
+
+    PopupMenuType {
+        id: moreActionsMenu
+
+        PopupMenuItemType {
+            id: addImportedSitesButton
+
+            text: qsTr("Add imported sites to existing ones")
+
+            onClicked: {
+                moreActionsMenu.close()
+                root.selectImportFile(false)
+            }
+        }
+
+        PopupMenuItemType {
+            id: replaceSitesButton
+
+            text: qsTr("Replace site list")
+
+            onClicked: {
+                moreActionsMenu.close()
+                root.selectImportFile(true)
+            }
+        }
+
+        PopupMenuItemType {
+            id: exportSitesButton
+
+            text: qsTr("Save site list")
+
+            onClicked: {
+                moreActionsMenu.close()
+                var fileName = ""
+                if (GC.isMobile()) {
+                    fileName = "amnezia_sites.json"
+                } else {
+                    fileName = SystemController.getFileName(qsTr("Save sites"),
+                                                            qsTr("Sites files (*.json)"),
+                                                            StandardPaths.standardLocations(StandardPaths.DocumentsLocation) + "/amnezia_sites",
+                                                            true,
+                                                            ".json")
+                }
+                if (fileName !== "") {
+                    PageController.showBusyIndicator(true)
+                    IpSplitTunnelingController.exportSites(fileName)
+                    PageController.showBusyIndicator(false)
+                }
+            }
+        }
+
+        PopupMenuSeparatorType {}
+
+        PopupMenuItemType {
+            id: clearSitesButton
+
+            text: qsTr("Clear site list")
+            destructive: true
+
+            onClicked: {
+                moreActionsMenu.close()
+                var headerText = qsTr("Clear site list?")
+                var descriptionText = qsTr("All sites will be removed from list.")
+                var yesButtonText = qsTr("Continue")
+                var noButtonText = qsTr("Cancel")
+
+                var yesButtonFunction = function() {
+                    PageController.showBusyIndicator(true)
+                    IpSplitTunnelingController.removeSites()
+                    PageController.showBusyIndicator(false)
+                }
+                var noButtonFunction = function() {
+                }
+
+                Dialogs.askQuestion(headerText, descriptionText, yesButtonText, noButtonText, yesButtonFunction, noButtonFunction)
             }
         }
     }
 
-    QtObject {
-        id: addOption
-
-        readonly property string title: qsTr("Add imported sites to existing ones")
-        readonly property var clickedHandler: function() {
-            var fileName = SystemController.getFileName(qsTr("Open sites file"),
-                                                        qsTr("Sites files (*.json)"))
-            if (fileName !== "") {
-                root.importSites(fileName, false)
-            }
+    function selectImportFile(replaceExistingSites) {
+        var fileName = SystemController.getFileName(qsTr("Open sites file"),
+                                                    qsTr("Sites files (*.json)"))
+        if (fileName !== "") {
+            root.importSites(fileName, replaceExistingSites)
         }
     }
 
@@ -642,7 +458,5 @@ PageType {
         PageController.showBusyIndicator(true)
         IpSplitTunnelingController.importSites(fileName, replaceExistingSites)
         PageController.showBusyIndicator(false)
-        importSitesDrawer.closeTriggered()
-        moreActionsDrawer.closeTriggered()
     }
 }

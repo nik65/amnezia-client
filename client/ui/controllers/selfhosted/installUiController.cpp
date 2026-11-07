@@ -18,6 +18,7 @@
 #include "core/controllers/selfhosted/installController.h"
 #include "core/controllers/connectionController.h"
 #include "core/utils/networkUtilities.h"
+#include "core/utils/errorStrings.h"
 #include "core/utils/protocolEnum.h"
 #include "core/protocols/protocolUtils.h"
 #include "core/utils/constants/configKeys.h"
@@ -437,10 +438,19 @@ void InstallUiController::runNextAutomaticAwgMigration()
     watcher->setFuture(m_automaticAwgFuture);
 }
 
-void InstallUiController::updateServerConfig(const QString &serverId, int containerIndex, int protocolIndex, bool closePage)
+void InstallUiController::updateServerConfig(const QString &serverId, int containerIndex, int protocolIndex, bool closePage,
+                                             bool acceptXrayKeyLoss)
 {
     DockerContainer container = static_cast<DockerContainer>(containerIndex);
     Proto protocolType = static_cast<Proto>(protocolIndex);
+
+    if (protocolType == Proto::Xray || protocolType == Proto::SSXray) {
+        const QStringList errs = m_xrayConfigModel->validationErrors();
+        if (!errs.isEmpty()) {
+            emit installationErrorOccurred(ErrorCode::XrayServerConfigInvalid);
+            return;
+        }
+    }
 
     ContainerConfig containerConfig;
     if (!buildContainerConfigFromModel(containerIndex, protocolIndex, containerConfig)) {
@@ -452,7 +462,13 @@ void InstallUiController::updateServerConfig(const QString &serverId, int contai
             || container == DockerContainer::TProxy
             || container == DockerContainer::Xray || container == DockerContainer::SSXray;
 
+
     if (asyncUpdate) {
+        if (m_serverConfigUpdateInProgress) {
+            return;
+        }
+        m_serverConfigUpdateInProgress = true;
+
         const bool emitBusy = container == DockerContainer::MtProxy || container == DockerContainer::Telemt
                 || container == DockerContainer::TProxy;
         if (emitBusy)
@@ -463,6 +479,7 @@ void InstallUiController::updateServerConfig(const QString &serverId, int contai
                          [this, watcher, serverId, container, closePage, protocolTypeCopy, emitBusy]() {
                              const ErrorCode errorCode = watcher->result();
                              watcher->deleteLater();
+                             m_serverConfigUpdateInProgress = false;
                              if (emitBusy)
                                  emit serverIsBusy(false);
 
@@ -472,6 +489,8 @@ void InstallUiController::updateServerConfig(const QString &serverId, int contai
                                  m_protocolModel->updateModel(updatedConfig);
                                  updateProtocolConfigModel(serverId, static_cast<int>(container), static_cast<int>(protocolTypeCopy));
                                  emit updateContainerFinished(tr("Settings updated successfully"), closePage);
+                             } else if (errorCode == ErrorCode::XrayKeyMigrationNeedsConfirm) {
+                                 emit xrayKeyMigrationNeedsConfirm(errorString(errorCode));
                              } else {
                                  emit installationErrorOccurred(errorCode);
                              }
@@ -482,14 +501,14 @@ void InstallUiController::updateServerConfig(const QString &serverId, int contai
         InstallController *installController = m_installController;
         QFuture<ErrorCode> future =
                 QtConcurrent::run([installController, serverId, container, oldConfigCopy,
-                                   newConfigCopy]() mutable -> ErrorCode {
-                    return installController->updateServerConfig(serverId, container, oldConfigCopy, newConfigCopy);
+                                   newConfigCopy, acceptXrayKeyLoss]() mutable -> ErrorCode {
+                    return installController->updateServerConfig(serverId, container, oldConfigCopy, newConfigCopy, acceptXrayKeyLoss);
                 });
         watcher->setFuture(future);
         return;
     }
 
-    ErrorCode errorCode = m_installController->updateServerConfig(serverId, container, oldContainerConfig, containerConfig);
+    ErrorCode errorCode = m_installController->updateServerConfig(serverId, container, oldContainerConfig, containerConfig, acceptXrayKeyLoss);
 
     if (errorCode == ErrorCode::NoError) {
         ContainerConfig updatedConfig = m_serversController->getContainerConfig(serverId, container);
@@ -619,6 +638,18 @@ void InstallUiController::rebootServer(const QString &serverId)
     const auto errorCode = m_installController->rebootServer(serverId);
     if (errorCode == ErrorCode::NoError) {
         emit rebootServerFinished(tr("Server '%1' was rebooted").arg(serverName));
+    } else {
+        emit installationErrorOccurred(errorCode);
+    }
+}
+
+void InstallUiController::updateServerPackages(const QString &serverId)
+{
+    const QString serverName = m_serversController->notificationDisplayName(serverId);
+
+    const auto errorCode = m_installController->updateServerPackages(serverId);
+    if (errorCode == ErrorCode::NoError) {
+        emit updateServerPackagesFinished(tr("Packages on server '%1' were updated").arg(serverName));
     } else {
         emit installationErrorOccurred(errorCode);
     }
