@@ -8,7 +8,7 @@ def jar(group,name,version):
 stdlib=jar('org.jetbrains.kotlin','kotlin-stdlib','2.1.0')
 compiler=[jar('org.jetbrains.kotlin','kotlin-compiler-embeddable','2.1.0'),stdlib,jar('org.jetbrains.kotlin','kotlin-script-runtime','2.1.0'),jar('org.jetbrains.kotlin','kotlin-reflect','1.6.10'),jar('org.jetbrains.intellij.deps','trove4j','1.0.20200330'),jar('org.jetbrains','annotations','13.0'),jar('org.jetbrains.kotlinx','kotlinx-coroutines-core-jvm','1.6.4')]
 java=Path.home()/'devtools/jdk-17/bin/java.exe';sep=os.pathsep
-sources=[root/'client/android/protocolApi/src/main/kotlin/NativeSessionBinding.kt',Path(__file__).with_name('NativeSessionBindingTest.kt')]
+sources=[root/'client/android/protocolApi/src/main/kotlin/NativeSessionBinding.kt',root/'client/android/protocolApi/src/main/kotlin/DnsTransportNoticeGate.kt',Path(__file__).with_name('NativeSessionBindingTest.kt')]
 extra=Path(__file__).with_name('generate_source_fixture.py')
 if extra.exists():
  subprocess.run([os.sys.executable,'-B',str(extra),str(root),str(a.output),str(a.wire_source or root/'client/android/wireguard/src/main/kotlin/org/amnezia/vpn/protocol/wireguard/Wireguard.kt'),str(a.activity_source or root/'client/android/src/org/amnezia/vpn/AmneziaActivity.kt')],check=True)

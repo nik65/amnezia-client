@@ -28,6 +28,13 @@ import org.json.JSONObject
 private const val TAG = "Xray"
 private const val LIBXRAY_TAG = "libXray"
 
+internal fun xrayEndpointBypassRoute(hostName: String): InetNetwork? {
+    val endpoint = parseInetAddress(hostName)
+    // Android rejects loopback routes. A local relay already uses the local loopback path;
+    // only a remote server endpoint needs an exact physical-network bypass route.
+    return if (endpoint.isLoopbackAddress) null else InetNetwork(endpoint)
+}
+
 private fun findSocksInboundIndex(inbounds: JSONArray): Int {
     for (i in 0 until inbounds.length()) {
         val o = inbounds.optJSONObject(i) ?: continue
@@ -51,11 +58,17 @@ private fun acquireFreeLocalPort(): Int {
 class Xray : Protocol() {
 
     private var isRunning: Boolean = false
+    private var nativeInitialized: Boolean = false
     override val statistics: Statistics = Statistics.EMPTY_STATISTICS
 
-    override fun internalInit() {
+    // Protocol.initialize can run on Main or an AWG-used thread. Defer all Go/Seq
+    // initialization until suspend startup reaches the exclusive Xray lane.
+    override fun internalInit() { }
+
+    private fun initializeNative() {
+        XrayNativeRuntime.requireOwner()
         Seq.setContext(context)
-        if (!isInitialized) {
+        if (!nativeInitialized) {
             LibXray.initLogger(object : Logger {
                 override fun warning(s: String) = Log.w(LIBXRAY_TAG, s)
 
@@ -69,9 +82,15 @@ class Xray : Protocol() {
                 Log.w(TAG, "Failed to initialize logger: $err")
             }
         }
+        nativeInitialized = true
     }
 
-    override suspend fun startVpn(config: JSONObject, vpnBuilder: Builder, protect: (Int) -> Boolean) {
+    override suspend fun startVpn(config: JSONObject, vpnBuilder: Builder, protect: (Int) -> Boolean) =
+        XrayNativeRuntime.await { startOnNativeThread(config, vpnBuilder, protect) }
+
+    private fun startOnNativeThread(config: JSONObject, vpnBuilder: Builder, protect: (Int) -> Boolean) {
+        XrayNativeRuntime.requireOwner()
+        initializeNative()
         if (isRunning) {
             Log.w(TAG, "XRay already running")
             return
@@ -114,7 +133,7 @@ class Xray : Protocol() {
             addRoute(InetNetwork("0.0.0.0", 0))
             addRoute(InetNetwork("2000::0", 3))
             config.getString("hostName").let {
-                excludeRoute(InetNetwork(it, 32))
+                xrayEndpointBypassRoute(it)?.let { endpoint -> excludeRoute(endpoint) }
             }
 
             config.optString("mtu").let {
@@ -143,6 +162,7 @@ class Xray : Protocol() {
     }
 
     private fun start(config: XrayConfig, configJson: String, vpnBuilder: Builder, protect: (Int) -> Boolean) {
+        XrayNativeRuntime.requireOwner()
         buildVpnInterface(config, vpnBuilder)
 
         DialerController { protect(it.toInt()) }.also {
@@ -182,16 +202,23 @@ class Xray : Protocol() {
         }
     }
 
-    override fun stopVpn() {
-        LibXray.stopXray().isNotNullOrBlank { err ->
-            Log.e(TAG, "Failed to stop XRay: $err")
-        }
-        LibXray.stopTun2Socks().isNotNullOrBlank { err ->
-            Log.e(TAG, "Failed to stop tun2Socks: $err")
-        }
+    override fun stopVpn() { stopVpnVerified() }
 
-        isRunning = false
-        state.value = DISCONNECTED
+    /** A fallback may replace this native TUN only after both native owners acknowledge stop. */
+    fun stopVpnVerified(): Boolean = XrayNativeRuntime.call {
+        if (!nativeInitialized) {
+            isRunning = false
+            state.value = DISCONNECTED
+            return@call true
+        }
+        val xrayError = runCatching { LibXray.stopXray() }.getOrElse { "native_stop_failed" }
+        val tunError = runCatching { LibXray.stopTun2Socks() }.getOrElse { "native_stop_failed" }
+        xrayError.isNotNullOrBlank { err -> Log.e(TAG, "Failed to stop XRay: $err") }
+        tunError.isNotNullOrBlank { err -> Log.e(TAG, "Failed to stop tun2Socks: $err") }
+        val confirmed = xrayError.isNullOrBlank() && tunError.isNullOrBlank()
+        isRunning = !confirmed
+        state.value = if (confirmed) DISCONNECTED else org.amnezia.vpn.protocol.ProtocolState.UNKNOWN
+        confirmed
     }
 
     override fun reconnectVpn(vpnBuilder: Builder, protect: (Int) -> Boolean) {
@@ -199,6 +226,7 @@ class Xray : Protocol() {
     }
 
     private fun runTun2Socks(config: XrayConfig, fd: Int) {
+        XrayNativeRuntime.requireOwner()
         val proxyUrl = "socks5://${config.socksUser}:${config.socksPass}@127.0.0.1:${config.socksPort}"
         val tun2SocksConfig = Tun2SocksConfig().apply {
             mtu = config.mtu.toLong()

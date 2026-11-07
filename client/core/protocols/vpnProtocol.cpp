@@ -1,4 +1,5 @@
 #include <QDebug>
+#include <QPointer>
 #include <QTimer>
 
 #include "core/utils/errorStrings.h"
@@ -31,7 +32,12 @@ void VpnProtocol::setLastError(ErrorCode lastError)
 {
     m_lastError = lastError;
     if (lastError) {
+        // Publish the actionable error before Error state reaches queued UI consumers.
+        const QPointer<VpnProtocol> guard(this);
+        emit protocolError(lastError);
+        if (!guard) return;
         setConnectionState(Vpn::ConnectionState::Error);
+        if (!guard) return;
     }
     qCritical().noquote() << "VpnProtocol error, code" << m_lastError << errorString(m_lastError);
 }

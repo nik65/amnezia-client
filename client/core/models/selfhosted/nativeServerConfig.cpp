@@ -9,6 +9,7 @@
 #include "core/protocols/protocolUtils.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/serverConfigUtils.h"
+#include "core/utils/dnsFallbackConfig.h"
 #include "core/utils/constants/protocolConstants.h"
 #include "core/utils/networkUtilities.h"
 
@@ -80,6 +81,10 @@ QJsonObject NativeServerConfig::toJson() const
     if (!dns2.isEmpty()) {
         obj[configKey::dns2] = dns2;
     }
+    const auto fallback = dnsFallbackConfig::normalized(dnsFallback);
+    if (!fallback.isEmpty()) {
+        obj[dnsFallbackConfig::key] = fallback;
+    }
     
     return obj;
 }
@@ -107,6 +112,7 @@ NativeServerConfig NativeServerConfig::fromJson(const QJsonObject& json)
 
     config.dns1 = json.value(configKey::dns1).toString();
     config.dns2 = json.value(configKey::dns2).toString();
+    config.dnsFallback = dnsFallbackConfig::normalized(json.value(dnsFallbackConfig::key));
 
     if (config.displayName.isEmpty()) {
         config.displayName = config.description.isEmpty() ? config.hostName : config.description;

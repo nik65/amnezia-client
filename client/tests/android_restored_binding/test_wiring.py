@@ -35,8 +35,21 @@ class NativeBindingWiring(unittest.TestCase):
   self.assertNotIn("UUID.randomUUID",reconnect);self.assertIn("restoreStatusGate.invalidate()",reconnect)
  def test_native_methods_share_guard(self):
   w=text(WIRE)
-  for marker in ["override val migrationObservation:","override val statistics:","override suspend fun startVpn(","private fun getLastHandshake()","override fun stopVpn()","override fun reconnectVpn("]:
+  for marker in ["override val migrationObservation:","override val statistics:","private fun getLastHandshake()","override fun stopVpn()","override fun reconnectVpn("]:
    start=w.index(marker);self.assertIn("nativeSessionGuard.locked",w[start:start+220],marker)
+  # Parsing the configuration before taking the lock is intentional. Check
+  # actual mutation blocks rather than an arbitrary 220-character prefix.
+  start=w.index("override suspend fun startVpn(");end=w.index("protected open fun parseConfig(",start)
+  method=w[start:end];guarded=[];offset=0
+  while True:
+   offset=method.find("nativeSessionGuard.locked {",offset)
+   if offset<0:break
+   opening=method.index("{",offset);depth=1;closing=opening+1
+   while depth:
+    depth+=(method[closing]=="{")-(method[closing]=="}");closing+=1
+   guarded.append(method[opening:closing]);offset=opening+1
+  for mutation in ["pendingStart = token", "start(wireguardConfig"]:
+   self.assertTrue(any(mutation in block for block in guarded),mutation)
   self.assertIn("nativeSessionGuard.confirmedCleanup()",w);self.assertIn('put("serviceActivationId", identity.serviceActivationId)',w)
  def test_fixed_qt_api_names(self):
   q=text("client/android/src/org/amnezia/vpn/qt/QtAndroidController.kt")

@@ -28,6 +28,36 @@ def _digest(value):
     return hashlib.sha256(authority.canonical(value)).hexdigest()
 
 
+def _verify_android(envelope, *, original_context, context, original_envelope_bytes):
+    """Admit a fresh current observation, or the unchanged historical proof."""
+    if authority.canonical(original_context.binding()) != authority.canonical(context.binding()):
+        return verify_android_equivalence(envelope, original_context=original_context,
+            context=context, original_envelope_bytes=original_envelope_bytes)
+    if not isinstance(original_envelope_bytes, bytes) or original_envelope_bytes != authority.canonical(envelope):
+        raise authority.TrustedAcquisitionError("exact original canonical Android envelope bytes required")
+    original_context.verify()
+    context.verify()
+    # Matching a caller-supplied binding alone must not disguise another
+    # manifest, key, or release identity as the current acquisition context.
+    for name in ("manifest", "manifest_payload", "public_key_record", "publisher", "outer",
+                 "version", "android_code", "artifacts"):
+        if authority.canonical(getattr(original_context, name)) != authority.canonical(getattr(context, name)):
+            raise authority.TrustedAcquisitionError("fresh Android original context identity differs")
+    original = authority.verify_export(envelope, context=context)
+    if (original["target"] != "android" or original["profileId"] != "android-real-device"
+            or authority.canonical(original["binding"]) != authority.canonical(context.binding())):
+        raise authority.TrustedAcquisitionError("fresh current real Android observation required")
+    retained = authority.verify_export(envelope, context=original_context)
+    if authority.canonical(retained) != authority.canonical(original):
+        raise authority.TrustedAcquisitionError("fresh Android original observation differs")
+    return original, {"schema": "amnezia-android-current-acquisition-derivation-v1",
+        "observationKind": "original-current-real-device-observation", "freshCapture": True,
+        "originalEnvelope": copy.deepcopy(envelope),
+        "originalEnvelopeSha256": hashlib.sha256(original_envelope_bytes).hexdigest(),
+        "originalBinding": copy.deepcopy(original_context.binding()),
+        "currentBinding": copy.deepcopy(context.binding())}
+
+
 def prepare_coordinated_matrix(*, context, windows_export, gui_export,
                                coordinated_headless_export, android_export,
                                original_android_context, original_android_bytes):
@@ -41,7 +71,7 @@ def prepare_coordinated_matrix(*, context, windows_export, gui_export,
     gui = authority.verify_export(gui_export, context=context)
     if windows["target"] != "windows" or gui["target"] != "linux-gui":
         raise authority.TrustedAcquisitionError("ordinary Windows and GUI roles differ")
-    android, android_proof = verify_android_equivalence(android_export,
+    android, android_proof = _verify_android(android_export,
         original_context=original_android_context, context=context,
         original_envelope_bytes=original_android_bytes)
     if android["target"] != "android":

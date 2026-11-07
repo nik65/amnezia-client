@@ -5,6 +5,7 @@
 #include "../../../common/awgMigrationRecovery.h"
 #include "core/utils/constants/configKeys.h"
 #include "core/utils/serverConfigUtils.h"
+#include "core/utils/nativeSessionRestore.h"
 #include <QTcpSocket>
 #include <QNetworkProxy>
 #include <QHostAddress>
@@ -304,12 +305,20 @@ void AwgMigrationController::cancel()
 void AwgMigrationController::failed()
 {
     if (!m_trial || m_cancelled) return;
+#if defined(Q_OS_ANDROID) || defined(AMNEZIA_AWG_MIGRATION_CONTROLLER_TESTING)
+    // A newly observed native owner must be bound before any stale trial
+    // deadline can request another connection. Preserve recovery evidence.
+    if (NativeSessionRestore::ingress.observed()) { cancel(); return; }
+#endif
     const auto legacy = m_originalConnection;
     cancel();
     if (reconnectLegacy) reconnectLegacy(legacy);
 }
 void AwgMigrationController::observe(const QString &serverId, quint64 epoch, const QJsonObject &observation)
 {
+#if defined(Q_OS_ANDROID) || defined(AMNEZIA_AWG_MIGRATION_CONTROLLER_TESTING)
+    if (NativeSessionRestore::ingress.observed()) return;
+#endif
     if (m_activationToken.isEmpty() || observation.value("migrationActivationToken").toString() != m_activationToken) return;
     if (m_cancelled || serverId != m_serverId || client(m_originalConnection).isEmpty()) return;
     bool ok = false;

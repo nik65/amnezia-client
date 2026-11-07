@@ -10,6 +10,7 @@ param(
     ),
     [string] $ArtifactDir = "",
     [string] $OutDir = "",
+    [string] $WindowsOuterArtifactDir = "",
     [string] $BaseUrl = $env:SELFHOSTED_UPDATE_BASE_URL,
     [string] $SyncHost = $(if ($env:SELFHOSTED_UPDATE_SYNC_HOST) { $env:SELFHOSTED_UPDATE_SYNC_HOST } else { "10.8.1.0" }),
     [string] $SshTrustedHost = $env:SELFHOSTED_SSH_TRUSTED_HOST,
@@ -149,6 +150,51 @@ function Resolve-RepoPath([string] $Path) {
         return [System.IO.Path]::GetFullPath($Path)
     }
     return [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $Path))
+}
+
+function Resolve-WindowsOuterOutputDirectory([string] $Override) {
+    $legacyRoot = [IO.Path]::GetFullPath((Join-Path $RepoRoot 'dist/selfhosted-windows-client'))
+    if ([string]::IsNullOrWhiteSpace($Override)) { return (Join-Path $legacyRoot $Version) }
+    if ($Override -match '(^|[\\/])\.{1,2}([\\/]|$)') { throw 'Outer output override must not contain dot segments' }
+    foreach ($part in ($Override -split '[\\/]')) {
+        if ($part -and $part.TrimEnd([char[]]'. ') -ne $part) { throw 'Outer output lexical alias suffix forbidden' }
+    }
+    $resolved = Resolve-RepoPath $Override
+    $root = [IO.Path]::GetFullPath($RepoRoot).TrimEnd([char[]]'\/')
+    $prefix = $root + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'Explicit outer output must remain inside repository' }
+    if ($resolved.Equals($legacyRoot,[StringComparison]::OrdinalIgnoreCase) -or $resolved.StartsWith($legacyRoot+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Explicit outer output must not overwrite legacy artifact namespace' }
+    $cursor = $resolved
+    while ($cursor.Length -ge $root.Length) {
+        $leaf = Split-Path -Leaf $cursor
+        if ($leaf -and $leaf.TrimEnd([char[]]'. ') -ne $leaf) { throw 'Outer output alias suffix forbidden' }
+        if (Test-Path -LiteralPath $cursor) {
+            $item = Get-Item -LiteralPath $cursor -Force
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Outer output reparse point forbidden' }
+        }
+        if ($cursor.Equals($root,[StringComparison]::OrdinalIgnoreCase)) { break }
+        $cursor = Split-Path -Parent $cursor
+    }
+    $target = Join-Path $resolved "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
+    if (Test-Path -LiteralPath $target) { throw 'Preserve existing explicit outer artifact; choose new attempt directory' }
+    return $resolved
+}
+
+function Copy-WindowsOuterExclusive([string] $Source,[string] $Directory) {
+    # Resolve again immediately before writing; create-new refuses replacement.
+    $checkedDirectory = Resolve-WindowsOuterOutputDirectory $Directory
+    New-Item -ItemType Directory -Force -Path $checkedDirectory | Out-Null
+    $null = Resolve-WindowsOuterOutputDirectory $checkedDirectory
+    $target = Join-Path $checkedDirectory "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
+    $inputStream=$null;$outputStream=$null
+    try {
+        $inputStream=[IO.File]::Open($Source,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+        $outputStream=[IO.File]::Open($target,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        $inputStream.CopyTo($outputStream);$outputStream.Flush()
+    } finally {
+        if($null-ne$outputStream){$outputStream.Dispose()}
+        if($null-ne$inputStream){$inputStream.Dispose()}
+    }
 }
 
 function Write-Step([string] $Message) {
@@ -583,9 +629,23 @@ function Invoke-External([string] $FilePath, [string[]] $Arguments, [string] $Wo
     Write-Host ("+ {0} {1}" -f $FilePath, ($displayArguments -join " "))
     Push-Location $WorkingDirectory
     try {
-        & $FilePath @Arguments
-        if ($LASTEXITCODE -ne 0) {
-            throw "Command failed with exit code ${LASTEXITCODE}: $FilePath"
+        $previousErrorPolicy = $ErrorActionPreference
+        $nativeExit = $null
+        try {
+            # PowerShell 5 wraps native stderr (even an empty line) in an
+            # ErrorRecord. Preserve it without confusing it with native failure.
+            $ErrorActionPreference = "Continue"
+            $global:LASTEXITCODE = $null
+            & $FilePath @Arguments
+            $nativeExit = $global:LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorPolicy
+        }
+        if ($null -eq $nativeExit -or $nativeExit -isnot [int]) {
+            throw "Command did not return a native integer exit code: $FilePath"
+        }
+        if ($nativeExit -ne 0) {
+            throw "Command failed with exit code ${nativeExit}: $FilePath"
         }
     } finally {
         Pop-Location
@@ -654,6 +714,8 @@ function Copy-Artifact([string] $SourceRoot, [string] $Pattern, [string] $Destin
 
 function Build-WindowsInstaller([string] $BundleDir) {
     $buildJobs = Resolve-BuildJobs
+    $previousProjectVersion = $env:AMNEZIAVPN_VERSION
+    $env:AMNEZIAVPN_VERSION = $Version
     $previousConanNoRemote = $env:CONAN_NO_REMOTE
     $previousPublicKeyBase64 = $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64
     $previousPublicKeySha256 = $env:SELFHOSTED_UPDATE_PUBLIC_KEY_SHA256
@@ -681,6 +743,7 @@ function Build-WindowsInstaller([string] $BundleDir) {
     try {
         Invoke-External "cmd.exe" @("/d", "/s", "/c", "`"$RepoRoot\deploy\build.bat`" --installer ifw -arch x64 --jobs $buildJobs")
     } finally {
+        $env:AMNEZIAVPN_VERSION = $previousProjectVersion
         $env:CONAN_NO_REMOTE = $previousConanNoRemote
         $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $previousPublicKeyBase64
         if ($null -eq $previousPublicKeySha256) {
@@ -1291,6 +1354,7 @@ if ([string]::IsNullOrWhiteSpace($OutDir)) {
 }
 $ArtifactDir = Resolve-RepoPath $ArtifactDir
 $OutDir = Resolve-RepoPath $OutDir
+$resolvedWindowsOuterDir = Resolve-WindowsOuterOutputDirectory $WindowsOuterArtifactDir
 
 $bundlesUpdatesInWindowsClient = (-not $NoBundleUpdatesInWindowsClient) -and
     ($BuildPlatform -contains "windows")
@@ -1367,6 +1431,7 @@ if (-not $SkipBuild) {
         $repoWsl = Convert-ToWslPath $RepoRoot
         $buildWsl = "$repoWsl/deploy/build-linux"
         $linuxExports = @()
+        $linuxExports += "export AMNEZIAVPN_VERSION=$(Quote-Sh $Version)"
         $wslQtRootPath = Resolve-WslQtRootPath
         Assert-WslQtReady $wslQtRootPath
         Assert-LinuxQtCacheBinding $buildWsl $wslQtRootPath
@@ -1393,6 +1458,7 @@ if (-not $SkipBuild) {
         $androidHomeWsl = Resolve-WslAndroidHome
         $androidNdkVersion = if ([string]::IsNullOrWhiteSpace($env:ANDROID_NDK_VERSION)) { "27.2.12479018" } else { $env:ANDROID_NDK_VERSION }
         $androidExports = @(
+            "export AMNEZIAVPN_VERSION=$(Quote-Sh $Version)",
             "export QT_ANDROID_KEYSTORE_PATH=$(Quote-Sh $keystoreWsl)",
             "export QT_ANDROID_KEYSTORE_ALIAS=$(Quote-Sh $env:QT_ANDROID_KEYSTORE_ALIAS)",
             "export QT_ANDROID_KEYSTORE_STORE_PASS=$(Quote-Sh $env:QT_ANDROID_KEYSTORE_STORE_PASS)",
@@ -1415,6 +1481,20 @@ if (-not $SkipBuild) {
         }
         if (-not [string]::IsNullOrWhiteSpace($env:QT_INSTALL_DIR)) {
             $androidExports += "export QT_INSTALL_DIR=$(Quote-Sh (Convert-ToWslPath $env:QT_INSTALL_DIR))"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:AMNEZIA_DNSTT_ANDROID_CLIENT)) {
+            $androidExports += "export AMNEZIA_DNSTT_ANDROID_CLIENT=$(Quote-Sh (Convert-ToWslPath $env:AMNEZIA_DNSTT_ANDROID_CLIENT))"
+        }
+        if ($env:AMNEZIA_GRADLE_OFFLINE -eq "1") {
+            $androidExports += "export AMNEZIA_GRADLE_OFFLINE=1"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:AMNEZIA_ANDROID_GRADLE_USER_HOME)) {
+            $gradleHomeWsl = if ($env:AMNEZIA_ANDROID_GRADLE_USER_HOME.StartsWith("/")) {
+                $env:AMNEZIA_ANDROID_GRADLE_USER_HOME
+            } else {
+                Convert-ToWslPath $env:AMNEZIA_ANDROID_GRADLE_USER_HOME
+            }
+            $androidExports += "export GRADLE_USER_HOME=$(Quote-Sh $gradleHomeWsl)"
         }
         if (-not [string]::IsNullOrWhiteSpace($qtRootPath)) {
             $androidExports += "export QT_ROOT_PATH=$(Quote-Sh (Convert-ToWslPath $qtRootPath))"
@@ -1593,14 +1673,18 @@ if (-not $NoBundleUpdatesInWindowsClient -and ($BuildPlatform -contains "windows
             $env:AMNEZIA_IFW_FRAMEWORK_VERSION = $previousIfwFrameworkVersion
         }
     }
-    $adminInstallerDir = Join-Path $RepoRoot "dist\selfhosted-windows-client\$Version"
+    $adminInstallerDir = $resolvedWindowsOuterDir
     New-Item -ItemType Directory -Force -Path $adminInstallerDir | Out-Null
     $adminInstallerSource = Join-Path $RepoRoot "deploy\build\AmneziaVPN_${Version}_windows_x64.exe"
     Assert-ExistingFile $adminInstallerSource "Bundled Windows release client"
     Assert-WindowsOuterIfwMetadata $adminInstallerSource
     Assert-BundledWindowsPayload $adminInstallerSource (Join-Path $OutDir "manifest.json")
     $adminInstallerTarget = Join-Path $adminInstallerDir "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
-    Copy-Item -LiteralPath $adminInstallerSource -Destination $adminInstallerTarget -Force
+    if ([string]::IsNullOrWhiteSpace($WindowsOuterArtifactDir)) {
+        Copy-Item -LiteralPath $adminInstallerSource -Destination $adminInstallerTarget -Force
+    } else {
+        Copy-WindowsOuterExclusive $adminInstallerSource $resolvedWindowsOuterDir
+    }
     Write-Host "Bundled Windows release client: $adminInstallerTarget"
 }
 
@@ -1608,7 +1692,7 @@ if ($LabLane -ne "off") {
     if ([string]::IsNullOrWhiteSpace($LabRunId)) {
         $LabRunId = "release-$Version-$(Get-Date -Format yyyyMMddTHHmmssZ)"
     }
-    $outerForLab = Join-Path $RepoRoot "dist\selfhosted-windows-client\$Version\AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
+    $outerForLab = Join-Path $resolvedWindowsOuterDir "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
     if (-not (Test-Path -LiteralPath $outerForLab -PathType Leaf)) {
         if ($LabLane -eq "release") {
             throw "Release lab requires the final bundled outer artifact; do not use -NoBundleUpdatesInWindowsClient for the release lane."
@@ -1692,7 +1776,7 @@ $acceptanceStatus = [ordered]@{
     manifestSha256 = (Get-FileHash -LiteralPath (Join-Path $OutDir "manifest.json") -Algorithm SHA256).Hash.ToLowerInvariant()
     originalOuter = $null
 }
-$originalOuterPath = Join-Path $RepoRoot "dist\selfhosted-windows-client\$Version\AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
+$originalOuterPath = Join-Path $resolvedWindowsOuterDir "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
 if (Test-Path -LiteralPath $originalOuterPath -PathType Leaf) {
     $originalOuterItem = Get-Item -LiteralPath $originalOuterPath
     $acceptanceStatus.originalOuter = [ordered]@{

@@ -52,6 +52,9 @@ find_package(awg-android REQUIRED)
 set(LIBS ${LIBS} amnezia::awg-android)
 set_property(TARGET ${PROJECT} APPEND PROPERTY QT_ANDROID_EXTRA_LIBS ${AMNEZIA_ANDROID_LIBWG_PATH} ${AMNEZIA_ANDROID_LIBWG_QUICK_PATH})
 
+include(${CMAKE_CURRENT_LIST_DIR}/dns_transport.cmake)
+amnezia_bundle_android_dns_transport(${PROJECT})
+
 set(_amnezia_android_shader_tools_lib "")
 set(_amnezia_android_shader_tools_candidates)
 if(DEFINED ENV{QT_ANDROID_SHADERTOOLS_LIB} AND NOT "$ENV{QT_ANDROID_SHADERTOOLS_LIB}" STREQUAL "")

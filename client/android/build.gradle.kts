@@ -53,6 +53,9 @@ android {
     packaging {
         // compress .so binary libraries
         jniLibs.useLegacyPackaging = true
+        // DNSTT is a separately built, stripped PIE with a pinned content hash.
+        // Preserve its bytes through AGP packaging after CMake verifies the manifest.
+        jniLibs.keepDebugSymbols += "**/libdnstt.so"
     }
 
     val abiList = qtTargetAbiList.split(",")

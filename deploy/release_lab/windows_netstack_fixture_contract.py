@@ -7,7 +7,10 @@ from pathlib import Path
 
 FILES = {"helper": "fixture.exe", "observer": "product_observer.ps1",
          "profile": "profile-template.json", "expected_routes": "expected-routes.json",
-         "routes": "routes.json", "config": "config.json", "observer_plan": "observer-plan.json"}
+         "routes": "routes.json", "config": "config.json", "observer_plan": "observer-plan.json",
+         "limited_runner": "limited_interactive_runner.ps1",
+         "limited_controller": "limited_interactive_controller.ps1",
+         "operator_capture": "BoundedOperatorCapture.cs"}
 
 
 def strict_json(raw):
@@ -57,7 +60,7 @@ def bind_manifest(value, output, *, run_id, case_id, vm_id, path_mapper=str):
     root = rf"C:\ProgramData\AmneziaLab\runs\{run_id}\windows-x64\{case_id}\netstack-fixture"
     config.update(identity, marker=root.rsplit("\\", 1)[0] + r"\run-marker.txt", routes=root + r"\routes.json", routes_sha256=value["files"]["routes"]["sha256"])
     plan.update(identity, task_token=token, installed_exe_sha256=value["installed_exe_sha256"])
-    plan["files"] = {FILES[k]: value["files"][k]["sha256"] for k in ("profile", "expected_routes", "routes")}
+    plan["files"] = {FILES[k]: value["files"][k]["sha256"] for k in ("profile", "expected_routes", "routes", "limited_runner", "limited_controller", "operator_capture")}
     bound = dict(value, files={k: dict(v) for k, v in value["files"].items()})
     for key, document in (("config", config), ("observer_plan", plan)):
         path = output / FILES[key]
@@ -93,7 +96,7 @@ def validate_observed(value, *, run_id, case_id, vm_id, nonce, task_token, paren
     for record in (lease, terminal):
         identity = dict(run_id=run_id, case_id=case_id, vm_id=vm_id, nonce=nonce,
                         exe_sha256=helper_sha256, routes_sha256=routes_sha256,
-                        production_journal=False, runtime_pass=False)
+                        production_journal=False, runtime_pass=False, fixture_client_random_trailers=False)
         if any(type(record.get(k)) is not type(v) or record.get(k) != v for k, v in identity.items()):
             raise ValueError("fixture lease identity mismatch")
         if any(type(record.get(k)) is not int or record[k] <= 0 for k in ("pid", "process_start_unix_ns", "source_udp_port", "target_udp_port")):
@@ -103,6 +106,10 @@ def validate_observed(value, *, run_id, case_id, vm_id, nonce, task_token, paren
     if lease.get("ready") is not True or terminal.get("terminal_state") != "closed_by_owned_process" or any(lease[k] != terminal[k] for k in ("pid", "process_start_unix_ns", "source_udp_port", "target_udp_port")):
         raise ValueError("fixture terminal process differs")
     observation = value.get("observation") or {}
+    if (observation.get("limited_gui_operator") is not True
+            or not isinstance(observation.get("limited_started_proof_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", observation["limited_started_proof_sha256"])):
+        raise ValueError("fixture LIMITED GUI/operator proof missing")
     if (observation.get("run_id") != run_id or observation.get("case_id") != case_id
             or observation.get("vm_id") != vm_id or observation.get("nonce") != nonce
             or observation.get("task_token") != task_token or observation.get("capability_observed") is not True
@@ -116,6 +123,8 @@ def validate_observed(value, *, run_id, case_id, vm_id, nonce, task_token, paren
         raise ValueError("fixture dataplane evidence absent")
     for key in ("native_before", "native_after"):
         native = observation.get(key) or {}
+        if native.get("random_trailers") != "0":
+            raise ValueError("fixture native client framing is not measured false")
         for field in ("last_handshake_time_sec", "rx_bytes", "tx_bytes"):
             raw = native.get(field)
             if not isinstance(raw, str) or not raw.isascii() or not raw.isdecimal() or int(raw) <= 0:

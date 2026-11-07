@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.25)
+project(xhttp_stream_settings_tests LANGUAGES CXX)
+enable_testing()
+set(CMAKE_CXX_STANDARD 17)
+find_package(Qt6 REQUIRED COMPONENTS Core)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+set(FIXTURE "${CMAKE_CURRENT_BINARY_DIR}/actual_stream_settings.h")
+add_custom_command(OUTPUT "${FIXTURE}"
+    COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/generate_fixture.py" "${REPO_ROOT}" "${FIXTURE}"
+    DEPENDS generate_fixture.py "${REPO_ROOT}/client/core/configurators/xrayConfigurator.cpp"
+    VERBATIM)
+add_executable(xhttp_stream_settings_tests tst_xhttp_stream_settings.cpp "${FIXTURE}")
+set_source_files_properties(tst_xhttp_stream_settings.cpp PROPERTIES OBJECT_DEPENDS "${FIXTURE}")
+target_include_directories(xhttp_stream_settings_tests PRIVATE "${REPO_ROOT}/client" "${CMAKE_CURRENT_BINARY_DIR}")
+target_link_libraries(xhttp_stream_settings_tests PRIVATE Qt6::Core)
+if(MSVC)
+    target_compile_options(xhttp_stream_settings_tests PRIVATE /W4 /WX /wd4100 /permissive-)
+else()
+    target_compile_options(xhttp_stream_settings_tests PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+endif()
+add_test(NAME xhttp_stream_settings COMMAND xhttp_stream_settings_tests)

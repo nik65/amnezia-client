@@ -19,7 +19,23 @@ changing the retained native owner or entering the worker Error cleanup path.
 An optional executable argument names JSONL emitted by the actual Kotlin serializer
 to test ordinary and escaped Unicode snapshot interoperability.
 
+DNS transport uses a separate exact schema 2: the common service/activation/nonce,
+request and generation tuple plus `effectiveTransport=dns` and a canonical
+enrollment SHA-256. It carries no AWG peer/address fields. Only schema 2 supports
+truthful `RECONNECTING` control snapshots; schema 1 remains CONNECTED-only.
+Profile digest input is UTF-8 `domain + "\n" + publicKey + "\n" + vlessId` after
+strict descriptor normalization. A live receiver can bind the observed DNS owner
+without creating another wrapper/TUN or connection epoch. Wrong ownership,
+profile, challenge or epoch cannot rewrite that receiver or cancel a trial.
+
+The DNS ingress fence stays latched until the owner stops or a fresh AWG session
+is proven. Queued AWG peer callbacks and an old 25-second trial deadline cannot
+start a legacy reconnect over this owner. Only accepted matching worker proof
+notifies the controller to cancel its own migration intent. Actual controller
+timer-callback regression tests live in `../awg_migration/`.
+
 The fixture proves actual extracted component logic, not Android linkage or
 runtime acceptance. The AndroidController JNI routes, ConnectionController
 repository preparation, CoreSignalHandlers ordering and full VpnConnection
-lifecycle still require source review; no smartphone or app build is authorized.
+lifecycle still require source review and real-device acceptance; this standalone
+test target never performs an application build, installation or VPN operation.

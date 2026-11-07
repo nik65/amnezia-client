@@ -81,16 +81,32 @@ data class NativeSessionDescriptor(val identity: NativeSessionIdentity, val serv
     fun valid() = identity.valid() && NativeSessionWire.serverId(serverId) && protocol in setOf("AWG", "WIREGUARD")
 }
 
-data class NativeSessionBinding(val descriptor: NativeSessionDescriptor, val peerPublicKey: String, val deviceIpv4Address: String, val nativeGeneration: Long) {
+data class NativeSessionBinding(val descriptor: NativeSessionDescriptor, val peerPublicKey: String, val deviceIpv4Address: String, val nativeGeneration: Long,
+    val effectiveTransport: String = "awg", val dnsProfileDigest: String = "", val sessionState: String = "CONNECTED") {
     fun snapshot(requestId: String, bindingGeneration: String): String? {
         if (!descriptor.valid() || !NativeSessionWire.uuid(requestId) || !NativeSessionWire.generation(bindingGeneration)
-            || !NativeSessionWire.peer(peerPublicKey) || !NativeSessionWire.ipv4(deviceIpv4Address) || nativeGeneration <= 0) return null
+            || nativeGeneration <= 0) return null
         val i = descriptor.identity
-        val values = linkedMapOf("requestId" to requestId, "bindingGeneration" to bindingGeneration, "state" to "CONNECTED",
+        val values = linkedMapOf("requestId" to requestId, "bindingGeneration" to bindingGeneration, "state" to sessionState,
             "serverId" to descriptor.serverId, "protocol" to descriptor.protocol, "serviceInstanceId" to i.serviceInstanceId,
-            "serviceActivationId" to i.serviceActivationId, "connectionNonce" to i.connectionNonce, "peerPublicKey" to peerPublicKey,
-            "deviceIpv4Address" to deviceIpv4Address, "nativeGeneration" to nativeGeneration.toString())
-        val result = "{\"schema\":1," + values.entries.joinToString(",") { NativeSessionWire.quote(it.key) + ":" + NativeSessionWire.quote(it.value) } + "}"
+            "serviceActivationId" to i.serviceActivationId, "connectionNonce" to i.connectionNonce)
+        val schema = when (effectiveTransport) {
+            "awg" -> {
+                if (sessionState != "CONNECTED" || !NativeSessionWire.peer(peerPublicKey) || !NativeSessionWire.ipv4(deviceIpv4Address) || dnsProfileDigest.isNotEmpty()) return null
+                values["peerPublicKey"] = peerPublicKey; values["deviceIpv4Address"] = deviceIpv4Address
+                values["nativeGeneration"] = nativeGeneration.toString()
+                1
+            }
+            "dns" -> {
+                if (sessionState !in setOf("CONNECTED", "RECONNECTING") || peerPublicKey.isNotEmpty() ||
+                    deviceIpv4Address.isNotEmpty() || !Regex("[0-9a-f]{64}").matches(dnsProfileDigest)) return null
+                values["nativeGeneration"] = nativeGeneration.toString()
+                values["effectiveTransport"] = "dns"; values["dnsProfileDigest"] = dnsProfileDigest
+                2
+            }
+            else -> return null
+        }
+        val result = "{\"schema\":$schema," + values.entries.joinToString(",") { NativeSessionWire.quote(it.key) + ":" + NativeSessionWire.quote(it.value) } + "}"
         return result.takeIf { it.toByteArray(Charsets.UTF_8).size <= NativeSessionWire.maximumSnapshotBytes }
     }
 }

@@ -88,6 +88,9 @@ public:
     void registerServiceDiscovery(const QString &requestId);
     void serviceDiscoveryTimedOut(const QString &requestId);
     void serviceDiscoveryChanged(const QJsonObject &snapshot);
+    void captureNativeDiscoveryOwner();
+    bool retireConfirmedNativeObservation(const QString &serverId, quint64 epoch);
+    bool retireAbsentNativeReceiver(const QJsonObject &snapshot);
     void handleStartAdmission(const QJsonObject &snapshot);
     void refuseServiceDiscovery();
     void armStartAdmission(const AndroidServiceDiscovery::Grant &grant);
@@ -146,6 +149,7 @@ signals:
     void serviceDiscoveryConnectRefused(amnezia::ErrorCode error, Vpn::ConnectionState retainedState);
     void nativeRestoreRegistered(const QString &requestId, const QString &generation, bool accepted);
     void nativeRestoreAccepted(const QString &requestId, const QString &generation);
+    void nativeDnsTransportAdopted(const QString &serverId);
     void nativeRestoreConnectRefused(Vpn::ConnectionState retainedState);
 #endif
     void migrationPeerObservation(const QString &serverId, quint64 connectionEpoch,
@@ -207,6 +211,13 @@ private:
     bool m_connectionRestoredWithoutStartup = false;
 #ifdef Q_OS_ANDROID
     QString m_discoveryRegisteredId;
+    quint64 m_discoveryObservationEpoch = 0;
+    quintptr m_discoveryObservationReceiver = 0;
+    bool m_discoveryObservationRecovery = false;
+    bool m_discoveryObservationUnbound = false;
+    quint64 m_discoveryObservationIngressVersion = 0;
+    QString m_discoveryObservationServerId;
+    QElapsedTimer m_nativeStartAdmissionAge;
     AndroidServiceDiscovery::Ledger m_startAdmissionLedger;
     std::function<void()> m_discoveryReconnectStart;
     bool m_manualDiscoveryResuming = false;

@@ -1617,6 +1617,9 @@ ExportController::ExportResult ExportController::generateConnectionConfig(const 
     adminConfig->dns1 = dns.first;
     adminConfig->dns2 = dns.second;
     adminConfig->clientLogs = clientLogs;
+    // A newly enrolled VPN client must receive its own DNS credential.
+    // Do not silently share the exporting administrator's VLESS identity.
+    adminConfig->dnsFallback = {};
 
     QJsonObject serverJson = adminConfig->toJson();
     removeClientResolvedServerRoutingRules(serverJson);

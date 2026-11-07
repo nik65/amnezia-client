@@ -56,6 +56,10 @@ try:
 except ImportError:  # pragma: no cover - package import path
     from .windows_evidence_archive import WindowsEvidenceArchiveError, archive_exact_file, validate_archive_record
 try:
+    from windows_consent_visual import ConsentVisualError, prepare_request as prepare_consent_visual, confirm_after_review as confirm_reviewed_consent, validate_completed as validate_consent_visual
+except ImportError:
+    from .windows_consent_visual import ConsentVisualError, prepare_request as prepare_consent_visual, confirm_after_review as confirm_reviewed_consent, validate_completed as validate_consent_visual
+try:
     from publisher_filemap import PublisherFileMapError, canonical_publisher_file_map, validate_observed_file_map
 except ImportError:  # pragma: no cover - package import path
     from .publisher_filemap import PublisherFileMapError, canonical_publisher_file_map, validate_observed_file_map
@@ -150,6 +154,7 @@ SEMANTIC_HELPER_RELATIVES = (
     "deploy/release_lab/headless_preexisting_fixture_guest.py",
     "deploy/release_lab/guest_helpers/linux_gui_window_evidence.py",
     "deploy/release_lab/linux_gui_visual_ack.py",
+    "deploy/release_lab/windows_consent_visual.py",
     "deploy/release_lab/linux_gui_fixture.py",
     "deploy/release_lab/linux_desktop_readiness.py",
     "deploy/release_lab/guest_helpers/linux_gui_softpipe_setup.py",
@@ -660,9 +665,17 @@ def validate_hyperv_interactive_archives(root: Path, receipt: Mapping[str, Any])
     if not isinstance(ui_archive, Mapping) or not isinstance(app_archive, Mapping):
         raise LabError("Hyper-V interactive durable screenshot records are missing")
     try:
-        validate_archive_record(root, ui_archive, kind="uac", vm_id=vm_id, case_id="outer-interactive", attempt_nonce=attempt)
+        validate_archive_record(root, ui_archive, kind="installer-desktop", vm_id=vm_id, case_id="outer-interactive", attempt_nonce=attempt)
         validate_archive_record(root, app_archive, kind="app-window", vm_id=vm_id, case_id="outer-interactive", attempt_nonce=attempt)
-    except WindowsEvidenceArchiveError as exc:
+        validate_consent_visual(owned_root=root, proof=hyperv_ui.get("consent_visual"),
+            observe=hyperv_ui.get("observe") or {},
+            confirmed_consent=(hyperv_ui.get("confirm") or {}).get("consent"),
+            confirmed_at=(hyperv_ui.get("confirm") or {}).get("confirmed_at"),
+            completed_at=(hyperv_ui.get("installer_completion") or {}).get("completed_at"))
+        visual_request=hyperv_ui["consent_visual"]["request"]
+        if visual_request.get("run_id") != receipt.get("run_id") or visual_request.get("vm_id") != vm_id:
+            raise LabError("Hyper-V consent pixels belong to a different run/VM")
+    except (WindowsEvidenceArchiveError, ConsentVisualError) as exc:
         raise LabError(f"Hyper-V interactive durable archive validation failed: {exc}") from exc
 
 
@@ -818,6 +831,12 @@ def build_hyperv_matrix_aggregation(
     if (not interactive_vm_id or str(interactive_state.get("vm_id") or "") != interactive_vm_id
             or not re.fullmatch(r"[0-9a-fA-F]{64}", interactive_parent)):
         raise LabError("Hyper-V matrix interactive VM binding differs from reset state")
+    visual_request=interactive["hyperv_ui"]["consent_visual"]["request"]
+    if (visual_request.get("manifest_sha256") != (run.get("manifest") or {}).get("sha256")
+            or visual_request.get("artifact_sha256") != outer_candidate.get("sha256")
+            or visual_request.get("parent_sha256") != interactive_parent
+            or visual_request.get("version") != planned_candidate):
+        raise LabError("Hyper-V root-reviewed consent pixels differ from exact release/reset context")
     if {step.get("id") for step in matrix_steps if isinstance(step, Mapping) and step.get("passed") is True} != {"probe", "reinstall", "update", "service-health"}:
         raise LabError("Hyper-V matrix archive does not represent every canonical Windows step")
     return {
@@ -1026,6 +1045,68 @@ def _safe_qga_response_metadata(response: Any) -> str:
         f"response_has_return={'return' in response};"
         f"response_has_error={'error' in response}"
     )
+
+
+def _archive_hyperv_failure(root: Path, *, run_id: str | None, action: str, case_id: Any, result: Any) -> str:
+    """Best-effort private byte evidence; never expose native output or mask failure."""
+    try:
+        # The actual controller runs in owned WSL Linux. chmod on Windows does
+        # not establish a private DACL; do not persist native data there.
+        if os.name != "posix" or not hasattr(os, "geteuid"):
+            return "archive=unavailable-platform"
+        valid = lambda value: isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", value) is not None
+        if not valid(run_id) or not valid(action) or (case_id is not None and not valid(case_id)):
+            return "archive=unavailable-identity"
+        root = Path(root).absolute()
+        uid = os.geteuid()
+        if any(stat.S_ISLNK(parent.lstat().st_mode) for parent in (root, *root.parents)):
+            return "archive=unavailable-path"
+        # Reuse only this controller's existing owned root. No external cache,
+        # credentials, argv, environment or stdin are included in the archive.
+        info = root.lstat()
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != uid or info.st_mode & 0o022:
+            return "archive=unavailable-root"
+        cursor = root
+        for part in ("exports", run_id, "private-adapter-errors"):
+            cursor = cursor / part
+            try:
+                cursor.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+            info = cursor.lstat()
+            if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_uid != uid or info.st_mode & 0o022:
+                return "archive=unavailable-path"
+        if cursor.stat().st_mode & 0o077:
+            return "archive=unavailable-permissions"
+        directory = cursor / (action + "-" + secrets.token_hex(16))
+        directory.mkdir(mode=0o700)
+        records = {}
+        def write_new(path: Path, data: bytes) -> None:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if path.read_bytes() != data or stat.S_IMODE(path.stat().st_mode) != 0o600:
+                raise OSError("private archive readback failed")
+        for label in ("stdout", "stderr"):
+            raw = getattr(result, label, b"")
+            if not isinstance(raw, bytes):
+                raise TypeError("native output is not bytes")
+            # Never silently truncate and call it exact. Oversize streams are
+            # represented by metadata only; the other bounded stream survives.
+            record = {"size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(), "persisted": len(raw) <= 131072}
+            if record["persisted"]:
+                write_new(directory / (label + ".bin"), raw)
+            records[label] = record
+        metadata = {"schema": 1, "run_id": run_id, "case_id": case_id, "action": action,
+                    "exit_code": result.returncode, "streams": records}
+        raw_meta = (json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        write_new(directory / "metadata.json", raw_meta)
+        # Return public evidence metadata only; never native content/error text.
+        return "archive=" + json.dumps({"path": str(directory / "metadata.json"), "sha256": hashlib.sha256(raw_meta).hexdigest(), "size": len(raw_meta)}, separators=(",", ":"))
+    except Exception:
+        return "archive=unavailable"
 
 
 def _safe_process_metadata(result: Any) -> str:
@@ -1471,6 +1552,27 @@ class QgaClient:
                     if hasattr(primary,"add_note"):primary.add_note(f"guest-file-close also failed: {close_error!r}")
 
 
+@contextlib.contextmanager
+def owned_cleanup_cancel_scope(max_seconds=120):
+    import signal,sys
+    if type(max_seconds) not in (int,float) or not 0 < max_seconds <= 120:
+        raise ValueError('cleanup signal scope bound must be within120seconds')
+    already_cancelling=isinstance(sys.exc_info()[1],KeyboardInterrupt)
+    if not already_cancelling:
+        # Never defer the first cancellation of an ordinary reset.
+        yield
+        return
+    deadline=time.monotonic()+max_seconds
+    previous=signal.getsignal(signal.SIGINT)
+    def defer(kind,frame):
+        if time.monotonic()>=deadline:
+            raise KeyboardInterrupt('owned cleanup cancellation deadline reached')
+    signal.signal(signal.SIGINT,defer)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT,previous)
+
 @dataclass
 class LabController:
     root: Path
@@ -1629,17 +1731,20 @@ class LabController:
         # Keep the controller's adapter deadline above the guest runner's
         # bounded 15 minute installer wait, so the guest can publish its
         # completion/failure receipt before the host bridge times out.
-        result = subprocess.run(argv, input=((secret + "\n").encode("utf-8") if secret is not None else None), check=False, shell=False, text=False, capture_output=True, timeout=960)
+        with (owned_cleanup_cancel_scope() if action == "reset" else contextlib.nullcontext()):
+            result = subprocess.run(argv, input=((secret + "\n").encode("utf-8") if secret is not None else None), check=False, shell=False, text=False, capture_output=True, timeout=960)
         stdout = result.stdout.decode("utf-8-sig", errors="replace")
         stderr = result.stderr.decode("utf-8-sig", errors="replace")
+        def failure_archive() -> str:
+            return _archive_hyperv_failure(self.root, run_id=run_id, action=action, case_id=kwargs.get("CaseId"), result=result)
         if result.returncode != 0:
-            raise LabError(f"Hyper-V adapter {action} failed ({_safe_process_metadata(result)})")
+            raise LabError(f"Hyper-V adapter {action} failed ({_safe_process_metadata(result)};{failure_archive()})")
         try:
             value = json.loads(stdout)
         except json.JSONDecodeError as exc:
-            raise LabError(f"Hyper-V adapter {action} returned non-JSON output") from exc
+            raise LabError(f"Hyper-V adapter {action} returned non-JSON output ({failure_archive()})") from exc
         if not isinstance(value, dict):
-            raise LabError(f"Hyper-V adapter {action} returned a non-object response")
+            raise LabError(f"Hyper-V adapter {action} returned a non-object response ({failure_archive()})")
         return value
 
     @property
@@ -3056,7 +3161,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                 observe_deadline = time.monotonic() + 90
                 while time.monotonic() < observe_deadline:
                     try:
-                        candidate_observation = self.hyperv_call("ui-observe", run_id=run_id, CaseId=interactive_case, credential=True, ExpectedArtifactSha256=outer_candidate["sha256"])
+                        candidate_observation = self.hyperv_call("ui-observe", run_id=run_id, CaseId=interactive_case, credential=True, ExpectedArtifactSha256=outer_candidate["sha256"], AttemptNonce=interactive_attempt)
                         candidate_consent = candidate_observation.get("consent") if isinstance(candidate_observation, dict) else None
                         if isinstance(candidate_consent, dict) and candidate_consent.get("expected_consent") is True:
                             ui_observe = candidate_observation
@@ -3071,7 +3176,21 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                 observed_consent = ui_observe.get("consent") if isinstance(ui_observe, dict) else None
                 if not isinstance(observed_consent, dict) or observed_consent.get("expected_consent") is not True:
                     raise LabError("Hyper-V UI observation did not prove the guest consent process")
-                ui_confirm = self.hyperv_call("ui-confirm", run_id=run_id, CaseId=interactive_case, credential=True, ExpectedArtifactSha256=outer_candidate["sha256"])
+                console = ui_observe.get("console_capture") or {}
+                console_host_path = str(console.get("host_path") or "")
+                expected_console_root = f"{HYPERV_RUNS_ROOT_WINDOWS}/{run_id}/windows-x64/cases/{interactive_case}/evidence/".lower()
+                normalized_console_path = console_host_path.replace("\\", "/")
+                if (not normalized_console_path.lower().startswith(expected_console_root)
+                        or not re.fullmatch(r"consent-console-"+re.escape(interactive_attempt)+r"-[0-9a-f]{32}\.rgb565", normalized_console_path.rsplit("/",1)[-1])):
+                    raise LabError("Hyper-V console pixels escaped the owned fresh case evidence root")
+                current_interactive = self.get_run(run_id)["profiles"][profile_id]["hyperv_cases"][interactive_case]
+                consent_visual_request = prepare_consent_visual(owned_root=self.root, run_id=run_id,
+                    version=str(planned_run["candidate_version"]), manifest_sha256=planned_run["manifest"]["sha256"],
+                    artifact_sha256=outer_candidate["sha256"], parent_sha256=current_interactive["parent_sha256"],
+                    observe=ui_observe, raw_source=wsl_path_for_windows_host(console_host_path), attempt_nonce=interactive_attempt)
+                consent_visual_ack, ui_confirm = confirm_reviewed_consent(owned_root=self.root, request=consent_visual_request,
+                    confirm=lambda: self.hyperv_call("ui-confirm", run_id=run_id, CaseId=interactive_case, credential=True, ExpectedArtifactSha256=outer_candidate["sha256"],
+                        ExpectedConsentPid=observed_consent["process_id"], ExpectedConsentStartTime=observed_consent["creation_time"], ExpectedConsentSessionId=observed_consent["session_id"]))
                 confirmed_consent = ui_confirm.get("consent") if isinstance(ui_confirm, dict) else None
                 if not isinstance(confirmed_consent, dict) or confirmed_consent.get("expected_consent") is not True:
                     raise LabError("Hyper-V UI confirmation lost the guest consent binding")
@@ -3100,7 +3219,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                     self.root, wsl_path_for_windows_host(ui_host_path),
                     self.root / "exports" / run_id / profile_id / interactive_case,
                     expected_sha256=str(ui_export.get("sha256") or ""), expected_size=ui_export.get("size"),
-                    kind="uac", vm_id=expected_vm_id, case_id=interactive_case,
+                    kind="installer-desktop", vm_id=expected_vm_id, case_id=interactive_case,
                     attempt_nonce=interactive_attempt,
                 )
                 interactive_receipt["hyperv_ui"] = {
@@ -3117,6 +3236,7 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
                     "installer_pid": confirmed_consent.get("installer_pid"),
                     "installer_path": confirmed_consent.get("installer_path"),
                     "installer_completion": completion,
+                    "consent_visual": {"request": consent_visual_request, "ack": consent_visual_ack},
                 }
                 checkpoint_run = self.get_run(run_id)
                 checkpoint_run["profiles"][profile_id]["interactive_installer_receipt"] = interactive_receipt
@@ -5093,7 +5213,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "preflight" and not result.get("ready", False): return 2
         if args.command == "gate" and not (result.get("release_passed") or result.get("candidate_passed")): return 3
         return 0
-    except (LabError, RelaySmokeError, WindowsEvidenceArchiveError, OSError, subprocess.SubprocessError) as exc:
+    except (LabError, RelaySmokeError, WindowsEvidenceArchiveError, ConsentVisualError, OSError, subprocess.SubprocessError) as exc:
         emit({"ok": False, "error": str(exc), "release_passed": False}, args.as_json)
         return 1
     finally:

@@ -91,6 +91,12 @@ void CoreSignalHandlers::initAllHandlers()
 
 void CoreSignalHandlers::initErrorMessagesHandler()
 {
+    connect(m_coreController->m_connectionUiController, &ConnectionUiController::connectionAdmissionBlocked, this, [this](ErrorCode errorCode) {
+        // Admission refusal is not a native tunnel state change. Keep the last
+        // observed state while showing the real reason that blocked this action.
+        emit m_coreController->m_pageController->showErrorMessage(errorCode);
+    });
+
     connect(m_coreController->m_connectionUiController, &ConnectionUiController::connectionErrorOccurred, this, [this](ErrorCode errorCode) {
         emit m_coreController->m_pageController->showErrorMessage(errorCode);
         m_coreController->m_connectionController->setConnectionState(Vpn::ConnectionState::Disconnected);

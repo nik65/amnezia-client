@@ -26,6 +26,11 @@ abstract class Protocol {
     open val migrationObservation: String? get() = null
     open val migrationCleanupObservation: String? get() = null
     open fun readRestoredSessionBinding(): NativeSessionBinding? = null
+    /** A cheap final Main-thread fence; implementations must never perform native/network IO here. */
+    open fun isRestoredSessionBindingCurrent(binding: NativeSessionBinding): Boolean {
+        val idle = readNativeIdleObservation()
+        return idle.state == NativeIdleState.ACTIVE && idle.generation == binding.nativeGeneration
+    }
     open fun readNativeIdleObservation(): NativeIdleObservation = NativeIdleObservation(NativeIdleState.UNKNOWN, 0)
     open fun stopVpnIfBound(expected: NativeSessionIdentity): Boolean = false
     protected lateinit var context: Context

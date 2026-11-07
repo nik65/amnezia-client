@@ -8,6 +8,23 @@ Generated source fixtures extract actual Wireguard lifecycle/readback/conditiona
 
 No complete Android/JNI application compilation or actual phone acceptance is claimed. Full service lifecycle declarations and Android framework/Bundle runtime remain uncompiled by these extracted fixtures. They must not be confused with an APK or native tunnel test.
 
+The independent `run_status_message_contract.py OUTPUT_DIRECTORY [SERVICE_SOURCE]`
+compiles the real REGISTER/UNREGISTER/REQUEST_STATUS branches against Java
+Message fields with Android-compatible nullable platform types. It checks
+missing reply receivers, valid restore/discovery replies, and Message recycling
+while statistics are read on IO. Pre-fix source fails all six negative cases;
+the fixed source passes. No installed service is contacted.
+
+The combined `run_tests.py` fixture models the current pending-start fields and
+LargeRouteEstablishment interface with inert JVM seams. It executes the extracted
+production start/stop lifecycle through successful staged establishment, a
+blocked concurrent start, cancellation before native activation, descriptor
+close, and a subsequent successful retry. Route sizing, Android establishment
+and network validation themselves remain outside this fixture's coverage.
+Its synthetic Activity connection also supplies the current bound reply receiver.
+On 2026-10-26 the repaired combined suite passed Kotlin compilation, JVM assertions
+and all twelve wiring checks; the earlier baseline stub compile failure is resolved.
+
 The approved onNativeSessionObserved() JNI callback reports only generic CONNECTED from the actual bound AwgService ComponentName; it never adopts a profile/nonce or reads VpnStateStore. Per-binding Messenger tokens discard old Binder deliveries, pending operation generations discard stale STATUS, and JNI readiness plus generation fences prevent delayed disconnect from clearing a new binding. READY is emitted only for bind/rebind/Qtready, not blindly during native operations.
 
 Independent-review regressions are executable: pre-fix nullable ComponentName callback fails Kotlin compilation; pre-fix pending-unbind actual method throws checkNotNull; pre-fix old status coroutine overwrites replacement state after a deterministic pause following its native read. Final fixtures include complete callback signatures, doUnbindService and lifecycle disconnect paths, and verify before-Qt binding callbacks plus stale deferred disconnect after rebind. Status generation/isActive checks protect native read and state/statusJob commit under the same monitor; delays remain outside it. These source-level fixes do not establish installed runtime acceptance or permit publication.

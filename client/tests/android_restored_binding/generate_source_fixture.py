@@ -47,6 +47,21 @@ private class Address {val isIpv4=true;override fun toString()="10.0.0.2/32"}
 private class WireguardConfig {val publicKeyHex="00".repeat(32);val addresses=listOf(Address())}
 private class Builder
 private class VpnException(message:String):RuntimeException(message)
+private class VpnStartException(message:String):RuntimeException(message)
+// Inert Android establishment seam. Production startVpn/stopVpn own all lifecycle decisions.
+private class Route
+private class ParcelFileDescriptor {var closed=false;fun close(){closed=true}}
+private object EstablishmentFixture {var staged=false;var beforeEstablish:(suspend ()->Unit)?=null;var lastFd:ParcelFileDescriptor?=null}
+private fun bootstrapRouteSubset(routes:List<Route>):List<Route>?=if(EstablishmentFixture.staged)routes else null
+private fun routeDestinationParcelExceedsRecommendation(routes:List<Route>)=EstablishmentFixture.staged&&routes.isNotEmpty()
+private class LargeRouteEstablishment(context:Any) {
+ val cleanupConfirmed=true
+ suspend fun establish(builder:Builder,addresses:List<Address>,finalRoutes:List<Route>,configureSmall:()->Unit,appendFinal:()->Unit,ensureOwner:()->Unit):ParcelFileDescriptor? {
+  check(builder.javaClass.simpleName.isNotEmpty()&&addresses.isNotEmpty()&&finalRoutes.isNotEmpty())
+  ensureOwner();configureSmall();EstablishmentFixture.beforeEstablish?.invoke();ensureOwner();appendFinal()
+  return ParcelFileDescriptor().also {EstablishmentFixture.lastFd=it}
+ }
+}
 private object Log {@Volatile var afterHandshake:(()->Unit)?=null;fun d(tag:String,message:String){check(tag.isNotEmpty()&&message.isNotEmpty())};fun v(tag:String,message:String){check(tag.isNotEmpty()&&message.isNotEmpty());val callback=afterHandshake;afterHandshake=null;callback?.invoke()};fun e(tag:String,message:String){check(tag.isNotEmpty()&&message.isNotEmpty())};fun w(tag:String,message:String){check(tag.isNotEmpty()&&message.isNotEmpty())}}
 private object GoBackend {
  var active=false
@@ -69,6 +84,14 @@ private class ActualWireguard {
  private var config:WireguardConfig?=null
  private var migrationConnectionNonce=""
  private var cleanedNonce=""
+ private var pendingStart:Any?=null
+ private var pendingStartJob:Job?=null
+ private var pendingStartCancelled=false
+ private var pendingCleanupUnconfirmed=false
+ private val context=Any()
+ private fun interfaceRoutes(config:WireguardConfig)=listOf(Route())
+ private fun buildVpnInterfaceWithRoutes(config:WireguardConfig,builder:Builder,routes:List<Route>){check(routes.isNotEmpty())}
+ private fun applyInterfaceRoutes(routes:List<Route>,builder:Builder){check(routes.isNotEmpty())}
  private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Default)
  private var statusJob:Job?=null
  private var statusJobGeneration=0L
@@ -78,7 +101,7 @@ private class ActualWireguard {
  fun currentStatusJob()=nativeSessionGuard.locked {statusJob}
  fun closeFixture(){scope.cancel()}
  private fun parseConfig(config:JSONObject):WireguardConfig {check(config.optString("protocol","")=="AWG");return WireguardConfig()}
- private fun start(config:WireguardConfig,builder:Builder,protect:(Int)->Boolean,stopExistingVpn:Boolean=false){
+ private fun start(config:WireguardConfig,builder:Builder,protect:(Int)->Boolean,stopExistingVpn:Boolean=false,establishedTun:ParcelFileDescriptor?=null){
   check(config.publicKeyHex.isNotEmpty());check(builder.javaClass.simpleName.isNotEmpty());check(protect(1));if(stopExistingVpn&&tunnelHandle>=0)turnOffVpn();ACTUAL_NATIVE_START_RESET
   tunnelHandle=42;GoBackend.beforeStart?.invoke();GoBackend.active=true
  }
@@ -96,6 +119,23 @@ fun runActualNativeFixture(){runBlocking {
  check(!actual.stopVpnIfBound(old));check(actual.readRestoredSessionBinding()!!.descriptor.identity==newer)
  check(actual.stopVpnIfBound(newer));check(actual.readRestoredSessionBinding()==null)
  val receipt=JSONObject(actual.migrationCleanupObservation!!);check(receipt.optString("serviceActivationId","")==newer.serviceActivationId)
+ EstablishmentFixture.staged=true
+ try {
+  actual.startVpn(cfg(old),Builder()){true}
+  check(actual.readRestoredSessionBinding()!!.descriptor.identity==old)
+  check(EstablishmentFixture.lastFd?.closed==true)
+  actual.stopVpn()
+  val stagedEntered=CompletableDeferred<Unit>();val stagedRelease=CompletableDeferred<Unit>()
+  EstablishmentFixture.beforeEstablish={stagedEntered.complete(Unit);stagedRelease.await()}
+  val pending=launch {actual.startVpn(cfg(newer),Builder()){true}}
+  withTimeout(3000){stagedEntered.await()}
+  check(actual.readRestoredSessionBinding()==null){"pending establishment exposed a native binding"}
+  check(runCatching {actual.startVpn(cfg(old),Builder()){true}}.exceptionOrNull() is VpnStartException)
+  actual.stopVpn();withTimeout(3000){pending.join()};check(pending.isCancelled)
+  check(actual.readRestoredSessionBinding()==null)
+  EstablishmentFixture.beforeEstablish=null
+  actual.startVpn(cfg(old),Builder()){true};check(actual.readRestoredSessionBinding()!!.descriptor.identity==old);actual.stopVpn()
+ } finally {EstablishmentFixture.staged=false;EstablishmentFixture.beforeEstablish=null}
  val entered=CountDownLatch(1);val release=CountDownLatch(1);val readerDone=CountDownLatch(1);val stopDone=CountDownLatch(1)
  GoBackend.beforeStart={entered.countDown();check(release.await(5,TimeUnit.SECONDS))}
  val starter=thread {runBlocking {actual.startVpn(cfg(old),Builder()){true}}}
@@ -118,7 +158,7 @@ fun runActualNativeFixture(){runBlocking {
   actual.stopVpn()
  }
  actual.closeFixture()
- println("Actual Wireguard extracted lifecycle/read-vs-two-writers/old-status-commit/binding/conditional-stop fixture PASS")
+ println("Actual Wireguard extracted lifecycle/staged-start-cancel/read-vs-two-writers/old-status-commit/binding/conditional-stop fixture PASS")
 }}
 """
 (out/'ActualNative.kt').write_text(prefix.replace('private class ActualWireguard {',handshake_helpers+'\nprivate class ActualWireguard {').replace('ACTUAL_NATIVE_START_RESET',reset)+actual+post,encoding='utf-8')
@@ -128,7 +168,8 @@ class JSONObject {
  constructor()
  constructor(raw:String){Regex("\\\"([^\\\"]+)\\\":\\\"([^\\\"]*)\\\"").findAll(raw).forEach{fields[it.groupValues[1]]=it.groupValues[2]}}
  fun put(key:String,value:Any?):JSONObject{fields[key]=value;return this}
- fun optString(key:String,fallback:String)=fields[key] as? String ?: fallback
+ fun optString(key:String,fallback:String="")=fields[key] as? String ?: fallback
+ fun opt(key:String)=fields[key]
  override fun toString()="{"+fields.entries.joinToString(","){org.amnezia.vpn.protocol.NativeSessionWire.quote(it.key)+":"+when(val value=it.value){is String->org.amnezia.vpn.protocol.NativeSessionWire.quote(value);else->value.toString()}}+"}"
 }
 """,encoding='utf-8')
@@ -154,19 +195,23 @@ private class JSONException:RuntimeException()
 private class ServiceBundle {val data=linkedMapOf<String,String>();fun putString(k:String,v:String){data[k]=v}}
 private enum class ServiceEvent {STATUS;fun packToMessage(body:ServiceBundle.()->Unit)=ServiceBundle().apply(body)}
 private class ClientMessenger {val sent=LinkedBlockingQueue<ServiceBundle>();fun send(body:()->ServiceBundle){sent.add(body())}}
-private class FakeServiceProtocol(var read:()->NativeSessionBinding?){fun readRestoredSessionBinding()=read()}
+private open class FakeServiceProtocol(var read:()->NativeSessionBinding?){var current:(NativeSessionBinding)->Boolean={true};fun readRestoredSessionBinding()=read();fun isRestoredSessionBindingCurrent(binding:NativeSessionBinding)=current(binding)}
+private class DnsFallbackProtocol(read:()->NativeSessionBinding?):FakeServiceProtocol(read)
+private enum class ServiceState {CONNECTED,RECONNECTING,UNKNOWN,DISCONNECTED}
 private class ActualService {
  private data class ActiveNativeSession(val protocol:FakeServiceProtocol,val descriptor:NativeSessionDescriptor)
  private val dispatcher=Executors.newSingleThreadExecutor().asCoroutineDispatcher()
  private val mainScope=CoroutineScope(SupervisorJob()+dispatcher)
  private val restoreStatusGate=RestoreStatusGate<ActiveNativeSession>()
  private var activeNativeSession:ActiveNativeSession?=null
- private var isConnected=true
+ private val protocolState=kotlinx.coroutines.flow.MutableStateFlow(ServiceState.CONNECTED)
+ private val isConnected get()=protocolState.value==ServiceState.CONNECTED
  private val clientMessengers=mutableMapOf<Messenger,ClientMessenger>()
  val requester=Messenger();val client=ClientMessenger()
  init{clientMessengers[requester]=client}
  fun install(protocol:FakeServiceProtocol,descriptor:NativeSessionDescriptor)=runBlocking(dispatcher){val owner=ActiveNativeSession(protocol,descriptor);activeNativeSession=owner;restoreStatusGate.activate(owner)}
  fun ask(id:String)=runBlocking(dispatcher){requestBoundRestoreStatus(requester,id,"7")}
+ fun setState(value:ServiceState)=runBlocking(dispatcher){protocolState.value=value;restoreStatusGate.activate(activeNativeSession)}
  suspend fun finish(){mainScope.coroutineContext[Job]!!.children.toList().joinAll()}
  fun close(){mainScope.cancel();dispatcher.close()}
 """
@@ -185,14 +230,24 @@ fun runActualServiceFixture()=runBlocking {
  // Same cached protocol reference, new logical activation before IO snapshot commits on Main.
  service.install(protocol,descriptor.copy(identity=identity.copy(serviceActivationId="55555555-5555-4555-8555-555555555555")))
  release.countDown();withTimeout(3000){service.finish()};check(service.client.sent.isEmpty());service.close()
- println("Actual Service extracted IO-snapshot/final-Main-fence fixture PASS")
+ // A DNS TUN remains a real owned resource during physical-network loss.
+ val dnsBinding=NativeSessionBinding(descriptor,"","",12,"dns","a".repeat(64),"RECONNECTING")
+ val dns=DnsFallbackProtocol{dnsBinding};val handover=ActualService();handover.install(dns,descriptor);handover.setState(ServiceState.RECONNECTING)
+ handover.ask("44444444-4444-4444-8444-444444444444");withTimeout(3000){handover.finish()}
+ check(handover.client.sent.poll(2,TimeUnit.SECONDS)?.data?.get("restoreSnapshot")==dnsBinding.snapshot("44444444-4444-4444-8444-444444444444","7"))
+ val readEntered=CountDownLatch(1);val readRelease=CountDownLatch(1)
+ dns.read={readEntered.countDown();check(readRelease.await(3,TimeUnit.SECONDS));dnsBinding}
+ handover.ask("44444444-4444-4444-8444-444444444444");check(readEntered.await(3,TimeUnit.SECONDS))
+ // Same logical activation/owner, but native TUN generation changed during the IO read.
+ dns.current={false};readRelease.countDown();withTimeout(3000){handover.finish()};check(handover.client.sent.isEmpty());handover.close()
+ println("Actual Service extracted IO-snapshot/final-Main-fence/DNS-RECONNECTING/native-generation fixture PASS")
 }
 """
 (out/'ActualService.kt').write_text(servicePrefix+method+servicePost,encoding='utf-8')
 
 activity=(Path(sys.argv[4]) if len(sys.argv)>4 else root/'client/android/src/org/amnezia/vpn/AmneziaActivity.kt').read_text(encoding='utf-8')
 s=activity
-activityMethods='\n'.join(block(m).replace('private fun','fun',1) for m in ['private fun invalidateRestoreRequest()', 'private fun notifyNativeSessionObservedWhenQtReady(', 'private fun notifyServiceDisconnectedWhenQtReady()', 'private fun notifyRestoreServiceReadyWhenQtReady()', 'fun qtAndroidControllerInitialized()', 'fun requestRestoreStatus(', 'fun stopBound(', 'private fun adoptConnectedService(', 'private fun doUnbindService()'])
+activityMethods='\n'.join(block(m).replace('private fun','fun',1) for m in ['private fun invalidateRestoreRequest()', 'private fun observeDnsTransportStatus(', 'private fun notifyNativeSessionObservedWhenQtReady(', 'private fun notifyServiceDisconnectedWhenQtReady()', 'private fun notifyRestoreServiceReadyWhenQtReady()', 'fun qtAndroidControllerInitialized()', 'fun requestRestoreStatus(', 'fun stopBound(', 'private fun adoptConnectedService(', 'private fun doUnbindService()'])
 # Control binding callbacks moved into per-bind closure; compile their real signatures/bodies.
 s=block('private fun doBindService()')
 activityMethods+='\n'+'\n'.join(block(m) for m in ['override fun onServiceConnected(', 'override fun onServiceDisconnected(', 'override fun onBindingDied('])
@@ -215,6 +270,7 @@ activityMethods+='\n'+receiver
 
 s=wire
 activityPrefix=r"""
+import org.json.JSONObject
 import org.amnezia.vpn.protocol.*
 import kotlinx.coroutines.*
 import java.util.concurrent.Executors
@@ -261,6 +317,7 @@ private class ActivityMessenger {
  fun reset(){}
 }
 private class ActualActivity {
+ private val dnsTransportNoticeGate=org.amnezia.vpn.protocol.DnsTransportNoticeGate()
  private val dispatcher=Executors.newSingleThreadExecutor().asCoroutineDispatcher()
  private val mainScope=CoroutineScope(SupervisorJob()+dispatcher)
  private val qtInitialized=CompletableDeferred<Unit>()
@@ -309,7 +366,7 @@ private class ActualActivity {
  private val vpnServiceEventHandler=object:ActivityReceiverHandler(ActivityReceiverLooper){override fun handleMessage(msg:ActivityMessage){handleStatus(ActivityEvent.STATUS,msg)}}
  fun receiver()=runBlocking(dispatcher){createBoundActivityMessenger()}
  fun deliver(receiver:ActivityReceiverMessenger,message:ActivityMessage)=runBlocking(dispatcher){receiver.deliver(message)}
- fun connected()=runBlocking(dispatcher){isServiceConnected=true;isWaitingStatus=true;invalidateRestoreRequest();legacyStatusRequestGeneration=restoreBindingGeneration;notifyRestoreServiceReadyWhenQtReady()}
+ fun connected()=runBlocking(dispatcher){isServiceConnected=true;isWaitingStatus=true;invalidateRestoreRequest();boundActivityMessenger=createBoundActivityMessenger();legacyStatusRequestGeneration=restoreBindingGeneration;notifyRestoreServiceReadyWhenQtReady()}
  fun initializeQt()=runBlocking(dispatcher){QtAndroidController.registered=true;qtAndroidControllerInitialized()}
  fun initializeQtFromForeignThread(){QtAndroidController.registered=true;qtAndroidControllerInitialized()}
  fun request(id:String,g:Long)=runBlocking(dispatcher){requestRestoreStatus(id,g)}
@@ -317,6 +374,7 @@ private class ActualActivity {
  suspend fun finish(){mainScope.coroutineContext[Job]!!.children.toList().joinAll()}
  fun sent()=runBlocking(dispatcher){vpnServiceMessenger.sent.toList()}
  fun status(message:ActivityMessage)=runBlocking(dispatcher){handleStatus(ActivityEvent.STATUS,message)}
+ fun dnsNotice(g:String,ready:Boolean)=runBlocking(dispatcher){observeDnsTransportStatus("{\"transport\":\"dns\",\"nativeGeneration\":\"$g\"}",ready)}
  fun close(){mainScope.cancel();dispatcher.close()}
 """
 activityPost=r"""
@@ -345,6 +403,13 @@ fun runActualActivityFixture()=runBlocking {
  activity.status(ActivityMessage(ActivityBundle()));withTimeout(3000){activity.finish()}
  check(QtAndroidController.observed==observedBefore+1)
  activity.close()
+ val notice=ActualActivity();notice.connected();notice.initializeQt();withTimeout(3000){notice.finish()}
+ val beforeDns=QtAndroidController.observed;val readyDns=QtAndroidController.ready.size
+ notice.dnsNotice("100",false);withTimeout(3000){notice.finish()};check(QtAndroidController.observed==beforeDns+1&&QtAndroidController.ready.size==readyDns+1)
+ notice.dnsNotice("100",false);withTimeout(3000){notice.finish()};check(QtAndroidController.observed==beforeDns+1)
+ notice.dnsNotice("100",true);withTimeout(3000){notice.finish()};check(QtAndroidController.observed==beforeDns+2)
+ notice.dnsNotice("101",true);withTimeout(3000){notice.finish()};check(QtAndroidController.observed==beforeDns+3)
+ notice.connected();withTimeout(3000){notice.finish()};notice.dnsNotice("101",true);withTimeout(3000){notice.finish()};check(QtAndroidController.observed==beforeDns+4);notice.close()
  val receivers=ActualActivity();val observedStart=QtAndroidController.observed
  receivers.connected();val oldReceiver=receivers.receiver();receivers.deliver(oldReceiver,ActivityMessage(ActivityBundle()));delay(20)
  check(QtAndroidController.observed==observedStart)

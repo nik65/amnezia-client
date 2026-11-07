@@ -1,0 +1,1154 @@
+[
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/.gitignore",
+    "path": "client/3rd/SortFilterProxyModel/.gitignore",
+    "sha256": "3fffe3119c5897a053208d7770184f8196b274699d44e3ab44e30c7d8e290b9a",
+    "size": 804
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/CMakeLists.txt",
+    "path": "client/3rd/SortFilterProxyModel/CMakeLists.txt",
+    "sha256": "27b0c2f62fee4940d5f6286600370e4b807e60235d8264dea639f5c64616b6d0",
+    "size": 1645
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/LICENSE",
+    "path": "client/3rd/SortFilterProxyModel/LICENSE",
+    "sha256": "8642e24b888e670e3ce2642942a611bfd3c5eb67d72415bdf8f9d4afe554451e",
+    "size": 1082
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/README.md",
+    "path": "client/3rd/SortFilterProxyModel/README.md",
+    "sha256": "956f15923b678bfdebfeb7a62f8d6d05b15c560dcdbdd8a12fcfbfbabbc9a018",
+    "size": 4430
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/SortFilterProxyModel.pri",
+    "path": "client/3rd/SortFilterProxyModel/SortFilterProxyModel.pri",
+    "sha256": "b44bb9b22fa71653b1fd3858a181411a8a8939c76faf76448062bf6ec9d2f14b",
+    "size": 2252
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/SortFilterProxyModel.qbs",
+    "path": "client/3rd/SortFilterProxyModel/SortFilterProxyModel.qbs",
+    "sha256": "91470a539ea84a52f09669eb64e294ce86232b62dc10529802347c9eb0bd04a8",
+    "size": 2137
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/index.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/index.html",
+    "sha256": "d0b60e46f744974337d250fd4f1137021d41a20d381bc683011d1a7499c3471c",
+    "size": 6549
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-allof-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-allof-members.html",
+    "sha256": "bdfb9c8378c8b5ddc2a5fa7815f43d58eef3d8d488e3049752fdf3b066a38cb2",
+    "size": 854
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-allof.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-allof.html",
+    "sha256": "ca21c649febec8afd9c9ac58c4eea3fa99fa2d4333baab0c3edc147df8810cbe",
+    "size": 3429
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-anyof-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-anyof-members.html",
+    "sha256": "9fc5a048d6889884295045962d0c8d688132d63eda03fcfcd57d17e9759475f4",
+    "size": 854
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-anyof.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-anyof.html",
+    "sha256": "b7d9ee9d4c1be4378a18dc3a767ad7caba0da33e072ab49d9f5253dbdbbc5c57",
+    "size": 4039
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionfilter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionfilter-members.html",
+    "sha256": "7059c0d87f8b08012e5ff7221446310ae30734e83578ab5fba1eee8c858a6203",
+    "size": 1060
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionfilter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionfilter.html",
+    "sha256": "160434900e6290c9fd8b40d089c90435abed14070f939ad9f55f0885dd48fadf",
+    "size": 4786
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionrole-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionrole-members.html",
+    "sha256": "a18ae425094c6c10f6db8bacff43c8804209e134fa7f511ef0638f397e39c875",
+    "size": 917
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionrole.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionrole.html",
+    "sha256": "f5903424a39ba748cd3d9c1ba38565f854699b674ae003fb5e962c0fe636a80b",
+    "size": 4353
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionsorter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionsorter-members.html",
+    "sha256": "c2ea1ddd917299af56669e678ee2cfa7a6506b8e28fc440d70163f9bf0159c2a",
+    "size": 1195
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionsorter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-expressionsorter.html",
+    "sha256": "e01b1f1fa3764bfb31c8c83d1e4305786aa60654ae05c13a79c4c2579d5233b0",
+    "size": 6439
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filter-members.html",
+    "sha256": "d3a5a83a8d428b04db53f37d1b009ddee73b50d2a06c7dbdd36f4933f4447b81",
+    "size": 855
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filter.html",
+    "sha256": "abbe4bd0c1398bb978d0c38178b745a157955cc909301ef9b3b26b116944fa68",
+    "size": 3474
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filtercontainer-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filtercontainer-members.html",
+    "sha256": "f1a79bb4443e708fe26eadf59155f347f19bf812a63ef64614edf5b37cf87f28",
+    "size": 818
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filtercontainer.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filtercontainer.html",
+    "sha256": "e0b40dc6cf99bd8f2190da03d0e386d921414881621566d4311a586f4a0883ea",
+    "size": 4054
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filterrole-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filterrole-members.html",
+    "sha256": "632b717742dd0a1a7b30c5fdf9427b3575dc5bfefe19c16bfde07598c2734810",
+    "size": 901
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filterrole.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filterrole.html",
+    "sha256": "3c39d4f3b2562df51145c8b1c8310044d81043a79f4743b2d5d64cfe3d607890",
+    "size": 3887
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filtersorter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filtersorter-members.html",
+    "sha256": "3568bee81285a0976981b327a5aa69898a94c6017d39128829bd4e869e551500",
+    "size": 1171
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filtersorter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-filtersorter.html",
+    "sha256": "b40cac981f46a0dfac90373dfc8f412d029b6abc6f2a339058581546d66d12f3",
+    "size": 5751
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-indexfilter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-indexfilter-members.html",
+    "sha256": "2a5e0ee2a46e1887f1c8d2df3dda515c356736325ff631d102b0a7f102fce726",
+    "size": 1144
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-indexfilter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-indexfilter.html",
+    "sha256": "ef801e665cbf137fea12803c40d4179d04fb4f391e114c5c6537597ccc70e2d6",
+    "size": 5399
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-joinrole-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-joinrole-members.html",
+    "sha256": "596d11b04414012bb151c8221c1e87b875bba5708dd45ce842f91d778e89c9f5",
+    "size": 1002
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-joinrole.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-joinrole.html",
+    "sha256": "9792160a4fb9a5c1bbd8394007d4f4aab6cfa0c222b42ecd479848aaa7fbdf53",
+    "size": 4089
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-proxyrole-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-proxyrole-members.html",
+    "sha256": "ab0c6c49edb089dd31bc2cbabbd4fafc58695f444bfac892454aab7179ac1895",
+    "size": 631
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-proxyrole.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-proxyrole.html",
+    "sha256": "7b9ad0d9319b45d59cd569377c1cb80478fb0bd93fd2253193d5f17cab4aa57e",
+    "size": 1826
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rangefilter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rangefilter-members.html",
+    "sha256": "0dc6225864088ea6de1d341c8c20f7657bcc4b4fbb4442bf1481b5252a730a61",
+    "size": 1536
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rangefilter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rangefilter.html",
+    "sha256": "87d2cf64125937684832af22d7e7b6fd5fde9df0e4c878d53ca7cfc0ea2ab006",
+    "size": 7690
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-regexpfilter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-regexpfilter-members.html",
+    "sha256": "bcf74da86831f28d55fb4fe346f30deb8a0b1a6c792b352e0dcb18c12df3c387",
+    "size": 1406
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-regexpfilter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-regexpfilter.html",
+    "sha256": "a5b6863c88921d81fb43ce00483d629f42433986c1c31249ac0ebaa92a0b498d",
+    "size": 7722
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-regexprole-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-regexprole-members.html",
+    "sha256": "131ba277a2623bc6a94d5e635c14b8b4aa4e220b97f409d897a4d7033051b780",
+    "size": 1037
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-regexprole.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-regexprole.html",
+    "sha256": "403047a3e0a5da565a90c31cb4bad6aa4292b26bbcc52df5bae6aff2ec286b72",
+    "size": 4466
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rolefilter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rolefilter-members.html",
+    "sha256": "5af46eff0d7e9e094e5901f60b078baf4b5f5bf4ad422fab06edc22a0d9863bd",
+    "size": 1004
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rolefilter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rolefilter.html",
+    "sha256": "3990f6861229a00d446c465a94797e8eb3f6d6275cd9c62dc848c1cfad5776d8",
+    "size": 4126
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rolesorter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rolesorter-members.html",
+    "sha256": "be5baf9e7c6a1a3a3d97e275c12b1328a8aebbab3a7210ade196dc71ae70eda8",
+    "size": 1133
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rolesorter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-rolesorter.html",
+    "sha256": "a098d41d8905cac3a898e7968d398d26d51ff71a9e472d353de0813fb1a6f277",
+    "size": 5253
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-singlerole-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-singlerole-members.html",
+    "sha256": "f391932cc040e686fa941ebdc597543aa5d6ccaff043954dc9ce4e03fc30cfa5",
+    "size": 760
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-singlerole.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-singlerole.html",
+    "sha256": "c82a88836775bfa369897eafdd75f521205dc53b840f1b5ad04dabaa76bbd133",
+    "size": 2934
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sorter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sorter-members.html",
+    "sha256": "d8d59a01ba47e7f645bf58d7b0518c5b64b77aa0c4031f15cf4c2b9dca14d30a",
+    "size": 980
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sorter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sorter.html",
+    "sha256": "e3c983c1805d01677f8c777abdb0f4bf902beeb2d9bda9559af02dabaf40c1ff",
+    "size": 4516
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sortercontainer-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sortercontainer-members.html",
+    "sha256": "838d7dc36e1600e02daf5440d2a5303f14c8cfb2a9ca2d807fb2de563f9edde9",
+    "size": 818
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sortercontainer.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sortercontainer.html",
+    "sha256": "201bc85276688392c0b365a8ac11a53cea908448b5ffa5e458f9e3f146df246c",
+    "size": 2968
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sortfilterproxymodel-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sortfilterproxymodel-members.html",
+    "sha256": "bce0a680fb304ef00f4acf700af5ff7294003016d58021314a0a1af719cb505a",
+    "size": 2748
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sortfilterproxymodel.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-sortfilterproxymodel.html",
+    "sha256": "9e430024cfdf1c1dab205baf161f23b1be3023a531cd3004c1dc958b3e262ff3",
+    "size": 13064
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-stringsorter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-stringsorter-members.html",
+    "sha256": "34d73314b77b7267ef53f36f042b4af2e67b5f92921611a5f912f368ee7cfa70",
+    "size": 1807
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-stringsorter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-stringsorter.html",
+    "sha256": "6494fff09f0730489f8a6436c3e516e6e7b0eef9f539f6836c0eaacf0f5cbf5a",
+    "size": 4943
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-switchrole-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-switchrole-members.html",
+    "sha256": "ffd49f20a87c41bd46bd8bc6e36f3491227a754c048cae2e1b7bbf225a35ff18",
+    "size": 1294
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-switchrole.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-switchrole.html",
+    "sha256": "1abbac955d6e351d48ecb0ec5ca933687bdc3b49d26220c06db6cb691c92078c",
+    "size": 7384
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-valuefilter-members.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-valuefilter-members.html",
+    "sha256": "99667ba37de3df58b00a8dff368d4bf5409cbc224a6790c05855afbc492b3dbc",
+    "size": 1129
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-valuefilter.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/qml-sortfilterproxymodel-valuefilter.html",
+    "sha256": "82f0a97ac521cd66ee582e82fc92b3ece94d17c68b047aa25ff538b0b99f190b",
+    "size": 4746
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/sortfilterproxymodel-qmlmodule.html",
+    "path": "client/3rd/SortFilterProxyModel/docs/sortfilterproxymodel-qmlmodule.html",
+    "sha256": "586bc76c4e08806a7a98607d16c450ab8a782c2f01901ccac0f814fb1243dd56",
+    "size": 5733
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/sortfilterproxymodel.index",
+    "path": "client/3rd/SortFilterProxyModel/docs/sortfilterproxymodel.index",
+    "sha256": "1dbe9b6f365a632c6ba16230eec60e16ce385844eedb6dfa4279311953d89cc4",
+    "size": 35999
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/docs/style/offline.css",
+    "path": "client/3rd/SortFilterProxyModel/docs/style/offline.css",
+    "sha256": "04919c798f9d30583db9ccf8233ad61bfbecf3cde073ce18659f01f25080d84a",
+    "size": 13240
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/alloffilter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/alloffilter.cpp",
+    "sha256": "c5d1ed945102900c03f9dda5d954d16821970679e0e9cc1290c7d2182faa50b0",
+    "size": 1012
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/alloffilter.h",
+    "path": "client/3rd/SortFilterProxyModel/filters/alloffilter.h",
+    "sha256": "9b0123cd230ac3c653652bcbe8053bac156d0bf59a0ab7babaa807c4508867b1",
+    "size": 384
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/anyoffilter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/anyoffilter.cpp",
+    "sha256": "4f8ba860ba7947d5174d0da917281619f58af97f2e10fb851c866621109f3dbd",
+    "size": 1474
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/anyoffilter.h",
+    "path": "client/3rd/SortFilterProxyModel/filters/anyoffilter.h",
+    "sha256": "3f7b5c853065474fcaa6ba553b3c45a8a1e18363b74ecc65f33bf56c4195f03d",
+    "size": 384
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/expressionfilter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/expressionfilter.cpp",
+    "sha256": "788245721d363c977ba75386eb22ea0e5f7a186be27976e9ee0d988144f5a46c",
+    "size": 4387
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/expressionfilter.h",
+    "path": "client/3rd/SortFilterProxyModel/filters/expressionfilter.h",
+    "sha256": "3143de9da2c13f94703b397c12af6680554973b6a0b8e9b43570fcec166bdfb8",
+    "size": 964
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/filter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/filter.cpp",
+    "sha256": "332e748dd4074315fe39d10f75137204498b735b2115c3cba22ec66f88e4b72c",
+    "size": 1861
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/filter.h",
+    "path": "client/3rd/SortFilterProxyModel/filters/filter.h",
+    "sha256": "e93532708eab4c2103fb30ef102d026f29484e197a245247aacecf0919240a75",
+    "size": 1061
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/filtercontainer.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/filtercontainer.cpp",
+    "sha256": "460cd1d5de38ca38349a90c694ddec9deafbb97cb66e55dce2eb6b8dc1fcec56",
+    "size": 3522
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/filtercontainer.h",
+    "path": "client/3rd/SortFilterProxyModel/filters/filtercontainer.h",
+    "sha256": "7588fa31a394237ae180eab3bddd91c7fd28ccca1aa77e06299aa0ffd2599e17",
+    "size": 1749
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/filtercontainerfilter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/filtercontainerfilter.cpp",
+    "sha256": "a725b3a69bcc6eb8f9929faee9e466738238abf428741ad8a0903773ac423b39",
+    "size": 592
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/filtercontainerfilter.h",
+    "path": "client/3rd/SortFilterProxyModel/filters/filtercontainerfilter.h",
+    "sha256": "87e4c910db618c7a5b12508780d4f21846467892524a786320d74bd331370952",
+    "size": 760
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/filtersqmltypes.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/filtersqmltypes.cpp",
+    "sha256": "98ea3797edd2c2df6d5b8ffc296c86a718f1b6923d3028d5ee2dc73a6ad0b908",
+    "size": 1184
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/indexfilter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/indexfilter.cpp",
+    "sha256": "969176b1f3b6aba71efb8a5f2ab776ccf9409bddbd8ed73bbc9e10c7a153bf26",
+    "size": 2832
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/indexfilter.h",
+    "path": "client/3rd/SortFilterProxyModel/filters/indexfilter.h",
+    "sha256": "9ff07bfd6c5a268ae48c78d565d1c9289a581cac32f7f544e9a0cc391a764a04",
+    "size": 895
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/rangefilter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/rangefilter.cpp",
+    "sha256": "39d5241a16d9599c0db73f54808d7cc9f98c284f98f9c11d7e510e9332832a10",
+    "size": 3365
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/rangefilter.h",
+    "path": "client/3rd/SortFilterProxyModel/filters/rangefilter.h",
+    "sha256": "6c8e270b9392d56404687b3e7b42ad9c513a49a76967e91d1a8c9775027ca550",
+    "size": 1438
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/regexpfilter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/regexpfilter.cpp",
+    "sha256": "fffd0b474dd5612c7c66d3c22f82dcfee2232f856b762f501bd8ce23ca7e1ca4",
+    "size": 2279
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/regexpfilter.h",
+    "path": "client/3rd/SortFilterProxyModel/filters/regexpfilter.h",
+    "sha256": "dd52efd69c0015d3e22d4a2340b722d8b2a9ffe24fdca735179a19990dfccc19",
+    "size": 1003
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/rolefilter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/rolefilter.cpp",
+    "sha256": "82a0ffc9d08a8378ee7f39d7def7212bde5aea2adb27a08b2ba2a2024f3beb1d",
+    "size": 1156
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/rolefilter.h",
+    "path": "client/3rd/SortFilterProxyModel/filters/rolefilter.h",
+    "sha256": "0abdf13c4b9617344bc90b01a8223b8b987f82d2f9209426b184fbee3de854e1",
+    "size": 563
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/valuefilter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/filters/valuefilter.cpp",
+    "sha256": "a09f2caeb10f2319d2145afbed4f0f021647d518babfc130f736c1c492cf789b",
+    "size": 1304
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/filters/valuefilter.h",
+    "path": "client/3rd/SortFilterProxyModel/filters/valuefilter.h",
+    "sha256": "1d01be59e3bd626a66f905eb290b33cf84fd766ab606bbb2dc622d90540a9fa3",
+    "size": 584
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/index.qdoc",
+    "path": "client/3rd/SortFilterProxyModel/index.qdoc",
+    "sha256": "d6fbe219d5f2ca2901208e22b8bd14aaa338df388a48fb37e9ae3114d250cbd1",
+    "size": 567
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/offline.css",
+    "path": "client/3rd/SortFilterProxyModel/offline.css",
+    "sha256": "04919c798f9d30583db9ccf8233ad61bfbecf3cde073ce18659f01f25080d84a",
+    "size": 13240
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/expressionrole.cpp",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/expressionrole.cpp",
+    "sha256": "e290b9ccbc94b8f4cdd710f112a93343807ac6042c98c9e84f96fe04fe91c0f3",
+    "size": 4293
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/expressionrole.h",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/expressionrole.h",
+    "sha256": "b7a4e1a2ef4752d25db9afee2373cf563dd9912dfd3b8eaa01427ead03f4a69f",
+    "size": 953
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/filterrole.cpp",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/filterrole.cpp",
+    "sha256": "73e892ffd042b2185707be15396261d0dc70f4353ce8c93f176334657dcb20e2",
+    "size": 1707
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/filterrole.h",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/filterrole.h",
+    "sha256": "77ac01e0749b499ae4cc3dea2ab23d22417086c5c020385e083bf872795bbcbb",
+    "size": 700
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/joinrole.cpp",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/joinrole.cpp",
+    "sha256": "48000201daeb1d78d9026a052e58ed3891e871afab2bf791bba8339dc84f4a21",
+    "size": 1868
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/joinrole.h",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/joinrole.h",
+    "sha256": "c3376f6705131fcdbf36a7eded509bb865acf4b7332e2e207d21f1793c52bc7f",
+    "size": 808
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/proxyrole.cpp",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/proxyrole.cpp",
+    "sha256": "08c5a75fd68d09da59dd5ac2329684765be65a5d29c781f9cfc6e8a3e83c2e6d",
+    "size": 1165
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/proxyrole.h",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/proxyrole.h",
+    "sha256": "dfbe0dd6690dff391ae933aea9a25af80e0ba9c08c5815f0b444f4b8d0900bf9",
+    "size": 812
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/proxyrolecontainer.cpp",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/proxyrolecontainer.cpp",
+    "sha256": "7ecd81bc292a42dc111713975ed24043de12b745d3b3d9840da51123ced71070",
+    "size": 1860
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/proxyrolecontainer.h",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/proxyrolecontainer.h",
+    "sha256": "b9182c7356a483dfc7dbb3f7ab539480c1108510319080bf10884c4c8fc55925",
+    "size": 1226
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/proxyrolesqmltypes.cpp",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/proxyrolesqmltypes.cpp",
+    "sha256": "0c974c9335f666c32419ccb60ed7c7d0013aba3a7f250e5181577bba61c60e58",
+    "size": 814
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/regexprole.cpp",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/regexprole.cpp",
+    "sha256": "c442d37c0508e335a5dbfd48d233a0ff81ef7d1aad5a2ac6ceef0f894b2d823d",
+    "size": 3015
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/regexprole.h",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/regexprole.h",
+    "sha256": "d79a04f3e5ad48b34ef4faa4d001320e15d9c90ebf137aa967f0339049b1b4e2",
+    "size": 1152
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/singlerole.cpp",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/singlerole.cpp",
+    "sha256": "49b407b7b45a37500cece055ba1eed5ec97dd7da3594f8cb2beb246391125291",
+    "size": 1262
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/singlerole.h",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/singlerole.h",
+    "sha256": "8ce452b3b1d8caa05f6ff64b8f1bff53fce5caf955949714cc04850f10f18761",
+    "size": 687
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/switchrole.cpp",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/switchrole.cpp",
+    "sha256": "730e459e5d7837fd023a8d4a176ad2a411e1dfe7026fe54593d43a10010b9b2d",
+    "size": 5003
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/proxyroles/switchrole.h",
+    "path": "client/3rd/SortFilterProxyModel/proxyroles/switchrole.h",
+    "sha256": "399c5bf41634d5a6f56bb9cbb0ea0e7874d5ff194d9b7db87ce28a0d9e8cead5",
+    "size": 1816
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/qpm.json",
+    "path": "client/3rd/SortFilterProxyModel/qpm.json",
+    "sha256": "36ef381438107f78130bfe8c7b3b7e6408facffdb79c0268afcd40803477a03b",
+    "size": 498
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/qqmlsortfilterproxymodel.cpp",
+    "path": "client/3rd/SortFilterProxyModel/qqmlsortfilterproxymodel.cpp",
+    "sha256": "d646fde5c342ba5f7665e81db7609feaaca0748a7cc9ef7711cdd4490e6db63f",
+    "size": 17381
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/qqmlsortfilterproxymodel.h",
+    "path": "client/3rd/SortFilterProxyModel/qqmlsortfilterproxymodel.h",
+    "sha256": "60878e87882ed5a94553642c907c1ced4b574db99856a9c964d3245c59cb9d77",
+    "size": 5166
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/expressionsorter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/sorters/expressionsorter.cpp",
+    "sha256": "8f8c18a54790991b1d5c78e91b2b740a04c7a98d17136bbc53cd72ae0e421557",
+    "size": 5140
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/expressionsorter.h",
+    "path": "client/3rd/SortFilterProxyModel/sorters/expressionsorter.h",
+    "sha256": "37839e7126a1c094b603473ccea151d171522b4c050ebca269a67d4198ca9a8b",
+    "size": 1025
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/filtersorter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/sorters/filtersorter.cpp",
+    "sha256": "ecbb35cb4600181280fdd9c48b9dac61074f5805342764306f4d4c8a33b67fd5",
+    "size": 2225
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/filtersorter.h",
+    "path": "client/3rd/SortFilterProxyModel/sorters/filtersorter.h",
+    "sha256": "3cfc3e4e97748d8f4a2f84e46929e2cfaf3c05cb47dd7fd467805d0453db7eb7",
+    "size": 930
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/rolesorter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/sorters/rolesorter.cpp",
+    "sha256": "3f08269169edf20e7f962141aa832cf35e49c0854ab14885976608cb5128f8a6",
+    "size": 1726
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/rolesorter.h",
+    "path": "client/3rd/SortFilterProxyModel/sorters/rolesorter.h",
+    "sha256": "1de643ff2cf976a39a2d97b502a3a8d90d0962ccfd4c65ab72a5c47be68d9e15",
+    "size": 750
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/sorter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/sorters/sorter.cpp",
+    "sha256": "502173d6152a425b2be87541b0b4efd5b9c1ec7ee6873f6ce0da03b708a16f04",
+    "size": 3405
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/sorter.h",
+    "path": "client/3rd/SortFilterProxyModel/sorters/sorter.h",
+    "sha256": "9bb5472aad10a53e828601b8215472e65fc9451cd3c5299e14a63e2b4fb5c51b",
+    "size": 1682
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/sortercontainer.cpp",
+    "path": "client/3rd/SortFilterProxyModel/sorters/sortercontainer.cpp",
+    "sha256": "2120484e4233791f711491aabc9f8498836d0d7b7ab4932d015b9794d103e957",
+    "size": 3530
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/sortercontainer.h",
+    "path": "client/3rd/SortFilterProxyModel/sorters/sortercontainer.h",
+    "sha256": "ec005a3f21fd72f9f7f06bb3bb86e6ea38a9ac877a9b7c4cb16c104819dd49a5",
+    "size": 1770
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/sortersqmltypes.cpp",
+    "path": "client/3rd/SortFilterProxyModel/sorters/sortersqmltypes.cpp",
+    "sha256": "d61bb83cf2b1111c5482292fdab70b02ed1ed7f52f603ed99e27e896ae9ad1c5",
+    "size": 911
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/stringsorter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/sorters/stringsorter.cpp",
+    "sha256": "073b6654cbe9aad22380ea666923334417b6317505f0ac157b2434c4069baff7",
+    "size": 3142
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sorters/stringsorter.h",
+    "path": "client/3rd/SortFilterProxyModel/sorters/stringsorter.h",
+    "sha256": "b36cd35f255d9b358626f8e8bfe3f59047d93ff25abfdb1e56c079cd3b76fac8",
+    "size": 1342
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/sortfilterproxymodel.qdocconf",
+    "path": "client/3rd/SortFilterProxyModel/sortfilterproxymodel.qdocconf",
+    "sha256": "868345d1908a95a9ea50fbb0417ef424bd7878542eef3126691cf086419d4215",
+    "size": 299
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/BLACKLIST",
+    "path": "client/3rd/SortFilterProxyModel/tests/BLACKLIST",
+    "sha256": "9b2ad19d912b9409b8643c86edf3f4039cc04f1a56160dedbddc6545be0e4360",
+    "size": 69
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/SortFilterProxyModel.pro",
+    "path": "client/3rd/SortFilterProxyModel/tests/SortFilterProxyModel.pro",
+    "sha256": "32e99a957b7be37bbccc281850999e30f30cf11ff6a1e82240483eaef73d2c0c",
+    "size": 821
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/indexsorter.cpp",
+    "path": "client/3rd/SortFilterProxyModel/tests/indexsorter.cpp",
+    "sha256": "d2b38db012c082962b63ba750582b6e84a441c9bfff2d527c1139023a8c5f667",
+    "size": 772
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/indexsorter.h",
+    "path": "client/3rd/SortFilterProxyModel/tests/indexsorter.h",
+    "sha256": "6ddd1899732ee6433d3db0816d0357e773ed6a7611a2324ade5c41925ce5781c",
+    "size": 579
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/testroles.cpp",
+    "path": "client/3rd/SortFilterProxyModel/tests/testroles.cpp",
+    "sha256": "98d83c675187089a3b821df478e94bc37e135ce8f166a43891b0ff61e571d772",
+    "size": 1175
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/testroles.h",
+    "path": "client/3rd/SortFilterProxyModel/tests/testroles.h",
+    "sha256": "fb12bba29ea242e3087060c5adc8cf58329a5ff9fd295a9edc8b845b0095257b",
+    "size": 1077
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_builtins.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_builtins.qml",
+    "sha256": "f4f5803d6defbd2a90f439bb3f8b750d8a08a72fddecd21aa5201fc5c75eadf2",
+    "size": 1752
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_delayed.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_delayed.qml",
+    "sha256": "d5e0cd25104c72bb26af270d6925722ac0a3f020cd3c59ff064dcbe6c54e56be",
+    "size": 7178
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_expressionrole.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_expressionrole.qml",
+    "sha256": "f3ddd9c4e08bba9872b5c0b341f0d9bd629ad23516fb15724121214a1774979e",
+    "size": 984
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_filtercontainerattached.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_filtercontainerattached.qml",
+    "sha256": "6f1c4f6e353f69008eb1f064e533e2e8565cc4d568314d2593a7ef9d97b01489",
+    "size": 1461
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_filtercontainers.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_filtercontainers.qml",
+    "sha256": "c253fef3367044b9533c19e41de44cfac5ba35da8467bc491557fc8cd179c552",
+    "size": 2741
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_filterrole.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_filterrole.qml",
+    "sha256": "0354975bde18fcc0aab925b49051e72effadf7970cfab35e7025e29b293622d2",
+    "size": 1288
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_filtersorter.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_filtersorter.qml",
+    "sha256": "5ed13743239596af5d843091bde17010fc1e9728e6fd9c872188388ef7e6d68d",
+    "size": 1189
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_helpers.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_helpers.qml",
+    "sha256": "4a924d9d2c2ebdfce907744de782f4da499d4dfb2f482d086c18eeadc5a16945",
+    "size": 3484
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_indexfilter.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_indexfilter.qml",
+    "sha256": "60f78fad03d045930937935897ed5fe6b36b7841818ec19f384e0d09454e1988",
+    "size": 3071
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_joinrole.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_joinrole.qml",
+    "sha256": "b6c140b596124556a6d2f9be488fe614e3bc9ba7562ed9ae7aed6f04248b812b",
+    "size": 1146
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_proxyroles.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_proxyroles.qml",
+    "sha256": "ecc5545a6b5b347ac823c8a9e785944dc8902f6dda2a61a436c169a0bd84baf0",
+    "size": 3556
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_rangefilter.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_rangefilter.qml",
+    "sha256": "0b6b7a89ca6602354b042bb172417391beb7b765ccb5bbcfb69de8140140a46d",
+    "size": 3575
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_regexprole.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_regexprole.qml",
+    "sha256": "e297811b07a3218effd56f18262008c56bb7087360bb1bfbec047b4d1973fec4",
+    "size": 1816
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_rolesorter.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_rolesorter.qml",
+    "sha256": "13155804fd4275f972c5fffd15b346fdb5daf936b45fd109fe144ef193ed63cf",
+    "size": 2304
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_sortercontainerattached.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_sortercontainerattached.qml",
+    "sha256": "198a26e8f2f4050504bff75d45b0d4c9971133bf14729f3d7a0b71796abf0fc6",
+    "size": 4368
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_sorters.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_sorters.qml",
+    "sha256": "65545b619cbd03bfbfa22a88dda8c9a716a86aee0f3770b604b62807aa8ab38a",
+    "size": 5784
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_sortfilterproxymodel.cpp",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_sortfilterproxymodel.cpp",
+    "sha256": "d64643f31ec590dd143123ba398193e1783c0a36b6e8f86d5df66e7d4478026e",
+    "size": 73
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_sourceroles.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_sourceroles.qml",
+    "sha256": "fd060a7088013176702d45a64a0a1ac2b0df3e096749f0584c286776f00bd17a",
+    "size": 1167
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_stringsorter.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_stringsorter.qml",
+    "sha256": "7ce676bc304da46758546068ea33c8ec16292d69050c00e08f71ec75e3fe5347",
+    "size": 3194
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/tests/tst_switchrole.qml",
+    "path": "client/3rd/SortFilterProxyModel/tests/tst_switchrole.qml",
+    "sha256": "878f6bdb12e4f0f9f7507edf4ffe35434236ab9378c64ce478701a9713d6417c",
+    "size": 3034
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/utils/utils.cpp",
+    "path": "client/3rd/SortFilterProxyModel/utils/utils.cpp",
+    "sha256": "9c6f5457ea84b40cf676619fcbdb7084c9c48fb8966209eed1fede73ab49f2ac",
+    "size": 2325
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/SortFilterProxyModel/utils/utils.h",
+    "path": "client/3rd/SortFilterProxyModel/utils/utils.h",
+    "sha256": "ae940755bb8747222dd7dee5b802fa592b6598ba48728c0f798d5d0dd19c31f4",
+    "size": 588
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/.gitignore",
+    "path": "client/3rd/qtkeychain/.gitignore",
+    "sha256": "92e4ed2871096da4fc103a3cb9dff3079480075c4141b088eb30bcbe65ca6da1",
+    "size": 1468
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/CMakeLists.txt",
+    "path": "client/3rd/qtkeychain/CMakeLists.txt",
+    "sha256": "12ff720af0988ce9e684b254182b3297ba79e8bb7efc5b47d6d29a82b3ca2544",
+    "size": 7253
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/COPYING",
+    "path": "client/3rd/qtkeychain/COPYING",
+    "sha256": "ca46b73d5159548ab52834db51f195aa3d1f277f020e9dca92f4beb21b468a50",
+    "size": 1341
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/ChangeLog",
+    "path": "client/3rd/qtkeychain/ChangeLog",
+    "sha256": "828fbd87b83475255db13274ec54626a334111c8d0db5aa248e4f21c33c480a8",
+    "size": 4748
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/QtKeychainConfig.cmake.in",
+    "path": "client/3rd/qtkeychain/QtKeychainConfig.cmake.in",
+    "sha256": "9c581ca484b0902cc56519bec830f8c81d4250480922e1f9d6635466df6594e7",
+    "size": 1129
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/ReadMe.md",
+    "path": "client/3rd/qtkeychain/ReadMe.md",
+    "sha256": "5be04f3b1391a2cfae92c86c7afc1b29800e5f20227c07476bc44a95d6a4f4b9",
+    "size": 1455
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/TestAppExample/.gitignore",
+    "path": "client/3rd/qtkeychain/TestAppExample/.gitignore",
+    "sha256": "c5a8699f53e4df57f1f81867cc2cd23a646a0576e319db876d73b848a31108cd",
+    "size": 741
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/TestAppExample/TestAppExample.pro",
+    "path": "client/3rd/qtkeychain/TestAppExample/TestAppExample.pro",
+    "sha256": "7da5c8de1719e72f8de7de67f793077f6f9d83dbe218335623a7e79701afac8a",
+    "size": 773
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/TestAppExample/keychainclass.cpp",
+    "path": "client/3rd/qtkeychain/TestAppExample/keychainclass.cpp",
+    "sha256": "6d2da3ccbbfe52e7a1bedcca91fd84f68a03c568aa3949b3c3824a618c8c1c4a",
+    "size": 1884
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/TestAppExample/keychainclass.h",
+    "path": "client/3rd/qtkeychain/TestAppExample/keychainclass.h",
+    "sha256": "1b8c7981bb5ae27339a3b079882b6164b7018fd8c68e223052a5b10198eaaa71",
+    "size": 777
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/TestAppExample/main.cpp",
+    "path": "client/3rd/qtkeychain/TestAppExample/main.cpp",
+    "sha256": "f8b13e7b01c9fb51b2eece39954e76fa45c07324d115c3ed6315deb85f39c6c3",
+    "size": 788
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/TestAppExample/main.qml",
+    "path": "client/3rd/qtkeychain/TestAppExample/main.qml",
+    "sha256": "5500d135aab19c3156bd7ecd6b54fa44ded59d25dc93fa5b941e0879ae339d35",
+    "size": 3603
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/TestAppExample/qml.qrc",
+    "path": "client/3rd/qtkeychain/TestAppExample/qml.qrc",
+    "sha256": "95bc6506415c366b473a11b9e0711a892808fcab1fcf916561a758ef881eade0",
+    "size": 87
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/appveyor.yml",
+    "path": "client/3rd/qtkeychain/appveyor.yml",
+    "sha256": "92678011a7c6c4d0457cf4980691b7ba83ea45bc45f80fef970f5e83a9cf0414",
+    "size": 812
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/appveyorHelp.psm1",
+    "path": "client/3rd/qtkeychain/appveyorHelp.psm1",
+    "sha256": "b65899a3c823b3ead1608f26200021b84b42bb0e73e770a45a8bcd4c6da59732",
+    "size": 11573
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/cmake/Modules/ECMGeneratePriFile.cmake",
+    "path": "client/3rd/qtkeychain/cmake/Modules/ECMGeneratePriFile.cmake",
+    "sha256": "61085aed1081c6f67f2e67ab38687e76ad943dde2f7df7091539fc7501c330ed",
+    "size": 10959
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/cmake/Modules/ECMPackageConfigHelpers.cmake",
+    "path": "client/3rd/qtkeychain/cmake/Modules/ECMPackageConfigHelpers.cmake",
+    "sha256": "2d268c210f8cd209a18d29d9c7e699438b34502dda01d6b462abf61156fc54da",
+    "size": 7094
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/cmake/Modules/ECMQueryQt.cmake",
+    "path": "client/3rd/qtkeychain/cmake/Modules/ECMQueryQt.cmake",
+    "sha256": "621b3791cd2ad631fcd956eddd992cc074a1c0c98c2c0ff485e0b97c899faafa",
+    "size": 3641
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/cmake/Modules/ECMSetupVersion.cmake",
+    "path": "client/3rd/qtkeychain/cmake/Modules/ECMSetupVersion.cmake",
+    "sha256": "5d84fb3e7473f37c6dcae3b32e8f91d834a422e1335d5a30dd37bed9da1d4957",
+    "size": 8243
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/cmake/Modules/QtVersionOption.cmake",
+    "path": "client/3rd/qtkeychain/cmake/Modules/QtVersionOption.cmake",
+    "sha256": "6739c86f8b3d515f9b811f13a7b3eb8e98d3edb54d87f63d08f37dbb543234e8",
+    "size": 989
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain.pri",
+    "path": "client/3rd/qtkeychain/qtkeychain.pri",
+    "sha256": "ab208ac829cd1082e310b6adeef08e81f5b493e0124c7f3add4bc302eaf12cd3",
+    "size": 2826
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/CMakeLists.txt",
+    "path": "client/3rd/qtkeychain/qtkeychain/CMakeLists.txt",
+    "sha256": "8adc828e81699c71d475c47424f0fe8db5166a909911a5a70c60e6f1c1390a89",
+    "size": 4352
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/androidkeystore.cpp",
+    "path": "client/3rd/qtkeychain/qtkeychain/androidkeystore.cpp",
+    "sha256": "ae2a85b4562d12cadebdfe1a978c6c6e2105fc448af0ec4e57774f433ba74fbf",
+    "size": 10222
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/androidkeystore_p.h",
+    "path": "client/3rd/qtkeychain/qtkeychain/androidkeystore_p.h",
+    "sha256": "34a3665d67953c1be1c1c22812589ae978145996f5df3c53d24bcf665c6dae8f",
+    "size": 7894
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/gnomekeyring.cpp",
+    "path": "client/3rd/qtkeychain/qtkeychain/gnomekeyring.cpp",
+    "sha256": "4a1e2f10e25d5472a991590baf6e5c2749de80a9c9cb9eb0ad94f776556182dc",
+    "size": 3364
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/gnomekeyring_p.h",
+    "path": "client/3rd/qtkeychain/qtkeychain/gnomekeyring_p.h",
+    "sha256": "8891d7ead27fb26e429fd3cc58edc2cfd2b9840973483f883f083e391d159477",
+    "size": 3493
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/keychain.cpp",
+    "path": "client/3rd/qtkeychain/qtkeychain/keychain.cpp",
+    "sha256": "19f01b47e0e4734a224a851645f66093b05ccf4ff40de54eefd01d78f80ca872",
+    "size": 5612
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/keychain.h",
+    "path": "client/3rd/qtkeychain/qtkeychain/keychain.h",
+    "sha256": "d814e7adccc3b13ada8b7a02a8dc6cae58e2bfcdf1580cc550853093b225f44e",
+    "size": 8478
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/keychain_android.cpp",
+    "path": "client/3rd/qtkeychain/qtkeychain/keychain_android.cpp",
+    "sha256": "a6b83fabdebee0df2b36b25fd5a777cc1948028303612f97d44f85fa1cacbcdc",
+    "size": 7058
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/keychain_apple.mm",
+    "path": "client/3rd/qtkeychain/qtkeychain/keychain_apple.mm",
+    "sha256": "f24ac8c5b03beff9759da40ff2cd279fbaed009dd52b51ee8c652f0f6b5cdd9e",
+    "size": 10335
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/keychain_haiku.cpp",
+    "path": "client/3rd/qtkeychain/qtkeychain/keychain_haiku.cpp",
+    "sha256": "ed5063129d8e9a07b62004ca62a8af7decf9bebbfd98bcbb47ffd724a44e2fcf",
+    "size": 5301
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/keychain_p.h",
+    "path": "client/3rd/qtkeychain/qtkeychain/keychain_p.h",
+    "sha256": "344ea23ee7fe63d31361b156977058f978b93b78921bf7aebaf60d60e1e21911",
+    "size": 4397
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/keychain_unix.cpp",
+    "path": "client/3rd/qtkeychain/qtkeychain/keychain_unix.cpp",
+    "sha256": "b924c5cd5fd94b878cd318f377a47ed06f7f34827ba25be6ba418bf7bca57269",
+    "size": 24007
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/keychain_win.cpp",
+    "path": "client/3rd/qtkeychain/qtkeychain/keychain_win.cpp",
+    "sha256": "01b47ebe70ddc513127825a7c21a8e1b72129d9f72520c7234fb81025a4b2b10",
+    "size": 6259
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/libsecret.cpp",
+    "path": "client/3rd/qtkeychain/qtkeychain/libsecret.cpp",
+    "sha256": "b3991766386c330c8cd0275f0ba26acb148ed3039a952590ca4820e35a63cca3",
+    "size": 11474
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/libsecret_p.h",
+    "path": "client/3rd/qtkeychain/qtkeychain/libsecret_p.h",
+    "sha256": "631940217fb0245659fc0e0206bf0cb684581b84fa8813e4ad551654be0ee395",
+    "size": 766
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/org.kde.KWallet.xml",
+    "path": "client/3rd/qtkeychain/qtkeychain/org.kde.KWallet.xml",
+    "sha256": "a351d67d6bf5c88267c9b1259b1ec0d8b8d862b25b533a8c2c88f9d0db3c4973",
+    "size": 10762
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/plaintextstore.cpp",
+    "path": "client/3rd/qtkeychain/qtkeychain/plaintextstore.cpp",
+    "sha256": "c21eea65b4c9764a066fd6341d6857fa01323812881c8f0f029606a1e7b911ea",
+    "size": 3517
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/qtkeychain/plaintextstore_p.h",
+    "path": "client/3rd/qtkeychain/qtkeychain/plaintextstore_p.h",
+    "sha256": "1c5509d3ebc422a207634bda1818a99fafa7a8eadb2bcc1b6791199ad9e3e983",
+    "size": 1668
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/testclient.cpp",
+    "path": "client/3rd/qtkeychain/testclient.cpp",
+    "sha256": "96082683ad811458b381bac5c70608cb4b85ec07f37715aa250dcf88f028e785",
+    "size": 4983
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/translations/qtkeychain_de.ts",
+    "path": "client/3rd/qtkeychain/translations/qtkeychain_de.ts",
+    "sha256": "643f68e2710b5e1db1cfb89dec136183b9cfe2961c52447d449692c848eef970",
+    "size": 7312
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/translations/qtkeychain_fr.ts",
+    "path": "client/3rd/qtkeychain/translations/qtkeychain_fr.ts",
+    "sha256": "df15a137e07c9433c2f3dbdf54ea3a36c398cf3c6cf6777356522f46ae8e2401",
+    "size": 11181
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/translations/qtkeychain_nl.ts",
+    "path": "client/3rd/qtkeychain/translations/qtkeychain_nl.ts",
+    "sha256": "3a939b1ce418d011a6aaaa15407bfacc6aa3622f8ede91698540d173b1c055cf",
+    "size": 13331
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/translations/qtkeychain_ro.ts",
+    "path": "client/3rd/qtkeychain/translations/qtkeychain_ro.ts",
+    "sha256": "3236e8ee4c5b9dbbabb09d81c22f714f19e3aa33ce9078ca9b15a48054c26f3b",
+    "size": 7362
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/translations/qtkeychain_ru.ts",
+    "path": "client/3rd/qtkeychain/translations/qtkeychain_ru.ts",
+    "sha256": "382dbb5c2552826f1cda6e35e908989b90b0ea4f49152ed87d301de206acdf60",
+    "size": 10617
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/translations/qtkeychain_zh.ts",
+    "path": "client/3rd/qtkeychain/translations/qtkeychain_zh.ts",
+    "sha256": "645580261c6276c606d4904ed34c8383d117e4f0d7f87468353eccb3967cbcb4",
+    "size": 7052
+  },
+  {
+    "exportPath": "docs/development/pause-2026-11-07/materialized-submodules/client/3rd/qtkeychain/translations/translations.qrc.in",
+    "path": "client/3rd/qtkeychain/translations/translations.qrc.in",
+    "sha256": "ab3d3499d343e7054a8a7a3c3031d58f021c8c42ab4c5102dc3df33dd17722fa",
+    "size": 88
+  }
+]

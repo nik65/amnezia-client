@@ -339,14 +339,15 @@ void HeadlessUpdateManager::initializeState()
             m_lastError = directoryError;
         }
     }
-    loadState();
+    bool pendingUpdateJournalValidated = false;
+    loadState(&pendingUpdateJournalValidated);
     collectGarbage();
     if (!m_stateValid && m_lastError.isEmpty()) {
         m_lastState = QStringLiteral("recovery_required");
         m_lastError = QStringLiteral("headless update storage is not secure");
     }
     if (m_stateValid && m_lastState != QStringLiteral("unsupported_payload_contract")) {
-        if (!m_rollbackDirectory.isEmpty() && !loadRollbackReceipt()) {
+        if (!m_rollbackDirectory.isEmpty() && !loadRollbackReceipt(pendingUpdateJournalValidated)) {
             m_stateValid = false;
             m_lastState = QStringLiteral("recovery_required");
             m_lastError = QStringLiteral("headless rollback receipt is invalid");
@@ -2264,8 +2265,9 @@ bool HeadlessUpdateManager::restoreCurrentPair(QString *error)
     return ok;
 }
 
-bool HeadlessUpdateManager::loadState()
+bool HeadlessUpdateManager::loadState(bool *pendingUpdateJournalValidated)
 {
+    if (pendingUpdateJournalValidated) *pendingUpdateJournalValidated = false;
     const QStringList managedFiles = managedPayloadFiles();
     if (m_statePath.isEmpty()) {
         return true;
@@ -2783,8 +2785,10 @@ bool HeadlessUpdateManager::loadState()
             // is deliberately exempt: replacement may already have started,
             // so explicit rollback must be able to repair a mixed pair.
             for (const QString &name : managedFiles) {
-                if (!verifyManagedInstalledFile(name, candidateHashes.value(name).toString(),
-                                                -1, nullptr)) {
+                qint64 candidateSize = -1;
+                if (!jsonInteger(candidateSizes.value(name), 1, MaximumArtifactBytes, candidateSize)
+                    || !verifyManagedInstalledFile(name, candidateHashes.value(name).toString(),
+                                                    candidateSize, nullptr)) {
                     m_stateValid = false;
                     m_lastState = QStringLiteral("recovery_required");
                     m_lastError = QStringLiteral("headless journal is not bound to the installed binary pair");
@@ -2888,6 +2892,12 @@ bool HeadlessUpdateManager::loadState()
             // next checkAndApply() must health-check both binaries before
             // removing the journal.
             m_lastState = QStringLiteral("restart_pending");
+            if (pendingUpdateJournalValidated && updateJournalOwnsRollback) {
+                // Both installed and rollback pairs, their identities and the
+                // journal were validated above.  The previous update's sidecar
+                // is superseded until acknowledgement commits the new one.
+                *pendingUpdateJournalValidated = true;
+            }
         } else if (phase == QStringLiteral("rollback_restart_pending")
                    && !m_rollbackVersion.isEmpty()
                    && m_lastState != QStringLiteral("rollback_failed")) {
@@ -3025,7 +3035,7 @@ bool HeadlessUpdateManager::writeRollbackReceipt(QString *error) const
     return durableSyncFileAndDirectory(m_rollbackReceiptPath);
 }
 
-bool HeadlessUpdateManager::loadRollbackReceipt()
+bool HeadlessUpdateManager::loadRollbackReceipt(bool pendingUpdateJournalValidated)
 {
     if (m_rollbackReceiptPath.isEmpty() || !QFileInfo::exists(m_rollbackReceiptPath)) {
         return true;
@@ -3044,6 +3054,14 @@ bool HeadlessUpdateManager::loadRollbackReceipt()
         return false;
     }
 #endif
+    if (pendingUpdateJournalValidated) {
+        // A restart can occur before the new rollback sidecar is published.
+        // Only the fully validated pending update journal may supersede it;
+        // stable states and rollback transactions still require exact binding.
+        // Leave the old bytes intact here.  checkAndApply() rechecks the new
+        // installed pair and writes its receipt under the transaction lock.
+        return true;
+    }
     QFile file(m_rollbackReceiptPath);
     QJsonParseError parseError;
     if (!file.open(QIODevice::ReadOnly)) return false;

@@ -621,10 +621,8 @@ QJsonObject XrayConfigurator::buildStreamSettings(const XrayServerConfig &srv, c
         xo[QStringLiteral("host")] = hostEff;
         if (!xhttp.path.isEmpty())
             xo[QStringLiteral("path")] = xhttp.path;
-        QString modeEff = normalizeXhttpMode(xhttp.mode);
-        if (modeEff == QLatin1String("auto") || modeEff == QLatin1String("packet-up")) {
-            modeEff = QStringLiteral("stream-one");
-        }
+        // Preserve the selected transport semantics; CDN compatibility differs by mode.
+        const QString modeEff = normalizeXhttpMode(xhttp.mode);
         xo[QStringLiteral("mode")] = modeEff;
 
         // No "Host" in headers: xray rejects it when the top-level "host" field is set.

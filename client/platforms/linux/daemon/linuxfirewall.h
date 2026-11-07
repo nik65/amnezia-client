@@ -36,6 +36,8 @@
 
 #include <QString>
 #include <QStringList>
+#include <QVector>
+#include <functional>
 
 // Descriptor for a set of firewall rules to be appled.
 //
@@ -71,16 +73,13 @@ public:
     // Table names
     static QString kFilterTable, kNatTable, kMangleTable, kRtableName, kRawTable;
 public:
-    using FilterCallbackFunc = std::function<void()>;
+    using FilterCallbackFunc = std::function<bool()>;
 private:
     static int createChain(IPVersion ip, const QString& chain, const QString& tableName = kFilterTable);
-    static int deleteChain(IPVersion ip, const QString& chain, const QString& tableName = kFilterTable);
     static int linkChain(IPVersion ip, const QString& chain, const QString& parent, bool mustBeFirst = false, const QString& tableName = kFilterTable);
-    static int unlinkChain(IPVersion ip, const QString& chain, const QString& parent, const QString& tableName = kFilterTable);
-    static void installAnchor(IPVersion ip, const QString& anchor, const QStringList& rules, const QString& tableName = kFilterTable, const FilterCallbackFunc& enableFunc = {}, const FilterCallbackFunc& disableFunc = {});
-    static void uninstallAnchor(IPVersion ip, const QString& anchor, const QString& tableName = kFilterTable);
-    static void setupTrafficSplitting();
-    static void teardownTrafficSplitting();
+    static bool installAnchor(IPVersion ip, const QString& anchor, const QStringList& rules, const QString& tableName = kFilterTable, const FilterCallbackFunc& enableFunc = {}, const FilterCallbackFunc& disableFunc = {});
+    static bool setupTrafficSplitting();
+    static bool teardownTrafficSplitting();
     static int execute(const QString& command, bool ignoreErrors = false);
     static int executeIptables(const QString& program, const QStringList& args, bool ignoreErrors = false);
 private:
@@ -88,18 +87,29 @@ private:
     static QString kOutputChain, kRootChain, kPostRoutingChain, kPreRoutingChain;
 
 public:
-    static void install();
-    static void uninstall();
+    // Preserve a complete existing netfilter policy, including mutable rules.
+    // Refuse partial/unknown state without repair. Fresh creation is permitted
+    // only after both complete snapshots prove the namespace absent.
+    // Traffic-splitting setup has its own checked result; it is not inferred
+    // from the presence of netfilter chains.
+    static bool install();
+    static bool uninstall();
+    // Netfilter infrastructure + immutable rules only, NOT routing readiness
+    // or an assertion that any optional policy anchor is currently enabled.
     static bool isInstalled();
-    static void ensureRootAnchorPriority(IPVersion ip = Both);
-    static void enableAnchor(IPVersion ip, const QString& anchor, const QString& tableName = kFilterTable);
-    static void disableAnchor(IPVersion ip, const QString& anchor, const QString& tableName = kFilterTable);
+    static bool ensureRootAnchorPriority(IPVersion ip = Both);
+    static bool enableAnchor(IPVersion ip, const QString& anchor, const QString& tableName = kFilterTable);
+    static bool disableAnchor(IPVersion ip, const QString& anchor, const QString& tableName = kFilterTable);
+    // false also covers an observation failure; never use false as proof of
+    // absence to authorize a mutation. Mutators observe their own preconditions.
     static bool isAnchorEnabled(IPVersion ip, const QString& anchor, const QString& tableName = kFilterTable);
-    static void setAnchorEnabled(IPVersion ip, const QString& anchor, bool enabled, const QString& tableName = kFilterTable);
-    static void replaceAnchor(LinuxFirewall::IPVersion ip, const QString &anchor, const QString &newRule, const QString& tableName);
-    static void updateDNSServers(const QStringList& servers);
-    static void updateAllowNets(const QStringList& servers);
-    static void updateBlockNets(const QStringList& servers);
+    static bool setAnchorEnabled(IPVersion ip, const QString& anchor, bool enabled, const QString& tableName = kFilterTable);
+    static bool replaceAnchor(LinuxFirewall::IPVersion ip, const QString &anchor, const QString &newRule, const QString& tableName);
+    // One targeted atomic table transaction per update, followed by a fresh
+    // observation. false after COMMIT is uncertain, not proof of rollback.
+    static bool updateDNSServers(const QStringList& servers);
+    static bool updateAllowNets(const QStringList& servers);
+    static bool updateBlockNets(const QStringList& servers);
 };
 
 #endif // LINUXFIREWALL_H

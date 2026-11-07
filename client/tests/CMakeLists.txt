@@ -5,6 +5,8 @@ enable_testing()
 
 set(AMNEZIA_FOCUSED_TEST_DIRS
     connection_health_probe
+    xhttp_stream_settings
+    dns_fallback_config
     qr_frames
     config_payload_codec
     bounded_network_reply
@@ -19,6 +21,7 @@ set(AMNEZIA_FOCUSED_TEST_DIRS
     selfhosted_update_bootstrapper_path
     selfhosted_update_policy
     backend_failure_contract
+    protocol_error_order
     awg_migration
 )
 

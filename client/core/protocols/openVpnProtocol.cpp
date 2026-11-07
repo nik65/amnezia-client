@@ -400,7 +400,6 @@ void OpenVpnProtocol::updateVpnGateway(const QString &line)
                     qCritical() << "OpenVpnProtocol::updateVpnGateway(): "
                                    "Failed to commit Windows firewall policy";
                     setLastError(ErrorCode::AmneziaServiceConnectionFailed);
-                    emit protocolError(lastError());
                     stop();
                     return;
                 }

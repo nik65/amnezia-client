@@ -22,13 +22,15 @@ if a.orchestration:
     text+=part('    private fun advanceRemoteLogRecoveryCheckpoint(', '    private fun remoteLogTokenPrefsKey(')
     text+=part('    private fun prepareRemoteLogPayload(', '    private fun isValidRemoteLogToken(')
     text+=part('    private fun remoteLogAnchor(', '    private fun readLimitedUtf8(')
+    text+=part('    private fun recordRemoteLogRedaction(', '    private fun recordRemoteLogHealth(')
     # Only Android logging/preferences are replaced. The cursor preparation,
     # ACK construction, recovery and sanitizer are the actual implementation.
     text+='''
 private var testCursor=RemoteLogCursor()
 private val remoteLogSanitizerContractVerified=true
-private var remoteLogRedactionReason=0
-private var remoteLogRedactionCount=0L
+private val remoteLogRedactionLock=Any()
+@Volatile private var remoteLogRedactionView=RemoteLogRedactionView()
+private val remoteLogRedactionReason get()=remoteLogRedactionView.reason
 private object Log { fun i(tag:String,msg:String){};fun w(tag:String,msg:String){} }
 private fun loadRemoteLogCursor(target:RemoteLogTarget)=testCursor
 private fun saveRemoteLogCursor(target:RemoteLogTarget,cursor:RemoteLogCursor):Boolean {testCursor=cursor;return true}
@@ -75,12 +77,15 @@ fun main(){
  check(carried!=null && !carried.data.toString(Charsets.UTF_8).contains("hidden-tail"))
 
  // Exercise the actual prepare/ACK lifecycle, not just boundary predicates.
- fun freshBatch(bytes:ByteArray,mode:String="",quote:String=""):RemoteLogPayload {
+ fun freshCursor(bytes:ByteArray,mode:String="",quote:String="") {
   val fingerprintSize=minOf(bytes.size,CLIENT_LOGS_CURSOR_FINGERPRINT_BYTES)
   testCursor=RemoteLogCursor(initialized=true,offset=0,
    fingerprint=sha256Hex(bytes.copyOfRange(0,fingerprintSize)),fingerprintBytes=fingerprintSize,
    sanitizerExplicitSecretsSha256=current,sanitizerAcceptedSecretsSha256=current,
    sanitizerSecretMode=mode,sanitizerSecretQuote=quote)
+ }
+ fun freshBatch(bytes:ByteArray,mode:String="",quote:String=""):RemoteLogPayload {
+  freshCursor(bytes,mode,quote)
   return prepareRemoteLogPayload(target,bytes,secrets)!!
  }
  fun nextAckedBatch(bytes:ByteArray,batch:RemoteLogPayload):RemoteLogPayload {
@@ -157,7 +162,11 @@ fun main(){
  val oversized=("x".repeat(boundary+20)+"\\nhealth=after-oversized\\n").toByteArray()
  val oversizedFirst=freshBatch(oversized)
  check(oversizedFirst.cursorAfterUpload.sanitizerSecretMode=="fail-closed")
- check(!nextAckedBatch(oversized,oversizedFirst).data.toString(Charsets.UTF_8).contains("health=after-oversized"))
+ testCursor=oversizedFirst.cursorAfterUpload
+ check(prepareRemoteLogPayload(target,oversized,secrets)==null && testCursor.sanitizerRecoveryQuarantine)
+ val oversizedRecovery=prepareRemoteLogPayload(target,oversized,secrets)!!
+ check(!oversizedRecovery.data.toString(Charsets.UTF_8).contains("health=after-oversized"))
+ check(oversizedRecovery.cursorAfterUpload.sanitizerRecoveryQuarantine)
  val quoted=("password=\\""+"s".repeat(boundary-40)+"\\n"+"secret-continuation-987".repeat(10)+"\\"\\nhealth=after-quoted\\n").toByteArray()
  val quotedFirst=freshBatch(quoted)
  check(quotedFirst.cursorAfterUpload.sanitizerSecretMode=="quoted")
@@ -173,13 +182,59 @@ fun main(){
  check(pemFirst.cursorAfterUpload.sanitizerBlockEndMarker.isNotEmpty())
  val pemNext=nextAckedBatch(pem,pemFirst).data.toString(Charsets.UTF_8)
  check(!pemNext.contains("pem-secret-654") && pemNext.contains("health=after-pem"))
- val partialEof=freshBatch("health=partial-record".toByteArray())
- check(partialEof.cursorAfterUpload.sanitizerSecretMode=="fail-closed")
- check(!partialEof.data.toString(Charsets.UTF_8).contains("health=partial-record"))
- val alreadyClosed=freshBatch(ordinary,"fail-closed")
- check(alreadyClosed.cursorAfterUpload.sanitizerSecretMode=="fail-closed")
- check(alreadyClosed.data.size==25 && remoteLogRedactionReason==5) {"25-byte fail-closed placeholder misclassified"}
- check(!alreadyClosed.data.toString(Charsets.UTF_8).contains("health=ok"))
+ // A live snapshot may end during appendText or after an interrupted write.
+ // Fresh batches must leave an incomplete EOF unread, never poison later ACKs.
+ val partialSnapshot="health=before\\nhealth=partial-record".toByteArray()
+ val partialEof=freshBatch(partialSnapshot)
+ check(partialEof.cursorAfterUpload.offset=="health=before\\n".toByteArray().size) {"partial EOF consumed into persistent sanitizer state"}
+ check(partialEof.cursorAfterUpload.sanitizerSecretMode.isEmpty())
+ check(!partialEof.data.toString(Charsets.UTF_8).contains("partial-record"))
+ val completedSnapshot=partialSnapshot+"-completed\\nhealth=after-eof\\n".toByteArray()
+ val completedEof=nextAckedBatch(completedSnapshot,partialEof)
+ check(completedEof.data.toString(Charsets.UTF_8).contains("health=partial-record-completed"))
+ check(completedEof.data.toString(Charsets.UTF_8).contains("health=after-eof"))
+ check(completedEof.cursorAfterUpload.sanitizerSecretMode.isEmpty())
+ val onlyPartial="health=partial-only".toByteArray()
+ freshCursor(onlyPartial)
+ check(prepareRemoteLogPayload(target,onlyPartial,secrets)==null) {"unterminated first record must wait"}
+ check(testCursor.offset==0 && testCursor.pendingEndOffset==0 && testCursor.sanitizerSecretMode.isEmpty())
+ val completedOnly=prepareRemoteLogPayload(target,onlyPartial+"\\n".toByteArray(),secrets)!!
+ check(completedOnly.data.toString(Charsets.UTF_8)=="health=partial-only\\n")
+ val splitKey="health=before-key\\npassw".toByteArray()
+ val splitKeyFirst=freshBatch(splitKey)
+ val splitKeySecond=nextAckedBatch(splitKey+"ord=\\\"hidden-eof-secret-123\\\"\\nhealth=after-key\\n".toByteArray(),splitKeyFirst)
+ check(!splitKeySecond.data.toString(Charsets.UTF_8).contains("hidden-eof-secret-123"))
+ check(splitKeySecond.data.toString(Charsets.UTF_8).contains("health=after-key"))
+ // Legacy poisoned cursors must re-enter the existing bounded origin recovery,
+ // not reset privacy state at an arbitrary current offset or stay poisoned forever.
+ val legacySource="health=ok\\n".repeat(10).toByteArray()
+ freshCursor(legacySource,"fail-closed")
+ testCursor=testCursor.copy(offset=legacySource.size,anchor=remoteLogAnchor(legacySource,legacySource.size))
+ check(prepareRemoteLogPayload(target,legacySource,secrets)==null)
+ check(testCursor.sanitizerRecoveryQuarantine) {"legacy terminal cursor never entered bounded recovery"}
+ val quarantined=prepareRemoteLogPayload(target,legacySource,secrets)!!
+ check(quarantined.data.size==26 && remoteLogRedactionReason==1)
+ check(quarantined.cursorAfterUpload.sanitizerRecoveryQuarantine)
+ testCursor=quarantined.cursorAfterUpload
+ val marker="10-26 09:00:00.000Z 123 456 I [main] AmneziaVpnService: $CLIENT_LOGS_ORIGIN_MARKER 00000000-0000-0000-0000-000000000002\\n".toByteArray()
+ val throughMarker=prepareRemoteLogPayload(target,legacySource+marker,secrets)!!
+ check(throughMarker.data.size==26 && !throughMarker.cursorAfterUpload.sanitizerRecoveryQuarantine)
+ val restored=nextAckedBatch(legacySource+marker+"health=restored\\n".toByteArray(),throughMarker)
+ check(restored.data.toString(Charsets.UTF_8)=="health=restored\\n")
+ // A marker does not close a real secret block that is still open.
+ val openKey="-----BEGIN PRIVATE KEY-----\\nprivate-fixture-value\\n".toByteArray()
+ freshCursor(openKey,"fail-closed")
+ check(prepareRemoteLogPayload(target,openKey,secrets)==null && testCursor.sanitizerRecoveryQuarantine)
+ val stillPrivate=prepareRemoteLogPayload(target,openKey+marker+"private-continuation\\n".toByteArray(),secrets)!!
+ check(stillPrivate.cursorAfterUpload.sanitizerRecoveryQuarantine)
+ check(!stillPrivate.data.toString(Charsets.UTF_8).contains("private-continuation"))
+ // An unacknowledged historical payload keeps its exact retry identity first.
+ freshCursor(legacySource,"fail-closed")
+ val legacyPendingId=sha256Hex("legacy-pending-terminal")
+ testCursor=testCursor.copy(pendingEndOffset=legacySource.size,pendingBodySha256=sha256Hex(legacySource),pendingBatchId=legacyPendingId)
+ val pendingTerminal=prepareRemoteLogPayload(target,legacySource,secrets)!!
+ check(pendingTerminal.batchId==legacyPendingId && pendingTerminal.data.size==25)
+ check(!pendingTerminal.cursorBeforeUpload.sanitizerRecoveryQuarantine)
 
  println("contractVerified=true orchestrationVerified=true batchBoundariesVerified=true")
 }

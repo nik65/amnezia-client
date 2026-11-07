@@ -43,7 +43,7 @@ ConnectionUiController::ConnectionUiController(ConnectionController* connectionC
 
 #ifdef Q_OS_ANDROID
     connect(m_connectionController, &ConnectionController::serviceDiscoveryBlocked, this,
-            &ConnectionUiController::notifyConnectionBlocked);
+            &ConnectionUiController::connectionAdmissionBlocked);
 #endif
 
     m_state = Vpn::ConnectionState::Disconnected;
@@ -135,7 +135,10 @@ void ConnectionUiController::onConnectionStateChanged(Vpn::ConnectionState state
     case Vpn::ConnectionState::Unknown: {
         m_isConnectionInProgress = false;
         m_connectionStateText = QCoreApplication::translate("ConnectionController", "Connect");
-        emit connectionErrorOccurred(getLastConnectionError());
+        // UNKNOWN is also an observation/transition, not necessarily a failure.
+        // Keep real errors visible without presenting "No error" as an error.
+        const auto error = getLastConnectionError();
+        if (error != ErrorCode::NoError) emit connectionErrorOccurred(error);
         break;
     }
     }

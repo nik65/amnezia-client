@@ -775,8 +775,20 @@ private slots:
         }
     }
 
+    void restartPendingJournalIsAcknowledgedOnlyAfterBinaryHealthCheck_data()
+    {
+        QTest::addColumn<QString>("scenario");
+        for (const char *scenario : { "no_sidecar", "old_sidecar", "old_sidecar_bound_state", "old_sidecar_recovery",
+                                      "bad_candidate", "bad_backup", "bad_size",
+                                      "missing_journal", "stable_mismatch", "symlink_sidecar",
+                                      "wrong_running_version", "candidate_changed_after_load" }) {
+            QTest::newRow(scenario) << QString::fromLatin1(scenario);
+        }
+    }
+
     void restartPendingJournalIsAcknowledgedOnlyAfterBinaryHealthCheck()
     {
+        QFETCH(QString, scenario);
         QTemporaryDir temporaryDirectory;
         QVERIFY(temporaryDirectory.isValid());
         // The automatic update archive is binary-only.  The systemd unit is
@@ -846,9 +858,107 @@ private slots:
         }).toJson(QJsonDocument::Compact)) > 0);
         journal.close();
 
+        const QString receiptPath = QDir(updates).filePath(QStringLiteral("rollback-receipt.json"));
+        QByteArray previousReceipt;
+        if (scenario != QStringLiteral("no_sidecar")) {
+            const QString previousRollback = QDir(updates).filePath(QStringLiteral("rollback-older"));
+            QVERIFY(QDir().mkpath(previousRollback));
+            const QString previousDigest = QString::fromLatin1(QCryptographicHash::hash(
+                    QByteArrayLiteral("older"), QCryptographicHash::Sha256).toHex());
+            for (const QString &name : managedFiles) {
+                QFile backup(QDir(previousRollback).filePath(name));
+                QVERIFY(backup.open(QIODevice::WriteOnly));
+                QCOMPARE(backup.write("older"), qint64(5));
+            }
+            previousReceipt = QJsonDocument(QJsonObject {
+                { QStringLiteral("version"), 1 },
+                { QStringLiteral("rollbackDirectory"), previousRollback },
+                { QStringLiteral("rollbackVersion"), QStringLiteral("5.0.1.1") },
+                { QStringLiteral("rollbackHashes"), QJsonObject {
+                    { QStringLiteral("amneziad"), previousDigest },
+                    { QStringLiteral("amnezia-cli"), previousDigest },
+                } },
+                { QStringLiteral("installDirectory"), temporaryDirectory.path() },
+                { QStringLiteral("updateRoot"), QDir(updates).canonicalPath() },
+            }).toJson(QJsonDocument::Compact);
+            QFile receipt(receiptPath);
+            QVERIFY(receipt.open(QIODevice::WriteOnly));
+            QCOMPARE(receipt.write(previousReceipt), qint64(previousReceipt.size()));
+            receipt.close();
+        }
+        auto changeObject = [](const QString &path, const QString &key, const QJsonValue &value) {
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly)) return false;
+            QJsonObject object = QJsonDocument::fromJson(file.readAll()).object();
+            file.close();
+            object.insert(key, value);
+            return file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+                && file.write(QJsonDocument(object).toJson(QJsonDocument::Compact)) > 0;
+        };
+        if (scenario == QStringLiteral("old_sidecar_bound_state")
+            || scenario == QStringLiteral("old_sidecar_recovery")) {
+            QVERIFY(changeObject(statePath, QStringLiteral("rollbackDirectory"), rollback));
+            QVERIFY(changeObject(statePath, QStringLiteral("rollbackVersion"), QStringLiteral("5.0.1.6")));
+            QVERIFY(changeObject(statePath, QStringLiteral("rollbackHashes"), QJsonObject {
+                { QStringLiteral("amneziad"), digest }, { QStringLiteral("amnezia-cli"), digest },
+            }));
+        }
+        if (scenario == QStringLiteral("old_sidecar_recovery")) {
+            QVERIFY(changeObject(statePath, QStringLiteral("state"), QStringLiteral("recovery_required")));
+            QVERIFY(changeObject(statePath, QStringLiteral("lastError"),
+                                 QStringLiteral("headless rollback receipt is invalid")));
+        } else if (scenario == QStringLiteral("bad_candidate") || scenario == QStringLiteral("bad_backup")) {
+            QFile binary(scenario == QStringLiteral("bad_candidate")
+                ? temporaryDirectory.filePath(QStringLiteral("amneziad"))
+                : QDir(rollback).filePath(QStringLiteral("amneziad")));
+            QVERIFY(binary.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            QCOMPARE(binary.write("tampered"), qint64(8));
+        } else if (scenario == QStringLiteral("bad_size")) {
+            QVERIFY(changeObject(journal.fileName(), QStringLiteral("candidateSizes"), QJsonObject {
+                { QStringLiteral("amneziad"), 5 }, { QStringLiteral("amnezia-cli"), 4 },
+            }));
+        } else if (scenario == QStringLiteral("missing_journal")) {
+            QVERIFY(QFile::remove(journal.fileName()));
+        } else if (scenario == QStringLiteral("stable_mismatch")) {
+            QVERIFY(QFile::remove(journal.fileName()));
+            QVERIFY(changeObject(statePath, QStringLiteral("state"), QStringLiteral("updated")));
+            QVERIFY(changeObject(statePath, QStringLiteral("rollbackDirectory"), rollback));
+            QVERIFY(changeObject(statePath, QStringLiteral("rollbackVersion"), QStringLiteral("5.0.1.6")));
+            QVERIFY(changeObject(statePath, QStringLiteral("rollbackHashes"), QJsonObject {
+                { QStringLiteral("amneziad"), digest }, { QStringLiteral("amnezia-cli"), digest },
+            }));
+        } else if (scenario == QStringLiteral("symlink_sidecar")) {
+            const QString target = temporaryDirectory.filePath(QStringLiteral("outside-receipt.json"));
+            QVERIFY(QFile::rename(receiptPath, target));
+            QVERIFY(QFile::link(target, receiptPath));
+            QVERIFY(QFileInfo(receiptPath).isSymLink());
+        }
         HeadlessUpdateManager manager({}, statePath, temporaryDirectory.path(), false);
+        if (!previousReceipt.isEmpty() && scenario != QStringLiteral("missing_journal")) {
+            QFile receipt(receiptPath);
+            QVERIFY(receipt.open(QIODevice::ReadOnly));
+            QCOMPARE(receipt.readAll(), previousReceipt);
+        }
+        if (scenario == QStringLiteral("candidate_changed_after_load")) {
+            QFile binary(temporaryDirectory.filePath(QStringLiteral("amneziad")));
+            QVERIFY(binary.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            QCOMPARE(binary.write("tampered"), qint64(8));
+        }
         const HeadlessUpdateResult result = manager.checkAndApply(Profile {},
-                                                                   QStringLiteral("5.0.1.16"));
+            scenario == QStringLiteral("wrong_running_version")
+                ? QStringLiteral("5.0.1.15") : QStringLiteral("5.0.1.16"));
+        if (scenario != QStringLiteral("no_sidecar") && scenario != QStringLiteral("old_sidecar")
+            && scenario != QStringLiteral("old_sidecar_bound_state")
+            && scenario != QStringLiteral("old_sidecar_recovery")) {
+            QVERIFY(!result.ok);
+            QCOMPARE(result.code, QStringLiteral("recovery_required"));
+            if (scenario != QStringLiteral("missing_journal")) {
+                QFile receipt(receiptPath);
+                QVERIFY(receipt.open(QIODevice::ReadOnly));
+                QCOMPARE(receipt.readAll(), previousReceipt);
+            }
+            return;
+        }
         QVERIFY(result.ok);
         QCOMPARE(result.code, QStringLiteral("disabled"));
         QVERIFY(!QFileInfo::exists(QDir(updates).filePath(QStringLiteral("transaction.json"))));
@@ -859,6 +969,12 @@ private slots:
         HeadlessUpdateManager reloaded({}, statePath, temporaryDirectory.path(), false);
         QVERIFY(!reloaded.status().value(QStringLiteral("recoveryRequired")).toBool());
         QVERIFY(reloaded.status().value(QStringLiteral("rollbackAvailable")).toBool());
+        QFile receipt(receiptPath);
+        QVERIFY(receipt.open(QIODevice::ReadOnly));
+        const QJsonObject acknowledgedReceipt = QJsonDocument::fromJson(receipt.readAll()).object();
+        QCOMPARE(acknowledgedReceipt.value(QStringLiteral("rollbackDirectory")).toString(), rollback);
+        QCOMPARE(acknowledgedReceipt.value(QStringLiteral("rollbackVersion")).toString(),
+                 QStringLiteral("5.0.1.6"));
     }
 
     void appliedStateIsStableAcrossReload()

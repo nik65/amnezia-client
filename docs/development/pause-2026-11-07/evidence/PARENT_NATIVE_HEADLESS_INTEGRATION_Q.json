@@ -1,0 +1,77 @@
+{
+  "kind": "accepted-integrated-N-W-source-component",
+  "verifiedUtc": "2026-11-07T14:37:05.112855+00:00",
+  "sourceCount": 2635,
+  "sourceManifest": "C:\\Users\\ivano\\PycharmProjects\\amnezia-client\\dist\\diagnostics\\upstream-5106-continuation-a\\final-build-readiness-q\\native-headless-integration-parent\\MATERIALIZED_PRODUCT_SOURCE_MANIFEST.json",
+  "sourceManifestSha256": "0830d940be4d89245fc695e7d8d3dffca5eb897b25bd8199449338941890d722",
+  "parentReviewedInput": "939c68df769147c6e4444b50e68537561a0a661e968fbe425ea2ea2b637ee2db",
+  "allowedProductionDelta": [
+    "deploy/headless/native/provisioning_verifier/CMakeLists.txt",
+    "deploy/headless/native/provisioning_verifier/bootstrap_n.cpp",
+    "deploy/headless/native/provisioning_verifier/host_runtime.inc",
+    "deploy/headless/native/provisioning_verifier/preauth_modes.cpp",
+    "deploy/headless/native/provisioning_verifier/verify_provisioning.cpp"
+  ],
+  "rawIndexes": {
+    "windows": "01347bedcda9626cced1629915c32e65b2eddbd36ebf78880fafc4b84dfdb9c4",
+    "candidate": "3e5142545f4ff71fad593b63010998e3fcc45901b84c5f6197d491c704c9368b"
+  },
+  "attempts": {
+    "cmake-build-a": {
+      "result": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-integration-parent\\cmake-build-a\\RESULT.json",
+      "sha256": "69c552838a430b700b888b2c3d83ae11eba9534cd7c2014e3cb01992ad899c85",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 3123,
+      "inputsUnchanged": true
+    },
+    "cmake-failedwork-a": {
+      "result": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-integration-parent\\cmake-failedwork-a\\RESULT.json",
+      "sha256": "25ea3e12909c4160b92748578a3a05d19c14375560828ef6c3f9905f92c43744",
+      "nativeExit": 23,
+      "componentPass": false,
+      "inputCount": 3125,
+      "inputsUnchanged": true
+    },
+    "integrated-stage-a": {
+      "result": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-integration-parent\\integrated-stage-a\\RESULT.json",
+      "sha256": "347892b6359e081e400ae9c7d9fb65dba60f93e076b16f4024a79fcac9026527",
+      "nativeExit": 0,
+      "componentPass": true,
+      "inputCount": 3106,
+      "inputsUnchanged": true
+    },
+    "integrated-stage-failedwork-a": {
+      "result": "\\\\wsl.localhost\\Ubuntu\\home\\ivano\\amnezia-product-50318-q\\native-headless-integration-parent\\integrated-stage-failedwork-a\\RESULT.json",
+      "sha256": "92a6ab09cca656115bedd4f47bd9f2f725a37300b4d54e7465af8519ab4f6419",
+      "nativeExit": 23,
+      "componentPass": false,
+      "inputCount": 3106,
+      "inputsUnchanged": true
+    }
+  },
+  "artifact": {
+    "path": "/home/ivano/amnezia-product-50318-q/native-headless-integration-parent/cmake-build-a/build/amnezia-verify-provisioning-native",
+    "size": 7769672,
+    "sha256": "9e11222529593f8276a5202e4e8569e54ca8383a84152aa438eea5c38171792a",
+    "executed": false,
+    "staticElf64X86_64": true,
+    "notFinalDelivery": true
+  },
+  "legacyCases": 17,
+  "byteIdenticalGoldenReceipts": 3,
+  "archiveIdentity": "Actual native producer receipt equals actual canonical Python receipt on signed parent corrected68d and legacy8 fixture",
+  "testScope": "Actual canonical bootstrap_n.cpp and sibling preauth/host/archive dependencies, no production overlays; only test process boundary include plus exact dev/ino-private-directory lstatUID0 model. Real FS uid1000. Full actual staging/metadata/copy-race andspecial-mode negatives. CMake static artifact never launched.",
+  "retainedScopedPriorRegressions": "W41functional, N26+4, source unchanged from parent reviewed input; not relabeled fresh whole candidate/runtime",
+  "open": [
+    "Actual installer initial-native consumer/canonical builder not integrated",
+    "Do not assume preauth metadata is the raw runtime-dependencies.json --probe-host contract; trace actual caller before accepting X premise",
+    "Root-owned firstactivation/recovery/current authority and fresh runtime106",
+    "Final static6pair/apps/four-platform/manual production publication"
+  ],
+  "componentPass": true,
+  "integrated": true,
+  "allFunctionsPass": false,
+  "releasePass": false,
+  "published": false
+}

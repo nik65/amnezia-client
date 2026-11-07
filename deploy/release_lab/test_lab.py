@@ -961,6 +961,7 @@ class ReleaseLabContractTests(unittest.TestCase):
     def _valid_hyperv_matrix_fixture(self):
         run = {
             "run_id": "matrix-run", "windows_backend": "hyperv",
+            "manifest": {"sha256": "f" * 64},
             "baseline_version": "1.0.0.0", "candidate_version": "2.0.0.0",
             "artifacts": {"windows-x64": {"sha256": "a" * 64, "size": 10}},
             "baseline_artifacts": {"windows-x64": {"sha256": "b" * 64, "size": 11}},
@@ -1002,7 +1003,9 @@ class ReleaseLabContractTests(unittest.TestCase):
         interactive["interactive_verified"] = True
         interactive["assertion"]["interactive_passed"] = True
         interactive["installed_app_window"] = {"vm_id": "vm-interactive", "screenshot": {"archive": {}}}
-        interactive["hyperv_ui"] = {"screenshot_archive": {}}
+        interactive["hyperv_ui"] = {"screenshot_archive": {}, "consent_visual": {"request": {
+            "manifest_sha256": run["manifest"]["sha256"], "artifact_sha256": run["outer_artifact"]["sha256"],
+            "parent_sha256": "e" * 64, "version": run["candidate_version"]}}}
         interactive["archive_attempt_nonce"] = "attempt"
         profile["hyperv_cases"]["outer-interactive"] = {"case_id": "outer-interactive", "state": "reset", "vm_id": "vm-interactive", "parent_sha256": "e" * 64}
         profile["interactive_receipt"] = interactive
@@ -1088,15 +1091,36 @@ class ReleaseLabContractTests(unittest.TestCase):
             "run_id": run["run_id"], "removed_child": True,
             "parent_sha256_before": "e" * 64, "parent_sha256_after": "e" * 64,
         }
-        for kind in ("uac", "app-window"):
+        for kind in ("installer-desktop", "app-window"):
             path = root / (kind + ".png"); path.write_bytes(kind.encode())
             digest, size = sha256_file(path)
             record = {"path": str(path), "sha256": digest, "size": size, "kind": kind,
                       "vm_id": app["vm_id"], "case_id": "outer-interactive", "attempt_nonce": "attempt"}
-            if kind == "uac":
+            if kind == "installer-desktop":
                 receipt["hyperv_ui"]["screenshot_archive"] = record
             else:
                 app["screenshot"]["archive"] = record
+        from . import windows_consent_visual as consent_visual
+        nonce="a" * 32;receipt["archive_attempt_nonce"]=nonce
+        receipt["hyperv_ui"]["screenshot_archive"]["attempt_nonce"]=nonce
+        app["screenshot"]["archive"]["attempt_nonce"]=nonce
+        proof={"run_id":run["run_id"],"case_id":"outer-interactive","vm_id":app["vm_id"],"expected_consent":True,
+            "process_id":123,"creation_time":"consent-start","session_id":1,"owner_sid":"S-1-5-18",
+            "consent_path":r"C:\Windows\System32\consent.exe","launcher_pid":122,"launcher_start_time":"launcher-start",
+            "launcher_session_id":1,"launcher_sid":"S-1-5-21-fixture"}
+        raw=root/'console.rgb565';raw.write_bytes(b'\x00\xf8'*(640*480));stamp=consent_visual.utc_text()
+        observe={"action":"ui-observe","injected":False,"origin":"guest","transport":"hyperv-powershell-direct",
+            "vm_id":app["vm_id"],"parent_sha256":"e"*64,"consent":dict(proof),"console_capture":{
+                "method":consent_visual.METHOD,"format":"rgb565le","vm_id":app["vm_id"],"settings_vm_id":app["vm_id"],
+                "settings_virtual_system_type":"Microsoft:Hyper-V:System:Realized","artifact_sha256":run["outer_artifact"]["sha256"],"width":640,"height":480,
+                "sha256":sha256_file(raw)[0],"size":raw.stat().st_size,"started_at":stamp,"completed_at":stamp,"consent_after":dict(proof)}}
+        request=consent_visual.prepare_request(owned_root=root,run_id=run["run_id"],version=run["candidate_version"],
+            manifest_sha256=run["manifest"]["sha256"],artifact_sha256=run["outer_artifact"]["sha256"],parent_sha256="e"*64,
+            observe=observe,raw_source=raw,attempt_nonce=nonce)
+        ack=consent_visual.create_ack(owned_root=root,request=request,viewed_png_sha256=request["png_archive"]["sha256"])
+        completed=consent_visual.utc_text()
+        receipt["hyperv_ui"].update(observe=observe,confirm={"consent":proof,"confirmed_at":completed},
+            installer_completion={"completed_at":completed},consent_visual={"request":request,"ack":ack})
         run["profiles"] = {"windows-x64": profile}
         return run, profile
 

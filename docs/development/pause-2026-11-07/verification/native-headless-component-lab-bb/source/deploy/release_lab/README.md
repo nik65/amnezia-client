@@ -1,0 +1,122 @@
+# Disposable release lab
+
+`lab.py` controls four release product lanes from the existing Ubuntu 24 WSL
+instance: Windows x64 through an explicit QEMU or Hyper-V backend and two Linux x64 QEMU guests through QMP/QGA. The
+historical Android arm64-v8a adapter/emulator lane is disabled by user policy,
+retained for reference and guarded cleanup only; Android validation is pending
+on a user-supplied real smartphone. The isolated `server-router` QEMU
+guest is an auxiliary consumer-fixture lane, not a fifth product artifact.
+The host boundary is QMP/QGA or the owned Android adapter. The controller never
+runs an Amnezia binary, installer, service command, VPN command, route
+command, DNS command, or firewall command on the Windows host or in production.
+
+The durable lab state belongs at `/var/lib/amnezia-release-lab` in WSL. It
+contains base images, owned per-run overlays, QEMU sockets and guest evidence.
+The checkout only contains code and profile contracts. Host-side logs and
+exports go under `dist/release-lab/` and are ignored by Git.
+
+QEMU profiles require a provisioned, immutable golden disk and an adjacent
+sealed readiness receipt. A raw vendor image is never treated as a ready
+guest. The receipt records the matching disk SHA-256, profile, QGA
+availability, completed provisioning, and absence of candidate credentials.
+The Windows receipt also records the sealed OVMF NVRAM and TPM-state hashes;
+each run clones those exact states and never creates fresh firmware state.
+
+The Linux profiles use explicit KVM acceleration and `-nic none` for ordinary
+release runs. The QEMU Windows profile remains blocked by its signed
+UEFI/swtpm boot issue. The explicit Hyper-V backend uses the sealed OS marker
+as a read-only parent and creates a differencing child VM per lab run; the
+sealed parent is never booted or finalized by `lab.py`. Hyper-V product
+evidence is collected through PowerShell Direct by VM ID and must carry a
+guest-origin receipt bound to the child VM and parent hash. The
+reviewed TCG software experiment is recorded separately and is not silently
+substituted for KVM. The server-router consumer fixture is the one explicit exception: it uses
+QEMU user networking with `restrict=on` and a loopback-only hostfwd to guest
+port `17865`. Historical Android receipts used the owned
+`android/android-lab.sh` adapter and dedicated ADB/emulator. Operational
+Android entrypoints are now fail-closed; only guarded cleanup of an already
+owned guest remains available.
+
+Each QEMU profile must have a prepared golden and a guest-side runner. The
+runner is responsible for platform-specific install/update/service checks. The
+controller waits for every QGA `guest-exec` PID to exit, requires a JSON
+`passed: true` assertion, and constructs evidence only from QGA marker and
+step readback. A host-created JSON file, a CLI `PASS` flag, or a dry run can
+never satisfy the gate.
+
+## Workflow
+
+Run `python deploy/release_lab/lab.py preflight --json` before provisioning.
+For the Windows Hyper-V lane use `--windows-backend hyperv` and provide the
+runtime-only `AMNEZIA_HYPERV_CREDENTIAL_FILE` when a child guest action needs
+PowerShell Direct. From Windows WSL interop, invoke the dedicated lab user
+directly with `wsl.exe -d Ubuntu -u amnezia-lab --exec /usr/bin/python3`.
+It is expected to fail closed until QEMU, `/dev/kvm`, all required goldens and
+profile harnesses exist. At the current checkpoint Linux headless v2 and the
+Linux GUI v9 OS/QGA golden plus strict GNOME/X11 session evidence are
+available. The v9 product run installed baseline `5.0.1.37` successfully with
+an active service and canonical runtime version; candidate `5.0.1.38` failed
+in the legacy maintenance tool (exit 6), leaving baseline version/service
+active. The Hyper-V Windows OS baseline is sealed with marker/VHD
+SHA-256 `8ded92f7c7a2f522dd6609f6afbb9e023515055ac3cd3db1309df9214e7275cb`,
+VM Off, 128 GiB self-contained disk, 0 DVD/0 NIC/0 checkpoints, Secure Boot
+`MicrosoftWindows`, first boot on the owned VHD, and licensed EnterpriseEval
+25H2/build 26200. The controller path is static-only until the consolidated
+release candidate passes final review and a user-authorized child-guest run is
+performed. Android's
+installer and lavapipe UI receipts do not yet prove the
+real application update on the current x86 guest. The active server-router OS
+golden is sealed at
+`/var/lib/amnezia-release-lab/guests/server-router/golden-disk.qcow2` with
+SHA-256 `3cea338c1ad54d8288f17ae9752c101df2a63d1c7ad16682d0a94a43d6c90734`.
+An owned disposable-overlay probe read back the guest marker, Docker/QGA
+active state, passwordless `lab` sudo, and the pinned BusyBox digest; its
+receipt is OS capability evidence only. The server-router fixture has
+health/manifest traffic only and is not publication evidence. The Windows
+readable probe receipt is `Testing/server-router-capability-cp2049.json`.
+Then the
+pipeline uses `plan`/`create`, starts and probes each selected lane, runs
+reinstall/update/health steps, collects each receipt, and calls `gate`.
+
+The evidence matrix is intentionally split: OS/QGA or emulator readiness,
+product installation/update, reboot/rollback, and self-hosted publication are
+separate gates. A lane with a ready OS but a missing product or publisher
+receipt remains unavailable to release. The 2026-09-08 lab snapshot has
+`152` passed tests and `21` skipped tests. Skipped platform/tool gates are
+reported separately from runtime blockers; this count is not a coverage or
+release-readiness percentage. Reboot and rollback scenarios were not
+completed, and preserving a working baseline after a failed candidate update
+does not count as rollback evidence.
+
+The controller records a live QMP/QGA binding with `server-observe --run-id ...
+--ssh-host-key-pin ...`. That observation proves only the owned server guest
+is alive and the configured pin is present; it does not prove self-hosted
+publication or served artifact bytes. A release gate must additionally receive
+an actual guest publication/client-flow receipt with server-side endpoint and
+manifest/artifact hash readback. Without that receipt, release remains blocked.
+
+Every run must provide both sides of the upgrade: `--baseline-version` and
+`--candidate-version`, plus one `--baseline-artifact platform=path` for each
+candidate artifact. The guest sequence keeps the N-1 baseline and N candidate
+separate, so a missing or changed baseline blocks the gate.
+
+The guest runner receives one guarded artifact path at a time. The controller
+stages N-1 there for `reinstall`, then stages N at the same path for `update`,
+passing the run ID, expected version, expected SHA-256, and guest receipt path
+on every invocation. This prevents an unbound baseline or an implicit
+metadata-only upgrade from becoming evidence.
+
+The release lane takes the final outer self-hosted Windows candidate, signed
+manifest, and its platform artifacts. Every file is hashed during planning
+and compared again at the gate. Any rebuild or byte change after testing
+fails. The server condition is satisfied only by a live QMP/QGA observation
+of the registered isolated `server-router` VM, bound to this run's UUID,
+outer/manifest hashes, and the configured lab SSH pin. External server JSON
+receipts are rejected. A successful release gate writes
+`exports/<run-id>/publishable.json` with the same outer SHA-256. Candidate mode
+may be used for a thin iteration of selected products; it reports
+`candidate_passed` only and never writes a publishable marker or claims
+`release_passed`.
+
+`reset` can remove only an overlay carrying the run/profile ownership marker.
+It refuses base, foreign, production, or unmarked paths.

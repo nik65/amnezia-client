@@ -19,7 +19,7 @@ class AggregateTests(unittest.TestCase):
         self.context = SimpleNamespace(verify=Mock(), binding=lambda: copy.deepcopy(self.binding),
             manifest={'sha256': 'a'*64}, publisher={'sha256': 'b'*64}, version='5.0.3.14',
             android_code=2200, artifacts=[{'path':'files/a','size':1,'sha256':'c'*64}], public_key=public)
-        self.old = SimpleNamespace(verify=Mock())
+        self.old = SimpleNamespace(verify=Mock(), binding=lambda: {'manifest': 'historical'})
         self.now = authority.utc_now()
         self.proofs = {}
         for target in ('android','windows','linux-gui',facade.COORDINATED_TARGET):
