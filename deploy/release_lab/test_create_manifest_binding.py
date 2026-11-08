@@ -11,8 +11,10 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 REPO = pathlib.Path(__file__).resolve().parents[2]
 try:
     from . import lab
+    from .testing_source_capsule import isolated_controller_sources
 except ImportError:
     import lab
+    from testing_source_capsule import isolated_controller_sources
 
 
 def write_signed_manifest(root, artifact, version, platform, *, extra=None, name='manifest.json'):
@@ -44,6 +46,7 @@ def windows_openssl(test):
 class CreateManifestBindingTests(unittest.TestCase):
     def setUp(self):
         windows_openssl(self)
+        self.enterContext(isolated_controller_sources())
     def test_signed_manifest_missing_selected_linux_rejected_before_guest_state(self):
         self.reject_mismatch(candidate_platform='windows-x64')
 
@@ -135,7 +138,7 @@ class CreateManifestBindingTests(unittest.TestCase):
             candidate_manifest = manifest('candidate.json', '5.0.3.5', candidate_platform, artifact)
             baseline_manifest = manifest('baseline.json', '5.0.3.4', baseline_platform, baseline)
             controller = lab.LabController(root / 'owned-lab', test_mode=True)
-            with patch.object(controller, 'assert_mutation_context'), patch.object(lab, 'repo_root', return_value=REPO), patch.object(lab, 'profiles_root', return_value=REPO / 'deploy/release_lab/profiles'):
+            with patch.object(controller, 'assert_mutation_context'), patch.object(lab, 'profiles_root', return_value=REPO / 'deploy/release_lab/profiles'):
                 kwargs = dict(run_id='missing-platform', baseline_artifacts={'linux-x64': baseline}, outer_artifact=outer, manifest=candidate_manifest, baseline_manifest=baseline_manifest, manifest_public_key=public, baseline_version='5.0.3.4', candidate_version='5.0.3.5')
                 if valid:
                     controller.create('candidate', {'linux-x64': artifact}, **kwargs)

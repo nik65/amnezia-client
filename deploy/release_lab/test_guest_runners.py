@@ -66,11 +66,14 @@ try {
         self.assertIn("Start-ScheduledTask", self.windows)
         self.assertIn("interactive-start", self.windows)
 
-    def test_windows_receipt_projection_handles_native_ordered_objects(self):
+    def test_windows_receipt_projection_uses_safe_source_fields(self):
         self.assertIn("Get-MapValue", self.windows)
         self.assertIn("safeAssertion", self.windows)
         self.assertIn("$name -eq 'execution_context'", self.windows)
         self.assertIn("$safeContext", self.windows)
+
+    @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "requires Windows PowerShell 5.1")
+    def test_windows_receipt_projection_handles_native_ordered_objects(self):
         script = r'''
 $ErrorActionPreference = 'Stop'
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ('amnezia-receipt-' + [guid]::NewGuid().ToString('N') + '.jsonl')

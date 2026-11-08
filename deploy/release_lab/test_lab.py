@@ -19,8 +19,10 @@ except ImportError:  # direct invocation from this directory
 
 try:
     from .test_create_manifest_binding import write_signed_manifest, windows_openssl
+    from .testing_source_capsule import isolated_controller_sources
 except ImportError:
     from test_create_manifest_binding import write_signed_manifest, windows_openssl
+    from testing_source_capsule import isolated_controller_sources
 
 
 class ReleaseLabContractTests(unittest.TestCase):
@@ -297,6 +299,7 @@ class ReleaseLabContractTests(unittest.TestCase):
         })
 
     def test_dry_run_never_creates_or_passes_gate(self):
+        self.enterContext(isolated_controller_sources())
         with tempfile.TemporaryDirectory() as tmp:
             controller = LabController(Path(tmp), test_mode=True)
             artifact = Path(tmp) / "outer.exe"
@@ -316,6 +319,7 @@ class ReleaseLabContractTests(unittest.TestCase):
         self.assertFalse(result["release_passed"])
 
     def test_candidate_only_requires_selected_profiles_and_never_publishes(self):
+        self.enterContext(isolated_controller_sources())
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             artifact = root / "windows.exe"
@@ -438,6 +442,7 @@ class ReleaseLabContractTests(unittest.TestCase):
         validate_receipt(receipt, run_id="android-launch", profile_id="android-arm64-v8a", artifact={"sha256": "c" * 64, "size": 2})
 
     def test_reset_requires_owned_marker(self):
+        self.enterContext(isolated_controller_sources())
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             artifact = root / "windows.exe"; artifact.write_bytes(b"x")
@@ -1117,6 +1122,13 @@ class ReleaseLabContractTests(unittest.TestCase):
                 "method":consent_visual.METHOD,"format":"rgb565le","vm_id":app["vm_id"],"settings_vm_id":app["vm_id"],
                 "settings_virtual_system_type":"Microsoft:Hyper-V:System:Realized","artifact_sha256":run["outer_artifact"]["sha256"],"width":640,"height":480,
                 "sha256":sha256_file(raw)[0],"size":raw.stat().st_size,"started_at":stamp,"completed_at":stamp,"consent_after":dict(proof)}}
+        provider_name = 'consent-provider-' + nonce + '-' + 'b' * 32 + '.octets'
+        provider = root / provider_name
+        provider.write_bytes(raw.read_bytes())
+        observe["console_capture"].update(provider_raw_file_name=provider_name,
+            provider_raw_sha256=sha256_file(provider)[0], provider_raw_size=provider.stat().st_size,
+            provider_encoding="raw-rgb565le", provider_payload_offset=0,
+            provider_octet_string_qualifier=True)
         request=consent_visual.prepare_request(owned_root=root,run_id=run["run_id"],version=run["candidate_version"],
             manifest_sha256=run["manifest"]["sha256"],artifact_sha256=run["outer_artifact"]["sha256"],parent_sha256="e"*64,
             observe=observe,raw_source=raw,attempt_nonce=nonce)
@@ -1320,7 +1332,7 @@ class ReleaseLabContractTests(unittest.TestCase):
                 headless_runner_inputs(manifest, key, receipt, artifact_record(artifact), '5.0.3.5')
 
     def test_semantic_helper_closure_rejects_missing_and_changed_source(self):
-        root = Path(__file__).resolve().parents[2]
+        root = self.enterContext(isolated_controller_sources())
         records = {relative: artifact_record(root / relative) for relative in SEMANTIC_HELPER_RELATIVES}
         validate_semantic_helper_records(records)
         missing = dict(records); missing.pop(next(iter(missing)))
@@ -1337,12 +1349,21 @@ if __name__ == "__main__":
 
 def test_android_vulkan_dependency_records_are_exact_and_tamper_fails():
     import pytest
+    from .lab import ANDROID_VULKAN_RELATIVES
+    with isolated_controller_sources() as root:
+        records={label:artifact_record(root/relative) for label,relative in ANDROID_VULKAN_RELATIVES.items()}
+        validate_android_vulkan_records(records)
+        changed={k:dict(v) for k,v in records.items()};changed["deb"]["sha256"]="0"*64
+        with pytest.raises(LabError,match="changed after plan"):
+            validate_android_vulkan_records(changed)
+
+
+def test_available_android_vulkan_verifier_reports_static_probe():
     from .lab import ANDROID_VULKAN_RELATIVES, repo_root
+    if not all((repo_root()/relative).is_file() for relative in ANDROID_VULKAN_RELATIVES.values()):
+        pytest.skip("immutable disabled Android Vulkan fixtures unavailable; no dependency/runtime acceptance")
     records={label:artifact_record(repo_root()/relative) for label,relative in ANDROID_VULKAN_RELATIVES.items()}
     validate_android_vulkan_records(records)
-    changed={k:dict(v) for k,v in records.items()};changed["deb"]["sha256"]="0"*64
-    with pytest.raises(LabError,match="changed after plan"):
-        validate_android_vulkan_records(changed)
     receipt=json.loads((repo_root()/ANDROID_VULKAN_RELATIVES["verifier"]).read_text())
     assert receipt["verified"] is True and receipt["static_probe"]["vkGetInstanceProcAddr"] is True
     assert receipt["dependency_closure"]["ldd_not_found"]==[] and receipt["guest_install_performed"] is False

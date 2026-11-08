@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from . import lab, trusted_windows_acquisition
 from .trusted_windows_acquisition import WindowsLiveSession
 from .trusted_acquisition_export import TrustedAcquisitionError
 
@@ -32,15 +33,20 @@ class WindowsSessionTests(unittest.TestCase):
         self.session.controller.hyperv_call.return_value = {"result": self.result}
 
     def capture(self):
-        with patch("deploy.release_lab.lab.windows_case_specs", return_value={"case-one": [("candidate", self.artifact)]}), \
-                patch("deploy.release_lab.lab.validate_receipt") as validate, \
-                patch("deploy.release_lab.trusted_windows_acquisition.secrets.token_hex", return_value="c" * 64):
+        with patch.object(lab, "windows_case_specs", return_value={"case-one": [("candidate", self.artifact)]}), \
+                patch.object(lab, "validate_receipt") as validate, \
+                patch.object(trusted_windows_acquisition.secrets, "token_hex", return_value="c" * 64):
             self.session.capture_windows_case("case-one")
             return validate
 
     def test_fresh_nonce_and_original_bytes_reach_existing_semantic_validator(self):
         validate = self.capture()
-        validate.assert_called_once()
+        validate.assert_called_once_with(
+            {"ok": True}, run_id="owned-run", profile_id="windows-x64",
+            artifact=self.artifact, case_id="case-one",
+            baseline_version=self.run["baseline_version"],
+            candidate_version=self.run["candidate_version"], expected_role="candidate",
+        )
         self.assertEqual(self.session.controller.hyperv_call.call_args.kwargs["AttemptNonce"], "c" * 64)
         self.assertIn("case-one", self.session._captures)
 

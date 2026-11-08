@@ -1,4 +1,6 @@
 import json
+import os
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -17,7 +19,8 @@ class HyperVBackendContractTests(unittest.TestCase):
     def setUp(self):
         self.source = BACKEND.read_text(encoding="utf-8")
 
-    def test_controller_adapter_is_powershell_51_parseable_and_child_bound(self):
+    @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "requires Windows PowerShell 5.1")
+    def test_controller_adapter_is_powershell_51_parseable(self):
         command = (
             "$tokens=$null;$errors=$null;"
             f"[System.Management.Automation.Language.Parser]::ParseFile("
@@ -29,6 +32,8 @@ class HyperVBackendContractTests(unittest.TestCase):
             check=False, capture_output=True, text=True,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_controller_adapter_is_child_bound(self):
         adapter = ADAPTER.read_text(encoding="utf-8")
         for required in (
             "create-child", "CaseId", "New-VHD -Path $disk -ParentPath $parent.vhdx",
@@ -48,6 +53,7 @@ class HyperVBackendContractTests(unittest.TestCase):
         self.assertNotIn("Stop-VM -Name", adapter)
         self.assertNotIn("New-PSSession -VMName", adapter)
 
+    @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "requires Windows PowerShell 5.1")
     def test_controller_hyperv_kwargs_match_native_adapter_param_ast(self):
         command = (
             "$tokens=$null;$errors=$null;"
@@ -80,6 +86,7 @@ class HyperVBackendContractTests(unittest.TestCase):
         self.assertNotIn("VMConnect", helper)
         self.assertNotIn("SendKeys", helper)
 
+    @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "requires Windows PowerShell 5.1")
     def test_powershell_51_parser_accepts_backend(self):
         command = (
             "$tokens=$null;$errors=$null;"
@@ -95,6 +102,7 @@ class HyperVBackendContractTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "requires Windows PowerShell 5.1")
     def test_mock_probe_contract_rejects_false_pass(self):
         result = subprocess.run(
             [
@@ -111,6 +119,7 @@ class HyperVBackendContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("MOCK_HYPERV_PROBE_CONTRACT_OK", result.stdout)
 
+    @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "requires Windows PowerShell 5.1")
     def test_plan_is_read_only_and_has_probe_schema(self):
         result = subprocess.run(
             [
@@ -260,6 +269,7 @@ class HyperVBackendContractTests(unittest.TestCase):
         self.assertIn('nic = if ($Transport -eq \'hyperv\') { "none" } else { "e1000" }', provision)
         self.assertNotIn('backend-hyperv.txt', provision)
 
+    @unittest.skipUnless(os.name == "nt" and shutil.which("powershell.exe"), "requires Windows PowerShell 5.1")
     def test_generated_helper_is_ps51_parseable_without_execution(self):
         helper = HELPER_TEMPLATE.read_text(encoding="utf-8")
         rendered = helper.replace('__SEED_NONCE__', 'f' * 32).replace('__BOOTSTRAP_ID__', 'golden-' + 'b' * 89)
