@@ -385,9 +385,31 @@ Component.prototype.installationFinished = function()
             return;
         }
 
-        // Non-Windows installers keep the previous elevation behaviour: the client
-        // is started from the installer process there, so the platform launch path
-        // is unchanged.
+        if (runningOnLinux()) {
+            // Do not open a desktop client during maintenance or CLI operations.
+            if (!installer.isInstaller() || installer.isCommandLineInstance()) {
+                return;
+            }
+            // IFW drops its helper, not the installer's own UID. After dropping
+            // it, hasAdminRights still detects an installer started as root.
+            installer.dropAdminRights();
+            if (installer.hasAdminRights()) {
+                console.log("Skipping Linux client launch: non-root installer required");
+                return;
+            }
+            var linuxTargetDir = String(installer.value("TargetDir")).replace(/\/+$/, "");
+            command = linuxTargetDir + "/bin/" + appExecutableFileName();
+            if (!installer.fileExists(command)) {
+                console.log("Skipping Linux client launch: installed executable missing: " + command);
+                return;
+            }
+            processStatus = installer.executeDetached(command, args, linuxTargetDir);
+            console.log((processStatus ? "Started installed Linux client: " : "Failed to start installed Linux client: ")
+                        + command);
+            return;
+        }
+
+        // macOS keeps its previous elevation and application launch behaviour.
         if (!installer.gainAdminRights()) {
             console.log("Fatal error! Cannot get admin rights!")
             return
@@ -395,8 +417,6 @@ Component.prototype.installationFinished = function()
 
         if (runningOnMacOS()) {
             command = "/Applications/" + appName() + ".app/Contents/MacOS/" + appName();
-        } else if (runningOnLinux()) {
-            command = "@TargetDir@/client/" + appName();
         }
 
         installer.dropAdminRights()
