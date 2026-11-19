@@ -147,7 +147,7 @@ function Write-PendingInstallerRequest([string] $Artifact, [string] $ArtifactHas
   $taskName = "AmneziaLab-Interactive-$RunId-$CaseId"; if($taskName.Length -gt 200){$taskName=$taskName.Substring(0,200)}
   if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) { Fail 'owned interactive task name already exists' }
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent(); $userId = [string]$identity.Name
-  $taskAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$LauncherPath`" -RunId $RunId -CaseId $CaseId -GuestRoot `"$GuestRoot`" -ArtifactPath `"$Artifact`" -ArtifactSha256 $ArtifactHash -PendingPath `"$requestPath`""
+  $taskAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -File `"$LauncherPath`" -RunId $RunId -CaseId $CaseId -GuestRoot `"$GuestRoot`" -ArtifactPath `"$Artifact`" -ArtifactSha256 $ArtifactHash -PendingPath `"$requestPath`""
   $taskPrincipal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
   $taskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -MultipleInstances IgnoreNew
   Register-ScheduledTask -TaskName $taskName -Action $taskAction -Principal $taskPrincipal -Settings $taskSettings -Description 'Amnezia release lab case-owned limited interactive installer' -ErrorAction Stop | Out-Null

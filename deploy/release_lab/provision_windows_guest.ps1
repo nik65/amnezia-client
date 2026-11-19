@@ -34,7 +34,7 @@ if ($Transport -eq 'hyperv') {
     $helperTemplate = Get-Content -LiteralPath (Join-Path $scriptDir "guest_templates\windows11\hyperv-seed-helper.ps1.template") -Raw
     $helperText = $helperTemplate.Replace('__SEED_NONCE__', $seedNonce).Replace('__BOOTSTRAP_ID__', $goldenBootstrapId)
     Set-Content -LiteralPath (Join-Path $staging $helperName) -Value $helperText -Encoding UTF8 -NoNewline
-    $hypervFirstLogon = "<FirstLogonCommands><SynchronousCommand wcm:action=""add"" xmlns:wcm=""http://schemas.microsoft.com/WMIConfig/2002/State""><Order>1</Order><CommandLine>cmd /c ""for %D in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %D:\$helperName powershell.exe -NoProfile -ExecutionPolicy Bypass -File %D:\$helperName""</CommandLine><Description>Run the uniquely named Hyper-V seed helper</Description></SynchronousCommand></FirstLogonCommands>"
+    $hypervFirstLogon = "<FirstLogonCommands><SynchronousCommand wcm:action=""add"" xmlns:wcm=""http://schemas.microsoft.com/WMIConfig/2002/State""><Order>1</Order><CommandLine>cmd /c ""for %D in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %D:\$helperName powershell.exe -NoProfile -File %D:\$helperName""</CommandLine><Description>Run the uniquely named Hyper-V seed helper</Description></SynchronousCommand></FirstLogonCommands>"
     $xml = [regex]::Replace($xml, '<FirstLogonCommands>.*?</FirstLogonCommands>', $hypervFirstLogon, [Text.RegularExpressions.RegexOptions]::Singleline)
 }
 $commandLineMatches = [regex]::Matches($xml, '(?s)<CommandLine>(.*?)</CommandLine>')

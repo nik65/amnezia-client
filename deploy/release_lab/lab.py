@@ -2003,7 +2003,7 @@ class LabController:
         adapter = hyperv_adapter_source()
         if not Path(HYPERV_POWERSHELL_WSL).is_file() or not os.access(HYPERV_POWERSHELL_WSL, os.X_OK):
             raise LabError(f"pinned Windows PowerShell bridge is unavailable: {HYPERV_POWERSHELL_WSL}")
-        argv = [HYPERV_POWERSHELL_WSL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", windows_path_for_wsl(adapter), "-Action", action, "-ParentRoot", HYPERV_PARENT_ROOT_WINDOWS, "-RunsRoot", HYPERV_RUNS_ROOT_WINDOWS]
+        argv = [HYPERV_POWERSHELL_WSL, "-NoProfile", "-NonInteractive", "-File", windows_path_for_wsl(adapter), "-Action", action, "-ParentRoot", HYPERV_PARENT_ROOT_WINDOWS, "-RunsRoot", HYPERV_RUNS_ROOT_WINDOWS]
         if run_id:
             argv += ["-RunId", run_id]
         for key, value in kwargs.items():

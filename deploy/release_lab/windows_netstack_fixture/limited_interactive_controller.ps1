@@ -67,7 +67,7 @@ function StartLimitedGui([string]$root,$plan,[string]$arguments){
  $limitedPlan=[ordered]@{run_id=$plan.run_id;case_id=$plan.case_id;vm_id=$plan.vm_id;nonce=$plan.nonce;task_token=$plan.task_token;user_sid=$sid;session_id=$session;app_sha256=$plan.installed_exe_sha256;gui_args=$arguments;operator_capture_sha256=$plan.files.'BoundedOperatorCapture.cs'}
  $planPath=Join-Path $inputDir 'plan.json';Write-NewJson $planPath $limitedPlan;Set-OwnedFixtureAcl $planPath $sid 'File';$sha=Hash $planPath
  $name="AmneziaLab-Limited-$($plan.run_id)-$($plan.case_id)";if(Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue){throw 'limited task exists'}
- $action=New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`" -InputRoot `"$inputDir`" -OutputRoot `"$output`" -PlanSha256 $sha"
+ $action=New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -NonInteractive -File `"$script`" -InputRoot `"$inputDir`" -OutputRoot `"$output`" -PlanSha256 $sha"
  $principal=New-ScheduledTaskPrincipal -UserId 'labadmin' -LogonType Interactive -RunLevel Limited
  Register-ScheduledTask -TaskName $name -Action $action -Principal $principal -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 240))|Out-Null
  $script:limited=[ordered]@{task=$name;input=$inputDir;output=$output;sequence=1;plan=$plan;sid=$sid;session=$session;gui=$null}

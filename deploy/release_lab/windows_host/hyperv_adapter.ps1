@@ -387,7 +387,7 @@ function Invoke-Guest([object] $Child, [string] $GuestScript, [string] $GuestAct
                 $userId=if([string]::IsNullOrWhiteSpace([string]$owner.Domain)){[string]$owner.User}else{"$($owner.Domain)\$($owner.User)"}
                 $taskName="AmneziaLab-UiCapture-$Id-$Case"; if($taskName.Length -gt 200){$taskName=$taskName.Substring(0,200)}
                 if(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue){throw 'owned UI capture task already exists'}
-                $args="-NoProfile -ExecutionPolicy Bypass -File `"$Helper`" -Action capture -RunId $Id -CaseId $Case -VmId $Vm -OutputPath `"$Evidence`" -ScreenshotPath `"$Screenshot`""
+                $args="-NoProfile -File `"$Helper`" -Action capture -RunId $Id -CaseId $Case -VmId $Vm -OutputPath `"$Evidence`" -ScreenshotPath `"$Screenshot`""
                 $taskAction=New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $args
                 $taskPrincipal=New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
                 $taskSettings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -MultipleInstances IgnoreNew
@@ -410,7 +410,7 @@ function Invoke-Guest([object] $Child, [string] $GuestScript, [string] $GuestAct
             if(-not [string]::IsNullOrWhiteSpace($tokenPath)){ $runnerArgs += @('-TokenEvidencePath',$tokenPath) }
             if(-not [string]::IsNullOrWhiteSpace($launcher)){ $runnerArgs += @('-LauncherPath',$launcher,'-LauncherSha256',$launcherHash) }
             $supervisorPath=Join-Path $root 'runner-supervisor.json'; $stdoutPath=Join-Path $root 'runner.stdout.log'; $stderrPath=Join-Path $root 'runner.stderr.log'
-            $nestedArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$runner)+$runnerArgs
+            $nestedArgs=@('-NoProfile','-File',$runner)+$runnerArgs
             $runnerProcess=Start-Process -FilePath powershell.exe -ArgumentList $nestedArgs -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -WindowStyle Hidden
             [void]$runnerProcess.Handle
             $runnerStart=[string]$runnerProcess.StartTime.ToUniversalTime().ToString('o'); $supervisor=[ordered]@{schema=1;run_id=$runId;case_id=$caseId;action=$action;artifact_sha256=$expectedSha;pid=[int]$runnerProcess.Id;start_time=$runnerStart;state='running';started_at=[DateTime]::UtcNow.ToString('o')}; $tmp="$supervisorPath.tmp"; $supervisor|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $tmp -Encoding UTF8; Move-Item -LiteralPath $tmp -Destination $supervisorPath -Force
@@ -522,18 +522,18 @@ function Start-PublisherSeed([object] $Child) {
 
 function Register-RelayServices([string] $RelayRootPath) {
     $script = Join-Path $PSScriptRoot 'hyperv_socket_relay.ps1'; if (-not (Test-Path -LiteralPath $script -PathType Leaf)) { Fail 'relay registry helper is missing' }
-    $args = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$script,'-Action','register','-RelayRoot',$RelayRootPath,'-RunId',$RunId)
+    $args = @('-NoProfile','-NonInteractive','-File',$script,'-Action','register','-RelayRoot',$RelayRootPath,'-RunId',$RunId)
     $proc = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -WindowStyle Hidden -ArgumentList $args -Wait -PassThru
     if ($proc.ExitCode -ne 0) { Fail "relay registry registration failed with exit $($proc.ExitCode)" }
-    try { $json = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Action validate -RelayRoot $RelayRootPath -RunId $RunId | Out-String; return ($json | ConvertFrom-Json) } catch { Fail 'relay registry registration readback was invalid' }
+    try { $json = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -File $script -Action validate -RelayRoot $RelayRootPath -RunId $RunId | Out-String; return ($json | ConvertFrom-Json) } catch { Fail 'relay registry registration readback was invalid' }
 }
 
 function Unregister-RelayServices([string] $RelayRootPath) {
     $script = Join-Path $PSScriptRoot 'hyperv_socket_relay.ps1'
-    $args = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$script,'-Action','unregister','-RelayRoot',$RelayRootPath,'-RunId',$RunId)
+    $args = @('-NoProfile','-NonInteractive','-File',$script,'-Action','unregister','-RelayRoot',$RelayRootPath,'-RunId',$RunId)
     $proc = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -WindowStyle Hidden -ArgumentList $args -Wait -PassThru
     if ($proc.ExitCode -ne 0) { Fail "relay registry unregistration failed with exit $($proc.ExitCode)" }
-    try { $json = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Action validate -RelayRoot $RelayRootPath -RunId $RunId | Out-String; return ($json | ConvertFrom-Json) } catch { Fail 'relay registry unregistration readback was invalid' }
+    try { $json = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -NonInteractive -File $script -Action validate -RelayRoot $RelayRootPath -RunId $RunId | Out-String; return ($json | ConvertFrom-Json) } catch { Fail 'relay registry unregistration readback was invalid' }
 }
 
 function Wait-RelayReceipt([string] $Path) {
@@ -601,7 +601,7 @@ function Start-Relays([object] $Child) {
             $ready=Invoke-Command -Session $session -ScriptBlock {
                 param($task,$ch,$id,$case,$vm,$sup,$relay,$leasePath,$receiptPath,$hash)
                 $previous=$ErrorActionPreference;$ErrorActionPreference='Continue'
-                try{$wire=@(& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $task -Action start -RunId $id -CaseId $case -Channel $ch -VmId $vm -SupervisorPath $sup -RelayPath $relay -OwnershipFile $leasePath -ReceiptPath $receiptPath -HelperSha256 $hash 2>&1);$code=$LASTEXITCODE}finally{$ErrorActionPreference=$previous}
+                try{$wire=@(& powershell.exe -NoProfile -NonInteractive -File $task -Action start -RunId $id -CaseId $case -Channel $ch -VmId $vm -SupervisorPath $sup -RelayPath $relay -OwnershipFile $leasePath -ReceiptPath $receiptPath -HelperSha256 $hash 2>&1);$code=$LASTEXITCODE}finally{$ErrorActionPreference=$previous}
                 if($code-ne0){$diagnosticPath=Join-Path (Split-Path -Parent $receiptPath) "startup-$ch.json";$detail='';if(Test-Path -LiteralPath $diagnosticPath -PathType Leaf){$item=Get-Item -LiteralPath $diagnosticPath;if($item.Length-le32768){$detail=[IO.File]::ReadAllText($diagnosticPath)}};throw "guest relay startup exit $code; diagnostic=$detail"}
                 $text=($wire|ForEach-Object{[string]$_})-join"`n";$answer=$text|ConvertFrom-Json -ErrorAction Stop
                 if($answer-is[array]-or$answer.action-cne'start'-or$answer.run_id-cne$id-or$answer.case_id-cne$case-or$answer.vm_id-cne([guid]$vm).ToString('B')-or$answer.ready-ne$true-or$answer.readiness.ready-ne$true){throw 'guest relay startup proof differs'}
@@ -699,7 +699,7 @@ function Invoke-ElevatedOwnedRelayStop([string]$Channel,[guid]$Vm,[string]$Lease
     foreach($pair in @(@('RunId',$RunId),@('CaseId',$CaseId),@('Channel',$Channel),@('VmId',$Vm.ToString('B')),@('SupervisorPath',$RelaySupervisorPath),@('RelayPath',$RelayHelperPath),@('OwnershipFile',$Lease),@('ReceiptPath',$Receipt),@('HelperSha256',$RelayHelperSha256),@('SourceSha256',$RelayGuestTaskSha256))){$command+=' -'+$pair[0]+' '+(&$literal ([string]$pair[1]))}
     $command+=';exit $LASTEXITCODE'
     $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-    $stop=Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -Verb RunAs -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded) -WindowStyle Hidden -Wait -PassThru
+    $stop=Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -Verb RunAs -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand',$encoded) -WindowStyle Hidden -Wait -PassThru
     if($stop.ExitCode-ne0){throw "elevated owned relay stop failed with exit $($stop.ExitCode)"}
     if(-not(Test-OwnedRelayStopped 'host' $Channel $RunId $CaseId $Vm $RelayHelperSha256 $Lease $Receipt $RelaySupervisorPath $RelayHelperPath)){throw 'elevated relay stop lacks independent stopped and PID absence proof'}
 }
@@ -710,7 +710,7 @@ function Stop-Relays([object] $Child) {
     $guestRoot = Join-Path (Join-Path (Join-Path (Join-Path (Join-Path 'C:\ProgramData\AmneziaLab' 'runs') $RunId) 'windows-x64') $CaseId) 'relay'
     $guestTask = Join-Path $guestRoot 'guest-task.ps1'; $guestStopped = $true; $hostStopped = $true
     if ([string]$Child.vm.State -eq 'Running') { $session = $null; try { $session = New-Session $Child; foreach ($channel in @('ssh','http')) { $lease=Join-Path $guestRoot "$channel.lease"; $receipt=Join-Path $guestRoot "$channel.receipt"; try { $answer=Invoke-Command -Session $session -ScriptBlock { param($task,$ch,$id,$case,$vm,$sup,$relay,$leasePath,$receiptPath,$hash,$taskHash); if (-not (Test-Path -LiteralPath $task -PathType Leaf)) { throw 'guest relay task is missing' }
-            $raw=& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $task -Action stop -RunId $id -CaseId $case -Channel $ch -VmId $vm -SupervisorPath $sup -RelayPath $relay -OwnershipFile $leasePath -ReceiptPath $receiptPath -HelperSha256 $hash -SourceSha256 $taskHash
+            $raw=& powershell.exe -NoProfile -NonInteractive -File $task -Action stop -RunId $id -CaseId $case -Channel $ch -VmId $vm -SupervisorPath $sup -RelayPath $relay -OwnershipFile $leasePath -ReceiptPath $receiptPath -HelperSha256 $hash -SourceSha256 $taskHash
             $nativeExit=$LASTEXITCODE
             if($nativeExit-ne0){throw "guest relay stop task exited with $nativeExit"}
             $wire=([string[]]@($raw))-join"`n"
@@ -989,7 +989,7 @@ function Protect-OwnedFixtureNamespace([string]$Root,[string]$RunId,[string]$Cas
    foreach($port in $ports){$listeners=@(Get-NetUDPEndpoint -LocalPort $port);if($listeners.Count-ne 1 -or $listeners[0].LocalAddress-cne '127.0.0.1' -or $listeners[0].OwningProcess-ne $helper.Id){throw 'fixture UDP lease differs'}}
    $taskName="AmneziaLab-RouteFixture-$id-$case";if(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue){throw 'observer task already exists'}
    $observer=Join-Path $root 'product_observer.ps1';$plan=Join-Path $root 'observer-plan.json'
-   $action=New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$observer`" -PlanPath `"$plan`""
+   $action=New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -NonInteractive -File `"$observer`" -PlanPath `"$plan`""
    $principal=New-ScheduledTaskPrincipal -UserId 'labadmin' -LogonType Interactive -RunLevel Highest
    Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 250))|Out-Null
    Start-ScheduledTask -TaskName $taskName
@@ -1131,7 +1131,7 @@ if ($Action -eq 'native-tests') {
             foreach($file in @(Get-ChildItem -LiteralPath $nativeInputRoot -File)){Set-NativeAcl $file.FullName 'File'}
             if((Get-FileHash -LiteralPath (Join-Path $nativeInputRoot 'manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()-cne$manifestSha-or(Get-FileHash -LiteralPath (Join-Path $nativeInputRoot 'native_test_guest.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()-cne$helperSha-or(Get-FileHash -LiteralPath (Join-Path $nativeInputRoot 'BoundedOperatorCapture.cs') -Algorithm SHA256).Hash.ToLowerInvariant()-cne$captureSha){throw 'native test helper guest copy differs'}
             $taskName="AmneziaLab-NativeTests-$id";if($taskName.Length-gt200-or(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)){throw 'native test task must be fresh'}
-            $helper=Join-Path $nativeInputRoot 'native_test_guest.ps1';$arguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$helper`" -RunId $id -VmId $vmid -AttemptNonce $nonce -ManifestSha256 $manifestSha -HelperSha256 $helperSha -CaptureSha256 $captureSha"
+            $helper=Join-Path $nativeInputRoot 'native_test_guest.ps1';$arguments="-NoProfile -NonInteractive -File `"$helper`" -RunId $id -VmId $vmid -AttemptNonce $nonce -ManifestSha256 $manifestSha -HelperSha256 $helperSha -CaptureSha256 $captureSha"
             $taskAction=New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $arguments
             $userId=if([string]::IsNullOrWhiteSpace([string]$owner.Domain)){[string]$owner.User}else{"$($owner.Domain)\$($owner.User)"}
             $principal=New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
@@ -1641,7 +1641,7 @@ if ($Action -eq 'app-window') {
             $explorer=@(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'"|Where-Object{$_.SessionId-gt0}|Select-Object -First 1);if($explorer.Count-ne1){throw 'app-window requires one Explorer session'}
             $owner=Invoke-CimMethod -InputObject $explorer[0] -MethodName GetOwner -ErrorAction Stop;$user=if([string]::IsNullOrWhiteSpace([string]$owner.Domain)){[string]$owner.User}else{"$($owner.Domain)\$($owner.User)"}
             $task="AmneziaLab-AppWindow-$id-$case";if($task.Length-gt200){$task=$task.Substring(0,200)};if(Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue){throw 'app-window task already exists'}
-            $args="-NoProfile -ExecutionPolicy Bypass -File `"$helper`" -Action launch-app -RunId $id -CaseId $case -VmId $vmid -ExpectedVersion $version -OutputPath `"$evidence`" -ScreenshotPath `"$screenshot`""
+            $args="-NoProfile -File `"$helper`" -Action launch-app -RunId $id -CaseId $case -VmId $vmid -ExpectedVersion $version -OutputPath `"$evidence`" -ScreenshotPath `"$screenshot`""
             $action=New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $args;$principal=New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited;$settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 3) -MultipleInstances IgnoreNew
             try { Register-ScheduledTask -TaskName $task -Action $action -Principal $principal -Settings $settings -Description 'Owned release-lab app window acceptance'|Out-Null;Start-ScheduledTask -TaskName $task;$deadline=(Get-Date).AddSeconds(120);while((Get-Date)-lt$deadline-and-not(Test-Path -LiteralPath $evidence -PathType Leaf)){Start-Sleep -Milliseconds 500};if(-not(Test-Path -LiteralPath $evidence -PathType Leaf)){throw 'app-window evidence deadline exceeded'};[IO.File]::ReadAllText($evidence) } finally { Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue;if(Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue){throw 'app-window task remained after cleanup'} }
         } -ArgumentList $guestHelper,$guestEvidence,$guestScreenshot,$RunId,$CaseId,([string]$child.vm.Id),$ExpectedVersion
