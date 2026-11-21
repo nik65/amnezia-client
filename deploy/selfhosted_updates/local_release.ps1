@@ -11,6 +11,8 @@ param(
     [string] $ArtifactDir = "",
     [string] $OutDir = "",
     [string] $WindowsOuterArtifactDir = "",
+    [switch] $PrepareNativePublicationCandidate,
+    [string] $NativeCandidateStageDir = "",
     [string] $BaseUrl = $env:SELFHOSTED_UPDATE_BASE_URL,
     [string] $SyncHost = $(if ($env:SELFHOSTED_UPDATE_SYNC_HOST) { $env:SELFHOSTED_UPDATE_SYNC_HOST } else { "10.8.1.0" }),
     [string] $SshTrustedHost = $env:SELFHOSTED_SSH_TRUSTED_HOST,
@@ -140,7 +142,7 @@ foreach ($platform in $BuildPlatform) {
 if ($LabWindowsBackend -notin @("qemu", "hyperv")) {
     throw "Runtime config windowsBackend must be qemu or hyperv"
 }
-if ($LabLane -eq "release" -and $LabWindowsBackend -ne "hyperv") {
+if (-not $PrepareNativePublicationCandidate -and $LabLane -eq "release" -and $LabWindowsBackend -ne "hyperv") {
     throw "Release-lane self-hosted publication requires the validated Hyper-V Windows backend"
 }
 $RequirePlatform = @($RequirePlatform | ForEach-Object { [string]$_ -split "," } |
@@ -151,6 +153,29 @@ function Resolve-RepoPath([string] $Path) {
         return [System.IO.Path]::GetFullPath($Path)
     }
     return [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $Path))
+}
+
+function New-NativeCandidateStage([string] $StageDir) {
+    if ($StageDir -match '(^|[\\/])\.{1,2}([\\/]|$)') {
+        throw "Private native candidate stage must not contain dot segments"
+    }
+    $stageRoot = Join-Path $RepoRoot "dist\release-lab\native-publication-candidates"
+    $stage = Resolve-RepoPath $StageDir
+    if ((Split-Path -Parent $stage) -ne $stageRoot -or
+        (Split-Path -Leaf $stage) -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$') {
+        throw "Private native candidate stage must be a named attempt directly under $stageRoot"
+    }
+    for ($cursor = $stage; $cursor; $cursor = Split-Path -Parent $cursor) {
+        $item = Get-Item -LiteralPath $cursor -Force -ErrorAction SilentlyContinue
+        if ($null -eq $item) { continue }
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Private native candidate stage must not traverse a reparse point: $cursor"
+        }
+        if ($cursor -eq $stage -or -not $item.PSIsContainer) {
+            throw "Private native candidate stage must be fresh: $stage"
+        }
+    }
+    return (New-Item -ItemType Directory -Path $stage).FullName
 }
 
 function Resolve-WindowsOuterOutputDirectory([string] $Override) {
@@ -377,7 +402,11 @@ print(hashlib.sha256(public.public_bytes(Encoding.Raw, PublicFormat.Raw)).hexdig
         $env:SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64 = $previousPublicKey
         $env:SELFHOSTED_UPDATE_PRIVATE_KEY_PATH = $previousPrivateKey
     }
-    $receiptPath = Join-Path $RepoRoot "dist\diagnostics\2026-09-30\local\SELFHOSTED_KEY_PREFLIGHT.md"
+    $receiptPath = if ($nativeCandidateStage) {
+        Join-Path $nativeCandidateStage "SELFHOSTED_KEY_PREFLIGHT.md"
+    } else {
+        Join-Path $RepoRoot "dist\diagnostics\2026-09-30\local\SELFHOSTED_KEY_PREFLIGHT.md"
+    }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $receiptPath) | Out-Null
     @(
         "# Self-hosted update key preflight",
@@ -1048,7 +1077,11 @@ function Assert-WindowsOuterIfwMetadata([string] $ArtifactPath, [bool] $PublishO
     if ([string]::IsNullOrWhiteSpace($qifRoot)) { throw "Qt IFW root is required to inspect the bundled Windows client." }
     $devtool = Join-Path $qifRoot "bin\devtool.exe"
     Assert-ExistingFile $devtool "Qt IFW metadata inspection tool"
-    $inspectionRoot = Join-Path $RepoRoot "dist\.build-tools\ifw-outer-inspection"
+    $inspectionRoot = if ($nativeCandidateStage) {
+        Join-Path $nativeCandidateStage "ifw-outer-inspection"
+    } else {
+        Join-Path $RepoRoot "dist\.build-tools\ifw-outer-inspection"
+    }
     if (Test-Path -LiteralPath $inspectionRoot) {
         $resolvedInspection = [IO.Path]::GetFullPath($inspectionRoot)
         $ownedRoot = [IO.Path]::GetFullPath((Join-Path $RepoRoot "dist\.build-tools")) + [IO.Path]::DirectorySeparatorChar
@@ -1095,7 +1128,11 @@ function Assert-WindowsClientTrust([string] $ArtifactPath, [string] $ReceiptPath
     if ([string]::IsNullOrWhiteSpace($ReceiptPath)) {
         $ReceiptPath = Join-Path (Split-Path -Parent $ArtifactPath) "windows-thin-payload-guard.json"
     }
-    $inspectionRoot = Join-Path $RepoRoot "dist\.build-tools\ifw-client-trust-inspection"
+    $inspectionRoot = if ($nativeCandidateStage) {
+        Join-Path $nativeCandidateStage "ifw-client-trust-inspection"
+    } else {
+        Join-Path $RepoRoot "dist\.build-tools\ifw-client-trust-inspection"
+    }
     $receipt = [ordered]@{
         schema = "amnezia-windows-thin-payload-guard-v1"
         status = "REJECTED"
@@ -1235,7 +1272,11 @@ function Assert-BundledWindowsPayload([string] $ArtifactPath, [string] $Manifest
         throw "Generated self-hosted build contract is not bound to the intended manifest"
     }
 
-    $inspectionRoot = Join-Path $RepoRoot "dist\.build-tools\ifw-payload-inspection"
+    $inspectionRoot = if ($nativeCandidateStage) {
+        Join-Path $nativeCandidateStage "ifw-payload-inspection"
+    } else {
+        Join-Path $RepoRoot "dist\.build-tools\ifw-payload-inspection"
+    }
     if (Test-Path -LiteralPath $inspectionRoot) {
         Remove-Item -LiteralPath $inspectionRoot -Recurse -Force
     }
@@ -1290,7 +1331,11 @@ function Assert-BundledWindowsPayload([string] $ArtifactPath, [string] $Manifest
             throw "Bundled manifest publication grant does not match the intended SSH host."
         }
         $ownerRoot = Split-Path -Parent $RepoRoot
-        $receiptRoot = Join-Path $ownerRoot "logs"
+        $receiptRoot = if ($nativeCandidateStage) {
+            $nativeCandidateStage
+        } else {
+            Join-Path $ownerRoot "logs"
+        }
         New-Item -ItemType Directory -Force -Path $receiptRoot | Out-Null
         $receipt = [ordered]@{
             schema = "amnezia-bundled-windows-payload-proof-v1"
@@ -1407,6 +1452,35 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = Get-ProjectVersion
 }
 
+$nativeCandidateStage = ""
+if ($PrepareNativePublicationCandidate) {
+    if ([string]::IsNullOrWhiteSpace($NativeCandidateStageDir) -or
+        [string]::IsNullOrWhiteSpace($ArtifactDir) -or -not $SkipBuild -or
+        $NoBundleUpdatesInWindowsClient -or $Preflight -or $VerifyWindowsThinPayloadOnly -or
+        $PSBoundParameters.ContainsKey("LabLane") -or
+        -not [string]::IsNullOrWhiteSpace($OutDir) -or
+        -not [string]::IsNullOrWhiteSpace($WindowsOuterArtifactDir)) {
+        throw "Private native preparation requires -NativeCandidateStageDir, -ArtifactDir, and -SkipBuild, with bundling enabled and no release output or lab lane overrides"
+    }
+    if ($BuildPlatform -notcontains "windows" -or $RequirePlatform.Count -ne 4 -or
+        (($RequirePlatform | Sort-Object) -join ",") -cne "android-arm64-v8a,linux-headless-x64,linux-x64,windows-x64") {
+        throw "Private native preparation requires Windows bundling and all four release platforms"
+    }
+    if ($Version -notmatch '^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){3}$') {
+        throw "Private native preparation requires a canonical four-part release version"
+    }
+    $ArtifactDir = Resolve-RepoPath $ArtifactDir
+    $windowsBuildRoot = Join-Path $RepoRoot "deploy\build"
+    if (-not (Test-Path -LiteralPath $ArtifactDir -PathType Container) -or
+        $ArtifactDir -eq $windowsBuildRoot -or $ArtifactDir.StartsWith($windowsBuildRoot + "\", [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Private native preparation requires an existing component artifact directory outside deploy/build"
+    }
+    $nativeCandidateStage = New-NativeCandidateStage $NativeCandidateStageDir
+    $OutDir = Join-Path $nativeCandidateStage "bundle"
+} elseif (-not [string]::IsNullOrWhiteSpace($NativeCandidateStageDir)) {
+    throw "-NativeCandidateStageDir requires -PrepareNativePublicationCandidate"
+}
+
 if ([string]::IsNullOrWhiteSpace($ArtifactDir)) {
     $ArtifactDir = Join-Path $RepoRoot "dist\selfhosted-local-artifacts\$Version"
 }
@@ -1415,16 +1489,22 @@ if ([string]::IsNullOrWhiteSpace($OutDir)) {
 }
 $ArtifactDir = Resolve-RepoPath $ArtifactDir
 $OutDir = Resolve-RepoPath $OutDir
-$resolvedWindowsOuterDir = Resolve-WindowsOuterOutputDirectory $WindowsOuterArtifactDir
+$resolvedWindowsOuterDir = if ($nativeCandidateStage) {
+    $nativeCandidateStage
+} else {
+    Resolve-WindowsOuterOutputDirectory $WindowsOuterArtifactDir
+}
 
 $bundlesUpdatesInWindowsClient = (-not $NoBundleUpdatesInWindowsClient) -and
     ($BuildPlatform -contains "windows")
-$publishOnInstall = $bundlesUpdatesInWindowsClient -and $LabLane -eq "release"
+$publishOnInstall = $bundlesUpdatesInWindowsClient -and ($PrepareNativePublicationCandidate -or $LabLane -eq "release")
 if ($bundlesUpdatesInWindowsClient -and ($RequirePlatform -notcontains "windows-x64")) {
     throw "Bundled Windows update publisher requires the windows-x64 manifest artifact."
 }
 
-New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
+if (-not $nativeCandidateStage) {
+    New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
+}
 
 if ($Preflight) {
     Assert-LocalReleasePrerequisites
@@ -1620,7 +1700,9 @@ if (-not $SkipBuild) {
     }
 }
 
-Remove-UnsupportedAndroidArtifacts $ArtifactDir $Version
+if (-not $nativeCandidateStage) {
+    Remove-UnsupportedAndroidArtifacts $ArtifactDir $Version
+}
 
 Write-Step "Create and verify self-hosted update manifest"
 if ([string]::IsNullOrWhiteSpace($PrivateKey)) {
@@ -1653,7 +1735,8 @@ if ($headlessRequested -and ($RequirePlatform -notcontains "linux-headless-x64")
 }
 $thinWindowsArtifactPath = Join-Path $ArtifactDir "AmneziaVPN_${Version}_windows_x64.exe"
 if ($bundlesUpdatesInWindowsClient) {
-    Assert-WindowsClientTrust $thinWindowsArtifactPath (Join-Path $ArtifactDir "windows-thin-payload-guard.json") | Out-Null
+    $thinGuardReceiptRoot = if ($nativeCandidateStage) { $nativeCandidateStage } else { $ArtifactDir }
+    Assert-WindowsClientTrust $thinWindowsArtifactPath (Join-Path $thinGuardReceiptRoot "windows-thin-payload-guard.json") | Out-Null
 }
 $manifestArgs = @(
     "deploy/selfhosted_updates/make_manifest.py",
@@ -1724,6 +1807,23 @@ $outerForLab = $adminInstallerTarget
 $gatedOuterSha256 = $null
 if ($bundlesUpdatesInWindowsClient) {
     Write-Step "Build Windows release client with bundled update payload"
+    $adminInstallerSource = Join-Path $RepoRoot "deploy\build\AmneziaVPN_${Version}_windows_x64.exe"
+    $heldOuter = $null
+    $priorBuildOutput = $null
+    if ($nativeCandidateStage) {
+        $heldOuter = Join-Path $nativeCandidateStage "AmneziaVPN_${Version}_windows_x64_selfhosted.exe.hold"
+        foreach ($path in @((Join-Path $RepoRoot "deploy"), (Split-Path -Parent $adminInstallerSource), $adminInstallerSource)) {
+            $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            if ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Private native preparation must not use a reparse point at $path"
+            }
+        }
+        if (Test-Path -LiteralPath $adminInstallerSource) {
+            Assert-ExistingFile $adminInstallerSource "Existing Windows build output"
+            $priorBuildOutput = Join-Path $nativeCandidateStage "prior-windows-build-output.hold"
+            [IO.File]::Move($adminInstallerSource, $priorBuildOutput)
+        }
+    }
     $previousIfwBinaryCreator = $env:AMNEZIA_IFW_BINARYCREATOR
     $previousIfwFrameworkVersion = $env:AMNEZIA_IFW_FRAMEWORK_VERSION
     $previousLaunchPublisher = $env:AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI
@@ -1735,6 +1835,16 @@ if ($bundlesUpdatesInWindowsClient) {
             Remove-Item Env:\AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI -ErrorAction SilentlyContinue
         }
         Build-WindowsInstaller $OutDir
+        Assert-ExistingFile $adminInstallerSource "Bundled Windows release client"
+        if ($publishOnInstall) {
+            $outerForLab = $adminInstallerSource
+            $gatedOuterSha256 = (Get-FileHash -LiteralPath $outerForLab -Algorithm SHA256).Hash
+        }
+        Assert-WindowsOuterIfwMetadata $adminInstallerSource $publishOnInstall
+        Assert-BundledWindowsPayload $adminInstallerSource (Join-Path $OutDir "manifest.json") $publishOnInstall
+        if ($nativeCandidateStage) {
+            [IO.File]::Move($adminInstallerSource, $heldOuter)
+        }
     } finally {
         if ($null -eq $previousLaunchPublisher) {
             Remove-Item Env:\AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI -ErrorAction SilentlyContinue
@@ -1751,15 +1861,15 @@ if ($bundlesUpdatesInWindowsClient) {
         } else {
             $env:AMNEZIA_IFW_FRAMEWORK_VERSION = $previousIfwFrameworkVersion
         }
+        if ($nativeCandidateStage) {
+            if ([IO.File]::Exists($adminInstallerSource)) {
+                [IO.File]::Move($adminInstallerSource, (Join-Path $nativeCandidateStage "incomplete-windows-build-output.hold"))
+            }
+            if ($priorBuildOutput) {
+                [IO.File]::Move($priorBuildOutput, $adminInstallerSource)
+            }
+        }
     }
-    $adminInstallerSource = Join-Path $RepoRoot "deploy\build\AmneziaVPN_${Version}_windows_x64.exe"
-    Assert-ExistingFile $adminInstallerSource "Bundled Windows release client"
-    if ($publishOnInstall) {
-        $outerForLab = $adminInstallerSource
-        $gatedOuterSha256 = (Get-FileHash -LiteralPath $outerForLab -Algorithm SHA256).Hash
-    }
-    Assert-WindowsOuterIfwMetadata $adminInstallerSource $publishOnInstall
-    Assert-BundledWindowsPayload $adminInstallerSource (Join-Path $OutDir "manifest.json") $publishOnInstall
     if (-not $publishOnInstall) {
         if ([string]::IsNullOrWhiteSpace($WindowsOuterArtifactDir)) {
             New-Item -ItemType Directory -Force -Path $resolvedWindowsOuterDir | Out-Null
@@ -1769,6 +1879,33 @@ if ($bundlesUpdatesInWindowsClient) {
         }
         Write-Host "Bundled Windows release client: $adminInstallerTarget"
     }
+}
+
+if ($nativeCandidateStage) {
+    $outerItem = Get-Item -LiteralPath $heldOuter
+    $outerSha256 = (Get-FileHash -LiteralPath $heldOuter -Algorithm SHA256).Hash
+    if ($outerSha256 -ne $gatedOuterSha256) {
+        throw "Private native candidate bytes changed after inspection"
+    }
+    $manifestPath = Join-Path $OutDir "manifest.json"
+    $status = [ordered]@{
+        schema = "amnezia-publication-acceptance-status-v1"
+        status = "HOLD_AUTHENTICATED_ACCEPTANCE_UNAVAILABLE"
+        approvalIssued = $false
+        version = $Version
+        reason = "Complete authenticated Windows/Linux/real-Android acquisition is required before this exact candidate can be released."
+        manifestSha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        originalOuter = [ordered]@{
+            path = $outerItem.FullName
+            size = $outerItem.Length
+            sha256 = $outerSha256.ToLowerInvariant()
+        }
+    }
+    $statusPath = Join-Path $nativeCandidateStage "publication-acceptance-status.json"
+    [IO.File]::WriteAllText($statusPath, ($status | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+    Write-Host "Private native publication candidate held for owned release-lab acquisition: $heldOuter"
+    Write-Host "Candidate bundle: $OutDir"
+    return
 }
 
 if ($LabLane -ne "off") {
