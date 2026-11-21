@@ -25,6 +25,7 @@ public:
  quint64 m_discoveryReconnectEpoch=0,m_connectionEpoch=1;
  quint64 m_discoveryReconnectSerial=0;
  unsigned m_discoveryReconnectAttempts=0;
+ QString m_discoveryReconnectComponent,lastRefreshComponent;
  QString m_discoveryReconnectServerId,m_serverId="fixture-server";
  AndroidServiceDiscovery::Ledger m_startAdmissionLedger;
  QElapsedTimer m_nativeStartAdmissionAge;
@@ -40,7 +41,7 @@ public:
  int registered=0,refreshes=0,refusals=0,changes=0,disconnects=0,accepted=0;
  ErrorCode error=ErrorCode::NoError;
  void serviceDiscoveryRegistered(const QString &,bool yes){++registered;accepted+=yes;}
- void serviceDiscoveryRefreshRequested(){++refreshes;}
+ void serviceDiscoveryRefreshRequested(const QString &component = {}){++refreshes;lastRefreshComponent=component;}
  void serviceDiscoveryConnectRefused(ErrorCode e,Vpn::ConnectionState s){++refusals;error=e;visible=s;}
  Vpn::ConnectionState visible=Vpn::ConnectionState::Unknown;
  void vpnProtocolError(ErrorCode e){error=e;}
@@ -50,7 +51,7 @@ public:
  void serviceDiscoveryTimedOut(const QString &);
  void refuseServiceDiscovery();
  void serviceDiscoveryChanged(const QJsonObject &);
- void awaitReconnectDiscovery(std::function<void()>);
+ void awaitReconnectDiscovery(std::function<void()>, const QString &);
  void refreshReconnectDiscovery();
  void armStartAdmission(const AndroidServiceDiscovery::Grant &);
  void handleStartAdmission(const QJsonObject &);
@@ -142,7 +143,7 @@ int main(int argc,char**argv){
  {
   VpnConnection w;w.m_connectionState=Vpn::ConnectionState::Reconnecting;
   CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
-  w.awaitReconnectDiscovery([]{});w.m_discoveryReconnectAttempts=3;w.serviceDiscoveryTimedOut(refreshId);
+  w.awaitReconnectDiscovery([]{},"AWG");w.m_discoveryReconnectAttempts=3;w.serviceDiscoveryTimedOut(refreshId);
   CHECK(w.m_connectionState==Vpn::ConnectionState::Disconnected);CHECK(w.visible==Vpn::ConnectionState::Disconnected);CHECK(w.error==ErrorCode::ServiceDiscoveryUnconfirmed);CHECK(!w.m_discoveryReconnectStart);CHECK(Protocol::stops==0);
  }
  {
@@ -153,7 +154,7 @@ int main(int argc,char**argv){
  }
  reset();
  {
-  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;});CHECK(w.refreshes==1);
+  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;},"AWG");CHECK(w.refreshes==1);
   CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
   QJsonObject terminal{{"schema",1},{"requestId",refreshId},{"generation","101"},{"phase","EMPTY"},{"component","NONE"},{"reason","NONE"}};
   CHECK(AndroidServiceDiscovery::coordinator.ingest(terminal));
@@ -163,7 +164,7 @@ int main(int argc,char**argv){
  reset();
  {
   VpnConnection w;w.m_connectionState=Vpn::ConnectionState::Reconnecting;
-  int started=0;w.awaitReconnectDiscovery([&]{++started;});
+  int started=0;w.awaitReconnectDiscovery([&]{++started;},"AWG");
   CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
   w.serviceDiscoveryTimedOut(refreshId);
   CHECK(bool(w.m_discoveryReconnectStart));CHECK(w.refreshes==2);CHECK(w.refusals==0);CHECK(started==0);
@@ -177,7 +178,7 @@ int main(int argc,char**argv){
  {
   VpnConnection w;w.owner();w.armStartAdmission(grant());auto owner=w.m_vpnProtocol;
   VpnConnection retiring;retiring.m_connectionState=Vpn::ConnectionState::Reconnecting;
-  retiring.awaitReconnectDiscovery([]{});NativeSessionRestore::ingress.observe();
+  retiring.awaitReconnectDiscovery([]{},"AWG");NativeSessionRestore::ingress.observe();
   QEventLoop loop;QTimer::singleShot(6500,Qt::PreciseTimer,&loop,&QEventLoop::quit);loop.exec();
   CHECK(retiring.visible==Vpn::ConnectionState::Unknown);CHECK(retiring.error==ErrorCode::NativeTunnelCleanupUnconfirmed);CHECK(!retiring.m_discoveryReconnectStart);CHECK(Protocol::stops==0);
   CHECK(w.m_vpnProtocol==owner);CHECK(w.visible==Vpn::ConnectionState::Unknown);CHECK(w.refusals==1);CHECK(w.disconnects==0);
@@ -185,7 +186,7 @@ int main(int argc,char**argv){
  }
  reset();
  {
-  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;});
+  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;},"AWG");
   CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
   QJsonObject uncertain{{"schema",1},{"requestId",refreshId},{"generation","103"},{"phase","UNCERTAIN"},{"component","NONE"},{"reason","STATUS_UNPROVEN"}};
   CHECK(AndroidServiceDiscovery::coordinator.ingest(uncertain));w.serviceDiscoveryChanged(uncertain);w.serviceDiscoveryChanged(uncertain);
@@ -198,7 +199,7 @@ int main(int argc,char**argv){
  }
  reset();
  for(bool serverChange:{false,true}) {
-  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;});
+  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;},"AWG");
   CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
   if(serverChange)w.m_serverId="other-server";else ++w.m_connectionEpoch;
   w.serviceDiscoveryTimedOut(refreshId);CHECK(!w.m_discoveryReconnectStart);CHECK(started==0);CHECK(w.refusals==0);CHECK(w.refreshes==1);
@@ -206,11 +207,11 @@ int main(int argc,char**argv){
  reset();
  {
   VpnConnection w;int oldStarted=0,newStarted=0;
-  w.awaitReconnectDiscovery([&]{++oldStarted;});
+  w.awaitReconnectDiscovery([&]{++oldStarted;},"AWG");
   CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
   QJsonObject uncertain{{"schema",1},{"requestId",refreshId},{"generation","105"},{"phase","UNCERTAIN"},{"component","NONE"},{"reason","BIND_TIMEOUT"}};
   CHECK(AndroidServiceDiscovery::coordinator.ingest(uncertain));w.serviceDiscoveryChanged(uncertain);
-  w.awaitReconnectDiscovery([&]{++newStarted;}); // same epoch, new wait serial
+  w.awaitReconnectDiscovery([&]{++newStarted;},"AWG"); // same epoch, new wait serial
   QEventLoop loop;QTimer::singleShot(350,Qt::PreciseTimer,&loop,&QEventLoop::quit);loop.exec();
   CHECK(w.refreshes==2);CHECK(w.m_discoveryReconnectAttempts==1);CHECK(oldStarted==0);CHECK(newStarted==0);
   CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
@@ -220,7 +221,38 @@ int main(int argc,char**argv){
  }
  reset();
  {
-  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;});
+  VpnConnection w;
+  int started=0;
+  w.awaitReconnectDiscovery([&]{++started;},"XRAY");
+  CHECK(w.refreshes==1);
+  CHECK(w.lastRefreshComponent=="XRAY");
+  CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));
+  w.registerServiceDiscovery(refreshId);
+  const QJsonObject idle{{"schema",1},{"requestId",refreshId},{"generation","107"},{"phase","IDLE_NATIVE"},{"component","AWG"},{"reason","NONE"}};
+  CHECK(AndroidServiceDiscovery::coordinator.ingest(idle));
+  CHECK(AndroidServiceDiscovery::coordinator.allowsFresh());
+  CHECK(AndroidServiceDiscovery::coordinator.canReconnect("AWG"));
+  w.serviceDiscoveryChanged(idle);
+  CHECK(started==0);
+  CHECK(bool(w.m_discoveryReconnectStart));
+
+  w.refreshReconnectDiscovery();
+  CHECK(w.refreshes==2);
+  CHECK(w.lastRefreshComponent=="XRAY");
+  const QString emptyId="33333333-3333-3333-3333-333333333333";
+  CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(emptyId));
+  w.registerServiceDiscovery(emptyId);
+  const QJsonObject empty{{"schema",1},{"requestId",emptyId},{"generation","108"},{"phase","EMPTY"},{"component","NONE"},{"reason","NONE"}};
+  CHECK(AndroidServiceDiscovery::coordinator.ingest(empty));
+  w.serviceDiscoveryChanged(empty);
+  CHECK(started==1);
+  CHECK(!w.m_discoveryReconnectStart);
+  w.serviceDiscoveryChanged(empty);
+  CHECK(started==1);
+ }
+ reset();
+ {
+  VpnConnection w;int started=0;w.awaitReconnectDiscovery([&]{++started;},"AWG");
   for(int i=0;i<3;++i) {
    CHECK(AndroidServiceDiscovery::coordinator.registerRefresh(refreshId));w.registerServiceDiscovery(refreshId);
    w.serviceDiscoveryTimedOut(refreshId);

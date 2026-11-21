@@ -2034,7 +2034,7 @@ void VpnConnection::connectToVpn(const QString &serverId, int serverIndex,
             ++m_manualDiscoveryRequestSerial;
             QScopedValueRollback<bool> resuming(m_manualDiscoveryResuming, true);
             connectToVpn(serverId, serverIndex, container, vpnConfiguration);
-        });
+        }, discoveryComponent);
         return;
     }
 #endif
@@ -2546,7 +2546,8 @@ void VpnConnection::serviceDiscoveryChanged(const QJsonObject &snapshot)
     }
     if (m_migrationTeardownContext || m_migrationTeardownRecoveryRequired
         || m_unboundNativeSessionObserved || NativeSessionRestore::ingress.observed()) return;
-    if (AndroidServiceDiscovery::coordinator.allowsFresh()) {
+    if (AndroidServiceDiscovery::coordinator.allowsFresh()
+        && AndroidServiceDiscovery::coordinator.canReconnect(m_discoveryReconnectComponent)) {
         auto continuation = std::move(m_discoveryReconnectStart);
         m_discoveryReconnectStart = {};
         continuation();
@@ -2562,10 +2563,11 @@ void VpnConnection::serviceDiscoveryChanged(const QJsonObject &snapshot)
     }
 }
 
-void VpnConnection::awaitReconnectDiscovery(std::function<void()> continuation)
+void VpnConnection::awaitReconnectDiscovery(std::function<void()> continuation, const QString &component)
 {
     m_discoveryReconnectEpoch = m_connectionEpoch;
     m_discoveryReconnectServerId = m_serverId;
+    m_discoveryReconnectComponent = component;
     ++m_discoveryReconnectSerial;
     m_discoveryReconnectAttempts = 0;
     m_discoveryReconnectStart = std::move(continuation);
@@ -2592,9 +2594,9 @@ void VpnConnection::refreshReconnectDiscovery()
     const auto attempt = ++m_discoveryReconnectAttempts;
     const auto serial = m_discoveryReconnectSerial;
     const auto epoch = m_connectionEpoch;
-    // Retry observation only. The saved continuation still requires a fresh
-    // one-shot coordinator grant and native cleanup/start-admission guards.
-    emit serviceDiscoveryRefreshRequested();
+    // An explicit destination lets Android release a proven-idle AWG
+    // service. The continuation still needs fresh, compatible start authority.
+    emit serviceDiscoveryRefreshRequested(m_discoveryReconnectComponent);
     QTimer::singleShot(6000, Qt::PreciseTimer, this, [this, epoch, serial, attempt]() {
         if (!m_discoveryReconnectStart || serial != m_discoveryReconnectSerial
             || attempt != m_discoveryReconnectAttempts) return;
@@ -3018,7 +3020,7 @@ void VpnConnection::reconnectToVpn() {
                         const std::lock_guard<std::recursive_mutex> lock(NativeSessionRestore::admissionMutex);
                         NativeSessionRestore::ingress.invalidate();
                     }
-                    awaitReconnectDiscovery(startUpdatedProtocol);
+                    awaitReconnectDiscovery(startUpdatedProtocol, androidDiscoveryComponent(m_vpnConfiguration));
 #else
                     startUpdatedProtocol();
 #endif
@@ -3052,7 +3054,7 @@ void VpnConnection::reconnectToVpn() {
                                    reconnectEpoch, reconnectServerId]() {
         if (reconnectEpoch == m_connectionEpoch && reconnectServerId == m_serverId
             && m_connectionState == Vpn::ConnectionState::Reconnecting) {
-            awaitReconnectDiscovery(startUpdatedProtocol);
+            awaitReconnectDiscovery(startUpdatedProtocol, androidDiscoveryComponent(m_vpnConfiguration));
         }
     });
 #else

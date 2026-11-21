@@ -28,6 +28,7 @@ public:
  bool m_manualDiscoveryResuming=false;
  quint64 m_manualDiscoveryRequestSerial=0,m_discoveryReconnectEpoch=0,m_discoveryReconnectSerial=0;
  unsigned m_discoveryReconnectAttempts=0;
+ QString m_discoveryReconnectComponent,lastRefreshComponent;
  QString m_discoveryReconnectServerId,m_discoveryRegisteredId;
  AndroidServiceDiscovery::Ledger m_startAdmissionLedger;
  QElapsedTimer m_nativeStartAdmissionAge;
@@ -44,14 +45,14 @@ public:
  void setConnectionState(Vpn::ConnectionState){++states;}
  void vpnProtocolError(ErrorCode){++errors;}
  void migrationTeardownObserved(const QString&,quint64,bool){++teardowns;}
- void serviceDiscoveryRefreshRequested(){++refreshes;}
+ void serviceDiscoveryRefreshRequested(const QString &component = {}){++refreshes;lastRefreshComponent=component;}
  void serviceDiscoveryRegistered(const QString&,bool){}
  void connectionStateChanged(Vpn::ConnectionState){++states;}
  void serviceDiscoveryConnectRefused(ErrorCode,Vpn::ConnectionState){++refused;}
  void registerServiceDiscovery(const QString&);
  void serviceDiscoveryTimedOut(const QString&);
  void serviceDiscoveryChanged(const QJsonObject&);
- void awaitReconnectDiscovery(std::function<void()>);
+ void awaitReconnectDiscovery(std::function<void()>, const QString &);
  void refreshReconnectDiscovery();
  void disconnectFromVpn();
  void beginManagedRouteReconnectSession(const QString&server){++mutations;fixtureStartedServer=server;}
@@ -82,7 +83,7 @@ int main(int argc,char**argv){QCoreApplication app(argc,argv);const QJsonObject 
  // starting a tunnel. A current fresh observation resumes exactly once.
  ready();AndroidServiceDiscovery::coordinator.invalidate();{VpnConnection w;
  w.connectToVpn("requested",3,DockerContainer::Awg,config);CHECK(w.mutations==0);CHECK(w.m_connectionEpoch==5);
- CHECK(bool(w.m_discoveryReconnectStart));CHECK(w.m_connectionState==Vpn::ConnectionState::Connecting);CHECK(w.refreshes==1);
+ CHECK(bool(w.m_discoveryReconnectStart));CHECK(w.m_connectionState==Vpn::ConnectionState::Connecting);CHECK(w.refreshes==1);CHECK(w.lastRefreshComponent=="AWG");
  ready();auto snapshot=AndroidServiceDiscovery::coordinator.snapshot();w.serviceDiscoveryChanged(snapshot);
  CHECK(w.mutations==1);CHECK(w.fixtureStartedServer=="requested");CHECK(w.fixtureStartedIndex==3);CHECK(w.fixtureStartedConfiguration==config);CHECK(!w.m_discoveryReconnectStart);w.serviceDiscoveryChanged(snapshot);CHECK(w.mutations==1);}
  // Expiry is observational and bounded to three rounds; no fresh grant means

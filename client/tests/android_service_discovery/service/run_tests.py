@@ -8,7 +8,7 @@ def method(marker):
  while depth:
   depth += (s[k]=='{')-(s[k]=='}');k+=1
  return s[i:k].replace('this@AmneziaVpnService','this@Fixture').replace('private suspend fun','suspend fun',1).replace('private fun','fun',1)
-methods='\n'.join(method(x) for x in ['private fun discoveryJobsIdle(', 'private fun invalidateDiscoveryGrants(', 'private fun updateControlBinding(', 'private suspend fun nativeDiscoveryResult(', 'private fun requestDiscoveryStatus(', 'private fun discoveryConfigMatchesService(', 'private fun acceptDiscoveryConnect(', 'override fun onBind(', 'override fun onUnbind(', 'override fun onRebind('])
+methods='\n'.join(method(x) for x in ['private fun discoveryJobsIdle(', 'private fun invalidateDiscoveryGrants(', 'private fun updateControlBinding(', 'private suspend fun nativeDiscoveryResult(', 'private fun requestDiscoveryStatus(', 'private fun retireIdleAwg(', 'private fun discoveryConfigMatchesService(', 'private fun acceptDiscoveryConnect(', 'override fun onBind(', 'override fun onUnbind(', 'override fun onRebind('])
 pre='''import org.amnezia.vpn.protocol.*
 import kotlinx.coroutines.*
 import java.util.UUID
@@ -18,6 +18,7 @@ class Intent(val action:String?)
 const val SERVICE_INTERFACE="system"
 const val TAG="test"
 object Log {fun d(tag:String,message:String){};fun w(tag:String,message:String){}}
+object Build {object VERSION {const val SDK_INT=30};object VERSION_CODES {const val Q=29}}
 open class Base {open fun onBind(intent:Intent?):IBinder?=null;open fun onUnbind(intent:Intent?):Boolean=true;open fun onRebind(intent:Intent?) {}}
 class ServiceMessenger(val binder:IBinder=IBinder())
 class Messenger(val id:Int)
@@ -45,7 +46,15 @@ open class Fixture(val mainScope:CoroutineScope):Base() {
  var connectionJob:Job?=null;var disconnectionJob:Job?=null
  var isUnknown=true;var isDisconnected=false;var isConnected=false;var isServiceBound=false
  var connects=0;var stops=0;var observationGroupBound=false;var controlGroupBound=false;val vpnServiceMessenger=ServiceMessenger()
+ var latestStartId:Int?=null;var releasedForProtocolSwitch=false;var isAlwaysOn=false
+ var frameworkStartId=1
+ fun stopSelfResult(startId:Int):Boolean {
+  if(startId!=frameworkStartId)return false
+  stops++
+  return true
+ }
  fun stopService(){stops++}
+ fun requestDiscoveryStatus(requester:Messenger,id:String,generation:String)=requestDiscoveryStatus(requester,id,generation,null)
  fun discoveryStateIdle()=(isUnknown||isDisconnected)&&discoveryJobsIdle()
  fun connect(config:String){connects++;isUnknown=false;invalidateDiscoveryGrants()}
 '''
@@ -92,6 +101,49 @@ fun main()=runBlocking {
   VpnProto.AWG.cached=null
  }
  println("PASS late observer rebind + 5 ownership/admission negative boundaries")
+ // Reproduce a started, verified-retired AWG service surviving teardown.
+ run {
+  val service=AwgService(scope)
+  val observer=Messenger(92)
+  val client=Client()
+  val identity=NativeSessionIdentity(UUID.randomUUID().toString(),UUID.randomUUID().toString(),UUID.randomUUID().toString())
+  val owner=Protocol(NativeIdleObservation(NativeIdleState.VERIFIED_RETIRED,5,identity))
+  service.activeNativeSession=Fixture.ActiveNativeSession(owner,NativeSessionDescriptor(identity,"server","AWG"))
+  service.isUnknown=false
+  service.isDisconnected=true
+  service.latestStartId=1
+  service.clientMessengers[observer]=client
+  service.observationClients.add(observer)
+  suspend fun observe(destination:String?):Bundle {
+   service.requestDiscoveryStatus(observer,UUID.randomUUID().toString(),"7",destination)
+   delay(30)
+   return client.events.last()
+  }
+  check(observe(null).getString("discoveryResult")=="IDLE")
+  check(observe("AWG").getString("discoveryResult")=="IDLE")
+  check(service.stops==0)
+  owner.observation=NativeIdleObservation(NativeIdleState.ACTIVE,6)
+  check(observe("XRAY").getString("discoveryResult")=="ACTIVE")
+  owner.observation=NativeIdleObservation(NativeIdleState.VERIFIED_RETIRED,7,identity)
+  service.controlGroupBound=true
+  service.updateControlBinding()
+  check(observe("XRAY").getString("discoveryResult")=="IDLE")
+  service.controlGroupBound=false
+  service.updateControlBinding()
+  service.isAlwaysOn=true
+  check(observe("XRAY").getString("discoveryResult")=="UNKNOWN")
+  service.isAlwaysOn=false
+  service.frameworkStartId=2
+  check(observe("XRAY").getString("discoveryResult")=="UNKNOWN")
+  check(service.stops==0)
+  service.latestStartId=2
+  val result=observe("XRAY")
+  check(result.getString("discoveryResult")=="RETIRED")
+  check(result.getString("discoveryGrant")=="")
+  check(observe("AWG").getString("discoveryResult")=="RETIRED")
+  check(service.stops==1)
+ }
+ println("PASS explicit protocol switch retires only the current idle service")
  val f=AwgService(scope);val r=Messenger(1);val client=Client();f.clientMessengers[r]=client;f.observationClients.add(r)
  suspend fun probe():Bundle {f.requestDiscoveryStatus(r,"11111111-1111-1111-1111-111111111111","7");delay(30);return client.events.last()}
  fun command(token:String)=Message(r,Bundle().apply {putString("admissionRequestId",UUID.randomUUID().toString());putString("admissionGeneration","7");putString("discoveryGrant",token);putString(MSG_VPN_CONFIG,"AWG")})

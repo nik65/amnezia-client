@@ -146,6 +146,8 @@ private:
 #ifdef Q_OS_ANDROID
     QString m_restoreRequestId, m_restoreBindingGeneration;
     QString m_serviceDiscoveryRequestId;
+    QString m_serviceDiscoveryStartComponent;
+    void requestServiceDiscoveryForStart(const QString &startComponent);
 #endif
     AwgMigrationController *m_awgMigration = nullptr;
     quint64 m_awgMigrationReconnectGeneration = 0;

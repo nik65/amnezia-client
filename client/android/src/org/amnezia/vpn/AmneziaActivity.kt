@@ -121,6 +121,7 @@ class AmneziaActivity : QtActivity() {
     private var discoveryForeground = false
     private var discoveryGeneration = NativeSessionWire.nextBindingGeneration()
     private var discoveryRequestId = ""
+    private var discoveryStartComponent = ""
     private var discoveryPhase = "PENDING"
     private var discoveryComponent = "NONE"
     private var discoveryGrant: String? = null
@@ -211,12 +212,13 @@ class AmneziaActivity : QtActivity() {
         else -> "NONE"
     }
 
-    private fun beginServiceDiscovery(request: String) {
+    private fun beginServiceDiscovery(request: String, startComponent: String) {
         if (!NativeSessionWire.uuid(request) || !discoveryForeground) return
         finishPendingStartOnLifecycle()
         discoveryDeadline?.cancel()
         discoveryGeneration = NativeSessionWire.nextBindingGeneration()
         discoveryRequestId = request
+        discoveryStartComponent = startComponent
         discoveryConsumed = false
         discoveryGrant = null
         publishDiscovery("PENDING")
@@ -301,6 +303,7 @@ class AmneziaActivity : QtActivity() {
         val probe = Action.REQUEST_STATUS.packToMessage {
             putString("discoveryRequestId", discoveryProbe)
             putString("discoveryBindingGeneration", discoveryGeneration.toString())
+            putString("discoveryStartComponent", discoveryStartComponent)
         }
         probe.replyTo = activityMessenger
         discoveryDeadline?.cancel()
@@ -452,12 +455,17 @@ class AmneziaActivity : QtActivity() {
                         }
                         val probeId = msg.data?.getString("discoveryRequestId")
                         if (probeId != null) {
-                            if (probeId != discoveryProbe || msg.data?.getString("discoveryBindingGeneration") != discoveryGeneration.toString() || discoveryAttempt?.generation != discoveryGeneration) return
+                            val attempt = discoveryAttempt ?: return
+                            if (probeId != discoveryProbe || msg.data?.getString("discoveryBindingGeneration") != discoveryGeneration.toString() || attempt.generation != discoveryGeneration) return
                             discoveryProbe = null
                             discoveryDeadline?.cancel()
                             val result = msg.data?.getString("discoveryResult")
-                            val kind = discoveryAttempt?.component?.let(::componentKind) ?: "NONE"
-                            if (result == "IDLE") {
+                            val kind = componentKind(attempt.component)
+                            if (kind == "AWG" && result == "RETIRED") {
+                                // The service released its started lifetime. Release the
+                                // observation binding and require a fresh absence check.
+                                failDiscoveryAttempt(attempt, "STATUS_UNPROVEN")
+                            } else if (result == "IDLE") {
                                 discoveryGrant = msg.data?.getString("discoveryGrant")?.takeIf(NativeSessionWire::uuid)
                                 if (discoveryGrant == null) publishDiscovery("UNCERTAIN", reason = "STATUS_UNPROVEN")
                                 else publishDiscovery(if (kind == "AWG") "IDLE_NATIVE" else "BOUND_LEGACY", kind)
@@ -1232,8 +1240,8 @@ class AmneziaActivity : QtActivity() {
     }
 
     @Suppress("unused")
-    fun requestServiceDiscovery(requestId: String) {
-        mainScope.launch { qtInitialized.await(); beginServiceDiscovery(requestId) }
+    fun requestServiceDiscovery(requestId: String, startComponent: String) {
+        mainScope.launch { qtInitialized.await(); beginServiceDiscovery(requestId, startComponent) }
     }
 
     @Suppress("unused")

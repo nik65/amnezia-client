@@ -33,7 +33,7 @@ public:
 
     ErrorCode start(const QJsonObject &vpnConfig);
     ErrorCode start(const QJsonObject &vpnConfig, const AndroidServiceDiscovery::Grant &grant);
-    void requestServiceDiscovery(const QString &requestId);
+    void requestServiceDiscovery(const QString &requestId, const QString &startComponent);
     void flushServiceDiscovery();
     void stop();
     void stopBound(const QJsonObject &identity);

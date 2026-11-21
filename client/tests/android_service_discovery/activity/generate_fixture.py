@@ -30,12 +30,12 @@ private enum class FixtureState{CONNECTED,DISCONNECTED}
 private class Message {val data=Bundle();var replyTo:Messenger?=null;fun recycle(){};companion object{fun obtain(other:Message)=other}}
 private class Looper {companion object{fun getMainLooper()=Looper()}}
 private open class Handler(looper:Looper) {open fun handleMessage(message:Message){}}
-private class Messenger(val handler:Handler?=null) {var sends=0;var fail=false;fun send(message:Message){sends++;if(fail)error("inert dispatch failure");handler?.handleMessage(message)}}
+private class Messenger(val handler:Handler?=null) {var sends=0;var fail=false;var lastMessage:Message?=null;fun send(message:Message){sends++;if(fail)error("inert dispatch failure");lastMessage=message;handler?.handleMessage(message)}}
 private enum class Action {REQUEST_STATUS,CONNECT,DISCONNECT,UNREGISTER_CLIENT;fun packToMessage(body:Bundle.()->Unit)=Message().apply{data.body()}}
 private class JSONObject(value:String){fun opt(key:String):Any?=if(key=="migrationConnectionNonce") "33333333-3333-4333-8333-333333333333" else null}
 private class Outbound {
  var onSend:(()->Unit)?=null;val messages=mutableListOf<Message>()
- fun send(action:Action,receiver:Messenger){val callback=onSend;onSend=null;callback?.invoke()}
+ fun send(action:Action,replyTo:Messenger){val callback=onSend;onSend=null;callback?.invoke()}
  fun send(body:()->Message){messages.add(body())}
  fun send(message:Message,replyTo:Messenger){message.replyTo=replyTo;messages.add(message)}
  fun reset(){}
@@ -61,13 +61,17 @@ private object ContextCompat {var starts=0;var fail=false;fun startForegroundSer
 private class ActualActivity {
  val connectivity=ConnectivityManager();val manager=ActivityManager();val applicationInfo=Info();val packageName="owned"
  val vpnServiceMessenger=Outbound();val serviceEventBindingGate=ServiceEventBindingGate();var isBoundNativeService=false
- val vpnServiceEventHandler=object:Handler(Looper.getMainLooper()){override fun handleMessage(message:Message){__ACTUAL_TERMINAL_BRANCH__}}
+ val vpnServiceEventHandler:Handler=object:Handler(Looper.getMainLooper()){override fun handleMessage(msg:Message){
+  __ACTUAL_DISCOVERY_REPLY__
+  __ACTUAL_TERMINAL_BRANCH__
+ }}
  val mainScope=CoroutineScope(SupervisorJob()+Dispatchers.Unconfined);val qtInitialized=CompletableDeferred<Unit>()
  var unbinds=0;var binds=0;var flags=0;var bound:ServiceConnection?=null
- var isInBoundState=false;var isServiceConnected=false;var isWaitingStatus=true;var vpnProto:VpnProto?=null;var activityMessenger=Messenger();var boundActivityMessenger:Messenger?=activityMessenger
+ var isInBoundState=false;var isServiceConnected=false;var isWaitingStatus=true;var vpnProto:VpnProto?=null;var activityMessenger:Messenger=Messenger(vpnServiceEventHandler);var boundActivityMessenger:Messenger?=activityMessenger
  var restoreInvalidations=0;var permissions=0;var permissionGrant:(()->Unit)?=null;var permissionReject:(()->Unit)?=null
- var restoreBindingGeneration=1L;var pendingRestoreRequest:String?=null
+ var restoreBindingGeneration=1L;var pendingRestoreRequest:String?=null;var legacyStatusRequestGeneration:Long?=null
  fun observeDnsTransportStatus(status:String?,connected:Boolean){}
+ fun notifyNativeSessionObservedWhenQtReady(generation:Long){}
  fun getSystemService(key:String):Any=if(key==ACTIVITY_SERVICE)manager else connectivity
  fun unbindService(c:ServiceConnection){unbinds++}
  fun bindService(intent:Intent,c:ServiceConnection,f:Int):Boolean{binds++;flags=f;bound=c;return true}
@@ -83,7 +87,7 @@ post=r'''
  fun freshReceiver():Messenger {boundActivityMessenger=createBoundActivityMessenger();return boundActivityMessenger!!}
  fun deliverTerminal(receiver:Messenger){receiver.send(Message().apply{data.putString("state","DISCONNECTED")})}
  fun setup(){qtInitialized.complete(Unit);discoveryForeground=true}
- fun empty(id:String){requestServiceDiscovery(id)}
+ fun empty(id:String, startComponent:String=""){__REQUEST_DISCOVERY__}
  fun generation()=discoveryGeneration.toString()
  fun lifecycle(){finishPendingStartOnLifecycle();discoveryForeground=false;invalidateDiscoveryLifecycle()}
  fun grant(){permissionGrant?.invoke()}
@@ -94,10 +98,19 @@ post=r'''
  fun confirmedStop(){pendingControlComponent=null;activeServiceConnection=null;isServiceConnected=false;discoveryAttempt=null}
  fun pendingConnection()=activeServiceConnection
  fun activeProbe()=discoveryProbe
+ fun lastProbeMessage()=boundRemoteMessenger?.lastMessage
  fun phase()=discoveryPhase
  fun timeoutNow(){discoveryDeadline?.cancel();if(discoveryPhase=="PENDING")publishDiscovery("UNCERTAIN",reason="BIND_TIMEOUT")}
  fun invalidateWhileUnbinding(){vpnServiceMessenger.onSend={invalidateDiscoveryLifecycle()}}
+ fun rediscoverWhileUnbinding(id:String){vpnServiceMessenger.onSend={__BEGIN_DISCOVERY__}}
 
+}
+private fun deliverRetirement(probe: Message, generation: String, staleId: String?=null) {
+ probe.replyTo!!.send(Message().apply {
+  data.putString("discoveryRequestId",staleId ?: probe.data.getString("discoveryRequestId"))
+  data.putString("discoveryBindingGeneration",generation)
+  data.putString("discoveryResult","RETIRED")
+ })
 }
 fun main(args:Array<String>)=runBlocking {
  val id="11111111-1111-4111-8111-111111111111";val start="22222222-2222-4222-8222-222222222222"
@@ -133,6 +146,45 @@ fun main(args:Array<String>)=runBlocking {
  terminal.deliverTerminal(currentReceiver);check(terminal.isServiceConnected){"late old terminal retired rebound owner"}
  terminal.deliverTerminal(rebound);terminal.manager.fail=true;terminal.empty(id);check(terminal.phase()=="UNCERTAIN"){"terminal converted inventory error to EMPTY"}
  terminal.manager.fail=false;terminal.manager.records=emptyList();terminal.empty(start);check(terminal.phase()=="EMPTY"){"fresh proven empty inventory could not admit reconnect"};terminal.dispose()
+ val retiring=ActualActivity();retiring.setup()
+ val awg=ComponentName("owned",AwgService::class.java.name)
+ retiring.manager.records=listOf(RunningServiceInfo(awg))
+ retiring.empty(id);retiring.bound!!.onServiceConnected(awg,IBinder())
+ check(retiring.lastProbeMessage()!!.data.getString("discoveryStartComponent").isNullOrEmpty()){"observation carried a start destination"}
+ retiring.empty(start,"XRAY")
+ val probe=retiring.lastProbeMessage()!!
+ check(probe.data.getString("discoveryStartComponent")=="XRAY"){"admission probe lost its intended destination"}
+ val priorGeneration=retiring.generation().toLong().dec().toString()
+ deliverRetirement(probe,priorGeneration)
+ deliverRetirement(probe,retiring.generation(),id)
+ check(retiring.phase()=="PENDING"&&retiring.unbinds==0){"stale retirement released the observation binding"}
+ val retirementGeneration=retiring.generation()
+ deliverRetirement(probe,retirementGeneration)
+ check(retiring.phase()=="UNCERTAIN"&&retiring.unbinds==1&&retiring.pendingConnection()==null){"retirement did not release its binding and require fresh absence"}
+ deliverRetirement(probe,retirementGeneration)
+ check(retiring.unbinds==1){"duplicate retirement released a binding again"}
+ retiring.empty(id,"XRAY")
+ check(retiring.phase()=="PENDING"&&retiring.binds==2){"retirement bypassed a still-present service"}
+ retiring.bound!!.onServiceConnected(awg,IBinder())
+ deliverRetirement(retiring.lastProbeMessage()!!,retiring.generation())
+ retiring.manager.records=emptyList();retiring.empty(start,"XRAY")
+ check(retiring.phase()=="EMPTY"){"fresh absence after retirement did not admit a new start"};retiring.dispose()
+ val retiringDuringReset=ActualActivity();retiringDuringReset.setup()
+ retiringDuringReset.manager.records=listOf(RunningServiceInfo(awg))
+ retiringDuringReset.empty(id,"XRAY");retiringDuringReset.bound!!.onServiceConnected(awg,IBinder())
+ retiringDuringReset.invalidateWhileUnbinding()
+ val beforeReset=retiringDuringReset.generation()
+ deliverRetirement(retiringDuringReset.lastProbeMessage()!!,beforeReset)
+ check(retiringDuringReset.generation()!=beforeReset&&retiringDuringReset.phase()=="PENDING"&&QtAndroidController.discoveries.last().contains("PENDING")){"retirement replaced a newer lifecycle reset"}
+ retiringDuringReset.dispose()
+ val retiringDuringRetry=ActualActivity();retiringDuringRetry.setup()
+ retiringDuringRetry.manager.records=listOf(RunningServiceInfo(awg))
+ retiringDuringRetry.empty(id,"XRAY");retiringDuringRetry.bound!!.onServiceConnected(awg,IBinder())
+ retiringDuringRetry.rediscoverWhileUnbinding(start)
+ val beforeRetry=retiringDuringRetry.generation()
+ deliverRetirement(retiringDuringRetry.lastProbeMessage()!!,beforeRetry)
+ check(retiringDuringRetry.generation()!=beforeRetry&&retiringDuringRetry.phase()=="PENDING"&&retiringDuringRetry.binds==2){"retirement completed a newer discovery request"}
+ retiringDuringRetry.dispose()
  val absence=ActualActivity();absence.setup();absence.connectivity.networks=arrayOf(Network());absence.connectivity.capabilities=NetworkCapabilities(true)
  absence.empty(id);check(absence.phase()=="UNCERTAIN"&&absence.binds==0){"live VPN accepted as empty service ownership"}
  absence.connectivity.capabilities=null;absence.empty(start);check(absence.phase()=="UNCERTAIN"){"unknown network capabilities accepted as absence"}
@@ -155,11 +207,15 @@ fun main(args:Array<String>)=runBlocking {
   check(runCatching{ServiceDiscoveryWire.snapshot("",100,"EMPTY","NONE","NONE")}.isFailure)
   check(runCatching{ServiceDiscoveryWire.admission("100",start,"DISPATCHED","STALE")}.isFailure)
  }
- println("Actual Activity discovery methods: cold EMPTY, one-shot, permissioncancel, finalinventoryfence, lifecyclecancel, bound-onlyHOLD, noAUTOrestore, lateattempt, dispatchuncertain, pendingcontrolrefresh, actualdeadline, malformedACK, currentterminalrelease, oldBinderfence and reinventory PASS")
+ println("Actual Activity discovery methods: cold EMPTY, one-shot, permissioncancel, finalinventoryfence, lifecyclecancel, bound-onlyHOLD, noAUTOrestore, lateattempt, dispatchuncertain, pendingcontrolrefresh, actualdeadline, malformedACK, currentterminalrelease, oldBinderfence, correlatedretirement, retirementlifecyclefence and reinventory PASS")
 }
 '''
 admission=s[s.index('                        val admissionId = msg.data?.getString("admissionRequestId")'):s.index('                        val probeId = msg.data?.getString("discoveryRequestId")')]
 receiver='fun admissionReply(msg:Message) {\n'+admission+'\n}'
 post=post.replace(' fun pendingConnection()', ' '+receiver+'\n fun pendingConnection()')
-prefix=prefix.replace('__ACTUAL_TERMINAL_BRANCH__',terminal_branch.replace('msg.data','message.data'))
+request_discovery='requestServiceDiscovery(id, startComponent)' if 'fun requestServiceDiscovery(requestId: String, startComponent: String)' in s else 'requestServiceDiscovery(id)'
+begin_discovery='beginServiceDiscovery(id,"XRAY")' if 'fun beginServiceDiscovery(request: String, startComponent: String)' in s else 'beginServiceDiscovery(id)'
+post=post.replace('__REQUEST_DISCOVERY__',request_discovery).replace('__BEGIN_DISCOVERY__',begin_discovery)
+discovery_reply=s[s.index('                        val probeId = msg.data?.getString("discoveryRequestId")'):s.index('                        val request = msg.data?.get("restoreRequestId")')]
+prefix=prefix.replace('__ACTUAL_TERMINAL_BRANCH__',terminal_branch).replace('__ACTUAL_DISCOVERY_REPLY__',discovery_reply)
 (out/'ActualActivityDiscovery.kt').write_text(prefix+region+'\n'+methods+'\n'+post,encoding='utf-8')

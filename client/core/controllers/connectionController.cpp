@@ -441,10 +441,10 @@ ConnectionController::ConnectionController(SecureServersRepository* serversRepos
         [this](const QString &id, bool accepted) {
             if (accepted && id == m_serviceDiscoveryRequestId
                 && AndroidServiceDiscovery::coordinator.currentRequest(id))
-                AndroidController::instance()->requestServiceDiscovery(id);
+                AndroidController::instance()->requestServiceDiscovery(id, m_serviceDiscoveryStartComponent);
         }, Qt::QueuedConnection);
     connect(m_vpnConnection, &VpnConnection::serviceDiscoveryRefreshRequested, this,
-        &ConnectionController::requestServiceDiscovery, Qt::QueuedConnection);
+        &ConnectionController::requestServiceDiscoveryForStart, Qt::QueuedConnection);
     connect(m_vpnConnection, &VpnConnection::serviceDiscoveryConnectRefused, this,
         &ConnectionController::handleServiceDiscoveryConnectRefused, Qt::QueuedConnection);
     connect(m_vpnConnection, &VpnConnection::nativeRestoreRegistered, this,
@@ -1147,6 +1147,11 @@ void ConnectionController::closeConnection()
 #ifdef Q_OS_ANDROID
 void ConnectionController::requestServiceDiscovery()
 {
+    requestServiceDiscoveryForStart({});
+}
+
+void ConnectionController::requestServiceDiscoveryForStart(const QString &startComponent)
+{
     if (!m_vpnConnection) return;
     if (!m_serviceDiscoveryRequestId.isEmpty()
         && AndroidServiceDiscovery::coordinator.registeredRequest(m_serviceDiscoveryRequestId)) return;
@@ -1154,6 +1159,7 @@ void ConnectionController::requestServiceDiscovery()
     // Register synchronously: no already-queued connect may use a previous grant.
     if (!AndroidServiceDiscovery::coordinator.registerRefresh(id)) return;
     m_serviceDiscoveryRequestId = id;
+    m_serviceDiscoveryStartComponent = startComponent;
     QMetaObject::invokeMethod(m_vpnConnection, [vpn=m_vpnConnection, id]() {
         vpn->registerServiceDiscovery(id);
     }, Qt::QueuedConnection);

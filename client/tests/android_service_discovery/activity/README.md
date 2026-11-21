@@ -42,3 +42,10 @@ repeats network/service absence. The fixture rejects a still-visible VPN, unknow
 capabilities, connectivity errors, service appearance between samples, and a VPN
 appearing while permission is pending; pending dispatched native binding remains
 a hold, never an EMPTY proof.
+
+The fixture checks that outgoing probes carry the intended start component and
+that the actual handler ignores retirement replies with stale request IDs or
+generations. A matching AWG RETIRED reply releases the observation binding. A
+still-present service must be observed again. A synchronous lifecycle reset or
+a newer discovery during unbind must survive retirement. Only a subsequent
+proven absence permits an EMPTY result.

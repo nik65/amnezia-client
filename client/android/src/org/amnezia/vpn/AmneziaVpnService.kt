@@ -385,6 +385,8 @@ open class AmneziaVpnService : VpnService() {
     private var observationGroupBound = false
     private var controlGroupBound = false
     private var controlLifecycleStarted = false
+    private var latestStartId: Int? = null
+    private var releasedForProtocolSwitch = false
     private val discoveryRequestTickets = mutableMapOf<Messenger, Any>()
     private val admissionRequests = mutableMapOf<Messenger, String>()
     private val discoveryProbeJobs = mutableMapOf<Messenger, Job>()
@@ -564,7 +566,7 @@ open class AmneziaVpnService : VpnService() {
                         val requester = msg.replyTo ?: return
                         if (msg.data.containsKey("discoveryRequestId")) {
                             requestDiscoveryStatus(requester, msg.data.getString("discoveryRequestId"),
-                                msg.data.getString("discoveryBindingGeneration"))
+                                msg.data.getString("discoveryBindingGeneration"), msg.data.getString("discoveryStartComponent"))
                             return
                         }
                         if (msg.data.containsKey("restoreRequestId")) {
@@ -644,6 +646,8 @@ open class AmneziaVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         invalidateDiscoveryGrants()
+        latestStartId = startId
+        releasedForProtocolSwitch = false
         controlLifecycleStarted = true
         val isAlwaysOn = intent != null && intent.action == SERVICE_INTERFACE
 
@@ -1023,7 +1027,7 @@ open class AmneziaVpnService : VpnService() {
         }
     }
 
-    private fun requestDiscoveryStatus(requester: Messenger, requestId: String?, generation: String?) {
+    private fun requestDiscoveryStatus(requester: Messenger, requestId: String?, generation: String?, startComponent: String?) {
         if (!clientMessengers.containsKey(requester) || requestId == null || !NativeSessionWire.uuid(requestId)
             || generation == null || !Regex("[1-9][0-9]{0,18}").matches(generation)
             || generation.toLongOrNull() == null) return
@@ -1053,8 +1057,11 @@ open class AmneziaVpnService : VpnService() {
             val resolved = when {
                 !current -> "UNKNOWN"
                 result == "ACTIVE" -> "ACTIVE"
-                discoveryStateIdle() && result == "IDLE" -> "IDLE"
-                else -> "UNKNOWN"
+                result != "IDLE" || !discoveryStateIdle() -> "UNKNOWN"
+                releasedForProtocolSwitch -> "RETIRED"
+                this@AmneziaVpnService is AwgService && (startComponent == "XRAY" || startComponent == "OPENVPN")
+                    && requester in observationClients && !isServiceBound -> retireIdleAwg()
+                else -> "IDLE"
             }
             val token = if (resolved == "IDLE") UUID.randomUUID().toString() else ""
             if (resolved == "IDLE") discoveryGrants[requester] = DiscoveryGrant(requester, requestId, generation, epoch, token)
@@ -1069,6 +1076,17 @@ open class AmneziaVpnService : VpnService() {
         }
         discoveryProbeJobs[requester] = probe
         probe.start()
+    }
+
+    private fun retireIdleAwg(): String {
+        val startId = latestStartId ?: return "UNKNOWN"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isAlwaysOn) return "UNKNOWN"
+        // A newer framework start wins even before its onStartCommand is delivered.
+        if (!stopSelfResult(startId)) return "UNKNOWN"
+        releasedForProtocolSwitch = true
+        invalidateDiscoveryGrants()
+        Log.d(TAG, "Retired idle AWG service for protocol switch")
+        return "RETIRED"
     }
 
     private fun discoveryConfigMatchesService(config: String): Boolean {

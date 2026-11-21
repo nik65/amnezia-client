@@ -94,7 +94,7 @@ public:
     void handleStartAdmission(const QJsonObject &snapshot);
     void refuseServiceDiscovery();
     void armStartAdmission(const AndroidServiceDiscovery::Grant &grant);
-    void awaitReconnectDiscovery(std::function<void()> continuation);
+    void awaitReconnectDiscovery(std::function<void()> continuation, const QString &component);
     void refreshReconnectDiscovery();
     void registerNativeRestore(const QString &requestId, const QString &generation);
     void invalidateNativeRestore();
@@ -145,7 +145,7 @@ public slots:
 signals:
 #ifdef Q_OS_ANDROID
     void serviceDiscoveryRegistered(const QString &requestId, bool accepted);
-    void serviceDiscoveryRefreshRequested();
+    void serviceDiscoveryRefreshRequested(const QString &startComponent = {});
     void serviceDiscoveryConnectRefused(amnezia::ErrorCode error, Vpn::ConnectionState retainedState);
     void nativeRestoreRegistered(const QString &requestId, const QString &generation, bool accepted);
     void nativeRestoreAccepted(const QString &requestId, const QString &generation);
@@ -226,6 +226,7 @@ private:
     quint64 m_discoveryReconnectSerial = 0;
     unsigned m_discoveryReconnectAttempts = 0;
     QString m_discoveryReconnectServerId;
+    QString m_discoveryReconnectComponent;
     NativeSessionRestore::Pending m_pendingNativeRestore;
     QString m_nativeRestoreProbe;
     QJsonObject m_restoredNativeIdentity;

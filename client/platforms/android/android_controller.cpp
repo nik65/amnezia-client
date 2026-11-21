@@ -166,11 +166,12 @@ ErrorCode AndroidController::start(const QJsonObject &vpnConfig, const AndroidSe
     return ErrorCode::NoError;
 }
 
-void AndroidController::requestServiceDiscovery(const QString &requestId)
+void AndroidController::requestServiceDiscovery(const QString &requestId, const QString &startComponent)
 {
     if (!m_serviceDiscoveryRoutesReady || !AndroidServiceDiscovery::coordinator.currentRequest(requestId)) return;
-    callActivityMethod("requestServiceDiscovery", "(Ljava/lang/String;)V",
-        QJniObject::fromString(requestId).object<jstring>());
+    callActivityMethod("requestServiceDiscovery", "(Ljava/lang/String;Ljava/lang/String;)V",
+        QJniObject::fromString(requestId).object<jstring>(),
+        QJniObject::fromString(startComponent).object<jstring>());
 }
 
 void AndroidController::flushServiceDiscovery()
