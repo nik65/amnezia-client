@@ -133,6 +133,16 @@ if(WIN32 AND DEFINED ENV{AMNEZIA_IFW_BINARYCREATOR} AND NOT "$ENV{AMNEZIA_IFW_BI
     endif()
     set(CPACK_IFW_FRAMEWORK_VERSION_FORCED "$ENV{AMNEZIA_IFW_FRAMEWORK_VERSION}")
 endif()
+set(_amnezia_ifw_component_script "${CMAKE_SOURCE_DIR}/deploy/installer/qif/componentscript.js")
+if(WIN32 AND NOT "$ENV{SELFHOSTED_UPDATE_BUNDLE_DIR}" STREQUAL ""
+   AND "$ENV{AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI}" STREQUAL "1")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_amnezia_ifw_component_script}")
+    file(READ "${_amnezia_ifw_component_script}" _amnezia_ifw_component_contents)
+    set(_amnezia_ifw_component_script "${CMAKE_BINARY_DIR}/selfhosted-componentscript.js")
+    file(WRITE "${_amnezia_ifw_component_script}"
+        "var bundledWindowsPublisherInstaller = true;
+${_amnezia_ifw_component_contents}")
+endif()
 include(CPackIFW)
 cpack_ifw_configure_component(AmneziaVPN
     LICENSES "GNU GPL v3" "${CPACK_RESOURCE_FILE_LICENSE}"
@@ -140,7 +150,7 @@ cpack_ifw_configure_component(AmneziaVPN
     RELEASE_DATE ${RELEASE_DATE}
     REQUIRES_ADMIN_RIGHTS
     FORCED_INSTALLATION
-    SCRIPT ${CMAKE_SOURCE_DIR}/deploy/installer/qif/componentscript.js
+    SCRIPT "${_amnezia_ifw_component_script}"
 )
 
 include(CPack)

@@ -54,7 +54,8 @@ class CPackLicenseResourceTests(unittest.TestCase):
             r'^configure_file\("\$\{CMAKE_SOURCE_DIR\}/LICENSE"[^\n]+COPYONLY\)\n'
             r'set\(CPACK_RESOURCE_FILE_LICENSE[^\n]+\)', cpack, re.MULTILINE)
         component = re.search(
-            r'^cpack_ifw_configure_component\(AmneziaVPN\n.*?^\)',
+            r'^set\(_amnezia_ifw_component_script .+?\n'
+            r'.*?^cpack_ifw_configure_component\(AmneziaVPN\n.*?^\)',
             cpack, re.MULTILINE | re.DOTALL)
         self.assertIsNotNone(copy)
         self.assertIsNotNone(component)
@@ -68,8 +69,8 @@ class CPackLicenseResourceTests(unittest.TestCase):
             placeholder.write_bytes(b"../../LICENSE")
             (source / "LICENSE").write_bytes(expected)
             (source / "payload.txt").write_text("license consumer fixture\n")
-            (source / "deploy/installer/qif/componentscript.js").write_text(
-                "function Component() {}\n")
+            component_script = "function Component() {}\n"
+            (source / "deploy/installer/qif/componentscript.js").write_text(component_script)
             binarycreator = Path(IFW_BINARYCREATOR).resolve().as_posix()
             (source / "CMakeLists.txt").write_text(
                 'cmake_minimum_required(VERSION 3.25)\nproject(LicenseFixture LANGUAGES NONE)\n'
@@ -79,26 +80,59 @@ class CPackLicenseResourceTests(unittest.TestCase):
                 'set(CPACK_IFW_PACKAGE_NAME AmneziaVPN)\n'
                 'set(CPACK_IFW_PACKAGE_TITLE "AmneziaVPN license fixture")\n'
                 f'set(CPACK_IFW_BINARYCREATOR_EXECUTABLE "{binarycreator}")\n'
-                + copy.group(0) + '\ninclude(CPackIFW)\n' + component.group(0)
+                + copy.group(0) + '\n' + component.group(0)
                 + '\ninstall(FILES "${CMAKE_SOURCE_DIR}/payload.txt" DESTINATION . COMPONENT AmneziaVPN)\n'
                 'include(CPack)\n')
-            build = base / "build"
-            for command in ([CMAKE, "-S", str(source), "-B", str(build)],
-                            [CPACK, "--config", str(build / "CPackConfig.cmake"),
-                             "-G", "IFW", "-B", str(base / "packages")]):
-                result = subprocess.run(command, capture_output=True, timeout=90)
-                self.assertEqual(result.returncode, 0,
-                                 (result.stdout + result.stderr).decode(errors="replace"))
-            metadata = list((base / "packages/_CPack_Packages").glob(
-                "*/IFW/*/packages/AmneziaVPN/meta/package.xml"))
-            self.assertEqual(len(metadata), 1)
-            licenses = ET.parse(metadata[0]).findall("./Licenses/License")
-            self.assertEqual(len(licenses), 1)
-            self.assertEqual(licenses[0].get("name"), "GNU GPL v3")
-            filename = licenses[0].get("file")
-            self.assertEqual(filename, "LICENSE.txt")
-            self.assertEqual((metadata[0].parent / filename).read_bytes(), expected)
-            self.assertEqual(placeholder.read_bytes(), b"../../LICENSE")
+            cases = ["thin", "legacy-bundle", "publish-on-install"] if os.name == "nt" else ["thin"]
+            for case in cases:
+                with self.subTest(case=case):
+                    env = os.environ.copy()
+                    env.pop("SELFHOSTED_UPDATE_BUNDLE_DIR", None)
+                    env.pop("AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI", None)
+                    if case != "thin":
+                        env["SELFHOSTED_UPDATE_BUNDLE_DIR"] = str(source)
+                    if case == "publish-on-install":
+                        env["AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI"] = "1"
+                    build = base / case / "build"
+                    package = base / case / "package"
+                    for command in ([CMAKE, "-S", str(source), "-B", str(build)],
+                                    [CPACK, "--config", str(build / "CPackConfig.cmake"),
+                                     "-G", "IFW", "-B", str(package)]):
+                        result = subprocess.run(command, capture_output=True, timeout=90, env=env)
+                        self.assertEqual(result.returncode, 0,
+                                         (result.stdout + result.stderr).decode(errors="replace"))
+                    metadata = list((package / "_CPack_Packages").glob(
+                        "*/IFW/*/packages/AmneziaVPN/meta/package.xml"))
+                    self.assertEqual(len(metadata), 1)
+                    root = ET.parse(metadata[0])
+                    licenses = root.findall("./Licenses/License")
+                    self.assertEqual(len(licenses), 1)
+                    self.assertEqual(licenses[0].get("name"), "GNU GPL v3")
+                    filename = licenses[0].get("file")
+                    self.assertEqual(filename, "LICENSE.txt")
+                    self.assertEqual((metadata[0].parent / filename).read_bytes(), expected)
+                    self.assertEqual(placeholder.read_bytes(), b"../../LICENSE")
+                    script_name = "componentscript.js"
+                    script_contents = component_script
+                    if case == "publish-on-install":
+                        script_name = "selfhosted-componentscript.js"
+                        script_contents = "var bundledWindowsPublisherInstaller = true;\n" + component_script
+                    self.assertEqual(root.findtext("./Script"), script_name)
+                    self.assertEqual((metadata[0].parent / script_name).read_text(), script_contents)
+                    if case == "publish-on-install":
+                        devtool = Path(binarycreator).with_name("devtool.exe")
+                        self.assertTrue(devtool.is_file(), "Qt IFW devtool is required for EXE readback")
+                        installers = list(package.glob("*.exe"))
+                        self.assertEqual(len(installers), 1)
+                        unpacked = package / "unpacked"
+                        result = subprocess.run(
+                            [str(devtool), "dump", str(installers[0]), str(unpacked)],
+                            capture_output=True, timeout=30,
+                        )
+                        self.assertEqual(result.returncode, 0,
+                                         (result.stdout + result.stderr).decode(errors="replace"))
+                        embedded = unpacked / "metadata/AmneziaVPN" / script_name
+                        self.assertEqual(embedded.read_text(), script_contents)
 
 
 if __name__ == "__main__":

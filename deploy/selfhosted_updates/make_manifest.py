@@ -1469,6 +1469,8 @@ def main() -> int:
     parser.add_argument("--ios-bundle-version", help="Defaults to --version when --ios-ipa is used")
     parser.add_argument("--ios-title", default="AmneziaVPN")
     parser.add_argument("--auto-install", action="store_true", help="Ask clients to start the OS installer automatically")
+    parser.add_argument("--publish-on-install", metavar="SSH_HOST",
+                        help="Authorize the exact bundled Windows publisher to publish to this pinned SSH host")
     parser.add_argument(
         "--payload-schema",
         type=int,
@@ -1806,6 +1808,15 @@ def main() -> int:
         "autoInstall": args.auto_install,
         "platforms": platforms,
     }
+    if args.publish_on_install is not None:
+        if not re.fullmatch(r"[A-Za-z0-9._:-]+", args.publish_on_install):
+            raise SystemExit("--publish-on-install requires an exact SSH host")
+        if "windows-x64" not in platforms or platforms["windows-x64"].get("openExternal", False):
+            raise SystemExit("--publish-on-install requires a local Windows x64 artifact")
+        payload["publishOnInstall"] = {
+            "sshHost": args.publish_on_install,
+            "publisherSha256": sha256(Path(__file__).with_name("publish_bundled_release.sh")),
+        }
     if headless_provisioning is not None:
         payload["headlessProvisioning"] = headless_provisioning
     if args.payload_schema == 2:

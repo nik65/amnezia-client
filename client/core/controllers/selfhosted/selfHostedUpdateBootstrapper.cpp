@@ -32,6 +32,7 @@
 
 #include "core/repositories/secureServersRepository.h"
 #include "core/utils/constants/protocolConstants.h"
+#include "core/utils/selfhosted/sshHostKeyPin.h"
 #include "core/utils/selfhosted/sshSession.h"
 #include "logger.h"
 
@@ -274,6 +275,43 @@ namespace
         return true;
     }
 
+    QString installedPublicationDirectory()
+    {
+        return QDir(QCoreApplication::applicationDirPath()).filePath(kPayloadDirName);
+    }
+
+    QString signedInstallPublicationHost(const QString &directory, const QByteArray &manifestData,
+                                         const QJsonObject &verifiedPayload)
+    {
+#if defined(Q_OS_WIN) && defined(AMNEZIA_INSTALL_PUBLICATION_MANIFEST_SHA256)
+        const QString installed = installedPublicationDirectory();
+        if (QDir(directory).absolutePath() != installed
+            || hasSymlinkOrReparsePoint(QDir(QCoreApplication::applicationDirPath()),
+                                       QStringLiteral("selfhosted_updates/manifest.json"))
+            || QCryptographicHash::hash(manifestData, QCryptographicHash::Sha256).toHex()
+                    != QByteArrayLiteral(AMNEZIA_INSTALL_PUBLICATION_MANIFEST_SHA256)) {
+            return {};
+        }
+        const QJsonObject authorization = verifiedPayload.value(QStringLiteral("publishOnInstall")).toObject();
+        const QString host = authorization.value(QStringLiteral("sshHost")).toString();
+        const QString publisherSha256 = authorization.value(QStringLiteral("publisherSha256")).toString();
+        QFile publisher(QString::fromLatin1(kBundledPublishScript));
+        if (authorization.size() != 2 || host.isEmpty()
+            || !amnezia::sshHostKeyPin::resolve(host, {}).isResolved()
+            || !publisher.open(QIODevice::ReadOnly)
+            || QCryptographicHash::hash(publisher.readAll(), QCryptographicHash::Sha256).toHex()
+                    != publisherSha256.toLatin1()) {
+            return {};
+        }
+        return host;
+#else
+        Q_UNUSED(directory);
+        Q_UNUSED(manifestData);
+        Q_UNUSED(verifiedPayload);
+        return {};
+#endif
+    }
+
     QString transitionFailureName(amnezia::selfhostedUpdates::BundledPublishTransitionResult result)
     {
         using Result = amnezia::selfhostedUpdates::BundledPublishTransitionResult;
@@ -332,23 +370,68 @@ bool SelfHostedUpdateBootstrapper::start()
     }
 
     amnezia::ServerCredentials credentials;
-    if (!selectServerCredentials(credentials)) {
+    if (!selectServerCredentials(credentials, payload.publicationHost)) {
         logger.info() << "Bundled self-hosted update payload is present, but no writable self-hosted server credentials are available";
         return false;
     }
 
+    return schedulePublication([payload, credentials]() { return publishPayload(payload, credentials); }, false);
+}
+
+bool SelfHostedUpdateBootstrapper::startAfterInstall()
+{
+#if defined(Q_OS_WIN) && defined(AMNEZIA_INSTALL_PUBLICATION_MANIFEST_SHA256)
+    using namespace amnezia::selfhostedUpdates;
+    if (automaticPublishStartDisposition(m_publishRetryState) != AutomaticPublishStartDisposition::Schedule) {
+        return false;
+    }
+
+    const QString directory = installedPublicationDirectory();
+    QFile file(QDir(directory).filePath(kManifestName));
+    if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > kMaximumManifestBytes) {
+        return false;
+    }
+    const QByteArray data = file.read(kMaximumManifestBytes + 1);
+    QJsonObject manifest, verifiedPayload;
+    BundledManifestIdentity identity;
+    if (!parseVerifiedManifest(data, manifest, verifiedPayload, identity)) {
+        return false;
+    }
+    const QString host = signedInstallPublicationHost(directory, data, verifiedPayload);
+    if (host.isEmpty()) {
+        return false;
+    }
+    amnezia::ServerCredentials credentials;
+    if (!selectServerCredentials(credentials, host)) {
+        logger.info() << "Automatic self-hosted publication requires a saved administrative profile for the signed SSH host";
+        return false;
+    }
+
+    return schedulePublication([directory, credentials]() {
+        Payload payload;
+        return loadPayload(directory, payload)
+            && payload.mode == PublicationAuthorization::SignedInstallManifest
+            && publishPayload(std::move(payload), credentials);
+    }, true);
+#else
+    return false;
+#endif
+}
+
+bool SelfHostedUpdateBootstrapper::schedulePublication(std::function<bool()> operation, bool fromInstalledBundle)
+{
     m_publishRetryState.scheduled = true;
     const int delayMs = automaticPublishDelayMs(m_publishRetryState);
-    QTimer::singleShot(delayMs, this, [this, payload, credentials]() {
+    QTimer::singleShot(delayMs, this, [this, operation = std::move(operation), fromInstalledBundle]() {
         amnezia::selfhostedUpdates::beginAutomaticPublishAttempt(m_publishRetryState);
         QPointer<SelfHostedUpdateBootstrapper> self(this);
         auto deliveryContext = amnezia::selfhostedUpdates::makeQueuedDeliveryContext();
-        QThreadPool::globalInstance()->start([self, deliveryContext, payload, credentials]() {
-            const bool success = publishPayload(payload, credentials);
+        QThreadPool::globalInstance()->start([self, deliveryContext, operation, fromInstalledBundle]() {
+            const bool success = operation();
             amnezia::selfhostedUpdates::enqueueGuardedCompletion(
                     deliveryContext,
                     self,
-                    [success](SelfHostedUpdateBootstrapper *bootstrapper) {
+                    [success, fromInstalledBundle](SelfHostedUpdateBootstrapper *bootstrapper) {
                         using namespace amnezia::selfhostedUpdates;
                         const AutomaticPublishCompletionDisposition completionDisposition =
                                 completeAutomaticPublishAttempt(
@@ -359,7 +442,11 @@ bool SelfHostedUpdateBootstrapper::start()
                             return;
                         }
                         if (completionDisposition == AutomaticPublishCompletionDisposition::Retry) {
-                            bootstrapper->start();
+                            if (fromInstalledBundle) {
+                                bootstrapper->startAfterInstall();
+                            } else {
+                                bootstrapper->start();
+                            }
                         } else if (completionDisposition
                                    == AutomaticPublishCompletionDisposition::Exhausted) {
                             // A later VPN Connected transition starts a fresh
@@ -384,7 +471,7 @@ bool SelfHostedUpdateBootstrapper::publishNow()
     }
 
     amnezia::ServerCredentials credentials;
-    if (!selectServerCredentials(credentials)) {
+    if (!selectServerCredentials(credentials, payload.publicationHost)) {
         logger.warning() << "Bundled self-hosted update payload is present, but no writable self-hosted server credentials are available";
         return false;
     }
@@ -399,15 +486,14 @@ QString SelfHostedUpdateBootstrapper::findPayloadDir() const
         return QDir(envDir).absolutePath();
     }
 
-    const QString appDir = QCoreApplication::applicationDirPath();
-    const QString payloadDir = QDir(appDir).filePath(kPayloadDirName);
+    const QString payloadDir = installedPublicationDirectory();
     if (QFileInfo::exists(QDir(payloadDir).filePath(kManifestName))) {
         return QDir(payloadDir).absolutePath();
     }
     return {};
 }
 
-bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payload &payload) const
+bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payload &payload)
 {
     const QDir root(payloadDir);
     const QString manifestPath = root.filePath(kManifestName);
@@ -427,6 +513,15 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
     if (!parseVerifiedManifest(manifestData, manifest, decodedPayload, manifestIdentity)) {
         logger.warning() << "Bundled update manifest or signature is invalid";
         return false;
+    }
+
+    QString publicationHost;
+    if (decodedPayload.contains(QStringLiteral("publishOnInstall"))) {
+        publicationHost = signedInstallPublicationHost(payloadDir, manifestData, decodedPayload);
+        if (publicationHost.isEmpty()) {
+            logger.warning() << "Signed install publication does not match this installed client";
+            return false;
+        }
     }
 
     const QJsonObject platforms = decodedPayload.value(QStringLiteral("platforms")).toObject();
@@ -680,6 +775,11 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
     }
     if (payload.version.isEmpty() || payload.manifestSha256.isEmpty()) return false;
     using amnezia::selfhostedUpdates::PublicationAuthorization;
+    if (!publicationHost.isEmpty()) {
+        payload.publicationHost = publicationHost;
+        payload.mode = PublicationAuthorization::SignedInstallManifest;
+        return true;
+    }
     if (!amnezia::selfhostedUpdates::selectPublicationAuthorization(
                 [&payload]() { payload.mode = PublicationAuthorization::FullAccepted; return validatePublicationAcceptance(payload); },
                 [&payload]() { payload.mode = PublicationAuthorization::OwnerUnverified13; return validatePublicationAcceptance(payload); },
@@ -693,6 +793,18 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
 bool SelfHostedUpdateBootstrapper::validatePublicationAcceptance(const Payload &payload)
 {
     using namespace amnezia::selfhostedUpdates;
+    if (payload.mode == PublicationAuthorization::SignedInstallManifest) {
+        // The manifest and decoded content were verified as a pair in loadPayload.
+        if (payload.publicationHost.isEmpty()
+            || payload.publicationHost != signedInstallPublicationHost(payload.rootDir, payload.manifestData,
+                                                                       payload.manifestIdentity.releaseContent)) {
+            return false;
+        }
+        return std::all_of(payload.files.cbegin(), payload.files.cend(), [](const PayloadFile &file) {
+            return QFileInfo(file.localPath).size() == file.size
+                && fileSha256(file.localPath) == file.sha256.toLatin1();
+        });
+    }
     const bool ownerWaiver = payload.mode == PublicationAuthorization::OwnerUnverified13;
     const QString approvalName = ownerWaiver ? QStringLiteral("owner-publication-permit.json")
                                         : QStringLiteral("release-acceptance.json");
@@ -723,13 +835,14 @@ bool SelfHostedUpdateBootstrapper::validatePublicationAcceptance(const Payload &
             publisherSha256, payload.version, payload.androidVersionCode, artifacts, QDateTime::currentDateTimeUtc());
 }
 
-bool SelfHostedUpdateBootstrapper::selectServerCredentials(amnezia::ServerCredentials &credentials) const
+bool SelfHostedUpdateBootstrapper::selectServerCredentials(amnezia::ServerCredentials &credentials,
+                                                         const QString &publicationHost) const
 {
     if (!m_serversRepository) {
         return false;
     }
 
-    const auto selectByServerId = [this, &credentials](const QString &serverId) {
+    const auto selectByServerId = [this, &credentials, &publicationHost](const QString &serverId) {
         if (serverId.isEmpty()) {
             return false;
         }
@@ -737,11 +850,35 @@ bool SelfHostedUpdateBootstrapper::selectServerCredentials(amnezia::ServerCreden
         if (!config || !config->hasCredentials()) {
             return false;
         }
-        credentials = config->credentials();
-        return credentials.isValid();
+        auto candidate = config->credentials();
+        if (!candidate.isValid() || (!publicationHost.isEmpty() && candidate.hostName != publicationHost)) {
+            return false;
+        }
+        if (!publicationHost.isEmpty()) {
+            const auto pinned = amnezia::sshHostKeyPin::resolve(publicationHost, {});
+            if (!pinned.isResolved() || (!candidate.sshHostKeyFingerprint.isEmpty()
+                && candidate.sshHostKeyFingerprint != pinned.fingerprint)) {
+                return false;
+            }
+            candidate.sshHostKeyFingerprint = pinned.fingerprint;
+        }
+        credentials = std::move(candidate);
+        return true;
     };
 
-    return selectByServerId(m_serversRepository->defaultServerId());
+    const QString defaultServer = m_serversRepository->defaultServerId();
+    if (selectByServerId(defaultServer)) {
+        return true;
+    }
+    if (publicationHost.isEmpty()) {
+        return false;
+    }
+    for (const QString &serverId : m_serversRepository->orderedServerIds()) {
+        if (serverId != defaultServer && selectByServerId(serverId)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::ServerCredentials credentials)

@@ -6643,6 +6643,48 @@ class ManifestPublisherTests(unittest.TestCase):
             )
             return result.returncode == 0
 
+    def test_install_publication_is_signed_and_requires_local_windows_artifact(self) -> None:
+        version = "9.9.9.9"
+        artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"windows")
+        out_dir = self.root / "publish-on-install"
+        command = [
+            sys.executable, str(SCRIPT_DIR / "make_manifest.py"),
+            "--version", version,
+            "--base-url", "https://updates.example.invalid",
+            "--private-key", str(self.private_key),
+            "--out-dir", str(out_dir),
+        ]
+        flags = ["--publish-on-install", "release.example.invalid"]
+        for artifact_arg, publish_args, error in (
+            (f"linux-x64={artifact}", flags, "requires a local Windows x64 artifact"),
+            (f"windows-x64={artifact}", ["--publish-on-install", "ssh://release.example.invalid"], "requires an exact SSH host"),
+        ):
+            with self.subTest(error=error):
+                rejected = subprocess.run(
+                    [*command, "--artifact", artifact_arg, *publish_args],
+                    env=self.env, capture_output=True, text=True,
+                )
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(error, rejected.stderr)
+                self.assertFalse((out_dir / "manifest.json").exists())
+
+        subprocess.run(
+            [*command, "--artifact", f"windows-x64={artifact}", *flags],
+            env=self.env, capture_output=True, text=True, check=True,
+        )
+        envelope = json.loads((out_dir / "manifest.json").read_bytes())
+        encoded = envelope["payload"]
+        signed = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        payload = json.loads(signed)
+        publisher = SCRIPT_DIR / "publish_bundled_release.sh"
+        self.assertEqual(payload["publishOnInstall"], {
+            "sshHost": "release.example.invalid",
+            "publisherSha256": hashlib.sha256(publisher.read_bytes()).hexdigest(),
+        })
+        self.assertTrue(self.signature_verifies(signed, envelope["signature"]))
+        payload["publishOnInstall"]["sshHost"] = "other.example.invalid"
+        self.assertFalse(self.signature_verifies(json.dumps(payload).encode(), envelope["signature"]))
+
     def test_manifest_schema_one_stays_compatible_and_rejects_restrictive_policy(self) -> None:
         version = "9.9.9.9"
         artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"windows-v1")
@@ -6669,6 +6711,7 @@ class ManifestPublisherTests(unittest.TestCase):
         payload = manifest_payload(out_dir / "manifest.json")
         self.assertEqual(payload["schema"], 1)
         self.assertNotIn("releasePolicy", payload)
+        self.assertNotIn("publishOnInstall", payload)
 
         restrictive_cases = {
             "channel": ["--channel", "canary"],
@@ -9581,6 +9624,58 @@ process.stdout.write(JSON.stringify(outcome));
         self.assertIn("exitCode === 1060", service_check)
         self.assertIn("exitCode !== 0 && exitCode !== 1072", service_check)
         self.assertIn("sleep(100)", service_check)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required")
+    def test_qif_starts_the_installed_publisher_once_only_after_a_successful_install(self) -> None:
+        harness = r"""
+const assert = require('assert'), fs = require('fs'), vm = require('vm');
+const source = fs.readFileSync(process.argv[1], 'utf8');
+function check({bundled, cli, success, expected}) {
+    const target = String.raw`C:\Program Files\AmneziaVPN`;
+    const explorer = String.raw`C:\Windows\explorer.exe`;
+    const launches = [];
+    const instance = {};
+    const context = {
+        console: { log() {} },
+        systemInfo: { kernelType: 'winnt', prettyProductName: 'Windows' },
+        buttons: { FinishButton: 'finish' },
+        QInstaller: { Success: 0 },
+        gui: { clickButton() { instance.finish(); } },
+        installer: {
+            isInstaller: () => true,
+            isUpdater: () => false,
+            isCommandLineInstance: () => cli,
+            status: success ? 0 : 1,
+            environmentVariable: name => name === 'SystemRoot' ? String.raw`C:\Windows` : '',
+            value: name => ({ Name: 'AmneziaVPN', TargetDir: target, os: 'win' })[name],
+            fileExists: () => true,
+            executeDetached(program, args, cwd) { launches.push([program, ...args, cwd]); return true; },
+        },
+    };
+    if (bundled) context.bundledWindowsPublisherInstaller = true;
+    vm.createContext(context);
+    vm.runInContext(source, context);
+    const prototype = context.Component.prototype;
+    Object.setPrototypeOf(instance, prototype);
+    instance.finish = () => prototype.installationFinished.call(instance);
+    prototype.installationFinishedPageIsShown.call(instance);
+    prototype.installationFinishedPageIsShown.call(instance);
+    assert.deepStrictEqual(launches, expected ? [[explorer, target + '\\AmneziaVPN.exe', target]] : []);
+}
+for (const cli of [false, true]) {
+    for (const bundled of [false, true]) {
+        for (const success of [false, true]) {
+            check({bundled, cli, success, expected: success && (!cli || bundled)});
+        }
+    }
+}
+"""
+        result = subprocess.run(
+            [shutil.which("node"), "-e", harness,
+             str(REPO_ROOT / "deploy/installer/qif/componentscript.js")],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is required")
     def test_qif_preflight_failure_blocks_extract_even_if_cancel_is_ignored(self) -> None:

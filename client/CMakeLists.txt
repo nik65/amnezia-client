@@ -66,6 +66,7 @@ if(WIN32 AND NOT _amnezia_selfhosted_bundle_dir STREQUAL "")
             "SELFHOSTED_UPDATE_BUNDLE_DIR must contain manifest.json before configuring the bundled client")
     endif()
     file(SHA256 "${_amnezia_selfhosted_manifest}" _amnezia_selfhosted_manifest_sha256)
+    add_compile_definitions(AMNEZIA_INSTALL_PUBLICATION_MANIFEST_SHA256="${_amnezia_selfhosted_manifest_sha256}")
     set(_amnezia_selfhosted_enabled TRUE)
     file(GENERATE
         OUTPUT "${CMAKE_BINARY_DIR}/selfhosted-build-contract.json"

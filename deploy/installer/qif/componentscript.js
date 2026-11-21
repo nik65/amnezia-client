@@ -157,9 +157,17 @@ Component.prototype.componentLoaded = function ()
 
 Component.prototype.installationFinishedPageIsShown = function()
 {
-    if (installer.isInstaller() && installer.status === QInstaller.Success) {
-        gui.clickButton(buttons.FinishButton);
+    if (!installer.isInstaller() || installer.status !== QInstaller.Success) {
+        return;
     }
+    if (installer.isCommandLineInstance()) {
+        if (runningOnWindows() && typeof bundledWindowsPublisherInstaller !== "undefined" &&
+            bundledWindowsPublisherInstaller === true) {
+            this.installationFinished();
+        }
+        return;
+    }
+    gui.clickButton(buttons.FinishButton);
 }
 
 Component.prototype.createOperations = function()
@@ -284,6 +292,10 @@ Component.prototype.installationFinished = function()
     if ((installer.status === QInstaller.Success) && (installer.isInstaller() || installer.isUpdater())) {
 
         if (runningOnWindows()) {
+            if (this.windowsClientLaunchAttempted) {
+                return;
+            }
+            this.windowsClientLaunchAttempted = true;
             // Start the freshly installed client as the interactive user, never as
             // the elevated installer.
             //
