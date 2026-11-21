@@ -280,34 +280,48 @@ namespace
         return QDir(QCoreApplication::applicationDirPath()).filePath(kPayloadDirName);
     }
 
-    QString signedInstallPublicationHost(const QString &directory, const QByteArray &manifestData,
-                                         const QJsonObject &verifiedPayload)
+    QString signedInstallPublicationHost(const QString &directory, const QByteArray &manifestData)
     {
-#if defined(Q_OS_WIN) && defined(AMNEZIA_INSTALL_PUBLICATION_MANIFEST_SHA256)
+#if defined(Q_OS_WIN) && defined(AMNEZIA_INSTALL_PUBLICATION_MANIFEST_SHA256) && defined(AMNEZIA_INSTALL_PUBLICATION_GRANT_SHA256)
+        using namespace amnezia::selfhostedUpdates;
         const QString installed = installedPublicationDirectory();
+        const QDir applicationDirectory(QCoreApplication::applicationDirPath());
+        const QString grantName = QStringLiteral("install-publication-grant.json");
+        const QString grantRelativePath = QString::fromLatin1(kPayloadDirName) + u'/' + grantName;
         if (QDir(directory).absolutePath() != installed
-            || hasSymlinkOrReparsePoint(QDir(QCoreApplication::applicationDirPath()),
-                                       QStringLiteral("selfhosted_updates/manifest.json"))
-            || QCryptographicHash::hash(manifestData, QCryptographicHash::Sha256).toHex()
-                    != QByteArrayLiteral(AMNEZIA_INSTALL_PUBLICATION_MANIFEST_SHA256)) {
+            || hasSymlinkOrReparsePoint(applicationDirectory, QStringLiteral("selfhosted_updates/manifest.json"))
+            || hasSymlinkOrReparsePoint(applicationDirectory, grantRelativePath)) {
             return {};
         }
-        const QJsonObject authorization = verifiedPayload.value(QStringLiteral("publishOnInstall")).toObject();
-        const QString host = authorization.value(QStringLiteral("sshHost")).toString();
-        const QString publisherSha256 = authorization.value(QStringLiteral("publisherSha256")).toString();
+        const QByteArray manifestSha256 = QCryptographicHash::hash(manifestData, QCryptographicHash::Sha256).toHex();
+        if (manifestSha256 != QByteArrayLiteral(AMNEZIA_INSTALL_PUBLICATION_MANIFEST_SHA256)) {
+            return {};
+        }
+
+        const QString grantPath = QDir(installed).filePath(grantName);
+        QFile grant(grantPath);
         QFile publisher(QString::fromLatin1(kBundledPublishScript));
-        if (authorization.size() != 2 || host.isEmpty()
-            || !amnezia::sshHostKeyPin::resolve(host, {}).isResolved()
+        QByteArray publicKey;
+        if (!QFileInfo(grantPath).isFile() || !grant.open(QIODevice::ReadOnly)
+            || grant.size() <= 0 || grant.size() > maximumInstallPublicationGrantBytes
             || !publisher.open(QIODevice::ReadOnly)
-            || QCryptographicHash::hash(publisher.readAll(), QCryptographicHash::Sha256).toHex()
-                    != publisherSha256.toLatin1()) {
+            || !decodeStrictBase64(QByteArray(SELFHOSTED_UPDATE_PUBLIC_KEY_PEM_BASE64),
+                                   QByteArray::Base64Encoding, publicKey)) {
             return {};
         }
-        return host;
+        const QByteArray grantBytes = grant.read(maximumInstallPublicationGrantBytes + 1);
+        if (QCryptographicHash::hash(grantBytes, QCryptographicHash::Sha256).toHex()
+            != QByteArrayLiteral(AMNEZIA_INSTALL_PUBLICATION_GRANT_SHA256)) {
+            return {};
+        }
+        const QByteArray publisherSha256 = QCryptographicHash::hash(publisher.readAll(), QCryptographicHash::Sha256).toHex();
+        const QString host = verifiedInstallPublicationGrantHost(
+                grantBytes, publicKey,
+                QString::fromLatin1(manifestSha256), QString::fromLatin1(publisherSha256));
+        return !host.isEmpty() && amnezia::sshHostKeyPin::resolve(host, {}).isResolved() ? host : QString();
 #else
         Q_UNUSED(directory);
         Q_UNUSED(manifestData);
-        Q_UNUSED(verifiedPayload);
         return {};
 #endif
     }
@@ -380,7 +394,7 @@ bool SelfHostedUpdateBootstrapper::start()
 
 bool SelfHostedUpdateBootstrapper::startAfterInstall()
 {
-#if defined(Q_OS_WIN) && defined(AMNEZIA_INSTALL_PUBLICATION_MANIFEST_SHA256)
+#if defined(Q_OS_WIN) && defined(AMNEZIA_INSTALL_PUBLICATION_MANIFEST_SHA256) && defined(AMNEZIA_INSTALL_PUBLICATION_GRANT_SHA256)
     using namespace amnezia::selfhostedUpdates;
     if (automaticPublishStartDisposition(m_publishRetryState) != AutomaticPublishStartDisposition::Schedule) {
         return false;
@@ -397,7 +411,7 @@ bool SelfHostedUpdateBootstrapper::startAfterInstall()
     if (!parseVerifiedManifest(data, manifest, verifiedPayload, identity)) {
         return false;
     }
-    const QString host = signedInstallPublicationHost(directory, data, verifiedPayload);
+    const QString host = signedInstallPublicationHost(directory, data);
     if (host.isEmpty()) {
         return false;
     }
@@ -410,7 +424,7 @@ bool SelfHostedUpdateBootstrapper::startAfterInstall()
     return schedulePublication([directory, credentials]() {
         Payload payload;
         return loadPayload(directory, payload)
-            && payload.mode == PublicationAuthorization::SignedInstallManifest
+            && payload.mode == PublicationAuthorization::SignedInstallGrant
             && publishPayload(std::move(payload), credentials);
     }, true);
 #else
@@ -515,14 +529,7 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
         return false;
     }
 
-    QString publicationHost;
-    if (decodedPayload.contains(QStringLiteral("publishOnInstall"))) {
-        publicationHost = signedInstallPublicationHost(payloadDir, manifestData, decodedPayload);
-        if (publicationHost.isEmpty()) {
-            logger.warning() << "Signed install publication does not match this installed client";
-            return false;
-        }
-    }
+    const QString publicationHost = signedInstallPublicationHost(payloadDir, manifestData);
 
     const QJsonObject platforms = decodedPayload.value(QStringLiteral("platforms")).toObject();
     if (platforms.isEmpty()) {
@@ -777,14 +784,14 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
     using amnezia::selfhostedUpdates::PublicationAuthorization;
     if (!publicationHost.isEmpty()) {
         payload.publicationHost = publicationHost;
-        payload.mode = PublicationAuthorization::SignedInstallManifest;
+        payload.mode = PublicationAuthorization::SignedInstallGrant;
         return true;
     }
     if (!amnezia::selfhostedUpdates::selectPublicationAuthorization(
                 [&payload]() { payload.mode = PublicationAuthorization::FullAccepted; return validatePublicationAcceptance(payload); },
                 [&payload]() { payload.mode = PublicationAuthorization::OwnerUnverified13; return validatePublicationAcceptance(payload); },
                 payload.mode)) {
-        logger.warning() << "Publication blocked: no current full acceptance or signed owner waiver";
+        logger.warning() << "Publication blocked: no current full acceptance, signed owner waiver or valid install grant";
         return false;
     }
     return true;
@@ -793,11 +800,10 @@ bool SelfHostedUpdateBootstrapper::loadPayload(const QString &payloadDir, Payloa
 bool SelfHostedUpdateBootstrapper::validatePublicationAcceptance(const Payload &payload)
 {
     using namespace amnezia::selfhostedUpdates;
-    if (payload.mode == PublicationAuthorization::SignedInstallManifest) {
-        // The manifest and decoded content were verified as a pair in loadPayload.
+    if (payload.mode == PublicationAuthorization::SignedInstallGrant) {
+        // Recheck the on-disk grant against the verified manifest snapshot before remote actions.
         if (payload.publicationHost.isEmpty()
-            || payload.publicationHost != signedInstallPublicationHost(payload.rootDir, payload.manifestData,
-                                                                       payload.manifestIdentity.releaseContent)) {
+            || payload.publicationHost != signedInstallPublicationHost(payload.rootDir, payload.manifestData)) {
             return false;
         }
         return std::all_of(payload.files.cbegin(), payload.files.cend(), [](const PayloadFile &file) {

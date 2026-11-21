@@ -45,6 +45,10 @@ MAX_GENERATED_AT_FUTURE_SKEW = timedelta(minutes=5)
 MAX_MANIFEST_RESPONSE_BYTES = 1024 * 1024
 RELEASE_ACCEPTANCE_SCHEMA = "amnezia-release-acceptance-v1"
 RELEASE_ACCEPTANCE_DOMAIN = b"amnezia-release-acceptance-v1\n"
+INSTALL_PUBLICATION_GRANT_SCHEMA = "amnezia-install-publication-grant-v1"
+INSTALL_PUBLICATION_GRANT_DOMAIN = b"amnezia-install-publication-grant-v1\n"
+INSTALL_PUBLICATION_GRANT_FILENAME = "install-publication-grant.json"
+MAX_INSTALL_PUBLICATION_GRANT_BYTES = 4096
 HEADLESS_PROVISIONING_FORMAT = "amnezia-headless-provisioning-tar-v1"
 ED25519_PUBLIC_KEY_DER_PREFIX = bytes.fromhex("302a300506032b6570032100")
 ED25519_PUBLIC_KEY_DER_BYTES = len(ED25519_PUBLIC_KEY_DER_PREFIX) + 32
@@ -1539,6 +1543,8 @@ def main() -> int:
         default=[],
         help="platform=path for a previous-version rollback artifact; repeat per platform",
     )
+    parser.add_argument("--install-publication-grant-out", type=Path,
+                        help="Write the signed installer-only grant outside the consumer bundle")
     args = parser.parse_args()
     version = validate_release_version(args.version)
     base_url = validate_base_url(args.base_url)
@@ -1614,6 +1620,15 @@ def main() -> int:
             )
 
     requested_out_dir = args.out_dir.resolve()
+    grant_out = None
+    if (args.publish_on_install is None) != (args.install_publication_grant_out is None):
+        parser.error("--publish-on-install and --install-publication-grant-out must be supplied together")
+    if args.publish_on_install is not None:
+        if not re.fullmatch(r"[A-Za-z0-9._:-]+", args.publish_on_install):
+            parser.error("--publish-on-install requires an exact SSH host")
+        if not args.public_key_base64:
+            parser.error("--publish-on-install requires --public-key-base64")
+        grant_out = validate_install_publication_grant_out(args.install_publication_grant_out, requested_out_dir)
     requested_out_dir.parent.mkdir(parents=True, exist_ok=True)
     fsync_directory(requested_out_dir.parent)
     staging_directory = tempfile.TemporaryDirectory(
@@ -1808,15 +1823,10 @@ def main() -> int:
         "autoInstall": args.auto_install,
         "platforms": platforms,
     }
-    if args.publish_on_install is not None:
-        if not re.fullmatch(r"[A-Za-z0-9._:-]+", args.publish_on_install):
-            raise SystemExit("--publish-on-install requires an exact SSH host")
-        if "windows-x64" not in platforms or platforms["windows-x64"].get("openExternal", False):
-            raise SystemExit("--publish-on-install requires a local Windows x64 artifact")
-        payload["publishOnInstall"] = {
-            "sshHost": args.publish_on_install,
-            "publisherSha256": sha256(Path(__file__).with_name("publish_bundled_release.sh")),
-        }
+    if grant_out is not None and (
+        "windows-x64" not in platforms or platforms["windows-x64"].get("openExternal", False)
+    ):
+        raise SystemExit("--publish-on-install requires a local Windows x64 artifact")
     if headless_provisioning is not None:
         payload["headlessProvisioning"] = headless_provisioning
     if args.payload_schema == 2:
@@ -1865,8 +1875,157 @@ def main() -> int:
         print("Verified schema-2 manifest signature, signing key, and required platforms", flush=True)
     if args.payload_schema == 2:
         validate_release_policy(payload["releasePolicy"], now=datetime.now(timezone.utc))
+    grant_bytes = None
+    if grant_out is not None:
+        publisher_path = Path(__file__).with_name("publish_bundled_release.sh")
+        message = install_publication_grant_message(manifest_bytes, sha256(publisher_path), args.publish_on_install)
+        grant_bytes = install_publication_grant_bytes(message, private_key)
+        if len(grant_bytes) > MAX_INSTALL_PUBLICATION_GRANT_BYTES:
+            raise SystemExit("Generated install publication grant exceeds its permitted size")
     replace_output_tree(out_dir, requested_out_dir)
+    if grant_out is not None:
+        write_new_install_publication_grant(grant_out, grant_bytes)
     staging_directory.cleanup()
+    return 0
+
+
+
+def install_publication_grant_message(manifest_bytes: bytes, publisher_sha256: str, ssh_host: str) -> bytes:
+    if not re.fullmatch(r"[A-Za-z0-9._:-]+", ssh_host):
+        raise SystemExit("--publish-on-install requires an exact SSH host")
+    return INSTALL_PUBLICATION_GRANT_DOMAIN + json.dumps(
+        {
+            "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
+            "publisherSha256": publisher_sha256,
+            "sshHost": ssh_host,
+        },
+        sort_keys=True, separators=(",", ":"),
+    ).encode("ascii")
+
+
+def install_publication_grant_bytes(message: bytes, private_key: Path) -> bytes:
+    signature = sign_payload(private_key, message)
+    verify_payload_signature(private_key, message, signature)
+    return json.dumps(
+        {
+            "schema": INSTALL_PUBLICATION_GRANT_SCHEMA,
+            "signatureAlgorithm": "Ed25519",
+            "payload": b64url(message),
+            "signature": signature,
+        },
+        sort_keys=True, separators=(",", ":"),
+    ).encode("ascii")
+
+
+def verify_install_publication_grant(
+    grant_path: Path, manifest_path: Path, publisher_path: Path, ssh_host: str, public_key_base64: str,
+) -> None:
+    with grant_path.open("rb") as source:
+        raw_grant = source.read(MAX_INSTALL_PUBLICATION_GRANT_BYTES + 1)
+    if not 0 < len(raw_grant) <= MAX_INSTALL_PUBLICATION_GRANT_BYTES:
+        raise SystemExit("Install publication grant exceeds its permitted size")
+    try:
+        grant = json.loads(raw_grant.decode("utf-8"), object_pairs_hook=strict_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SystemExit("Install publication grant is not valid JSON") from error
+    with manifest_path.open("rb") as source:
+        manifest_bytes = source.read(MAX_MANIFEST_RESPONSE_BYTES + 1)
+    payload, signed_manifest, manifest_signature = decode_manifest_envelope(manifest_bytes)
+    if "publishOnInstall" in payload:
+        raise SystemExit("Consumer manifest must not contain install publication authority")
+    message = install_publication_grant_message(manifest_bytes, sha256(publisher_path), ssh_host)
+    if (
+        not isinstance(grant, dict)
+        or set(grant) != {"schema", "signatureAlgorithm", "payload", "signature"}
+        or grant["schema"] != INSTALL_PUBLICATION_GRANT_SCHEMA
+        or grant["signatureAlgorithm"] != "Ed25519"
+        or grant["payload"] != b64url(message)
+        or json.dumps(grant, sort_keys=True, separators=(",", ":")).encode("ascii") != raw_grant
+    ):
+        raise SystemExit("Install publication grant does not match exact manifest/publisher/host")
+    try:
+        signature = base64.b64decode(grant["signature"], validate=True)
+        public_key = base64.b64decode(public_key_base64, validate=True)
+    except (ValueError, TypeError) as error:
+        raise SystemExit("Install publication grant signature or public key is not valid base64") from error
+    if (
+        len(signature) != 64
+        or base64.b64encode(signature).decode("ascii") != grant["signature"]
+        or not 0 < len(public_key) <= 8192
+        or base64.b64encode(public_key).decode("ascii") != public_key_base64
+    ):
+        raise SystemExit("Install publication grant signature or public key is not canonical")
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        key_path, message_path, signature_path = root / "key.pem", root / "message", root / "signature"
+        key_path.write_bytes(public_key)
+        key_format = subprocess.run(
+            [openssl_command(), "pkey", "-pubin", "-in", str(key_path), "-outform", "DER"],
+            capture_output=True,
+        )
+        if (
+            key_format.returncode != 0
+            or len(key_format.stdout) != ED25519_PUBLIC_KEY_DER_BYTES
+            or not key_format.stdout.startswith(ED25519_PUBLIC_KEY_DER_PREFIX)
+        ):
+            raise SystemExit("Install publication grant requires an Ed25519 public key")
+        for content, proof in ((message, signature), (signed_manifest, base64.b64decode(manifest_signature))):
+            message_path.write_bytes(content)
+            signature_path.write_bytes(proof)
+            verification = subprocess.run(
+                [
+                    openssl_command(), "pkeyutl", "-verify", "-rawin", "-pubin",
+                    "-inkey", str(key_path), "-in", str(message_path), "-sigfile", str(signature_path),
+                ],
+                capture_output=True,
+            )
+            if verification.returncode != 0:
+                raise SystemExit("Install publication grant or consumer manifest signature verification failed")
+
+
+def validate_install_publication_grant_out(destination: Path, bundle: Path) -> Path:
+    target = destination.absolute()
+    if target.name != INSTALL_PUBLICATION_GRANT_FILENAME:
+        raise SystemExit(f"--install-publication-grant-out must name {INSTALL_PUBLICATION_GRANT_FILENAME}")
+    for item in (target, *target.parents):
+        try:
+            attributes = item.lstat()
+        except FileNotFoundError:
+            continue
+        if item.is_symlink() or getattr(attributes, "st_file_attributes", 0) & 0x400:
+            raise SystemExit("Install publication grant output path contains a symlink or reparse point")
+    target = target.resolve()
+    if target.is_relative_to(bundle):
+        raise SystemExit("Install publication grant output must be outside the consumer bundle")
+    if target.exists():
+        raise SystemExit("Install publication grant output already exists")
+    return target
+
+
+def write_new_install_publication_grant(destination: Path, data: bytes) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staged = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=destination.parent, prefix=".install-grant-", delete=False) as stream:
+            staged = Path(stream.name)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(staged, destination)
+        fsync_directory(destination.parent)
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+
+
+def verify_install_publication_grant_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Verify a local installer-only publication grant")
+    for name in ("grant", "manifest", "publisher"):
+        parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--public-key-base64", required=True)
+    parser.add_argument("--ssh-host", required=True)
+    args = parser.parse_args(argv)
+    verify_install_publication_grant(args.grant, args.manifest, args.publisher, args.ssh_host, args.public_key_base64)
     return 0
 
 
@@ -1901,4 +2060,8 @@ def issue_acceptance_main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(issue_acceptance_main(sys.argv[2:]) if sys.argv[1:2] == ["issue-acceptance"] else main())
+    if sys.argv[1:2] == ["issue-acceptance"]:
+        sys.exit(issue_acceptance_main(sys.argv[2:]))
+    if sys.argv[1:2] == ["verify-install-publication-grant"]:
+        sys.exit(verify_install_publication_grant_main(sys.argv[2:]))
+    sys.exit(main())

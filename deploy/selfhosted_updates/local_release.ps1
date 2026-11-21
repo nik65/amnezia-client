@@ -769,7 +769,7 @@ function Copy-Artifact([string] $SourceRoot, [string] $Pattern, [string] $Destin
     Copy-Item -LiteralPath $matches[0].FullName -Destination (Join-Path $DestinationRoot $matches[0].Name) -Force
 }
 
-function Build-WindowsInstaller([string] $BundleDir) {
+function Build-WindowsInstaller([string] $BundleDir, [string] $InstallPublicationGrantPath = "") {
     $buildJobs = Resolve-BuildJobs
     $previousProjectVersion = $env:AMNEZIAVPN_VERSION
     $env:AMNEZIAVPN_VERSION = $Version
@@ -781,6 +781,7 @@ function Build-WindowsInstaller([string] $BundleDir) {
     $previousSshTrustedHost = $env:SELFHOSTED_SSH_TRUSTED_HOST
     $previousSshTrustedHostKeySha256 = $env:SELFHOSTED_SSH_TRUSTED_HOST_KEY_SHA256
     $previousBundleDir = $env:SELFHOSTED_UPDATE_BUNDLE_DIR
+    $previousInstallPublicationGrant = $env:AMNEZIA_INSTALL_PUBLICATION_GRANT_FILE
     $previousBuildJobs = $env:AMNEZIA_BUILD_JOBS
     $previousCmakeBuildParallelLevel = $env:CMAKE_BUILD_PARALLEL_LEVEL
     $env:CONAN_NO_REMOTE = "1"
@@ -796,6 +797,11 @@ function Build-WindowsInstaller([string] $BundleDir) {
         Remove-Item Env:\SELFHOSTED_UPDATE_BUNDLE_DIR -ErrorAction SilentlyContinue
     } else {
         $env:SELFHOSTED_UPDATE_BUNDLE_DIR = $BundleDir
+    }
+    if ([string]::IsNullOrWhiteSpace($InstallPublicationGrantPath)) {
+        Remove-Item Env:\AMNEZIA_INSTALL_PUBLICATION_GRANT_FILE -ErrorAction SilentlyContinue
+    } else {
+        $env:AMNEZIA_INSTALL_PUBLICATION_GRANT_FILE = $InstallPublicationGrantPath
     }
     try {
         Invoke-External "cmd.exe" @("/d", "/s", "/c", "`"$RepoRoot\deploy\build.bat`" --installer ifw -arch x64 --jobs $buildJobs")
@@ -842,6 +848,11 @@ function Build-WindowsInstaller([string] $BundleDir) {
             Remove-Item Env:\SELFHOSTED_UPDATE_BUNDLE_DIR -ErrorAction SilentlyContinue
         } else {
             $env:SELFHOSTED_UPDATE_BUNDLE_DIR = $previousBundleDir
+        }
+        if ($null -eq $previousInstallPublicationGrant) {
+            Remove-Item Env:\AMNEZIA_INSTALL_PUBLICATION_GRANT_FILE -ErrorAction SilentlyContinue
+        } else {
+            $env:AMNEZIA_INSTALL_PUBLICATION_GRANT_FILE = $previousInstallPublicationGrant
         }
     }
 }
@@ -1228,7 +1239,7 @@ function Assert-WindowsClientTrust([string] $ArtifactPath, [string] $ReceiptPath
         Remove-Item -LiteralPath $inspectionRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
-function Assert-BundledWindowsPayload([string] $ArtifactPath, [string] $ManifestPath, [bool] $PublishOnInstall) {
+function Assert-BundledWindowsPayload([string] $ArtifactPath, [string] $ManifestPath, [bool] $PublishOnInstall, [string] $InstallPublicationGrantPath = "") {
     Assert-ExistingFile $ArtifactPath "Bundled Windows release client"
     Assert-ExistingFile $ManifestPath "Bundled self-hosted manifest"
     if ([string]::IsNullOrWhiteSpace($PublicKeyBase64) -or
@@ -1323,12 +1334,30 @@ function Assert-BundledWindowsPayload([string] $ArtifactPath, [string] $Manifest
         $encodedPayload = $envelope.payload.Replace("-", "+").Replace("_", "/")
         $encodedPayload = $encodedPayload.PadRight($encodedPayload.Length + ((4 - $encodedPayload.Length % 4) % 4), [char]'=')
         $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedPayload)) | ConvertFrom-Json
-        $publicationGrant = $payload.PSObject.Properties["publishOnInstall"]
-        if ($PublishOnInstall -ne ($null -ne $publicationGrant)) {
-            throw "Bundled manifest publication grant does not match the selected release lane."
+        if ($null -ne $payload.PSObject.Properties["publishOnInstall"]) {
+            throw "Bundled consumer manifest must not include installer publication authorization."
         }
-        if ($PublishOnInstall -and $publicationGrant.Value.sshHost -cne $SshTrustedHost) {
-            throw "Bundled manifest publication grant does not match the intended SSH host."
+        $embeddedGrant = @(Get-ChildItem -LiteralPath $archiveRoot -Recurse -File -Filter "install-publication-grant.json" |
+            Where-Object { $_.FullName -match '[\\/]selfhosted_updates[\\/]install-publication-grant\.json$' })
+        $expectedGrantCount = if ($PublishOnInstall) { 1 } else { 0 }
+        if ($embeddedGrant.Count -ne $expectedGrantCount) {
+            throw "Bundled installer publication grant count does not match the selected release lane."
+        }
+        $grantSha256 = ""
+        if ($PublishOnInstall) {
+            Assert-ExistingFile $InstallPublicationGrantPath "Separate install publication grant"
+            $grantSha256 = (Get-FileHash -LiteralPath $InstallPublicationGrantPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $embeddedGrantSha256 = (Get-FileHash -LiteralPath $embeddedGrant[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($embeddedGrantSha256 -ne $grantSha256 -or
+                $payloadText.IndexOf($grantSha256, [StringComparison]::Ordinal) -lt 0) {
+                throw "Bundled grant differs from the exact staged grant or is not bound to the installed client executable."
+            }
+            Invoke-External "python" @(
+                "deploy/selfhosted_updates/make_manifest.py", "verify-install-publication-grant",
+                "--grant", $embeddedGrant[0].FullName, "--manifest", $embeddedManifest[0].FullName,
+                "--publisher", (Join-Path $ScriptRoot "publish_bundled_release.sh"),
+                "--public-key-base64", $PublicKeyBase64, "--ssh-host", $SshTrustedHost
+            ) | Out-Null
         }
         $ownerRoot = Split-Path -Parent $RepoRoot
         $receiptRoot = if ($nativeCandidateStage) {
@@ -1343,6 +1372,7 @@ function Assert-BundledWindowsPayload([string] $ArtifactPath, [string] $Manifest
             payloadSha256 = (Get-FileHash -LiteralPath $payloadCandidates[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             manifestSha256 = $manifestSha256
             embeddedManifestSha256 = $embeddedManifestSha256
+            installPublicationGrantSha256 = $grantSha256
             publicKeySha256 = [string]$script:SelfHostedUpdatePublicKeySha256
             syncHost = $SyncHost
             baseUrl = $BaseUrl
@@ -1797,8 +1827,15 @@ foreach ($platform in $RequirePlatform) {
     $manifestArgs += @("--artifact", "$platform=$artifactPath")
 }
 
+$installPublicationGrantPath = ""
 if ($publishOnInstall) {
-    $manifestArgs += @("--publish-on-install", $SshTrustedHost)
+    $grantRoot = if ($nativeCandidateStage) {
+        $nativeCandidateStage
+    } else {
+        (New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) ("amnezia-install-grant-" + [Guid]::NewGuid().ToString("N")))).FullName
+    }
+    $installPublicationGrantPath = Join-Path $grantRoot "install-publication-grant.json"
+    $manifestArgs += @("--publish-on-install", $SshTrustedHost, "--install-publication-grant-out", $installPublicationGrantPath)
 }
 Invoke-External "python" $manifestArgs
 
@@ -1834,16 +1871,19 @@ if ($bundlesUpdatesInWindowsClient) {
         } else {
             Remove-Item Env:\AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI -ErrorAction SilentlyContinue
         }
-        Build-WindowsInstaller $OutDir
+        Build-WindowsInstaller $OutDir $installPublicationGrantPath
         Assert-ExistingFile $adminInstallerSource "Bundled Windows release client"
         if ($publishOnInstall) {
             $outerForLab = $adminInstallerSource
             $gatedOuterSha256 = (Get-FileHash -LiteralPath $outerForLab -Algorithm SHA256).Hash
         }
         Assert-WindowsOuterIfwMetadata $adminInstallerSource $publishOnInstall
-        Assert-BundledWindowsPayload $adminInstallerSource (Join-Path $OutDir "manifest.json") $publishOnInstall
+        Assert-BundledWindowsPayload $adminInstallerSource (Join-Path $OutDir "manifest.json") $publishOnInstall $installPublicationGrantPath
         if ($nativeCandidateStage) {
             [IO.File]::Move($adminInstallerSource, $heldOuter)
+        } elseif ($publishOnInstall) {
+            [IO.File]::Delete($installPublicationGrantPath)
+            [IO.Directory]::Delete($grantRoot)
         }
     } finally {
         if ($null -eq $previousLaunchPublisher) {
@@ -2019,7 +2059,7 @@ if (Test-Path -LiteralPath $originalOuterPath -PathType Leaf) {
     }
 }
 if ($publishOnInstall) {
-    $acceptanceStatus.status = "AUTHORIZED_BY_SIGNED_INSTALL_MANIFEST"
+    $acceptanceStatus.status = "AUTHORIZED_BY_SIGNED_INSTALL_GRANT"
     $acceptanceStatus.reason = "The release gate accepted the exact installer carrying the signed grant to publish on startup to the configured SSH host."
 }
 $acceptanceStatusPath = Join-Path $OutDir "publication-acceptance-status.json"

@@ -43,7 +43,13 @@ set(_amnezia_selfhosted_sync_host "$ENV{SELFHOSTED_UPDATE_SYNC_HOST}")
 set(_amnezia_selfhosted_base_url "$ENV{SELFHOSTED_UPDATE_BASE_URL}")
 set(_amnezia_selfhosted_public_key_sha256 "$ENV{SELFHOSTED_UPDATE_PUBLIC_KEY_SHA256}")
 set(_amnezia_selfhosted_bundle_dir "$ENV{SELFHOSTED_UPDATE_BUNDLE_DIR}")
+set(_amnezia_install_publication_grant "$ENV{AMNEZIA_INSTALL_PUBLICATION_GRANT_FILE}")
 set(_amnezia_selfhosted_enabled FALSE)
+if(NOT _amnezia_install_publication_grant STREQUAL ""
+   AND (NOT WIN32 OR _amnezia_selfhosted_bundle_dir STREQUAL ""
+        OR NOT "$ENV{AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI}" STREQUAL "1"))
+    message(FATAL_ERROR "An install publication grant requires the Windows publisher bundle")
+endif()
 if(WIN32 AND NOT _amnezia_selfhosted_bundle_dir STREQUAL "")
     if(_amnezia_selfhosted_public_key STREQUAL ""
        OR _amnezia_selfhosted_sync_host STREQUAL ""
@@ -72,6 +78,14 @@ if(WIN32 AND NOT _amnezia_selfhosted_bundle_dir STREQUAL "")
     endif()
     file(SHA256 "${_amnezia_selfhosted_manifest}" _amnezia_selfhosted_manifest_sha256)
     add_compile_definitions(AMNEZIA_INSTALL_PUBLICATION_MANIFEST_SHA256="${_amnezia_selfhosted_manifest_sha256}")
+    if("$ENV{AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI}" STREQUAL "1")
+        file(TO_CMAKE_PATH "${_amnezia_install_publication_grant}" _amnezia_install_publication_grant)
+        if(NOT EXISTS "${_amnezia_install_publication_grant}" OR IS_DIRECTORY "${_amnezia_install_publication_grant}")
+            message(FATAL_ERROR "The Windows publisher bundle requires a separate grant file")
+        endif()
+        file(SHA256 "${_amnezia_install_publication_grant}" _amnezia_install_publication_grant_sha256)
+        add_compile_definitions(AMNEZIA_INSTALL_PUBLICATION_GRANT_SHA256="${_amnezia_install_publication_grant_sha256}")
+    endif()
     set(_amnezia_selfhosted_enabled TRUE)
     file(GENERATE
         OUTPUT "${CMAKE_BINARY_DIR}/selfhosted-build-contract.json"
@@ -471,7 +485,15 @@ if(WIN32 AND DEFINED ENV{SELFHOSTED_UPDATE_BUNDLE_DIR} AND NOT "$ENV{SELFHOSTED_
     install(DIRECTORY "${SELFHOSTED_UPDATE_BUNDLE_DIR}/"
         DESTINATION "selfhosted_updates"
         COMPONENT AmneziaVPN
+        PATTERN "install-publication-grant.json" EXCLUDE
     )
+    if(NOT _amnezia_install_publication_grant STREQUAL "")
+        install(FILES "${_amnezia_install_publication_grant}"
+            DESTINATION "selfhosted_updates"
+            COMPONENT AmneziaVPN
+            RENAME "install-publication-grant.json"
+        )
+    endif()
 endif()
 
 if (APPLE AND NOT IOS AND NOT MACOS_NE)

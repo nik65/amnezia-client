@@ -6643,47 +6643,100 @@ class ManifestPublisherTests(unittest.TestCase):
             )
             return result.returncode == 0
 
-    def test_install_publication_is_signed_and_requires_local_windows_artifact(self) -> None:
+    def test_install_publication_grant_is_separate_signed_and_bound(self) -> None:
         version = "9.9.9.9"
         artifact = self.write_artifact(f"AmneziaVPN_{version}_windows_x64.exe", b"windows")
         out_dir = self.root / "publish-on-install"
+        grant = self.root / "grant" / "install-publication-grant.json"
+        host = "release.example.invalid"
+        tool = [sys.executable, str(SCRIPT_DIR / "make_manifest.py")]
         command = [
-            sys.executable, str(SCRIPT_DIR / "make_manifest.py"),
-            "--version", version,
-            "--base-url", "https://updates.example.invalid",
-            "--private-key", str(self.private_key),
-            "--out-dir", str(out_dir),
+            *tool, "--version", version, "--base-url", "https://updates.example.invalid",
+            "--private-key", str(self.private_key), "--public-key-base64", self.public_key_base64,
         ]
-        flags = ["--publish-on-install", "release.example.invalid"]
-        for artifact_arg, publish_args, error in (
-            (f"linux-x64={artifact}", flags, "requires a local Windows x64 artifact"),
-            (f"windows-x64={artifact}", ["--publish-on-install", "ssh://release.example.invalid"], "requires an exact SSH host"),
+        native_args = ["--publish-on-install", host, "--install-publication-grant-out", str(grant)]
+        for artifact_arg, options, error in (
+            (f"linux-x64={artifact}", native_args, "requires a local Windows x64 artifact"),
+            (f"windows-x64={artifact}", ["--publish-on-install", "ssh://release.example.invalid",
+                                        "--install-publication-grant-out", str(grant)], "requires an exact SSH host"),
+            (f"windows-x64={artifact}", ["--publish-on-install", host], "must be supplied together"),
+            (f"windows-x64={artifact}", ["--install-publication-grant-out", str(grant)], "must be supplied together"),
+            (f"windows-x64={artifact}", ["--publish-on-install", host, "--install-publication-grant-out",
+                                        str(out_dir / grant.name)], "must be outside the consumer bundle"),
         ):
             with self.subTest(error=error):
                 rejected = subprocess.run(
-                    [*command, "--artifact", artifact_arg, *publish_args],
+                    [*command, "--out-dir", str(out_dir), "--artifact", artifact_arg, *options],
                     env=self.env, capture_output=True, text=True,
                 )
                 self.assertNotEqual(rejected.returncode, 0)
                 self.assertIn(error, rejected.stderr)
                 self.assertFalse((out_dir / "manifest.json").exists())
+                self.assertFalse(grant.exists())
 
-        subprocess.run(
-            [*command, "--artifact", f"windows-x64={artifact}", *flags],
-            env=self.env, capture_output=True, text=True, check=True,
+        standard_dir = self.root / "ordinary-bundle"
+        for directory, options in ((standard_dir, []), (out_dir, native_args)):
+            subprocess.run(
+                [*command, "--out-dir", str(directory), "--artifact", f"windows-x64={artifact}", *options],
+                env=self.env, capture_output=True, text=True, check=True,
+            )
+        self.assertEqual(
+            {path.relative_to(out_dir): path.read_bytes() for path in out_dir.rglob("*") if path.is_file()},
+            {path.relative_to(standard_dir): path.read_bytes() for path in standard_dir.rglob("*") if path.is_file()},
         )
-        envelope = json.loads((out_dir / "manifest.json").read_bytes())
+        manifest = out_dir / "manifest.json"
+        payload, signed_manifest, manifest_sig = make_manifest.decode_manifest_envelope(manifest.read_bytes())
+        self.assertNotIn("publishOnInstall", payload)
+        self.assertTrue(self.signature_verifies(signed_manifest, manifest_sig))
+        publisher = SCRIPT_DIR / "publish_bundled_release.sh"
+        exact_grant = grant.read_bytes()
+        envelope = json.loads(exact_grant)
+        self.assertEqual(envelope["schema"], "amnezia-install-publication-grant-v1")
         encoded = envelope["payload"]
         signed = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
-        payload = json.loads(signed)
-        publisher = SCRIPT_DIR / "publish_bundled_release.sh"
-        self.assertEqual(payload["publishOnInstall"], {
-            "sshHost": "release.example.invalid",
+        domain = b"amnezia-install-publication-grant-v1\n"
+        self.assertTrue(signed.startswith(domain))
+        self.assertEqual(json.loads(signed[len(domain):]), {
+            "manifestSha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            "sshHost": host,
             "publisherSha256": hashlib.sha256(publisher.read_bytes()).hexdigest(),
         })
         self.assertTrue(self.signature_verifies(signed, envelope["signature"]))
-        payload["publishOnInstall"]["sshHost"] = "other.example.invalid"
-        self.assertFalse(self.signature_verifies(json.dumps(payload).encode(), envelope["signature"]))
+        self.assertFalse(self.signature_verifies(signed[len(domain):], envelope["signature"]))
+
+        verify = [
+            *tool, "verify-install-publication-grant", "--grant", str(grant),
+            "--public-key-base64", self.public_key_base64,
+        ]
+        def verify_with(candidate_manifest=manifest, candidate_publisher=publisher, candidate_host=host):
+            return subprocess.run(
+                [*verify, "--manifest", str(candidate_manifest), "--publisher", str(candidate_publisher),
+                 "--ssh-host", candidate_host],
+                env=self.env, capture_output=True, text=True,
+            )
+
+        verified = verify_with()
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        self.assertNotEqual(verify_with(candidate_host="other.example.invalid").returncode, 0)
+        changed_manifest = self.write_artifact("same-payload-different-envelope.json", manifest.read_bytes() + b" ")
+        self.assertNotEqual(verify_with(candidate_manifest=changed_manifest).returncode, 0)
+        changed_publisher = self.write_artifact("changed-publisher.sh", publisher.read_bytes() + b"\n")
+        self.assertNotEqual(verify_with(candidate_publisher=changed_publisher).returncode, 0)
+        for grant_variant in (
+            exact_grant + b"\n",
+            exact_grant.replace(b'{"payload":', b'{"payload":"duplicate","payload":', 1),
+            json.dumps({**envelope, "signature": base64.b64encode(b"\x00" * 64).decode()},
+                       sort_keys=True, separators=(",", ":")).encode(),
+        ):
+            grant.write_bytes(grant_variant)
+            self.assertNotEqual(verify_with().returncode, 0)
+        grant.write_bytes(exact_grant)
+        rejected = subprocess.run(
+            [*command, "--out-dir", str(out_dir), "--artifact", f"windows-x64={artifact}", *native_args],
+            env=self.env, capture_output=True, text=True,
+        )
+        self.assertIn("already exists", rejected.stderr)
+        self.assertEqual(grant.read_bytes(), exact_grant)
 
     def test_manifest_schema_one_stays_compatible_and_rejects_restrictive_policy(self) -> None:
         version = "9.9.9.9"

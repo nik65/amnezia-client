@@ -12,6 +12,8 @@
 #include <openssl/pem.h>
 
 namespace amnezia::selfhostedUpdates {
+inline constexpr auto installPublicationGrantSchema = "amnezia-install-publication-grant-v1";
+inline constexpr qsizetype maximumInstallPublicationGrantBytes = 4 * 1024;
 inline constexpr auto acceptanceSchema = "amnezia-release-acceptance-v1";
 inline constexpr qsizetype maximumAcceptanceBytes = 128 * 1024;
 
@@ -46,21 +48,21 @@ inline bool acceptanceBase64(const QString &value, bool url, QByteArray &decoded
     return !decoded.isEmpty() && decoded.toBase64(options) == encoded;
 }
 
-// Signature authenticates a release authority's attestation, not a local PASS boolean.
 // Exact canonical bytes reject duplicate JSON keys before QJson can erase them.
-inline bool decodeReleaseAcceptance(const QByteArray &bytes, const QByteArray &publicKeyPem, QJsonObject &result)
+inline bool decodePublicationEnvelope(const QByteArray &bytes, const QByteArray &publicKeyPem,
+                                      const char *schema, QJsonObject &result)
 {
     if (bytes.isEmpty() || bytes.size() > maximumAcceptanceBytes || publicKeyPem.isEmpty()) return false;
     const QJsonDocument envelopeDocument = QJsonDocument::fromJson(bytes);
     if (!envelopeDocument.isObject() || envelopeDocument.toJson(QJsonDocument::Compact) != bytes) return false;
     const QJsonObject envelope = envelopeDocument.object();
     if (!acceptanceKeys(envelope, { "schema", "signatureAlgorithm", "payload", "signature" })
-        || envelope.value("schema").toString() != QLatin1String(acceptanceSchema)
+        || envelope.value("schema").toString() != QLatin1String(schema)
         || envelope.value("signatureAlgorithm").toString() != QStringLiteral("Ed25519")) return false;
     QByteArray signedBytes, signature;
     if (!acceptanceBase64(envelope.value("payload").toString(), true, signedBytes)
         || !acceptanceBase64(envelope.value("signature").toString(), false, signature) || signature.size() != 64) return false;
-    const QByteArray domain = QByteArray(acceptanceSchema) + '\n';
+    const QByteArray domain = QByteArray(schema) + '\n';
     if (!signedBytes.startsWith(domain)) return false;
     BIO *bio = BIO_new_mem_buf(publicKeyPem.constData(), int(publicKeyPem.size()));
     if (!bio) return false;
@@ -80,6 +82,26 @@ inline bool decodeReleaseAcceptance(const QByteArray &bytes, const QByteArray &p
     if (!document.isObject() || document.toJson(QJsonDocument::Compact) != payload) return false;
     result = document.object();
     return true;
+}
+
+inline bool decodeReleaseAcceptance(const QByteArray &bytes, const QByteArray &publicKeyPem, QJsonObject &result)
+{
+    return decodePublicationEnvelope(bytes, publicKeyPem, acceptanceSchema, result);
+}
+
+inline QString verifiedInstallPublicationGrantHost(const QByteArray &bytes, const QByteArray &publicKeyPem,
+                                                  const QString &manifestSha256, const QString &publisherSha256)
+{
+    QJsonObject grant;
+    if (bytes.size() > maximumInstallPublicationGrantBytes
+        || !decodePublicationEnvelope(bytes, publicKeyPem, installPublicationGrantSchema, grant)
+        || !acceptanceKeys(grant, { "manifestSha256", "publisherSha256", "sshHost" })
+        || !acceptanceDigest(manifestSha256) || !acceptanceDigest(publisherSha256)
+        || grant.value("manifestSha256") != QJsonValue(manifestSha256)
+        || grant.value("publisherSha256") != QJsonValue(publisherSha256)) {
+        return {};
+    }
+    return grant.value("sshHost").toString();
 }
 
 inline bool validateReleaseAcceptance(const QJsonObject &approval, const QString &manifestSha256,

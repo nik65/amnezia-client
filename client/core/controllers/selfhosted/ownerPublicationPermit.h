@@ -4,7 +4,7 @@
 #include <QDir>
 
 namespace amnezia::selfhostedUpdates {
-enum class PublicationAuthorization { FullAccepted, OwnerUnverified13, SignedInstallManifest };
+enum class PublicationAuthorization { FullAccepted, OwnerUnverified13, SignedInstallGrant };
 inline constexpr auto ownerPublicationPermitSchema = "amnezia-owner-publication-permit-v1";
 
 inline bool decodeOwnerPublicationPermit(const QByteArray &bytes, const QByteArray &publicKeyPem, QJsonObject &result)
