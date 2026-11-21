@@ -485,7 +485,7 @@ void CoreController::scheduleGuardianConnectivityProbe(int delayMs)
             return;
         }
 
-        QUrl guardianProbeEndpoint(m_appSettingsRepository->getGatewayEndpoint());
+        QUrl guardianProbeEndpoint(m_appSettingsRepository->gatewayEnvironment().endpoint);
         // The production gateway historically defaults to plain HTTP for the
         // legacy API transport. Guardian needs an authenticated origin before
         // it may treat a successful exchange as meaningful health evidence.

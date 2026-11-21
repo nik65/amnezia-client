@@ -28,13 +28,6 @@ import org.json.JSONObject
 private const val TAG = "Xray"
 private const val LIBXRAY_TAG = "libXray"
 
-internal fun xrayEndpointBypassRoute(hostName: String): InetNetwork? {
-    val endpoint = parseInetAddress(hostName)
-    // Android rejects loopback routes. A local relay already uses the local loopback path;
-    // only a remote server endpoint needs an exact physical-network bypass route.
-    return if (endpoint.isLoopbackAddress) null else InetNetwork(endpoint)
-}
-
 private fun findSocksInboundIndex(inbounds: JSONArray): Int {
     for (i in 0 until inbounds.length()) {
         val o = inbounds.optJSONObject(i) ?: continue
@@ -132,9 +125,6 @@ class Xray : Protocol() {
 
             addRoute(InetNetwork("0.0.0.0", 0))
             addRoute(InetNetwork("2000::0", 3))
-            config.getString("hostName").let {
-                xrayEndpointBypassRoute(it)?.let { endpoint -> excludeRoute(endpoint) }
-            }
 
             config.optString("mtu").let {
                 if (it.isNotBlank()) setMtu(it.toInt())

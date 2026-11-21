@@ -2,6 +2,7 @@
     <qresource prefix="/ui/qml">
         <file>Components/ChangelogDrawer.qml</file>
         <file>Components/CopyableValueRow.qml</file>
+        <file>Components/CascadeSettings.qml</file>
         <file>Components/ConfigContentSheet.qml</file>
         <file>Components/QrCodeCard.qml</file>
         <file>Components/ShareClientInfoSheet.qml</file>

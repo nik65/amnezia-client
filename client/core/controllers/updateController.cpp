@@ -2702,7 +2702,7 @@ bool UpdateController::checkForUpdates()
 
     if (isSelfHostedUpdateChannelConfigured()) {
         fetchSelfHostedManifest();
-    } else if (!GatewayController::hasConfiguredPublicKey(m_appSettingsRepository->isDevGatewayEnv())) {
+    } else if (!GatewayController::hasConfiguredPublicKey(m_appSettingsRepository->gatewayEnvironment())) {
         logger.info() << "Gateway update channel is unavailable because its selected RSA key is not configured";
         finishUpdateCheck();
     } else {
@@ -2850,11 +2850,9 @@ void UpdateController::doGetAsync(const QString &endpoint, std::function<void(bo
 void UpdateController::fetchGatewayUrl()
 {
     const quint64 generation = m_updateCheckGeneration;
-    auto gatewayController = QSharedPointer<GatewayController>::create(m_appSettingsRepository->getGatewayEndpoint(),
-                                                                       m_appSettingsRepository->isDevGatewayEnv(),
-                                                                       apiDefs::requestTimeoutMsecs,
-                                                                       m_appSettingsRepository->isStrictKillSwitchEnabled(),
-                                                                       m_appSettingsRepository);
+    auto gatewayController = QSharedPointer<GatewayController>::create(
+            m_appSettingsRepository->gatewayEnvironment(), apiDefs::requestTimeoutMsecs,
+            m_appSettingsRepository->isStrictKillSwitchEnabled(), m_appSettingsRepository);
     if (!gatewayController->isAvailable()) {
         logger.info() << "Gateway update channel is unavailable because its client configuration could not be initialized";
         finishUpdateCheck();

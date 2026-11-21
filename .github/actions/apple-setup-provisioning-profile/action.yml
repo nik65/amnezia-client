@@ -21,7 +21,6 @@ runs:
           exit 0
         fi
 
-        PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
         TEMP_FILE=$(mktemp)
 
         printf '%s' "$PROVISIONING_PROFILE_BASE64" | base64 --decode > "$TEMP_FILE"
@@ -33,6 +32,12 @@ runs:
           exit 1
         fi
 
-        mkdir -p "$PROFILES_DIR"
-        mv "$TEMP_FILE" "$PROFILES_DIR/$PROFILE_UUID.mobileprovision"
-        echo "Installed profile: $PROFILE_UUID"
+        PROFILE_EXTENSION=mobileprovision
+        grep -aq "<string>OSX</string>" "$TEMP_FILE" && PROFILE_EXTENSION=provisionprofile
+
+        for PROFILES_DIR in "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+          mkdir -p "$PROFILES_DIR"
+          cp "$TEMP_FILE" "$PROFILES_DIR/$PROFILE_UUID.$PROFILE_EXTENSION"
+        done
+        rm -f "$TEMP_FILE"
+        echo "Installed profile: $PROFILE_UUID.$PROFILE_EXTENSION"

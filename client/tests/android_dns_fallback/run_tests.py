@@ -66,17 +66,17 @@ object Log {fun i(tag:String,message:String){};fun w(tag:String,message:String){
 source=(a.xray_source or root/'client/android/xray/src/main/kotlin/Xray.kt').read_text(encoding='utf8')
 stop=method(source,'fun stopVpnVerified(): Boolean')
 helper=method(source,'private fun String?.isNotNullOrBlank(')
-endpoint=method(source,'internal fun xrayEndpointBypassRoute(')
-assert 'xrayEndpointBypassRoute(it)?.let { endpoint -> excludeRoute(endpoint) }' in method(source,'private fun parseConfig(')
-(a.output/'XrayEndpointFixture.kt').write_text('''package org.amnezia.vpn.protocol.xray
-import org.amnezia.vpn.util.net.InetNetwork
-import org.amnezia.vpn.util.net.parseInetAddress
-'''+endpoint)
-(a.output/'InetAddressFixture.kt').write_text('''package org.amnezia.vpn.util.net
-import java.net.InetAddress
-fun parseInetAddress(address:String):InetAddress=InetAddress.getByName(address)
-val InetAddress.ip:String get()=hostAddress.orEmpty()
-''')
+vpn_config = method(source, 'private fun parseConfig(')
+assert 'hostName' not in vpn_config and 'excludeRoute(' not in vpn_config
+assert 'addRoute(InetNetwork("0.0.0.0", 0))' in vpn_config
+assert 'addRoute(InetNetwork("2000::0", 3))' in vpn_config
+assert 'configSplitTunneling(config)' in vpn_config
+assert 'configAppSplitTunneling(config)' in vpn_config
+native_start = method(source, 'private fun start(config:')
+assert (native_start.index('DialerController { protect(it.toInt()) }')
+        < native_start.index('LibXray.registerDialerController(it)')
+        < native_start.index('LibXray.registerListenerController(it)')
+        < native_start.index('LibXray.runXray('))
 (a.output/'XrayFixture.kt').write_text('''package org.amnezia.vpn.protocol.xray
 import android.net.VpnService
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -161,9 +161,8 @@ fun runOwnerStopTests():Int {
 ''')
 sources=[(a.resolver_source if name == 'DnsResolverSelection.kt' and a.resolver_source else root/'client/android/src/org/amnezia/vpn'/name) for name in ['DnsFallbackPolicy.kt','DnsResolverSelection.kt','DnsFallbackTransport.kt','DnsFallbackProtocol.kt','DnsVlessTls.kt','DnsTunnelReadiness.kt']]
 sources += [root/'client/android/xray/src/main/kotlin/XrayNativeRuntime.kt']
-sources += [root/'client/android/utils/src/main/kotlin/net/InetNetwork.kt']
 sources += [root/'client/android/protocolApi/src/main/kotlin'/name for name in ['NativeSessionBinding.kt','ProtocolState.kt','DnsSessionOwner.kt','DnsTransportNoticeGate.kt']]
-sources += [a.output/name for name in ['ProtocolFixture.kt','LogFixture.kt','XrayFixture.kt','OwnerStopFixture.kt','XrayEndpointFixture.kt','InetAddressFixture.kt']]+[Path(__file__).with_name('PolicyTest.kt'),Path(__file__).with_name('DnsResolverSelectionTest.kt'),Path(__file__).with_name('DnsRestoreTest.kt'),Path(__file__).with_name('XrayNativeRuntimeTest.kt'),Path(__file__).with_name('XrayEndpointRouteTest.kt'),Path(__file__).with_name('DnsTunnelReadinessTest.kt')]
+sources += [a.output/name for name in ['ProtocolFixture.kt','LogFixture.kt','XrayFixture.kt','OwnerStopFixture.kt']]+[Path(__file__).with_name('PolicyTest.kt'),Path(__file__).with_name('DnsResolverSelectionTest.kt'),Path(__file__).with_name('DnsRestoreTest.kt'),Path(__file__).with_name('XrayNativeRuntimeTest.kt'),Path(__file__).with_name('DnsTunnelReadinessTest.kt')]
 sep=os.pathsep;cp=sep.join(map(str,[stdlib,annotations,coroutines,jsonjar,android]));target=a.output/'fallback-tests.jar'
 java=Path.home()/'devtools/jdk-17/bin/java.exe'
 cmd=[str(java),'-Xmx384m','-cp',sep.join(map(str,compiler)),'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler','-no-stdlib','-no-reflect','-classpath',cp,'-d',str(target),*map(str,sources)]

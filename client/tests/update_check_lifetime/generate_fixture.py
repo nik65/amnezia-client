@@ -107,11 +107,12 @@ protected:
 };
 struct FakeApplication {FakeManager manager;FakeManager *networkManager(){return &manager;}};
 FakeApplication *amnApp=nullptr;
+struct GatewayEnvironment { QString endpoint; };
 struct Settings {
- QString getGatewayEndpoint()const{return "https://gateway.invalid";}
- bool isDevGatewayEnv()const{return false;}
+ GatewayEnvironment gatewayEnvironment()const{return {"https://gateway.invalid"};}
  bool isStrictKillSwitchEnabled()const{return false;}
 };
+namespace apiDefs { inline constexpr int requestTimeoutMsecs=6000; }
 namespace apiDefs::key { inline const QString cliVersion="cli_version"; }
 struct GatewayPayloadBuilder {
  explicit GatewayPayloadBuilder(Settings*){}
@@ -121,9 +122,11 @@ struct GatewayPayloadBuilder {
 using GatewayResult=QPair<ErrorCode,QByteArray>;
 struct PendingGateway {std::shared_ptr<QPromise<GatewayResult>> promise;bool completed=false;};
 std::vector<PendingGateway> pendingGateway;
+bool gatewayClientAvailable=true;
 class GatewayController:public QObject {
 public:
- GatewayController(const QString&,bool,int,bool,Settings*){}
+ GatewayController(const GatewayEnvironment&,int,bool,Settings*){}
+ bool isAvailable()const{return gatewayClientAvailable;}
  QFuture<GatewayResult> postAsync(const QString&,const QJsonObject&){
   auto promise=std::make_shared<QPromise<GatewayResult>>();promise->start();
   pendingGateway.push_back({promise,false});return promise->future();
@@ -181,8 +184,13 @@ FakeReply *lastReply(FakeApplication &application){
 }
 void gatewayCase(const QString &name){
  auto controller=std::make_unique<UpdateController>();
+ gatewayClientAvailable=name!="gateway-unavailable";
  controller->fetchGatewayUrl();
- if(name=="gateway-delayed-invalidated"){
+ if(name=="gateway-unavailable"){
+  events(1150);
+  check(pendingGateway.empty()&&!controller->m_updateCheckRunning&&controller->finishCalls==1&&controller->versionCalls==0,
+        "unavailable gateway finishes without issuing network request");
+ }else if(name=="gateway-delayed-invalidated"){
   ++controller->m_updateCheckGeneration;controller->m_updateCheckRunning=false;events(1150);
   check(pendingGateway.empty(),"timed-out delayed start must not issue gateway request");
  }else{

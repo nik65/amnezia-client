@@ -34,7 +34,7 @@ else()
     endif()
 endif()
 include(CTest)
-foreach(CASE IN ITEMS gateway-delayed-invalidated gateway-stale-success gateway-stale-error gateway-current
+foreach(CASE IN ITEMS gateway-delayed-invalidated gateway-stale-success gateway-stale-error gateway-current gateway-unavailable
     manifest-exact manifest-overflow manifest-declared manifest-final-only manifest-destroy-owner
     manifest-destroy-reply manifest-leak metadata-exact metadata-overflow metadata-declared metadata-stale
     metadata-destroy-owner metadata-destroy-reply bootstrap-retry-delete bootstrap-exhausted-delete

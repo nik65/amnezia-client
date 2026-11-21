@@ -9,6 +9,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "core/utils/commonStructs.h"
 #include "core/utils/errorCodes.h"
 
 #include "agw.h"
@@ -20,12 +21,12 @@ class GatewayController : public QObject
     Q_OBJECT
 
 public:
-    explicit GatewayController(const QString &gatewayEndpoint, const bool isDevEnvironment, const int requestTimeoutMsecs,
+    explicit GatewayController(const amnezia::GatewayEnvironment &environment, const int requestTimeoutMsecs,
                                const bool isStrictKillSwitchEnabled, SecureAppSettingsRepository *appSettingsRepository = nullptr,
                                QObject *parent = nullptr);
     ~GatewayController() override;
 
-    static bool hasConfiguredPublicKey(bool isDevEnvironment);
+    static bool hasConfiguredPublicKey(const amnezia::GatewayEnvironment &environment);
     bool isAvailable() const;
 
     amnezia::ErrorCode post(const QString &endpoint, const QJsonObject apiPayload, QByteArray &responseBody);

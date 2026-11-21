@@ -232,6 +232,9 @@ PageType {
         }
 
         function onBackgroundPurchaseCompleted(message) {
+            if (!root.isTabBarShown) {
+                PageController.goToPageHome()
+            }
             PageController.showNotificationMessage(message)
         }
 

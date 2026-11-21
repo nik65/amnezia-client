@@ -1,6 +1,7 @@
 #ifndef COMMONSTRUCTS_H
 #define COMMONSTRUCTS_H
 
+#include <QByteArray>
 #include <QString>
 #include "core/utils/routeModes.h"
 
@@ -38,6 +39,15 @@ namespace amnezia
     {
         QString primaryDns;
         QString secondaryDns;
+    };
+
+    struct GatewayEnvironment
+    {
+        QString endpoint;
+        QByteArray publicKey;
+        QString primaryProxyStorages;
+        QString fallbackProxyStorages;
+        bool isDev = false;
     };
 
     struct SplitTunnelingSettings

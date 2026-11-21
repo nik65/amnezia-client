@@ -17,15 +17,13 @@
 using namespace amnezia;
 
 namespace {
-    constexpr char gatewayEndpoint[] = "http://gw.amnezia.org:80/";
+    constexpr char prodGatewayEndpoint[] = "http://gw.amnezia.org:80/";
     constexpr char proxyUrlsKey[] = "Conf/proxyUrls/";
 }
 
 SecureAppSettingsRepository::SecureAppSettingsRepository(SecureQSettings* settings, QObject *parent)
     : QObject(parent), m_settings(settings)
 {
-    QString storedEndpoint = value("Conf/gatewayEndpoint", gatewayEndpoint).toString();
-    m_gatewayEndpoint = storedEndpoint.isEmpty() ? gatewayEndpoint : storedEndpoint;
 }
 
 QVariant SecureAppSettingsRepository::value(const QString &key, const QVariant &defaultValue) const
@@ -271,35 +269,71 @@ void SecureAppSettingsRepository::setAppsSplitTunnelingEnabled(bool enabled)
     emit appsSplitTunnelingEnabledChanged(enabled);
 }
 
-QString SecureAppSettingsRepository::getGatewayEndpoint(bool isTestPurchase) const
+GatewayEnvironment SecureAppSettingsRepository::gatewayEnvironment(bool isTestPurchase) const
 {
     if (isTestPurchase) {
-        return QString(DEV_AGW_ENDPOINT);
+        const QByteArray sandboxKey(SANDBOX_AGW_PUBLIC_KEY_B64);
+        const QString sandboxEndpoint = QString::fromUtf8(SANDBOX_AGW_ENDPOINT);
+        const QString sandboxProxyStorages = QString::fromUtf8(SANDBOX_S3_ENDPOINT);
+        if (sandboxKey.isEmpty() && sandboxEndpoint.isEmpty() && sandboxProxyStorages.isEmpty()) {
+            // Old fork deployments used the configured legacy dev tuple for test purchases.
+            return { QString::fromUtf8(DEV_AGW_ENDPOINT), QByteArray(DEV_AGW_PUBLIC_KEY),
+                     QString::fromUtf8(DEV_S3_ENDPOINT), {}, true };
+        }
+        return { sandboxEndpoint, QByteArray::fromBase64(sandboxKey, QByteArray::AbortOnBase64DecodingErrors),
+                 sandboxProxyStorages, {}, true };
     }
-    return m_gatewayEndpoint;
+    if (isDevGatewayEnv()) {
+        // Only use legacy settings when none of the new tuple has been stored.
+        // An explicitly incomplete new tuple must never inherit an unrelated key.
+        if (!value("Conf/devGatewayEndpoint").isValid() && !value("Conf/devGatewayPublicKey").isValid()
+                && !value("Conf/devGatewayProxyStorages").isValid()) {
+            const QString legacyEndpoint = value("Conf/gatewayEndpoint").toString();
+            return { legacyEndpoint.isEmpty() ? QString::fromUtf8(DEV_AGW_ENDPOINT) : legacyEndpoint,
+                     QByteArray(DEV_AGW_PUBLIC_KEY), QString::fromUtf8(DEV_S3_ENDPOINT), {}, true };
+        }
+        return { devGatewayEndpoint(),
+                 QByteArray::fromBase64(devGatewayPublicKey().toUtf8(), QByteArray::AbortOnBase64DecodingErrors),
+                 devGatewayProxyStorages(), {}, true };
+    }
+    const QByteArray productionKey(PROD_AGW_PUBLIC_KEY_B64);
+    if (productionKey.isEmpty()) {
+        const QString legacyEndpoint = value("Conf/gatewayEndpoint").toString();
+        const bool useLegacyEndpoint = !legacyEndpoint.isEmpty()
+                && legacyEndpoint != QString::fromUtf8(DEV_AGW_ENDPOINT);
+        return { useLegacyEndpoint ? legacyEndpoint : QString::fromUtf8(prodGatewayEndpoint),
+                 QByteArray(PROD_AGW_PUBLIC_KEY), PROD_S3_ENDPOINT, FALLBACK_S3_ENDPOINT, false };
+    }
+    return { prodGatewayEndpoint, QByteArray::fromBase64(productionKey, QByteArray::AbortOnBase64DecodingErrors),
+             PROD_S3_ENDPOINT, FALLBACK_S3_ENDPOINT, false };
 }
 
-void SecureAppSettingsRepository::setGatewayEndpoint(const QString &endpoint)
+QString SecureAppSettingsRepository::devGatewayEndpoint() const
 {
-    m_gatewayEndpoint = endpoint;
-    setValue("Conf/gatewayEndpoint", endpoint);
+    return value("Conf/devGatewayEndpoint").toString();
 }
 
-void SecureAppSettingsRepository::resetGatewayEndpoint()
+QString SecureAppSettingsRepository::devGatewayProxyStorages() const
 {
-    m_gatewayEndpoint = gatewayEndpoint;
-    setValue("Conf/gatewayEndpoint", gatewayEndpoint);
+    return value("Conf/devGatewayProxyStorages").toString();
 }
 
-void SecureAppSettingsRepository::setDevGatewayEndpoint()
+QString SecureAppSettingsRepository::devGatewayPublicKey() const
 {
-    m_gatewayEndpoint = QString(DEV_AGW_ENDPOINT);
-    setValue("Conf/gatewayEndpoint", DEV_AGW_ENDPOINT);
+    return value("Conf/devGatewayPublicKey").toString();
 }
 
-bool SecureAppSettingsRepository::isDevGatewayEnv(bool isTestPurchase) const
+void SecureAppSettingsRepository::setDevGatewayConfig(const QString &endpoint, const QString &proxyStorages,
+                                                      const QString &publicKey)
 {
-    return isTestPurchase ? true : value("Conf/devGatewayEnv", false).toBool();
+    setValue("Conf/devGatewayEndpoint", endpoint);
+    setValue("Conf/devGatewayProxyStorages", proxyStorages);
+    setValue("Conf/devGatewayPublicKey", publicKey);
+}
+
+bool SecureAppSettingsRepository::isDevGatewayEnv() const
+{
+    return value("Conf/devGatewayEnv", false).toBool();
 }
 
 void SecureAppSettingsRepository::toggleDevGatewayEnv(bool enabled)

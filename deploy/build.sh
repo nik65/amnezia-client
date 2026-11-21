@@ -46,6 +46,7 @@ while [[ $# -gt 0 ]]; do
         --aab)              : ${BUILD_AAB=true};     shift   ;;
         --apk)              : ${BUILD_APK=true};     shift   ;;
         --play)             : ${BUILD_PLAY=true};    shift   ;;
+        --configure-only)   : ${CONFIGURE_ONLY=true}; shift  ;;
         --help|-h|?)
             echo "Usage: $0 [options]"
             echo "  Options:"
@@ -61,6 +62,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --aab                     - whether to build AAB. only applicable to Android"
             echo "  --apk                     - whether to build APK. use with --play. only applicable to Android"
             echo "  --play                    - build Play flavor (Google Play Billing). use with --aab or --apk. only applicable to Android"
+            echo "  --configure-only          - run CMake configure and skip the build"
             exit 0
             ;;
         *) echo "Unknown arg \"$1\". Use $0 -h to get help"; exit 1 ;;
@@ -237,6 +239,7 @@ if [[ -n "$FORCE" ]]; then
 fi
 
 run_traced cmake -S "$SOURCE_PATH" -B "$BUILD_PATH" "${args[@]}"
+[[ -n "$CONFIGURE_ONLY" ]] && exit 0
 if [[ "$TARGET" == "android" && "$QT_ANDROID_BUILD_ALL_ABIS" == "TRUE" ]]; then
     for configure_target in \
         qt_internal_android_armeabi-v7a_configure \

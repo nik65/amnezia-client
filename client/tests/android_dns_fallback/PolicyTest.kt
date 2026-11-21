@@ -64,7 +64,6 @@ fun main() {
     assertions += org.amnezia.vpn.ownerstop.runOwnerStopTests()
     assertions += runDnsRestoreContracts()
     assertions += org.amnezia.vpn.protocol.xray.runXrayNativeRuntimeTests()
-    assertions += org.amnezia.vpn.protocol.xray.runXrayEndpointRouteTests()
     assertions += runDnsTunnelReadinessTests()
     assertions += runDnsResolverSelectionTests()
     println("$assertions checks passed; actual policy, descriptor and native-stop method; no app build")

@@ -93,6 +93,7 @@ android {
             storePassword = releaseStorePassword
             keyAlias = releaseKeyAlias
             keyPassword = releaseKeyPassword?.takeIf { it.isNotEmpty() } ?: releaseStorePassword
+            enableV3Signing = true
         }
     }
 
@@ -150,7 +151,7 @@ android {
             isEnable = abiList.size > 1
             reset()
             include(*abiList.toTypedArray())
-            isUniversalApk = false
+            isUniversalApk = true
         }
     }
 
@@ -161,7 +162,8 @@ android {
             outputs.map { it as BaseVariantOutputImpl }
                 .forEach { output ->
                     if (output.outputFileName.endsWith(".apk")) {
-                        output.outputFileName = "$outputBaseName-${buildType.name}.apk"
+                        output.outputFileName = listOfNotNull(outputBaseName, output.getFilter("ABI"), buildType.name)
+                            .joinToString("-", postfix = ".apk")
                     }
                 }
         }
@@ -182,6 +184,8 @@ android {
             val base = outputBaseName.ifEmpty { "android-build" }
             val unsignedSuffix = if (buildTypeName == "release") "-unsigned" else ""
 
+            val universalOutput = outputs.map { it as BaseVariantOutputImpl }.first { it.getFilter("ABI") == null }
+
             packageApplicationProvider.configure {
                 doLast {
                     val srcDir = layout.buildDirectory.dir("outputs/apk/oss/$buildTypeName").get().asFile
@@ -189,10 +193,9 @@ android {
                     val qtDstDir = layout.buildDirectory.dir("outputs/apk/$buildTypeName").get().asFile
                     dstDir.mkdirs()
                     qtDstDir.mkdirs()
-                    srcDir.listFiles()?.filter { it.name.endsWith(".apk") }?.forEach { apk ->
-                        apk.copyTo(File(dstDir, "$base-$buildTypeName$unsignedSuffix.apk"), overwrite = true)
-                        apk.copyTo(File(qtDstDir, "$base-$buildTypeName$unsignedSuffix.apk"), overwrite = true)
-                    }
+                    val apk = File(srcDir, universalOutput.outputFileName)
+                    apk.copyTo(File(dstDir, "$base-$buildTypeName$unsignedSuffix.apk"), overwrite = true)
+                    apk.copyTo(File(qtDstDir, "$base-$buildTypeName$unsignedSuffix.apk"), overwrite = true)
                 }
             }
 
