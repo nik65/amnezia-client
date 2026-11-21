@@ -224,8 +224,7 @@ bool KillSwitch::disableAllTraffic() {
 
 bool KillSwitch::resetAllowedRange(const QStringList &ranges) {
 #ifdef Q_OS_LINUX
-    if (!LinuxFirewall::updateAllowNets(ranges)) return false;
-    if (!LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("110.allowNets"), true)) return false;
+    if (!LinuxFirewall::setKillSwitchAllowedNetworks(ranges, isStrictKillSwitchEnabled())) return false;
     m_allowedRanges = ranges;
 #endif
 

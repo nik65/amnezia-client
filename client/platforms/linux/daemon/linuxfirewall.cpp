@@ -1818,15 +1818,39 @@ bool LinuxFirewall::updateDNSServers(const QStringList& servers)
     return replaceRules(IPv4, kFilterTable, kAnchorName + QStringLiteral(".320.allowDNS"), rules);
 }
 
+namespace {
+bool buildAllowNetworkRules(const QStringList& networks, QVector<QStringList>* rules)
+{
+    for (const QString& network : networks) {
+        QString address;
+        if (!ipv4Network(network, &address)) return false;
+        rules->append({QStringLiteral("-d"), address, QStringLiteral("-j"), QStringLiteral("ACCEPT")});
+    }
+    return true;
+}
+}
+
 bool LinuxFirewall::updateAllowNets(const QStringList& servers)
 {
     QVector<QStringList> rules;
-    for (const QString& server : servers) {
-        QString address;
-        if (!ipv4Network(server, &address)) return false;
-        rules.append({QStringLiteral("-d"), address, QStringLiteral("-j"), QStringLiteral("ACCEPT")});
+    return buildAllowNetworkRules(servers, &rules) &&
+           replaceRules(IPv4, kFilterTable, kAnchorName + QStringLiteral(".110.allowNets"), rules);
+}
+
+bool LinuxFirewall::setKillSwitchAllowedNetworks(const QStringList& networks, bool requireInstalled)
+{
+    QVector<QStringList> rules;
+    if (!buildAllowNetworkRules(networks, &rules)) return false;
+
+    Snapshot v4, v6;
+    if (!observeFirewall(IPv4, &v4) || !observeFirewall(IPv6, &v6)) return false;
+    if (!requireInstalled && namespaceAbsent(v4) && namespaceAbsent(v6)) return true;
+    if (!completeFirewall(v4, false) || !completeFirewall(v6, true)) {
+        logger.error() << "Cannot update kill-switch allowances without a complete firewall";
+        return false;
     }
-    return replaceRules(IPv4, kFilterTable, kAnchorName + QStringLiteral(".110.allowNets"), rules);
+    return replaceRules(IPv4, kFilterTable, kAnchorName + QStringLiteral(".110.allowNets"), rules) &&
+           setAnchorEnabled(IPv4, QStringLiteral("110.allowNets"), true);
 }
 
 bool LinuxFirewall::updateBlockNets(const QStringList& servers)

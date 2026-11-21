@@ -39,7 +39,7 @@ QString OpenVpnProtocol::defaultConfigPath()
     return p;
 }
 
-void OpenVpnProtocol::cleanupResources()
+bool OpenVpnProtocol::cleanupResources()
 {
     if (m_openVpnProcess || openVpnProcessIsRunning()) {
         if (!sendTermSignal()) {
@@ -50,12 +50,16 @@ void OpenVpnProtocol::cleanupResources()
     m_managementServer.stop();
 
 #if defined(Q_OS_WIN) || defined(Q_OS_LINUX) || defined(Q_OS_MACOS)
-    IpcClient::withInterface([](QSharedPointer<IpcInterfaceReplica> iface) {
+    const bool firewallReady = IpcClient::withInterface([](QSharedPointer<IpcInterfaceReplica> iface) {
         QRemoteObjectPendingReply<bool> reply = iface->disableKillSwitch();
-        if (!reply.waitForFinished(1000) || !reply.returnValue()) {
-            qWarning() << "OpenVpnProtocol::cleanupResources(): Failed to disable killswitch";
-        }
+        return reply.waitForFinished(1000) && reply.returnValue();
     });
+    if (!firewallReady) {
+        qWarning() << "OpenVpnProtocol::cleanupResources(): Failed to disable killswitch";
+    }
+    return firewallReady;
+#else
+    return true;
 #endif
 }
 
@@ -185,7 +189,14 @@ ErrorCode OpenVpnProtocol::start()
 {
     resetStopGuard();
 
+#if defined(Q_OS_LINUX)
+    if (!cleanupResources()) {
+        setLastError(ErrorCode::AmneziaServiceConnectionFailed);
+        return ErrorCode::AmneziaServiceConnectionFailed;
+    }
+#else
     cleanupResources();
+#endif
 
     if (!QFileInfo::exists(configPath())) {
         setLastError(ErrorCode::OpenVpnConfigMissing);
@@ -200,8 +211,15 @@ ErrorCode OpenVpnProtocol::start()
             return ErrorCode::AmneziaServiceConnectionFailed;
         }
         return ErrorCode::NoError;
+#if defined(Q_OS_LINUX)
+    }, [] {
+        return ErrorCode::AmneziaServiceConnectionFailed;
+#endif
     });
     if (res != ErrorCode::NoError) {
+#if defined(Q_OS_LINUX)
+        setLastError(res);
+#endif
         return res;
     }
 #endif

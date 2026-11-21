@@ -109,6 +109,9 @@ public:
     // observation. false after COMMIT is uncertain, not proof of rollback.
     static bool updateDNSServers(const QStringList& servers);
     static bool updateAllowNets(const QStringList& servers);
+    // A non-strict allowance can be skipped only if both families prove
+    // that the Amnezia firewall namespace is absent.
+    static bool setKillSwitchAllowedNetworks(const QStringList& networks, bool requireInstalled);
     static bool updateBlockNets(const QStringList& servers);
 };
 
