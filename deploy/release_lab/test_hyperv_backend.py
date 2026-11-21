@@ -257,7 +257,7 @@ class HyperVBackendContractTests(unittest.TestCase):
         self.assertNotIn('install-qga', helper.lower())
         max_bootstrap = 'b' * 96
         nonce = 'f' * 32
-        launcher = f'cmd /c "for %D in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %D:\\hyperv-seed-{nonce}.ps1 powershell.exe -NoProfile -ExecutionPolicy Bypass -File %D:\\hyperv-seed-{nonce}.ps1"'
+        launcher = f'cmd /c "for %D in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do if exist %D:\\hyperv-seed-{nonce}.ps1 powershell.exe -NoProfile -File %D:\\hyperv-seed-{nonce}.ps1"'
         command_xml = ElementTree.fromstring(f'<CommandLine>{launcher}</CommandLine>')
         self.assertLessEqual(len(command_xml.text), 256)
         self.assertIn('CommandLine exceeds the Windows 1024-character limit', provision)

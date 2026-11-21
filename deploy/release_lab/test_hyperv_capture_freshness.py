@@ -62,7 +62,7 @@ try {
         with tempfile.TemporaryDirectory(prefix="amnezia-capture-") as directory:
             command = Path(directory) / "test.ps1"
             command.write_text(script, encoding="utf-8")
-            result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(command), "-Adapter", str(root / "windows_host/hyperv_adapter.ps1"), "-Helper", str(root / "windows_host/hyperv_ui_helper.ps1"), "-Scratch", directory], capture_output=True, text=True, timeout=45)
+            result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-File", str(command), "-Adapter", str(root / "windows_host/hyperv_adapter.ps1"), "-Helper", str(root / "windows_host/hyperv_ui_helper.ps1"), "-Scratch", directory], capture_output=True, text=True, timeout=45)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("byte mismatch rejection PASS", result.stdout)
 

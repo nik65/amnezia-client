@@ -13,6 +13,7 @@
 #include <QThread>
 #include <QUrl>
 
+#include <functional>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -474,6 +475,7 @@ public:
     explicit SelfHostedUpdateBootstrapper(SecureServersRepository *serversRepository, QObject *parent = nullptr);
 
     bool start();
+    bool startAfterInstall();
     bool publishNow();
 
 signals:
@@ -494,6 +496,7 @@ private:
         amnezia::selfhostedUpdates::PublicationAuthorization mode = amnezia::selfhostedUpdates::PublicationAuthorization::FullAccepted;
         QString rootDir;
         QString manifestPath;
+        QString publicationHost;
         QString version;
         QList<PayloadFile> files;
         QByteArray manifestSha256;
@@ -503,8 +506,9 @@ private:
     };
 
     QString findPayloadDir() const;
-    bool loadPayload(const QString &payloadDir, Payload &payload) const;
-    bool selectServerCredentials(amnezia::ServerCredentials &credentials) const;
+    static bool loadPayload(const QString &payloadDir, Payload &payload);
+    bool selectServerCredentials(amnezia::ServerCredentials &credentials, const QString &publicationHost) const;
+    bool schedulePublication(std::function<bool()> operation, bool fromInstalledBundle);
     static bool publishPayload(Payload payload, amnezia::ServerCredentials credentials);
     static bool validatePublicationAcceptance(const Payload &payload);
 

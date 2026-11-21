@@ -26,6 +26,7 @@ set "AMNEZIA_BUILD_JOBS=%BUILD_JOBS%"
 set "CMAKE_BUILD_PARALLEL_LEVEL=%BUILD_JOBS%"
 
 :: understand toolchain arch (host_target) and Qt prefix path
+set "_cmake_platform_arg="
 if not defined ARCH set "ARCH=%PROCESSOR_ARCHITECTURE%"
 if /i "%ARCH%" == "x64" set "ARCH=amd64"
 if /i "%ARCH%" == "amd64" (
@@ -37,6 +38,8 @@ if /i "%ARCH%" == "arm64" (
     if /i "%PROCESSOR_ARCHITECTURE%" == "AMD64" set "_vcvars_arg=amd64_arm64"
     if /i "%PROCESSOR_ARCHITECTURE%" == "x86"   set "_vcvars_arg=x86_arm64"
     set "_qt_postfix_arg=arm64"
+    set "_cmake_platform_arg=-A ARM64"
+    set "BUILD_DIR=%PROJECT_DIR%\deploy\build-arm64"
 )
 if not defined _vcvars_arg  (
     echo ERROR: Unsupported architecture "%ARCH%"
@@ -107,8 +110,8 @@ if exist "%VCVARS_PATH%" (
 :: the latest matching SDK bin directory when needed.
 where mc.exe >nul 2>nul
 if errorlevel 1 (
+    rem mc.exe runs on the build host, including when targeting ARM64.
     set "_sdk_tools_arch=x64"
-    if /i "%ARCH%" == "arm64" set "_sdk_tools_arch=arm64"
     for /f "delims=" %%I in ('dir /b /ad /o-n "%ProgramFiles(x86)%\Windows Kits\10\bin" 2^>nul') do (
         if not defined _windows_sdk_bin (
             if exist "%ProgramFiles(x86)%\Windows Kits\10\bin\%%I\!_sdk_tools_arch!\mc.exe" (
@@ -125,7 +128,7 @@ set "_version_arg="
 if defined AMNEZIAVPN_VERSION set "_version_arg=-DAMNEZIAVPN_VERSION=%AMNEZIAVPN_VERSION%"
 if defined AMNEZIA_BUILD_TESTS set "_tests_arg=-DAMNEZIA_BUILD_TESTS=%AMNEZIA_BUILD_TESTS%"
 @echo on
-cmake -S "%PROJECT_DIR%" -B "%BUILD_DIR%" -DCMAKE_BUILD_TYPE=Release -DCMAKE_CONFIGURATION_TYPES=Release -DCONAN_INSTALL_BUILD_CONFIGURATIONS=Release "-DCMAKE_PREFIX_PATH=%QT_ROOT_PATH%\msvc2022_%_qt_postfix_arg%" "-DCMAKE_VS_GLOBALS=UseMultiToolTask=true;EnforceProcessCountAcrossBuilds=true;CL_MPCount=%BUILD_JOBS%;MultiProcMaxCount=%BUILD_JOBS%" %_tests_arg% %_version_arg% || goto :fail
+cmake -S "%PROJECT_DIR%" -B "%BUILD_DIR%" %_cmake_platform_arg% -DCMAKE_BUILD_TYPE=Release -DCMAKE_CONFIGURATION_TYPES=Release -DCONAN_INSTALL_BUILD_CONFIGURATIONS=Release "-DCMAKE_PREFIX_PATH=%QT_ROOT_PATH%\msvc2022_%_qt_postfix_arg%" "-DCMAKE_VS_GLOBALS=UseMultiToolTask=true;EnforceProcessCountAcrossBuilds=true;CL_MPCount=%BUILD_JOBS%;MultiProcMaxCount=%BUILD_JOBS%" %_tests_arg% %_version_arg% || goto :fail
 cmake --build "%BUILD_DIR%" --config Release -- /m:%BUILD_JOBS%  || goto :fail
 @echo off
 for %%I in (%ARG_BUILD_INSTALLERS%) do (

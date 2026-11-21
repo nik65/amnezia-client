@@ -198,6 +198,33 @@ function Copy-WindowsOuterExclusive([string] $Source,[string] $Directory) {
     }
 }
 
+function Copy-GatedWindowsOuter([string] $Source, [string] $Target, [string] $ExpectedSha256) {
+    $directory = Split-Path -Parent $Target
+    if (-not [string]::IsNullOrWhiteSpace($WindowsOuterArtifactDir)) {
+        $null = Resolve-WindowsOuterOutputDirectory $directory
+    }
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($WindowsOuterArtifactDir)) {
+        $null = Resolve-WindowsOuterOutputDirectory $directory
+    }
+    $pending = Join-Path $directory (".windows-outer-" + [Guid]::NewGuid().ToString("N") + ".pending")
+    try {
+        [IO.File]::Copy($Source, $pending, $false)
+        if ((Get-FileHash -LiteralPath $pending -Algorithm SHA256).Hash -ne $ExpectedSha256) {
+            throw "Bundled Windows release client changed after release-lab verification."
+        }
+        if ([string]::IsNullOrWhiteSpace($WindowsOuterArtifactDir) -and [IO.File]::Exists($Target)) {
+            [IO.File]::Replace($pending, $Target, [NullString]::Value)
+        } else {
+            [IO.File]::Move($pending, $Target)
+        }
+    } finally {
+        if (Test-Path -LiteralPath $pending) {
+            Remove-Item -LiteralPath $pending -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Write-Step([string] $Message) {
     Write-Host ""
     Write-Host "==> $Message"
@@ -1015,7 +1042,7 @@ function New-WindowsOuterBinaryCreator() {
     }
 }
 
-function Assert-WindowsOuterIfwMetadata([string] $ArtifactPath) {
+function Assert-WindowsOuterIfwMetadata([string] $ArtifactPath, [bool] $PublishOnInstall) {
     Assert-ExistingFile $ArtifactPath "Bundled Windows release client"
     $qifRoot = Resolve-QifRootPath
     if ([string]::IsNullOrWhiteSpace($qifRoot)) { throw "Qt IFW root is required to inspect the bundled Windows client." }
@@ -1040,6 +1067,19 @@ function Assert-WindowsOuterIfwMetadata([string] $ArtifactPath) {
         $configText = [IO.File]::ReadAllText($config)
         if ($configText -notmatch '<ControlScript>controlscript_js\.js</ControlScript>') {
             throw "Bundled outer IFW config does not reference the control script."
+        }
+        $componentName = "componentscript.js"
+        $componentSource = Join-Path $RepoRoot "deploy/installer/qif/componentscript.js"
+        $expectedComponent = [IO.File]::ReadAllText($componentSource).Replace([string][char]13, "")
+        if ($PublishOnInstall) {
+            $componentName = "selfhosted-componentscript.js"
+            $expectedComponent = "var bundledWindowsPublisherInstaller = true;" + [char]10 + $expectedComponent
+        }
+        $embeddedComponent = Join-Path (Join-Path $inspectionRoot "metadata/AmneziaVPN") $componentName
+        Assert-ExistingFile $embeddedComponent "Bundled outer IFW component script"
+        $componentText = [IO.File]::ReadAllText($embeddedComponent).Replace([string][char]13, "")
+        if (-not [string]::Equals($componentText, $expectedComponent, [StringComparison]::Ordinal)) {
+            throw "Bundled outer IFW component script does not match the selected release lane."
         }
         $sourceControl = Join-Path $RepoRoot "deploy\installer\qif\controlscript.js"
         if ((Get-FileHash -LiteralPath $embeddedControl -Algorithm SHA256).Hash -ne
@@ -1151,7 +1191,7 @@ function Assert-WindowsClientTrust([string] $ArtifactPath, [string] $ReceiptPath
         Remove-Item -LiteralPath $inspectionRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
-function Assert-BundledWindowsPayload([string] $ArtifactPath, [string] $ManifestPath) {
+function Assert-BundledWindowsPayload([string] $ArtifactPath, [string] $ManifestPath, [bool] $PublishOnInstall) {
     Assert-ExistingFile $ArtifactPath "Bundled Windows release client"
     Assert-ExistingFile $ManifestPath "Bundled self-hosted manifest"
     if ([string]::IsNullOrWhiteSpace($PublicKeyBase64) -or
@@ -1226,6 +1266,9 @@ function Assert-BundledWindowsPayload([string] $ArtifactPath, [string] $Manifest
         if ($payloadText.IndexOf($SyncHost, [StringComparison]::Ordinal) -lt 0) {
             throw "Bundled Windows client executable does not contain the intended self-hosted sync-host marker"
         }
+        if ($payloadText.IndexOf($manifestSha256, [StringComparison]::Ordinal) -lt 0) {
+            throw "Bundled Windows client executable does not contain the intended publication manifest hash"
+        }
         $embeddedManifest = @(Get-ChildItem -LiteralPath $inspectionRoot -Recurse -File -Filter "manifest.json" |
             Where-Object { $_.FullName -match "selfhosted_updates" })
         if ($embeddedManifest.Count -ne 1) {
@@ -1234,6 +1277,17 @@ function Assert-BundledWindowsPayload([string] $ArtifactPath, [string] $Manifest
         $embeddedManifestSha256 = (Get-FileHash -LiteralPath $embeddedManifest[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($embeddedManifestSha256 -ne $manifestSha256) {
             throw "Bundled selfhosted_updates/manifest.json does not match the intended manifest"
+        }
+        $envelope = Get-Content -LiteralPath $embeddedManifest[0].FullName -Raw | ConvertFrom-Json
+        $encodedPayload = $envelope.payload.Replace("-", "+").Replace("_", "/")
+        $encodedPayload = $encodedPayload.PadRight($encodedPayload.Length + ((4 - $encodedPayload.Length % 4) % 4), [char]'=')
+        $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedPayload)) | ConvertFrom-Json
+        $publicationGrant = $payload.PSObject.Properties["publishOnInstall"]
+        if ($PublishOnInstall -ne ($null -ne $publicationGrant)) {
+            throw "Bundled manifest publication grant does not match the selected release lane."
+        }
+        if ($PublishOnInstall -and $publicationGrant.Value.sshHost -cne $SshTrustedHost) {
+            throw "Bundled manifest publication grant does not match the intended SSH host."
         }
         $ownerRoot = Split-Path -Parent $RepoRoot
         $receiptRoot = Join-Path $ownerRoot "logs"
@@ -1365,6 +1419,7 @@ $resolvedWindowsOuterDir = Resolve-WindowsOuterOutputDirectory $WindowsOuterArti
 
 $bundlesUpdatesInWindowsClient = (-not $NoBundleUpdatesInWindowsClient) -and
     ($BuildPlatform -contains "windows")
+$publishOnInstall = $bundlesUpdatesInWindowsClient -and $LabLane -eq "release"
 if ($bundlesUpdatesInWindowsClient -and ($RequirePlatform -notcontains "windows-x64")) {
     throw "Bundled Windows update publisher requires the windows-x64 manifest artifact."
 }
@@ -1659,16 +1714,33 @@ foreach ($platform in $RequirePlatform) {
     $manifestArgs += @("--artifact", "$platform=$artifactPath")
 }
 
+if ($publishOnInstall) {
+    $manifestArgs += @("--publish-on-install", $SshTrustedHost)
+}
 Invoke-External "python" $manifestArgs
 
-if (-not $NoBundleUpdatesInWindowsClient -and ($BuildPlatform -contains "windows")) {
+$adminInstallerTarget = Join-Path $resolvedWindowsOuterDir "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
+$outerForLab = $adminInstallerTarget
+$gatedOuterSha256 = $null
+if ($bundlesUpdatesInWindowsClient) {
     Write-Step "Build Windows release client with bundled update payload"
     $previousIfwBinaryCreator = $env:AMNEZIA_IFW_BINARYCREATOR
     $previousIfwFrameworkVersion = $env:AMNEZIA_IFW_FRAMEWORK_VERSION
+    $previousLaunchPublisher = $env:AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI
     try {
         $env:AMNEZIA_IFW_BINARYCREATOR = New-WindowsOuterBinaryCreator
+        if ($publishOnInstall) {
+            $env:AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI = "1"
+        } else {
+            Remove-Item Env:\AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI -ErrorAction SilentlyContinue
+        }
         Build-WindowsInstaller $OutDir
     } finally {
+        if ($null -eq $previousLaunchPublisher) {
+            Remove-Item Env:\AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI -ErrorAction SilentlyContinue
+        } else {
+            $env:AMNEZIA_LAUNCH_PUBLISHER_FROM_CLI = $previousLaunchPublisher
+        }
         if ($null -eq $previousIfwBinaryCreator) {
             Remove-Item Env:\AMNEZIA_IFW_BINARYCREATOR -ErrorAction SilentlyContinue
         } else {
@@ -1680,27 +1752,31 @@ if (-not $NoBundleUpdatesInWindowsClient -and ($BuildPlatform -contains "windows
             $env:AMNEZIA_IFW_FRAMEWORK_VERSION = $previousIfwFrameworkVersion
         }
     }
-    $adminInstallerDir = $resolvedWindowsOuterDir
-    New-Item -ItemType Directory -Force -Path $adminInstallerDir | Out-Null
     $adminInstallerSource = Join-Path $RepoRoot "deploy\build\AmneziaVPN_${Version}_windows_x64.exe"
     Assert-ExistingFile $adminInstallerSource "Bundled Windows release client"
-    Assert-WindowsOuterIfwMetadata $adminInstallerSource
-    Assert-BundledWindowsPayload $adminInstallerSource (Join-Path $OutDir "manifest.json")
-    $adminInstallerTarget = Join-Path $adminInstallerDir "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
-    if ([string]::IsNullOrWhiteSpace($WindowsOuterArtifactDir)) {
-        Copy-Item -LiteralPath $adminInstallerSource -Destination $adminInstallerTarget -Force
-    } else {
-        Copy-WindowsOuterExclusive $adminInstallerSource $resolvedWindowsOuterDir
+    if ($publishOnInstall) {
+        $outerForLab = $adminInstallerSource
+        $gatedOuterSha256 = (Get-FileHash -LiteralPath $outerForLab -Algorithm SHA256).Hash
     }
-    Write-Host "Bundled Windows release client: $adminInstallerTarget"
+    Assert-WindowsOuterIfwMetadata $adminInstallerSource $publishOnInstall
+    Assert-BundledWindowsPayload $adminInstallerSource (Join-Path $OutDir "manifest.json") $publishOnInstall
+    if (-not $publishOnInstall) {
+        if ([string]::IsNullOrWhiteSpace($WindowsOuterArtifactDir)) {
+            New-Item -ItemType Directory -Force -Path $resolvedWindowsOuterDir | Out-Null
+            Copy-Item -LiteralPath $adminInstallerSource -Destination $adminInstallerTarget -Force
+        } else {
+            Copy-WindowsOuterExclusive $adminInstallerSource $resolvedWindowsOuterDir
+        }
+        Write-Host "Bundled Windows release client: $adminInstallerTarget"
+    }
 }
 
 if ($LabLane -ne "off") {
     if ([string]::IsNullOrWhiteSpace($LabRunId)) {
         $LabRunId = "release-$Version-$(Get-Date -Format yyyyMMddTHHmmssZ)"
     }
-    $outerForLab = Join-Path $resolvedWindowsOuterDir "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
-    if (-not (Test-Path -LiteralPath $outerForLab -PathType Leaf)) {
+    if (($LabLane -eq "release" -and -not $publishOnInstall) -or
+        -not (Test-Path -LiteralPath $outerForLab -PathType Leaf)) {
         if ($LabLane -eq "release") {
             throw "Release lab requires the final bundled outer artifact; do not use -NoBundleUpdatesInWindowsClient for the release lane."
         }
@@ -1767,16 +1843,26 @@ if ($LabLane -ne "off") {
     if (-not [string]::IsNullOrWhiteSpace($outerForLab)) {
         $gateArgs += @("--outer-artifact", (Convert-ToWslPath $outerForLab))
     }
-    Invoke-ReleaseLab "gate" $gateArgs | Out-Null
+    $gateOutput = Invoke-ReleaseLab "gate" $gateArgs
+    if ($publishOnInstall) {
+        $gateResult = ($gateOutput -join [Environment]::NewLine) | ConvertFrom-Json
+        if ($gateResult.run_id -cne $LabRunId -or $gateResult.lane -cne "release" -or
+            $gateResult.artifact_sha256 -ne $gatedOuterSha256 -or
+            [string]::IsNullOrWhiteSpace($gateResult.publishable_marker)) {
+            throw "Release lab did not return a publishable result for this Windows installer."
+        }
+        Copy-GatedWindowsOuter $outerForLab $adminInstallerTarget $gatedOuterSha256
+        Write-Host "Bundled Windows release client: $adminInstallerTarget"
+    }
     Write-Host "Release lab gate passed: $LabLane"
 }
 else {
     Write-Warning "LabLane=off: this is an explicitly unvalidated build-only run; output is not release-gate eligible."
 }
 
-# A successful build or ordinary lab lane does not issue publication approval.
-# Preserve the exact tested outer identity separately: embedding approval into
-# that executable would change its bytes and invalidate its guest binding.
+# This diagnostic receipt does not issue a detached publication approval.
+# The release lane packages the signed grant before testing and copies the
+# outer installer to the output directory after the gate accepts the same bytes.
 $acceptanceStatus = [ordered]@{
     schema = "amnezia-publication-acceptance-status-v1"
     status = "HOLD_AUTHENTICATED_ACCEPTANCE_UNAVAILABLE"
@@ -1786,7 +1872,7 @@ $acceptanceStatus = [ordered]@{
     manifestSha256 = (Get-FileHash -LiteralPath (Join-Path $OutDir "manifest.json") -Algorithm SHA256).Hash.ToLowerInvariant()
     originalOuter = $null
 }
-$originalOuterPath = Join-Path $resolvedWindowsOuterDir "AmneziaVPN_${Version}_windows_x64_selfhosted.exe"
+$originalOuterPath = $adminInstallerTarget
 if (Test-Path -LiteralPath $originalOuterPath -PathType Leaf) {
     $originalOuterItem = Get-Item -LiteralPath $originalOuterPath
     $acceptanceStatus.originalOuter = [ordered]@{
@@ -1795,9 +1881,17 @@ if (Test-Path -LiteralPath $originalOuterPath -PathType Leaf) {
         sha256 = (Get-FileHash -LiteralPath $originalOuterPath -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 }
+if ($publishOnInstall) {
+    $acceptanceStatus.status = "AUTHORIZED_BY_SIGNED_INSTALL_MANIFEST"
+    $acceptanceStatus.reason = "The release gate accepted the exact installer carrying the signed grant to publish on startup to the configured SSH host."
+}
 $acceptanceStatusPath = Join-Path $OutDir "publication-acceptance-status.json"
 [System.IO.File]::WriteAllText($acceptanceStatusPath, ($acceptanceStatus | ConvertTo-Json -Depth 5), [System.Text.UTF8Encoding]::new($false))
-Write-Warning "Publication HOLD: no release-acceptance.json was issued. The unsigned status receipt is diagnostic only."
+if ($publishOnInstall) {
+    Write-Host "After manual installation, the release-gated client publishes through its normal startup."
+} else {
+    Write-Warning "Publication HOLD: no release-acceptance.json was issued. The unsigned status receipt is diagnostic only."
+}
 
 Write-Step "Done"
 Write-Host "Artifacts: $ArtifactDir"

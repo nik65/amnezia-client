@@ -141,7 +141,7 @@ function Protect-OwnedFixtureNamespace([string]$Root,[string]$RunId,[string]$Cas
    foreach($port in $ports){$listeners=@(Get-NetUDPEndpoint -LocalPort $port);if($listeners.Count-ne 1 -or $listeners[0].LocalAddress-cne '127.0.0.1' -or $listeners[0].OwningProcess-ne $helper.Id){throw 'fixture UDP lease differs'}}
    $taskName="AmneziaLab-RouteFixture-$id-$case";if(Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue){throw 'observer task already exists'}
    $observer=Join-Path $root 'product_observer.ps1';$plan=Join-Path $root 'observer-plan.json'
-   $action=New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$observer`" -PlanPath `"$plan`""
+   $action=New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument "-NoProfile -NonInteractive -File `"$observer`" -PlanPath `"$plan`""
    $principal=New-ScheduledTaskPrincipal -UserId 'labadmin' -LogonType Interactive -RunLevel Highest
    Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 250))|Out-Null
    Start-ScheduledTask -TaskName $taskName

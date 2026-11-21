@@ -116,7 +116,7 @@ function Invoke-GuestRelayStopWorker {
     $task=&$literal $PSCommandPath;$pin=&$literal $SourceSha256.ToLowerInvariant()
     $command="`$ErrorActionPreference='Stop';if((Get-FileHash -LiteralPath $task -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()-cne$pin){throw 'guest stop worker source hash differs'};& $task -Action stop -Mode guest-worker"
     foreach($pair in @(@('RunId',$RunId),@('CaseId',$CaseId),@('Channel',$Channel),@('VmId',$VmId.ToString('B')),@('SupervisorPath',$SupervisorPath),@('RelayPath',$RelayPath),@('OwnershipFile',$OwnershipFile),@('ReceiptPath',$ReceiptPath),@('HelperSha256',$HelperSha256),@('SourceSha256',$SourceSha256),@('StopAttempt',$attempt))){$command+=' -'+$pair[0]+' '+(&$literal ([string]$pair[1]))}
-    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command));$executable=Join-Path $PSHOME 'powershell.exe';$arguments="-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command));$executable=Join-Path $PSHOME 'powershell.exe';$arguments="-NoProfile -NonInteractive -EncodedCommand $encoded"
     $action=New-ScheduledTaskAction -Execute $executable -Argument $arguments
     $principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     # On-demand only: no second timer trigger can create another worker.

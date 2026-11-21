@@ -1446,6 +1446,59 @@ def validate_signed_manifest(path: Path, public_key: Path, *, version: str, arti
             )
 
 
+_HISTORICAL_DESKTOP_BASELINE_VERSION = "5.0.3.18"
+_HISTORICAL_DESKTOP_BASELINE_PLATFORMS = frozenset(("windows-x64", "linux-x64"))
+_HISTORICAL_DESKTOP_BASELINE_MANIFEST = "6c3bb2bab0ca4e35d77d099667d8749fbc0cb3bde2a60d36c6d04ecfaa71dbdd"
+_HISTORICAL_DESKTOP_BASELINE_KEY = "aeced4b158793068e6f1df13a052ecdcfd49e3aafb4906bea965c04828cc2d59"
+_HISTORICAL_DESKTOP_BASELINE_OTHER_ARTIFACTS = {
+    "android-arm64-v8a": ("AmneziaVPN_5.0.3.18_android9+_arm64-v8a.apk", 81570489),
+    "linux-headless-x64": ("AmneziaHeadless_5.0.3.18_linux_x64.tar.gz", 6868176),
+}
+
+
+def validate_baseline_manifest(path: Path, candidate_public_key: Path, *, lane: str, version: str, candidate_version: str, artifacts: Mapping[str, Mapping[str, Any]]) -> None:
+    """Authenticate the one archived N-1 desktop baseline without changing candidate trust."""
+    if (
+        lane == "candidate"
+        and version == _HISTORICAL_DESKTOP_BASELINE_VERSION
+        and candidate_version == "5.0.3.19"
+        and set(artifacts) == _HISTORICAL_DESKTOP_BASELINE_PLATFORMS
+        and path.is_file() and not path.is_symlink()
+    ):
+        with path.open("rb") as stream:
+            envelope = stream.read(1024 * 1024 + 1)
+        if hashlib.sha256(envelope).hexdigest() == _HISTORICAL_DESKTOP_BASELINE_MANIFEST:
+            key_path = path.with_name("selfhosted-update-public.pem")
+            if not key_path.is_file() or key_path.is_symlink():
+                raise LabError("historical desktop baseline requires the archived public key")
+            with key_path.open("rb") as stream:
+                key_bytes = stream.read(114)
+            if hashlib.sha256(key_bytes).hexdigest() != _HISTORICAL_DESKTOP_BASELINE_KEY:
+                raise LabError("historical desktop baseline public key does not match the pinned key")
+            archive = path.parent.parent
+            all_artifacts = dict(artifacts)
+            for platform_id, (filename, expected_size) in _HISTORICAL_DESKTOP_BASELINE_OTHER_ARTIFACTS.items():
+                artifact = archive / filename
+                try:
+                    metadata = artifact.lstat()
+                except OSError as exc:
+                    raise LabError(f"historical desktop baseline artifact is unavailable: {platform_id}") from exc
+                if not stat.S_ISREG(metadata.st_mode) or artifact.is_symlink():
+                    raise LabError(f"historical desktop baseline artifact must be a regular file: {platform_id}")
+                if metadata.st_size != expected_size:
+                    raise LabError(f"historical desktop baseline artifact size does not match: {platform_id}")
+                all_artifacts[platform_id] = artifact_record(artifact)
+            # Verify precisely the bytes that matched the historical pins.
+            with tempfile.TemporaryDirectory() as tmp:
+                manifest_copy = Path(tmp) / "manifest.json"
+                key_copy = Path(tmp) / "archive-public.pem"
+                manifest_copy.write_bytes(envelope)
+                key_copy.write_bytes(key_bytes)
+                validate_signed_manifest(manifest_copy, key_copy, version=version, artifacts=all_artifacts)
+            return
+    validate_signed_manifest(path, candidate_public_key, version=version, artifacts=artifacts)
+
+
 def headless_runner_inputs(manifest_path: Path, public_key_path: Path, receipt_path: Path, artifact: Mapping[str, Any], expected_version: str) -> dict[str, str]:
     if not manifest_path.is_file() or manifest_path.is_symlink() or not public_key_path.is_file() or public_key_path.is_symlink() or not receipt_path.is_file() or receipt_path.is_symlink():
         raise LabError("headless trust inputs must be regular files")
@@ -2003,7 +2056,7 @@ class LabController:
         adapter = hyperv_adapter_source()
         if not Path(HYPERV_POWERSHELL_WSL).is_file() or not os.access(HYPERV_POWERSHELL_WSL, os.X_OK):
             raise LabError(f"pinned Windows PowerShell bridge is unavailable: {HYPERV_POWERSHELL_WSL}")
-        argv = [HYPERV_POWERSHELL_WSL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", windows_path_for_wsl(adapter), "-Action", action, "-ParentRoot", HYPERV_PARENT_ROOT_WINDOWS, "-RunsRoot", HYPERV_RUNS_ROOT_WINDOWS]
+        argv = [HYPERV_POWERSHELL_WSL, "-NoProfile", "-NonInteractive", "-File", windows_path_for_wsl(adapter), "-Action", action, "-ParentRoot", HYPERV_PARENT_ROOT_WINDOWS, "-RunsRoot", HYPERV_RUNS_ROOT_WINDOWS]
         if run_id:
             argv += ["-RunId", run_id]
         for key, value in kwargs.items():
@@ -2209,8 +2262,8 @@ class LabController:
             validate_signed_manifest(manifest, manifest_public_key,
                                      version=str(candidate_version), artifacts=records)
             if baseline_manifest is not None:
-                validate_signed_manifest(baseline_manifest, manifest_public_key,
-                                         version=str(baseline_version), artifacts=baseline_records)
+                validate_baseline_manifest(baseline_manifest, manifest_public_key, lane=lane,
+                                           version=str(baseline_version), candidate_version=str(candidate_version), artifacts=baseline_records)
         baseline_outer_record = artifact_record(baseline_outer_artifact) if baseline_outer_artifact else None
         if lane != "publisher-diagnostic" and self.windows_backend == "hyperv" and outer_artifact is not None and baseline_outer_artifact is None:
             raise LabError("Hyper-V Windows run requires an explicit baseline outer artifact")
@@ -5322,7 +5375,11 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
                 raise LabError(f"hyperv_records changed after plan: {item_id}")
         validate_signed_manifest(Path(run["manifest"]["path"]), Path(run["manifest_public_key"]["path"]), version=str(run["candidate_version"]), artifacts=run.get("artifacts", {}))
         if isinstance(run.get("baseline_manifest"), dict):
-            validate_signed_manifest(Path(run["baseline_manifest"]["path"]), Path(run["manifest_public_key"]["path"]), version=str(run["baseline_version"]), artifacts=run.get("baseline_artifacts", {}))
+            validate_baseline_manifest(
+                Path(run["baseline_manifest"]["path"]), Path(run["manifest_public_key"]["path"]),
+                lane=lane, version=str(run["baseline_version"]), candidate_version=str(run["candidate_version"]),
+                artifacts=run.get("baseline_artifacts", {}),
+            )
         if lane == "release":
             observation = run.get("server_observation")
             publication = run.get("publication_evidence") or {}

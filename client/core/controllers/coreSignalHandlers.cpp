@@ -586,6 +586,8 @@ void CoreSignalHandlers::initUpdateFoundHandler()
     connect(m_coreController->m_selfHostedUpdateBootstrapper, &SelfHostedUpdateBootstrapper::publishFinished, this, [scheduleUpdateCheck](bool) {
         scheduleUpdateCheck();
     });
+    QTimer::singleShot(0, m_coreController->m_selfHostedUpdateBootstrapper,
+                       &SelfHostedUpdateBootstrapper::startAfterInstall);
 #endif
 
     connect(m_coreController->m_connectionController, &ConnectionController::connectionStateChanged, this, [this](Vpn::ConnectionState state) {

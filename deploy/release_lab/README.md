@@ -127,3 +127,18 @@ may be used for a thin iteration of selected products; it reports
 
 `reset` can remove only an overlay carrying the run/profile ownership marker.
 It refuses base, foreign, production, or unmarked paths.
+
+### Archived 5.0.3.18 desktop baseline
+
+For the exact Windows x64 + Linux GUI candidate test of 5.0.3.18 to
+5.0.3.19, pass the original 5.0.3.18 envelope as the baseline manifest.
+Keep the original layout: the historical pinned public PEM is next to
+`metadata/manifest.json`, and the historical Android and Linux headless
+artifacts retain their original filenames in the archive root. They are
+read and authenticated but are not installed or counted as tested. The
+desktop baseline inputs in the run plan are bound to the two matching
+signed rows from the same envelope.
+
+This does not authorize that envelope for candidate artifacts, other
+versions, other candidate scopes, or the release lane. The candidate
+manifest still needs its own exact artifact inventory and signing key.

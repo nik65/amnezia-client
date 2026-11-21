@@ -193,9 +193,24 @@ handoff marker (Windows may still display its UAC consent prompt):
   --accept-messages --accept-licenses --confirm-command install AmneziaSelfHostedUpdate=true
 ```
 
-After the new client starts, its embedded self-hosted flow publishes the
-verified local release payload to the configured update host. Do not use a
-separate publisher or direct SSH/SCP upload.
+Only the Windows bundle built in `-LabLane release` carries the signed grant
+for automatic publication on startup. The script keeps that installer under
+`deploy/build` until the release gate accepts its exact bytes, then copies it
+to the normal output directory. The `off` and `candidate` lanes produce legacy
+bundled installers without the automatic publication grant.
+
+After manual installation of the gated installer, the client starts the built-in
+publication flow using the saved administrative profile for the configured SSH
+host. Publication uses the signed manifest, artifact hashes, and pinned SSH
+host key. If the profile is missing, publication can run on a later start
+with the profile available.
+
+The existing lab publication scenario calls the publisher explicitly. Verify
+the startup path in an interactive disposable Windows guest with a diagnostic
+package signed for the lab SSH endpoint and the matching saved administrative
+profile present before installation. The default release lane holds the
+installer when required guest evidence is unavailable or the gate rejects
+the artifacts.
 
 The Windows bundled client is intentionally the publication vehicle for the
 whole self-hosted release: one verified payload may contain the Windows, Linux,
@@ -811,10 +826,12 @@ client must stop manifest fallback and report a valid no-update result. It must
 not try a stale mirror, because that could bypass the signed policy.
 
 Do not upload `dist/selfhosted-updates/<version>` with the release script. The
-generated Windows self-hosted client is the deployment vehicle: install/run
+release-gated Windows self-hosted client is the deployment vehicle. After
+manual installation of
 `dist\selfhosted-windows-client\<version>\AmneziaVPN_<version>_windows_x64_selfhosted.exe`
-on the release workstation, and that client uploads the signed manifest and all
-published platform artifacts through the saved self-hosted admin SSH credentials.
+on the release workstation, the client automatically uploads the signed
+manifest and platform artifacts using the saved self-hosted admin SSH
+credentials.
 The client refreshes the server update-host container and writes
 `manifest.json` last so clients never read a half-published release. Rollback
 trees use generation-specific immutable paths and a unique no-clobber directory
