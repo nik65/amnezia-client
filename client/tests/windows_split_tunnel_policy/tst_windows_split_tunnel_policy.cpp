@@ -83,6 +83,18 @@ int main() {
   CHECK(!windowsSplitTunnelPolicy::cleanupStateAllowsInitializedNoop(
       true, sizeof(std::size_t), sizeof(std::size_t), ready, initialized));
 
+  // Termination requests are delayed and single-shot for each quarantine.
+  windowsSplitTunnelPolicy::QuarantineTermination termination;
+  termination.begin(100);
+  CHECK(!termination.requestIfOverdue(100));
+  CHECK(!termination.requestIfOverdue(5099));
+  CHECK(termination.requestIfOverdue(5100));
+  CHECK(!termination.requestIfOverdue(900000));
+  termination.begin(900000);
+  CHECK(!termination.requestIfOverdue(900000));
+  CHECK(termination.requestIfOverdue(905000));
+  CHECK(!termination.requestIfOverdue(910000));
+
   windowsSplitTunnelPolicy::CleanupGate gate;
   CHECK(gate.allowsMutation());
   gate.markFailure();

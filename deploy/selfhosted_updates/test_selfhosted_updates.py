@@ -359,6 +359,7 @@ def transactional_fake_docker_source() -> str:
     return textwrap.dedent(
         f'''\
         #!/usr/bin/env python3
+        import hashlib
         import json
         import os
         import sys
@@ -458,12 +459,28 @@ def transactional_fake_docker_source() -> str:
                 print("/" + name)
             elif ".State.Running" in template:
                 print("true" if container["running"] else "false")
+            elif ".State.Restarting" in template:
+                print("true" if container.get("restarting", False) else "false")
             elif ".NetworkSettings.Networks" in template:
-                print(container.get("ip", ""))
+                network = container.get("network", "")
+                if "len " in template:
+                    print(container.get("network_count", 1))
+                elif ".NetworkID" in template:
+                    print(networks.get(network, {{}}).get("id", "") if network in template else "")
+                else:
+                    print(container.get("ip", ""))
             elif ".Config.Image" in template:
                 print(container.get("image", PINNED_IMAGE))
+            elif ".Image" in template:
+                print(container.get("image_id", ""))
+            elif ".Config.Entrypoint" in template:
+                print(json.dumps(container.get("entrypoint"), separators=(",", ":")))
+            elif ".Config.Cmd" in template:
+                print(json.dumps(container.get("command"), separators=(",", ":")))
             elif ".HostConfig.NetworkMode" in template:
                 print(container.get("network", ""))
+            elif ".HostConfig.Privileged" in template:
+                print("true" if container.get("privileged", False) else "false")
             elif ".Config.Labels" in template:
                 for label_key, label_value in container.get("labels", {{}}).items():
                     if label_key in template:
@@ -472,15 +489,22 @@ def transactional_fake_docker_source() -> str:
                 else:
                     print("")
             elif ".Mounts" in template:
-                print(f"{{container.get('mount_source', '')}}|{{str(container.get('mount_rw', False)).lower()}}")
+                source = container.get("mount_source", "")
+                writable = str(container.get("mount_rw", False)).lower()
+                if ".Type" in template:
+                    print(f"{{container.get('mount_type', 'bind')}}|{{source}}|/www|{{writable}}")
+                else:
+                    print(f"{{source}}|{{writable}}")
 
         if args[:2] == ["image", "inspect"]:
-            reference = args[2] if len(args) > 2 else ""
+            reference = args[-1] if len(args) > 2 else ""
             present = bool(state.get("image_present")) if reference == PINNED_IMAGE else (
                 bool(state.get("poisoned_tag_present")) if reference == POISONED_TAG else False
             )
             if not present:
                 print(f"Error: No such image: {{reference}}", file=sys.stderr)
+            elif option("-f") == "{{{{.Id}}}}":
+                print(state.get("image_id", ""))
             complete("image-inspect", 0 if present else 1)
 
         if args and args[0] == "pull":
@@ -650,7 +674,7 @@ def transactional_fake_docker_source() -> str:
             command_text = " ".join(args)
             if name is None:
                 if "busybox --list" in command_text:
-                    complete("candidate-preflight")
+                    complete("candidate-preflight", int(os.environ.get("FAKE_CANDIDATE_PREFLIGHT_EXIT", "0")))
                 expected_address = os.environ.get("FAKE_EXPECT_HOST_PROBE_ADDRESS")
                 if expected_address and f"http://{{expected_address}}:" not in command_text:
                     complete("health-host-wrong-bind", 24)
@@ -708,6 +732,16 @@ def transactional_fake_docker_source() -> str:
             name, container = resolve(args[1])
             if container is None or not container["running"]:
                 complete("health-missing", 1)
+            if args[-1].endswith("/manifest.json"):
+                if args[-1] != "http://127.0.0.1:17865/manifest.json":
+                    complete("manifest-probe-address", 1)
+                if container.get("manifest_unreachable", False):
+                    complete("manifest-probe", 1)
+                body = (Path(container["mount_source"]) / "manifest.json").read_bytes()
+                if "manifest_body" in container:
+                    body = container["manifest_body"].encode("utf-8")
+                print(f"{{hashlib.sha256(body).hexdigest()}}  -")
+                complete("manifest-probe")
             role = container["role"]
             if role in ("main", "new-main"):
                 phase = "health-main"
@@ -901,6 +935,51 @@ def initial_transactional_docker_state(*, image_present: bool = True) -> dict[st
             },
         },
     }
+
+
+def healthy_update_host_reuse_state(host_dir: Path) -> dict[str, object]:
+    state = initial_transactional_docker_state()
+    state["image_id"] = "sha256:" + "e" * 64
+    state["networks"]["amnezia-dns-net"]["id"] = "f" * 64
+    bridge_name = "amnezia-client-updates"
+    vpn_ids = {"amnezia-awg2": "a" * 64, "amnezia-openvpn": "b" * 64}
+    endpoints = (
+        (bridge_name, "bridge", "amnezia-dns-net"),
+        (bridge_name + "-host", "host", "host"),
+        *((f"{bridge_name}-vpn-{name}", f"tunnel-{name}", "container:" + identity)
+          for name, identity in vpn_ids.items()),
+    )
+    containers = {
+        name: {"id": identity, "role": "vpn", "running": True, "network": "bridge", "ip": ""}
+        for name, identity in vpn_ids.items()
+    }
+    for index, (name, role, network) in enumerate(endpoints, 1):
+        address = "0.0.0.0:17865" if role == "host" else "17865"
+        containers[name] = {
+            "id": str(index) * 64,
+            "role": role,
+            "running": True,
+            "network": network,
+            "ip": "172.29.172.252" if role == "bridge" else "",
+            "image": PINNED_UPDATE_HOST_IMAGE,
+            "image_id": state["image_id"],
+            "mount_source": str(host_dir),
+            "mount_rw": False,
+            "entrypoint": ["sh"],
+            "command": ["-c", f"busybox httpd -f -p {address} -h /www"],
+            "labels": {
+                f"org.amnezia.client-update-host.{key}": value
+                for key, value in {
+                    "transaction": "c" * 48,
+                    "role": role,
+                    "bind": "0.0.0.0",
+                    "probe": "127.0.0.1",
+                    "port": "17865",
+                }.items()
+            },
+        }
+    state["containers"] = containers
+    return state
 
 
 def prepare_transactional_installer_harness(root: Path, state: dict[str, object]) -> tuple[Path, Path, Path, dict[str, str]]:
@@ -5292,6 +5371,94 @@ class SourceContractTests(unittest.TestCase):
             cleanup_positions = [index for index, line in enumerate(accepted_log.splitlines()) if "|cleanup-backup-" in line]
             self.assertTrue(health_positions and cleanup_positions)
             self.assertLess(max(health_positions), min(cleanup_positions))
+
+    @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
+    def test_update_host_reuses_only_healthy_endpoints_serving_expected_prior(self) -> None:
+        sh = find_sh()
+        assert sh
+        for case in ("exact", "missing-owned-rule", "firewall-update-failure", "no-prior", "wrong-prior",
+                     "wrong-health", "unreachable", "wrong-namespace"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                lock_parent = tmp_path / "trust-anchor" / "amnezia"
+                host_dir = lock_parent / "client-updates"
+                state = healthy_update_host_reuse_state(host_dir)
+                openvpn_sidecar = state["containers"]["amnezia-client-updates-vpn-amnezia-openvpn"]
+                if case == "wrong-health":
+                    openvpn_sidecar["manifest_body"] = "stale manifest"
+                elif case == "unreachable":
+                    openvpn_sidecar["manifest_unreachable"] = True
+                elif case == "wrong-namespace":
+                    openvpn_sidecar["network"] = "container:" + state["containers"]["amnezia-awg2"]["id"]
+
+                installer, _, state_path, env = prepare_transactional_installer_harness(tmp_path, state)
+                host_dir.mkdir(parents=True)
+                (lock_parent / ".client-update-host-cids").mkdir(mode=0o755)
+                lock = lock_parent / ".client-update-host-installer.lock"
+                lock.touch(mode=0o444)
+                (lock_parent / ".client-update-host-firewall-state").write_text(
+                    "version=1\nbind=0.0.0.0\nport=17865\nufw=1\nfirewalld_runtime=0\n"
+                    "firewalld_permanent=0\niptables=1\n", encoding="utf-8",
+                )
+                (lock_parent / ".client-update-host-firewall-state").chmod(0o444)
+                firewall_state_path = tmp_path / "firewall-state.json"
+                comment = "amnezia-client-updates-0_0_0_0-17865"
+                firewall_state = json.loads(firewall_state_path.read_bytes())
+                firewall_state["ufw"] = [comment]
+                if case not in {"missing-owned-rule", "firewall-update-failure"}:
+                    firewall_state["iptables"] = [comment]
+                firewall_state_path.write_text(json.dumps(firewall_state))
+                env["FAKE_FIREWALLD_RUNNING"] = "0"
+                if case == "firewall-update-failure":
+                    env["FAKE_FIREWALL_FAIL_AFTER"] = "iptables-add"
+
+                manifest = host_dir / "manifest.json"
+                body = b'{"fixture":"exact already-published release"}\n'
+                manifest.write_bytes(body)
+                manifest.chmod(0o444)
+                state_before = state_path.read_bytes()
+                expected_sha = hashlib.sha256(body).hexdigest()
+                args = [sh, str(installer), str(host_dir)]
+                if case != "no-prior":
+                    args.append("0" * 64 if case == "wrong-prior" else expected_sha)
+                env.pop("AMNEZIA_UPDATE_VPN_CONTAINER")
+                env["FAKE_CANDIDATE_PREFLIGHT_EXIT"] = "2"
+
+                result = subprocess.run(args, env=env, text=True, capture_output=True, check=False, timeout=45)
+                commands = [line.split("|", 2) for line in (tmp_path / "docker.log").read_text().splitlines()]
+                observed = [command.split()[1] for _, phase, command in commands if phase == "manifest-probe"]
+                if case in {"exact", "missing-owned-rule", "firewall-update-failure"}:
+                    firewall_after = json.loads(firewall_state_path.read_bytes())
+                    if case == "firewall-update-failure":
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("Unable to add owned iptables firewall rule", result.stderr)
+                        self.assertNotIn("update_host_transaction=reused", result.stdout)
+                        self.assertEqual(firewall_after, firewall_state)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn("update_host_transaction=reused", result.stdout)
+                        self.assertEqual(firewall_after["iptables"], [comment])
+                    self.assertCountEqual(observed, [str(i) * 64 for i in range(1, 5)])
+                    self.assertLessEqual(
+                        {phase for _, phase, _ in commands},
+                        {"container-inspect", "inspect-container", "image-inspect", "network-inspect", "ps", "manifest-probe"},
+                    )
+                else:
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn("Pinned update image candidate preflight failed", result.stderr)
+                    self.assertNotIn("update_host_transaction=reused", result.stdout)
+                    self.assertEqual(sum(phase == "candidate-preflight" for _, phase, _ in commands), 1)
+                    if case in {"wrong-health", "unreachable"}:
+                        self.assertIn(openvpn_sidecar["id"], observed)
+
+                self.assertEqual(manifest.read_bytes(), body)
+                self.assertEqual(state_path.read_bytes(), state_before)
+                firewall_log = tmp_path / "firewall.log"
+                if case == "exact" and firewall_log.exists():
+                    self.assertNotIn("iptables-add", firewall_log.read_text())
+                elif case not in {"exact", "missing-owned-rule", "firewall-update-failure"}:
+                    self.assertFalse(firewall_log.exists())
+                self.assertFalse((lock_parent / ".client-update-host-transaction").exists())
 
     @unittest.skipUnless(os.name == "posix" and find_sh(), "POSIX sh and flock are required")
     def test_update_host_query_errors_never_mean_absent(self) -> None:

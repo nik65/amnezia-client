@@ -29,7 +29,8 @@ manifest = section(update, 'void UpdateController::fetchSelfHostedManifestFromUr
 metadata = section(update, 'void UpdateController::doGetAsync(', '\nvoid UpdateController::fetchGatewayUrl(')
 gateway = section(update, 'void UpdateController::fetchGatewayUrl(', '\nvoid UpdateController::fetchVersionInfo(')
 pinned = section(update, '    bool samePinnedUrl(', '\n#if defined(Q_OS_WINDOWS)')
-completion = section(bootstrap, '                    [success](SelfHostedUpdateBootstrapper *bootstrapper) {', '\n                    });').strip() + '\n}'
+publication = section(bootstrap, 'bool SelfHostedUpdateBootstrapper::schedulePublication(', '\n}\n')
+completion = section(publication, '                    [success, fromInstalledBundle](SelfHostedUpdateBootstrapper *bootstrapper) {', '\n                    });').strip() + '\n}'
 retry = section(header, '    constexpr int maximumAutomaticPublishAttempts', '\n    inline bool accountBoundedRemoteOutput(')
 prefix = r'''
 #include <QByteArray>
@@ -168,11 +169,13 @@ public:
 bootstrap_prefix = '\nnamespace amnezia::selfhostedUpdates {\n' + retry + '\n}\n'
 bootstrap_prefix += r'''
 static int bootstrapStarts=0;
+static int installedBundleStarts=0;
 class SelfHostedUpdateBootstrapper:public QObject {
  Q_OBJECT
 public:
  amnezia::selfhostedUpdates::AutomaticPublishRetryState m_publishRetryState;
  bool start(){++bootstrapStarts;m_publishRetryState.scheduled=true;return true;}
+ bool startAfterInstall(){++installedBundleStarts;m_publishRetryState.scheduled=true;return true;}
 signals:
  void publishFinished(bool success);
 };
@@ -289,6 +292,7 @@ int main(int argc,char **argv){
 bootstrap_test = r'''
 void bootstrapCase(const QString &name){
  const bool success=name=="bootstrap-success-delete";
+ const bool fromInstalledBundle=name.startsWith("bootstrap-installed-");
  auto *object=new SelfHostedUpdateBootstrapper;
  object->m_publishRetryState.inProgress=true;
  object->m_publishRetryState.attemptCount=name.contains("exhausted")?3:1;
@@ -304,11 +308,13 @@ void bootstrapCase(const QString &name){
  check(notifications==1,"one publication-completion notification");
  if(name.endsWith("-delete")){
   check(observed.isNull(),"direct receiver deleted emitter");
-  check(bootstrapStarts==0,"no retry after synchronous emitter deletion");
+  check(bootstrapStarts==0&&installedBundleStarts==0,"no retry after synchronous emitter deletion");
  }else if(name=="bootstrap-normal-retry"){
-  check(bootstrapStarts==1&&object->m_publishRetryState.scheduled,"normal retry remains scheduled");
+  check(bootstrapStarts==1&&installedBundleStarts==0&&object->m_publishRetryState.scheduled,"normal retry remains scheduled");
+ }else if(name=="bootstrap-installed-retry"){
+  check(bootstrapStarts==0&&installedBundleStarts==1&&object->m_publishRetryState.scheduled,"installed bundle retry remains scheduled");
  }else{
-  check(exhaustedDuringSignal&&!object->m_publishRetryState.exhausted&&bootstrapStarts==0,"exhausted latch stays during notification and rearms after");
+  check(exhaustedDuringSignal&&!object->m_publishRetryState.exhausted&&bootstrapStarts==0&&installedBundleStarts==0,"exhausted latch stays during notification and rearms after");
  }
  if(observed)delete observed.data();
 }

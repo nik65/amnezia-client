@@ -2269,12 +2269,19 @@ class LabController:
             raise LabError("Hyper-V Windows run requires an explicit baseline outer artifact")
         profile_records = {profile_id: artifact_record(profiles_root() / f"{profile_id}.json") for profile_id in profiles}
         semantic_helper_records = {relative: artifact_record(repo_root() / relative) for relative in SEMANTIC_HELPER_RELATIVES}
-        android_vulkan_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_VULKAN_RELATIVES.items()}
-        validate_android_vulkan_records(android_vulkan_records)
-        android_host_dependency_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_HOST_DEPENDENCY_RELATIVES.items()}
-        validate_android_host_dependency_records(android_host_dependency_records)
-        android_wayland_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_WAYLAND_RELATIVES.items()}
-        validate_android_wayland_records(android_wayland_records)
+        windows_only_candidate = lane == "candidate" and self.windows_backend == "hyperv" and set(records) == {"windows-x64"}
+        android_vulkan_records = {}
+        android_host_dependency_records = {}
+        android_wayland_records = {}
+        # A Windows-only candidate has no Android sandbox step. Keep the
+        # legacy fixture closure unchanged for all other plans and release gates.
+        if not windows_only_candidate:
+            android_vulkan_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_VULKAN_RELATIVES.items()}
+            validate_android_vulkan_records(android_vulkan_records)
+            android_host_dependency_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_HOST_DEPENDENCY_RELATIVES.items()}
+            validate_android_host_dependency_records(android_host_dependency_records)
+            android_wayland_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_WAYLAND_RELATIVES.items()}
+            validate_android_wayland_records(android_wayland_records)
         runner_records = {profile_id: artifact_record(repo_root() / profile["runner"]) for profile_id, profile in profiles.items() if isinstance(profile.get("runner"), str)}
         hyperv_records = None
         if self.windows_backend == "hyperv":

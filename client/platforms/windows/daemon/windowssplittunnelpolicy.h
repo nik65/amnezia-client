@@ -48,6 +48,29 @@ inline bool cleanupStateAllowsInitializedNoop(std::size_t ioctlSucceeded,
       && observedState == initializedState;
 }
 
+// Give the helper time to observe its cooperative abort. A termination
+// request does not establish process exit or driver cleanup.
+class QuarantineTermination {
+ public:
+  void begin(std::uint64_t now) {
+    m_startedAt = now;
+    m_requested = false;
+  }
+
+  bool requestIfOverdue(std::uint64_t now) {
+    constexpr std::uint64_t graceMs = 5000;
+    if (m_requested || now - m_startedAt < graceMs) {
+      return false;
+    }
+    m_requested = true;
+    return true;
+  }
+
+ private:
+  std::uint64_t m_startedAt = 0;
+  bool m_requested = false;
+};
+
 class CleanupGate {
  public:
   bool allowsMutation() const { return !m_failed; }

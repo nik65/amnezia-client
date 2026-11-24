@@ -133,6 +133,7 @@ class WindowsSplitTunnel final {
   HANDLE m_quarantinedHelperJob = nullptr;
   HANDLE m_quarantinedHelperProcess = nullptr;
   HANDLE m_quarantinedHelperAbortEvent = nullptr;
+  windowsSplitTunnelPolicy::QuarantineTermination m_quarantineTermination;
   DaemonError m_lastFailure = DaemonError::ERROR_NONE;
   windowsSplitTunnelPolicy::CleanupGate m_cleanupGate;
   DRIVER_STATE getState();

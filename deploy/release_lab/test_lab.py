@@ -344,6 +344,32 @@ class ReleaseLabContractTests(unittest.TestCase):
             result = controller.gate("candidate", "candidate", outer_artifact=outer)
             self.assertFalse(result["candidate_passed"])
 
+    def test_hyperv_windows_only_candidate_does_not_read_android_sandbox_fixtures(self):
+        source = self.enterContext(isolated_controller_sources())
+        module = sys.modules[LabController.__module__]
+        missing = source / module.ANDROID_VULKAN_RELATIVES["bundle"]
+        missing.unlink()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = {name: root / (name + ".exe") for name in ("thin", "outer", "old-thin", "old-outer")}
+            for name, path in paths.items():
+                path.write_bytes(name.encode("ascii"))
+            versions = {"baseline_version": "5.0.3.20", "candidate_version": "5.0.3.21"}
+            manifest, key = write_signed_manifest(root, paths["thin"], versions["candidate_version"], "windows-x64")
+            inputs = dict(manifest=manifest, manifest_public_key=key,
+                          baseline_artifacts={"windows-x64": paths["old-thin"]}, baseline_outer_artifact=paths["old-outer"],
+                          **versions)
+            windows = LabController(root, windows_backend="hyperv", test_mode=True)
+            run = windows.create("candidate", {"windows-x64": paths["thin"]}, paths["outer"], "windows-only", **inputs)
+            self.assertEqual(run["expected_profiles"], ["windows-x64"])
+            self.assertTrue(run["hyperv_records"])
+            self.assertTrue(run["semantic_helper_records"])
+            for field in ("android_vulkan_records", "android_host_dependency_records", "android_wayland_records"):
+                self.assertEqual(run[field], {})
+            with self.assertRaisesRegex(LabError, "artifact does not exist"):
+                LabController(root, test_mode=True).create(
+                    "candidate", {"windows-x64": paths["thin"]}, paths["outer"], "qemu-negative-control", **inputs)
+
     def test_gate_rejects_artifact_bytes_changed_after_guest_testing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

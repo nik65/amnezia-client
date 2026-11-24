@@ -791,6 +791,7 @@ void WindowsSplitTunnel::quarantineConfigurationHelper(
   m_quarantinedHelperJob = job;
   m_quarantinedHelperProcess = process;
   m_quarantinedHelperAbortEvent = abortEvent;
+  m_quarantineTermination.begin(GetTickCount64());
   // state is indeterminate until late cleanup completes
   // State is indeterminate until late cleanup completes; preserve the
   // quarantined handles and fail closed for subsequent mutations.
@@ -810,6 +811,18 @@ bool WindowsSplitTunnel::reapQuarantinedConfigurationHelper() {
   const DWORD processWait =
       WaitForSingleObject(m_quarantinedHelperProcess, 0);
   if (processWait == WAIT_TIMEOUT) {
+    if (m_quarantineTermination.requestIfOverdue(GetTickCount64())) {
+      // Abort is cooperative and cannot interrupt synchronous driver I/O.
+      // Request termination of only the retained, owned process. Keep its
+      // handles and wait for confirmed exit on a later reap; the aborted exit
+      // code then requires the normal isolated cleanup and exact readback.
+      const BOOL requested = TerminateProcess(m_quarantinedHelperProcess,
+                                              CONFIGURATION_HELPER_ABORTED);
+      const DWORD terminationError = requested ? ERROR_SUCCESS : GetLastError();
+      logger.warning() << "Split-tunnel quarantine termination requested"
+                       << "accepted=" << (requested != FALSE)
+                       << "result=" << terminationError;
+    }
     logger.warning() << "Split-tunnel helper is still quarantined";
     return false;
   }

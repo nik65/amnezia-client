@@ -3,6 +3,7 @@
 set -eu
 
 HOST_DIRECTORY="${1:-/opt/amnezia/client-updates}"
+EXPECTED_CURRENT_MANIFEST_SHA256="${2:-}"
 BRIDGE_HOST="${AMNEZIA_UPDATE_BRIDGE_HOST:-172.29.172.252}"
 SYNC_PORT="${AMNEZIA_UPDATE_SYNC_PORT:-17865}"
 CONTAINER_NAME="${AMNEZIA_UPDATE_CONTAINER_NAME:-amnezia-client-updates}"
@@ -835,7 +836,7 @@ remove_owned_firewall_rule() {
     fi
 }
 
-load_firewall_state() {
+read_firewall_state() {
     FIREWALL_OLD_PRESENT=0
     if ! as_root test -e "$FIREWALL_STATE_PATH" && ! as_root test -L "$FIREWALL_STATE_PATH"; then
         return 0
@@ -875,6 +876,11 @@ EOF
         case "$firewall_old_flag" in 0|1) ;; *) die "Firewall ownership state has an invalid flag" ;; esac
     done
     FIREWALL_OLD_PRESENT=1
+}
+
+load_firewall_state() {
+    read_firewall_state
+    [ "$FIREWALL_OLD_PRESENT" = 1 ] || return 0
     FIREWALL_STATE_BACKUP="${FIREWALL_STATE_PATH}.backup.${TRANSACTION_ID}"
     as_root test ! -e "$FIREWALL_STATE_BACKUP" && ! as_root test -L "$FIREWALL_STATE_BACKUP" \
         || die "Firewall ownership backup path already exists"
@@ -1482,23 +1488,264 @@ recover_incomplete_transaction() {
         clear_transaction_journal \
             || die "Committed update-host recovery could not clear durable transaction journal"
         printf '%s\n' 'Recovered committed update-host transaction and completed cleanup'
-        exit 0
+        [ -n "$EXPECTED_CURRENT_MANIFEST_SHA256" ] || exit 0
+        reset_transaction_state_after_recovery
+        return 0
     fi
 
     hydrate_new_container_records 0
     recover_health_sentinel_for_rollback
     if rollback_transaction; then
+        set -e
         remove_health_sentinel || die "Recovered rollback could not remove health sentinel"
         cleanup_transaction_cidfiles || die "Recovered rollback could not remove cidfiles"
         clear_transaction_journal \
             || die "Recovered rollback could not clear durable transaction journal"
         printf '%s\n' 'Recovered and rolled back incomplete update-host transaction' >&2
         reset_transaction_state_after_recovery
-        exit 0
+        [ -n "$EXPECTED_CURRENT_MANIFEST_SHA256" ] || exit 0
+        return 0
     else
         TRANSACTION_STARTED=0
         die "CRITICAL: durable update-host transaction recovery was incomplete"
     fi
+}
+
+# Reuse only the default managed service and only the exact signed manifest
+# already authenticated by the calling publisher. The publisher separately
+# retains its compare-and-swap, post-commit endpoint checks, and rollback.
+reuse_manifest_snapshot() {
+    require_trusted_directory "$HOST_DIRECTORY" "existing update host directory"
+    reuse_file="$HOST_DIRECTORY/manifest.json"
+    as_root test -f "$reuse_file" && ! as_root test -L "$reuse_file" || return 1
+    reuse_file_stat="$(as_root stat -c '%u:%g:%a:%s:%d:%i:%h' -- "$reuse_file")" || return 1
+    IFS=: read -r reuse_uid reuse_gid reuse_mode reuse_size reuse_device reuse_inode reuse_links <<EOF
+$reuse_file_stat
+EOF
+    [ "$reuse_uid:$reuse_gid:$reuse_links" = "$TRUSTED_UID:$TRUSTED_GID:1" ] || return 1
+    case "$reuse_mode" in ""|*[!0-7]*) return 1 ;; esac
+    case "$reuse_size:$reuse_device:$reuse_inode" in :*|*::*|*:|*[!0-9:]*) return 1 ;; esac
+    [ $((0$reuse_mode & 0022)) -eq 0 ] && [ "$reuse_size" -gt 0 ] \
+        && [ "$reuse_size" -le 1048576 ] || return 1
+    reuse_local_sha="$(as_root sha256sum -- "$reuse_file")" || return 1
+    [ "${reuse_local_sha%% *}" = "$EXPECTED_CURRENT_MANIFEST_SHA256" ] || return 1
+    [ "$(as_root stat -c '%u:%g:%a:%s:%d:%i:%h' -- "$reuse_file")" = "$reuse_file_stat" ] \
+        && ! as_root test -L "$reuse_file"
+}
+
+reuse_container() {
+    reuse_id="$1"
+    reuse_name="$2"
+    reuse_role="$3"
+    reuse_net_mode="$4"
+    reuse_http_port="$5"
+    assert_new_container_identity "$reuse_id" "$reuse_name" "$reuse_role" || return 1
+    is_running_container "$reuse_id" || return 1
+    query_container_field "$reuse_id" '{{.State.Restarting}}' 'reuse restart state' || return 1
+    [ "$CONTAINER_QUERY_VALUE" = false ] || return 1
+    query_container_field "$reuse_id" '{{.Image}}' 'reuse immutable image' || return 1
+    [ "$CONTAINER_QUERY_VALUE" = "$reuse_image_id" ] || return 1
+    query_container_field "$reuse_id" \
+        '{{range .Mounts}}{{.Type}}|{{.Source}}|{{.Destination}}|{{.RW}}{{println}}{{end}}' \
+        'reuse mounts' || return 1
+    [ "$CONTAINER_QUERY_VALUE" = "bind|$HOST_DIRECTORY|/www|false" ] || return 1
+    query_container_field "$reuse_id" '{{.HostConfig.Privileged}}' 'reuse privilege' || return 1
+    [ "$CONTAINER_QUERY_VALUE" = false ] || return 1
+    query_container_field "$reuse_id" '{{.HostConfig.NetworkMode}}' 'reuse network mode' || return 1
+    if [ "$reuse_role" = bridge ]; then
+        [ "$CONTAINER_QUERY_VALUE" = "$reuse_net_mode" ] \
+            || [ "$CONTAINER_QUERY_VALUE" = "$reuse_network_id" ] || return 1
+    else
+        [ "$CONTAINER_QUERY_VALUE" = "$reuse_net_mode" ] || return 1
+    fi
+    query_container_field "$reuse_id" '{{json .Config.Entrypoint}}' 'reuse entrypoint' || return 1
+    [ "$CONTAINER_QUERY_VALUE" = '["sh"]' ] || return 1
+    query_container_field "$reuse_id" '{{json .Config.Cmd}}' 'reuse command' || return 1
+    [ "$CONTAINER_QUERY_VALUE" = "[\"-c\",\"busybox httpd -f -p $reuse_http_port -h /www\"]" ]
+}
+
+reuse_manifest_endpoint() {
+    reuse_endpoint_id="$1"
+    reuse_endpoint_address="$2"
+    # ash pipefail keeps HTTP or body-limit errors from being hidden by sha256sum.
+    reuse_served_sha="$(as_root timeout 8s docker exec "$reuse_endpoint_id" sh -ec \
+        'set -o pipefail; busybox wget -T 4 -q -O - "$1" | busybox head -c 1048577 | busybox sha256sum' \
+        amnezia-update-host-probe "http://$reuse_endpoint_address:$SYNC_PORT/manifest.json")" || return 1
+    [ "$reuse_served_sha" = "$EXPECTED_CURRENT_MANIFEST_SHA256  -" ]
+}
+
+reuse_existing_update_host() (
+    [ "${#EXPECTED_CURRENT_MANIFEST_SHA256}" -eq 64 ] || exit 1
+    case "$EXPECTED_CURRENT_MANIFEST_SHA256" in *[!0-9a-f]*) exit 1 ;; esac
+    [ "$HOST_DIRECTORY" = "$LOCK_PARENT/client-updates" ] \
+        && [ "$CONTAINER_NAME:$HOST_CONTAINER_NAME:$BRIDGE_HOST:$HOST_BIND:$SYNC_PORT:$PUBLISH_HOST_PORT" = \
+            amnezia-client-updates:amnezia-client-updates-host:172.29.172.252:0.0.0.0:17865:1 ] \
+        && [ -z "$VPN_CONTAINER" ] && [ "$reuse_existing_lock_and_cids" = true ] || exit 1
+    command -v timeout >/dev/null 2>&1 && command -v find >/dev/null 2>&1 || exit 1
+    ! as_root test -e "$JOURNAL_PATH" && ! as_root test -L "$JOURNAL_PATH" || exit 1
+    reuse_pending_cid="$(as_root find "$CID_PARENT" -mindepth 1 -maxdepth 1 -print -quit)" || exit 1
+    [ -z "$reuse_pending_cid" ] || exit 1
+    reuse_manifest_snapshot || exit 1
+    reuse_original_manifest_stat="$reuse_file_stat"
+
+    reuse_image_id="$(as_root docker image inspect -f '{{.Id}}' "$IMAGE")" || exit 1
+    [ "${#reuse_image_id}" -eq 71 ] || exit 1
+    case "$reuse_image_id" in sha256:*) ;; *) exit 1 ;; esac
+    case "${reuse_image_id#sha256:}" in *[!0-9a-f]*) exit 1 ;; esac
+
+    reuse_network=amnezia-dns-net
+    query_network_id "$reuse_network" || exit 1
+    query_network_subnets "$reuse_network" || exit 1
+    if ! printf '%s\n' "$NETWORK_QUERY_VALUE" | grep -qx "$EXPECTED_SUBNET"; then
+        reuse_network="${CONTAINER_NAME}-net"
+    fi
+    query_network_id "$reuse_network" || exit 1
+    reuse_network_id="$NETWORK_QUERY_VALUE"
+    [ "${#reuse_network_id}" -eq 64 ] || exit 1
+    case "$reuse_network_id" in *[!0-9a-f]*) exit 1 ;; esac
+    query_network_name "$reuse_network_id" || exit 1
+    [ "$NETWORK_QUERY_VALUE" = "$reuse_network" ] || exit 1
+    query_network_subnets "$reuse_network_id" || exit 1
+    [ "$NETWORK_QUERY_VALUE" = "$EXPECTED_SUBNET" ] || exit 1
+
+    query_container_id "$CONTAINER_NAME" || exit 1
+    reuse_bridge_id="$CONTAINER_QUERY_VALUE"
+    query_container_label "$reuse_bridge_id" "$TRANSACTION_LABEL_KEY" || exit 1
+    TRANSACTION_ID="$CONTAINER_QUERY_VALUE"
+    [ "${#TRANSACTION_ID}" -eq 48 ] || exit 1
+    case "$TRANSACTION_ID" in *[!0-9a-f]*) exit 1 ;; esac
+    query_container_id "$HOST_CONTAINER_NAME" || exit 1
+    reuse_host_id="$CONTAINER_QUERY_VALUE"
+    reuse_expected_ids=""
+    reuse_expected_names=""
+    reuse_parents=""
+    for reuse_vpn_name in $AUTO_VPN_CONTAINERS; do
+        if ! is_running_container "$reuse_vpn_name"; then
+            continue
+        fi
+        query_container_id "$reuse_vpn_name" || exit 1
+        reuse_vpn_id="$CONTAINER_QUERY_VALUE"
+        assert_name_maps_to_id "$reuse_vpn_name" "$reuse_vpn_id" || exit 1
+        reuse_sidecar_name="${CONTAINER_NAME}-vpn-${reuse_vpn_name}"
+        query_container_id "$reuse_sidecar_name" || exit 1
+        reuse_sidecar_id="$CONTAINER_QUERY_VALUE"
+        reuse_parents="${reuse_parents}${reuse_vpn_name}|${reuse_vpn_id}|${reuse_sidecar_name}|${reuse_sidecar_id}
+"
+        reuse_expected_ids="$reuse_expected_ids $reuse_sidecar_id"
+        reuse_expected_names="$reuse_expected_names $reuse_sidecar_name"
+    done
+    reuse_expected_ids="$reuse_bridge_id $reuse_host_id$reuse_expected_ids"
+    for reuse_expected_id in $reuse_expected_ids; do
+        [ "${#reuse_expected_id}" -eq 64 ] || exit 1
+        case "$reuse_expected_id" in *[!0-9a-f]*) exit 1 ;; esac
+    done
+
+    # Check exact name/ID membership and repeat it after probing all namespaces.
+    for reuse_pass in before after; do
+        reuse_observed_ids="$(as_root docker ps -aq --no-trunc --filter \
+            "label=$TRANSACTION_LABEL_KEY=$TRANSACTION_ID")" || exit 1
+        reuse_seen=""
+        for reuse_observed_id in $reuse_observed_ids; do
+            case " $reuse_expected_ids " in *" $reuse_observed_id "*) ;; *) exit 1 ;; esac
+            case " $reuse_seen " in *" $reuse_observed_id "*) exit 1 ;; esac
+            reuse_seen="$reuse_seen $reuse_observed_id"
+        done
+        for reuse_expected_id in $reuse_expected_ids; do
+            case " $reuse_seen " in *" $reuse_expected_id "*) ;; *) exit 1 ;; esac
+        done
+        reuse_names="$(as_root docker ps -a --format '{{.Names}}')" || exit 1
+        for reuse_name in $reuse_names; do
+            case "$reuse_name" in
+                "$CONTAINER_NAME".amnezia-backup.*|"$HOST_CONTAINER_NAME".amnezia-backup.*) exit 1 ;;
+                "$CONTAINER_NAME"-vpn-*)
+                    case " $reuse_expected_names " in *" $reuse_name "*) ;; *) exit 1 ;; esac ;;
+            esac
+        done
+
+        reuse_container "$reuse_bridge_id" "$CONTAINER_NAME" bridge "$reuse_network" "$SYNC_PORT" || exit 1
+        query_container_field "$reuse_bridge_id" '{{len .NetworkSettings.Networks}}' \
+            'reuse bridge network count' || exit 1
+        [ "$CONTAINER_QUERY_VALUE" = 1 ] || exit 1
+        query_container_field "$reuse_bridge_id" \
+            "{{with index .NetworkSettings.Networks \"$reuse_network\"}}{{.NetworkID}}{{end}}" \
+            'reuse bridge network ID' || exit 1
+        [ "$CONTAINER_QUERY_VALUE" = "$reuse_network_id" ] || exit 1
+        query_container_network_ip "$reuse_bridge_id" "$reuse_network" || exit 1
+        [ "$CONTAINER_QUERY_VALUE" = "$BRIDGE_HOST" ] || exit 1
+        query_network_id "$reuse_network" || exit 1
+        [ "$NETWORK_QUERY_VALUE" = "$reuse_network_id" ] || exit 1
+        reuse_container "$reuse_host_id" "$HOST_CONTAINER_NAME" host host "$HOST_BIND:$SYNC_PORT" || exit 1
+        if [ "$reuse_pass" = before ]; then
+            reuse_manifest_endpoint "$reuse_bridge_id" 127.0.0.1 || exit 1
+            reuse_manifest_endpoint "$reuse_host_id" "$HOST_PROBE_ADDRESS" || exit 1
+        fi
+
+        # Preserve a closed set even if a VPN appears/disappears during probes.
+        for reuse_vpn_name in $AUTO_VPN_CONTAINERS; do
+            if is_running_container "$reuse_vpn_name"; then
+                case " $reuse_expected_names " in
+                    *" ${CONTAINER_NAME}-vpn-${reuse_vpn_name} "*) ;;
+                    *) exit 1 ;;
+                esac
+            fi
+        done
+        while IFS='|' read -r reuse_vpn_name reuse_vpn_id reuse_sidecar_name reuse_sidecar_id; do
+            [ -n "$reuse_vpn_name" ] || continue
+            assert_name_maps_to_id "$reuse_vpn_name" "$reuse_vpn_id" \
+                && is_running_container "$reuse_vpn_id" || exit 1
+            reuse_container "$reuse_sidecar_id" "$reuse_sidecar_name" "tunnel-$reuse_vpn_name" \
+                "container:$reuse_vpn_id" "$SYNC_PORT" || exit 1
+            if [ "$reuse_pass" = before ]; then
+                reuse_manifest_endpoint "$reuse_sidecar_id" 127.0.0.1 || exit 1
+            fi
+        done <<EOF
+$reuse_parents
+EOF
+    done
+
+    reuse_manifest_snapshot && [ "$reuse_file_stat" = "$reuse_original_manifest_stat" ] \
+        && ! as_root test -e "$JOURNAL_PATH" && ! as_root test -L "$JOURNAL_PATH" || exit 1
+)
+
+reuse_firewall_ready() (
+    read_firewall_state
+    [ "$FIREWALL_OLD_PRESENT" = 1 ] && [ "$FIREWALL_OLD_BIND" = "$HOST_BIND" ] \
+        && [ "$FIREWALL_OLD_PORT" = "$SYNC_PORT" ] || exit 1
+    if command -v ufw >/dev/null 2>&1; then
+        firewall_rule_present ufw "$HOST_BIND" "$SYNC_PORT" || exit 1
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewalld_running; then
+        firewall_rule_present firewalld-runtime "$HOST_BIND" "$SYNC_PORT" \
+            && firewall_rule_present firewalld-permanent "$HOST_BIND" "$SYNC_PORT" || exit 1
+    fi
+    if command -v iptables >/dev/null 2>&1; then
+        firewall_rule_present iptables "$HOST_BIND" "$SYNC_PORT" || exit 1
+    fi
+)
+
+begin_installer_transaction() {
+    TRANSACTION_ID="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
+    case "$TRANSACTION_ID" in
+        ""|*[!0-9a-f]*) die "Unable to generate installer transaction identity" ;;
+    esac
+    [ "${#TRANSACTION_ID}" -eq 48 ] || die "Installer transaction identity has unexpected length"
+    HEALTH_SENTINEL_NAME="amnezia-update-health-${TRANSACTION_ID}"
+    HEALTH_SENTINEL_PATH="${HOST_DIRECTORY}/${HEALTH_SENTINEL_NAME}"
+    HEALTH_SENTINEL_CONTENT="amnezia-update-health-v1:${TRANSACTION_ID}"
+    TRANSACTION_STARTED=1
+    persist_transaction_journal active
+}
+
+commit_installer_transaction() {
+    # The desired endpoints are now authoritative. Backup cleanup cannot be made atomic
+    # by Docker, so a cleanup error preserves the verified replacements and reports fail-closed.
+    persist_transaction_journal committed_pending_cleanup
+    TRANSACTION_COMMITTED=1
+    finalize_firewall_state || die "Verified update host is active, but firewall state cleanup failed"
+    cleanup_backups || die "Verified update host is active, but transactional backup cleanup failed"
+    cleanup_transaction_cidfiles || die "Verified update host is active, but cidfile cleanup failed"
+    clear_transaction_journal \
+        || die "Verified update host is active, but durable transaction journal cleanup failed"
 }
 
 [ -n "$HOST_DIRECTORY" ] || die "HOST_DIRECTORY must not be empty"
@@ -1529,6 +1776,10 @@ printf '%s' "$HOST_DIRECTORY" | grep -q '[|[:cntrl:]]' \
     && die "HOST_DIRECTORY contains a journal-unsafe character"
 
 as_root true || die "Passwordless noninteractive sudo is required"
+reuse_existing_lock_and_cids=false
+if [ -n "$EXPECTED_CURRENT_MANIFEST_SHA256" ] && as_root test -f "$LOCK_PATH" && as_root test -d "$CID_PARENT"; then
+    reuse_existing_lock_and_cids=true
+fi
 prepare_installer_lock
 trap finish_installer EXIT
 trap 'exit 74' HUP INT TERM
@@ -1544,12 +1795,18 @@ else
     HOST_PROBE_ADDRESS="$HOST_BIND"
 fi
 recover_incomplete_transaction
-
-TRANSACTION_ID="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
-case "$TRANSACTION_ID" in
-    ""|*[!0-9a-f]*) die "Unable to generate installer transaction identity" ;;
-esac
-[ "${#TRANSACTION_ID}" -eq 48 ] || die "Installer transaction identity has unexpected length"
+if [ -n "$EXPECTED_CURRENT_MANIFEST_SHA256" ] && reuse_existing_update_host; then
+    if ! reuse_firewall_ready; then
+        # The proven running containers need no replacement. Journal only the
+        # firewall reconciliation so interrupted repair remains recoverable.
+        begin_installer_transaction
+        reconcile_firewall_rules
+        switch_firewall_state
+        commit_installer_transaction
+    fi
+    printf '%s\n' 'update_host_transaction=reused'
+    exit 0
+fi
 
 # Preflight all immutable inputs and candidate runtime before touching a live endpoint.
 as_root mkdir -p "$HOST_DIRECTORY/files"
@@ -1562,11 +1819,7 @@ as_root docker run --rm --log-driver none --entrypoint sh "$IMAGE" \
     -c "busybox --list | busybox grep -qx httpd" >/dev/null \
     || die "Pinned update image candidate preflight failed"
 
-HEALTH_SENTINEL_NAME="amnezia-update-health-${TRANSACTION_ID}"
-HEALTH_SENTINEL_PATH="${HOST_DIRECTORY}/${HEALTH_SENTINEL_NAME}"
-HEALTH_SENTINEL_CONTENT="amnezia-update-health-v1:${TRANSACTION_ID}"
-TRANSACTION_STARTED=1
-persist_transaction_journal active
+begin_installer_transaction
 HEALTH_SENTINEL_INTENT=1
 persist_transaction_journal active
 create_or_verify_health_sentinel
@@ -1772,15 +2025,7 @@ reconcile_firewall_rules
 remove_health_sentinel || die "Unable to remove update-host health sentinel"
 switch_firewall_state
 
-# The desired endpoints are now authoritative. Backup cleanup cannot be made atomic
-# by Docker, so a cleanup error preserves the verified replacements and reports fail-closed.
-persist_transaction_journal committed_pending_cleanup
-TRANSACTION_COMMITTED=1
-finalize_firewall_state || die "Verified update host is active, but firewall state cleanup failed"
-cleanup_backups || die "Verified update host is active, but transactional backup cleanup failed"
-cleanup_transaction_cidfiles || die "Verified update host is active, but cidfile cleanup failed"
-clear_transaction_journal \
-    || die "Verified update host is active, but durable transaction journal cleanup failed"
+commit_installer_transaction
 
 printf 'update_host_transaction=committed\ntransaction_id=%s\nimage=%s\nbridge_container=%s\nbridge_container_id=%s\nhost_container=%s\nhost_container_id=%s\nhost_bind=%s\nhost_probe_address=%s\nsync_port=%s\nnetwork_name=%s\nnetwork_id=%s\nvpn_sidecars=%s\n' \
     "$TRANSACTION_ID" "$IMAGE" "$CONTAINER_NAME" "$NEW_MAIN_ID" "$HOST_CONTAINER_NAME" \

@@ -38,7 +38,8 @@ foreach(CASE IN ITEMS gateway-delayed-invalidated gateway-stale-success gateway-
     manifest-exact manifest-overflow manifest-declared manifest-final-only manifest-destroy-owner
     manifest-destroy-reply manifest-leak metadata-exact metadata-overflow metadata-declared metadata-stale
     metadata-destroy-owner metadata-destroy-reply bootstrap-retry-delete bootstrap-exhausted-delete
-    bootstrap-success-delete bootstrap-normal-retry bootstrap-normal-exhausted)
+    bootstrap-success-delete bootstrap-normal-retry bootstrap-normal-exhausted
+    bootstrap-installed-retry bootstrap-installed-retry-delete bootstrap-installed-exhausted)
     add_test(NAME update_check_${CASE} COMMAND update_check_lifetime_tests "${CASE}")
     set_tests_properties(update_check_${CASE} PROPERTIES TIMEOUT 15)
 endforeach()

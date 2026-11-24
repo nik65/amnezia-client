@@ -8,6 +8,7 @@ SEALED_INSTALLER="${2:-}"
 EXPECTED_SHA256="${3:-}"
 EXPECTED_SIZE="${4:-}"
 HOST_DIRECTORY="${5:-}"
+CURRENT_MANIFEST_SHA256="${6:-}"
 SEALED_CREATED=0
 INSTALL_TIMEOUT_SECONDS=900
 
@@ -49,6 +50,12 @@ case "$EXPECTED_SIZE" in
     ""|*[!0-9]*) die "Expected installer size is invalid" ;;
 esac
 [ "$EXPECTED_SIZE" -gt 0 ] 2>/dev/null || die "Expected installer size is invalid"
+if [ -n "$CURRENT_MANIFEST_SHA256" ]; then
+    [ "${#CURRENT_MANIFEST_SHA256}" -eq 64 ] || die "Current manifest sha256 is invalid"
+    case "$CURRENT_MANIFEST_SHA256" in
+        *[!0-9a-f]*) die "Current manifest sha256 is invalid" ;;
+    esac
+fi
 command -v timeout >/dev/null 2>&1 || die "Required installer timeout tool is missing"
 as_root true || die "Passwordless noninteractive sudo is required"
 
@@ -75,8 +82,11 @@ as_root test -f "$SEALED_INSTALLER" && ! as_root test -L "$SEALED_INSTALLER" \
 [ "$(as_root sha256sum -- "$SEALED_INSTALLER" | awk '{print $1}')" = "$EXPECTED_SHA256" ] \
     || die "Sealed installer sha256 mismatch"
 
-timeout --signal=TERM --kill-after=60s "${INSTALL_TIMEOUT_SECONDS}s" \
-    sh "$SEALED_INSTALLER" "$HOST_DIRECTORY"
+set -- "$HOST_DIRECTORY"
+if [ -n "$CURRENT_MANIFEST_SHA256" ]; then
+    set -- "$@" "$CURRENT_MANIFEST_SHA256"
+fi
+timeout --signal=TERM --kill-after=60s "${INSTALL_TIMEOUT_SECONDS}s" sh "$SEALED_INSTALLER" "$@"
 as_root rm -f -- "$SEALED_INSTALLER"
 SEALED_CREATED=0
 trap - EXIT HUP INT TERM

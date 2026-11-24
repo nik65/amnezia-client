@@ -1006,7 +1006,8 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
         return false;
     }
 
-    const auto installOrRefreshUpdateHost = [&sshSession, &credentials, &remoteTmp, &serverDir, &runId]() {
+    const auto installOrRefreshUpdateHost = [&sshSession, &credentials, &remoteTmp, &serverDir, &runId,
+                                             &expectedCurrentManifestSha256]() {
         QFile installScriptFile(QString::fromLatin1(kInstallHostScript));
         if (!installScriptFile.open(QIODevice::ReadOnly)) {
             logger.warning() << "Bundled update host install script is missing";
@@ -1048,18 +1049,21 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
 
         amnezia::ErrorCode error = sshSession.uploadFileToHost(credentials, installScript, remoteInstallScript);
         if (error == amnezia::ErrorCode::NoError) {
+            const QByteArray reuseManifestSha256 = expectedCurrentManifestSha256 == QByteArrayLiteral("absent")
+                    ? QByteArray() : expectedCurrentManifestSha256;
             const QString verifiedInstallCommand = QStringLiteral(
                     "set -eu; verifier_b64=%1; verifier_sha256=%2; "
                     "verifier=$(printf '%s' \"$verifier_b64\" | base64 -d); "
                     "test \"$(printf '%s' \"$verifier\" | sha256sum | awk '{print $1}')\" = \"$verifier_sha256\"; "
-                    "sh -c \"$verifier\" amnezia-verified-installer %3 %4 %5 %6 %7")
+                    "sh -c \"$verifier\" amnezia-verified-installer %3 %4 %5 %6 %7 %8")
                     .arg(shellQuote(QString::fromLatin1(verifiedRunnerBase64)),
                          shellQuote(QString::fromLatin1(verifiedRunnerSha256)),
                          shellQuote(remoteInstallScript),
                          shellQuote(sealedInstallScript),
                          shellQuote(QString::fromLatin1(installScriptSha256)),
                          shellQuote(QString::number(installScript.size())),
-                         shellQuote(serverDir));
+                         shellQuote(serverDir),
+                         shellQuote(QString::fromLatin1(reuseManifestSha256)));
             error = sshSession.runScript(
                     credentials,
                     verifiedInstallCommand,
@@ -1076,7 +1080,7 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
         return true;
     };
 
-    const auto verifyRemoteUpdateHost = [&sshSession, &credentials, &payload, &serverDir, &remoteManifest]() {
+    const auto verifyRemoteUpdateHost = [&sshSession, &credentials, &payload, &serverDir, &remoteManifest, &remoteTmp]() {
         QString verifyScript = QStringLiteral(
                 "set -eu\n"
                 "tx_label=%5\n"
@@ -1199,10 +1203,22 @@ bool SelfHostedUpdateBootstrapper::publishPayload(Payload payload, amnezia::Serv
         }
 
         verifyScript += QStringLiteral(
-                "test \"$(sudo -n -- docker run --rm --log-driver none --network host --entrypoint sh %2 -c \"busybox wget -q -O - 'http://$host_probe:$sync_port/manifest.json'\" | sha256sum | awk '{print $1}')\" = %1\n"
+                "if command -v curl >/dev/null 2>&1; then\n"
+                "  host_sample=$(mktemp %3)\n"
+                "  host_status=$(curl -q --fail --silent --show-error --noproxy '*' --proto '=http' "
+                "--max-time 20 --max-filesize %4 --output \"$host_sample\" "
+                "--write-out '%{http_code}' \"http://$host_probe:$sync_port/manifest.json\")\n"
+                "  test \"$host_status\" = 200\n"
+                "  test \"$(sha256sum -- \"$host_sample\" | awk '{print $1}')\" = %1\n"
+                "  rm -f -- \"$host_sample\"\n"
+                "else\n"
+                "  test \"$(sudo -n -- docker run --rm --log-driver none --network host --entrypoint sh %2 -c \"busybox wget -q -O - 'http://$host_probe:$sync_port/manifest.json'\" | sha256sum | awk '{print $1}')\" = %1\n"
+                "fi\n"
                 "printf 'transaction_id=%s\\nbridge_container_id=%s\\nhost_container_id=%s\\nhost_bind=%s\\nhost_probe_address=%s\\nsync_port=%s\\nsidecar_count=%s\\nvpn_sidecars=%s\\nmanifest_sha256=%s\\n' \"$transaction_id\" \"$bridge_id\" \"$host_id\" \"$host_bind\" \"$host_probe\" \"$sync_port\" \"$sidecar_count\" \"${sidecar_report:-none}\" %1\n")
                 .arg(shellQuote(QString::fromLatin1(payload.manifestSha256)),
-                     shellQuote(QString::fromLatin1(kUpdateHostImage)));
+                     shellQuote(QString::fromLatin1(kUpdateHostImage)),
+                     shellQuote(remoteTmp + QStringLiteral("/host-manifest.XXXXXX")),
+                     QString::number(kMaximumManifestBytes));
 
         qsizetype verificationOutputBytes = 0;
         const auto accountVerificationOutput = [&verificationOutputBytes](const QString &data, libssh::Client &) {
