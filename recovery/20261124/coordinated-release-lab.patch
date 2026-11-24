@@ -1,0 +1,883 @@
+diff --git a/deploy/release_lab/README.md b/deploy/release_lab/README.md
+index 8d122aee..4c5625cc 100644
+--- a/deploy/release_lab/README.md
++++ b/deploy/release_lab/README.md
+@@ -117,14 +117,43 @@ The release lane takes the final outer self-hosted Windows candidate, signed
+ manifest, and its platform artifacts. Every file is hashed during planning
+ and compared again at the gate. Any rebuild or byte change after testing
+ fails. The server condition is satisfied only by a live QMP/QGA observation
+-of the registered isolated `server-router` VM, bound to this run's UUID,
+-outer/manifest hashes, and the configured lab SSH pin. External server JSON
+-receipts are rejected. A successful release gate writes
++of the registered isolated `server-router` VM, bound to this run's UUID
++and outer/manifest hashes. The controller uses QGA to read the SSH key
++advertised on loopback in that guest and compares its Ed25519 fingerprint
++with the configured lab SSH pin. External server JSON receipts are rejected.
++A successful release gate writes
+ `exports/<run-id>/publishable.json` with the same outer SHA-256. Candidate mode
+ may be used for a thin iteration of selected products; it reports
+ `candidate_passed` only and never writes a publishable marker or claims
+ `release_passed`.
+ 
++Pass the original physical Android acquisition to the release gate with
++`gate --run-id <run-id> --lane release --android-real-device-export <path>`.
++The gate verifies the signature, freshness, real-device role, and exact
++planned manifest, outer installer, and platform artifact identities.
++Publication validation and the remaining guest checks still apply.
++
++### Coordinated release authorization
++
++The coordinated gate verifies an exact held installer against the four original
++signed platform exports, their recorded N-1 inputs, and a fresh detached full
++approval. It also requires an owned PowerShell Direct transaction from the
++exact production client and a separate installer-driven publication on the
++isolated lab SSH profile. Both publication runs must complete and pass their
++cleanup checks. The PowerShell Direct transport requires no relay registration
++on the Windows host.
++
++An optional `renewal` in the plan pins a fresh signed approval for the same
++four original exports and the same release bytes. The approval pinned in
++`approval` must have covered the original exact publication from dispatch
++through readback. The gate verifies both signatures and records both hashes.
++
++Run `python3 -B -m deploy.release_lab.coordinated_release_promote verify` with
++`--plan` and `--expected-plan-sha256` as the existing Ubuntu laboratory account.
++The `promote` action revalidates that plan, records the coordinated authorization,
++and copies only the exact held bytes into `dist/selfhosted-windows-client`.
++It does not start the installer. The user starts the final installer manually.
++
+ `reset` can remove only an overlay carrying the run/profile ownership marker.
+ It refuses base, foreign, production, or unmarked paths.
+ 
+diff --git a/deploy/release_lab/coordinated_release_acceptance.py b/deploy/release_lab/coordinated_release_acceptance.py
+index e3add4ff..83a73acf 100644
+--- a/deploy/release_lab/coordinated_release_acceptance.py
++++ b/deploy/release_lab/coordinated_release_acceptance.py
+@@ -130,3 +130,47 @@ def issue_coordinated_acceptance(*, private_key, **inputs):
+     envelope = authority.make_manifest.acceptance_envelope(payload, Path(private_key))
+     authority.verify_full_acceptance(envelope, context=context)
+     return envelope, proof
++
++
++def _received_object(raw, *, label, maximum):
++    if not isinstance(raw, bytes) or not 0 < len(raw) <= maximum:
++        raise authority.TrustedAcquisitionError(f"{label} requires original bytes within bounds")
++    value = authority._json(raw)
++    if not isinstance(value, dict):
++        raise authority.TrustedAcquisitionError(f"{label} must be a JSON object")
++    return value
++
++
++def verify_coordinated_approval(*, context, approval_bytes, windows_bytes, gui_bytes,
++                               coordinated_headless_bytes, android_bytes):
++    """Verify an existing approval against the original four current exports.
++
++    The caller supplies the pinned acquisition context. No file placement or
++    signing occurs here. Successful verification leaves the input bytes safe
++    to pass unchanged to a separately guarded publication fixture.
++    """
++    approval = _received_object(approval_bytes, label="detached approval", maximum=128 * 1024)
++    if approval_bytes != authority.canonical(approval):
++        raise authority.TrustedAcquisitionError("canonical detached approval bytes required")
++    payload = authority.verify_full_acceptance(approval, context=context)
++
++    def export(raw, label):
++        return _received_object(raw, label=label, maximum=authority.MAX_EXPORT_BYTES)
++
++    receipts, proof, source_expiry = prepare_coordinated_matrix(
++        context=context, windows_export=export(windows_bytes, "Windows export"),
++        gui_export=export(gui_bytes, "Linux GUI export"),
++        coordinated_headless_export=export(coordinated_headless_bytes, "coordinated headless export"),
++        android_export=export(android_bytes, "physical Android export"),
++        original_android_context=context, original_android_bytes=android_bytes,
++    )
++    if authority.canonical(payload["receipts"]) != authority.canonical(receipts):
++        raise authority.TrustedAcquisitionError("detached approval receipts differ from the four verified observations")
++    issued = authority._utc(payload["issuedAt"])
++    expires = authority._utc(payload["expiresAt"])
++    latest_observation = max(authority._utc(item["payload"]["issuedAt"]) for item in proof["observations"])
++    if issued < latest_observation or expires > min(issued + timedelta(hours=1), source_expiry):
++        raise authority.TrustedAcquisitionError("detached approval lifetime differs from its coordinated observations")
++    if authority.utc_now() >= expires:
++        raise authority.TrustedAcquisitionError("detached approval expired during verification")
++    return payload, proof
+diff --git a/deploy/release_lab/lab.py b/deploy/release_lab/lab.py
+index 1b6e2d1f..6e821c19 100644
+--- a/deploy/release_lab/lab.py
++++ b/deploy/release_lab/lab.py
+@@ -269,6 +269,24 @@ def android_attempt_matches_fixture(
+     )
+ 
+ 
++def parse_loopback_server_ssh_pin(output: str) -> str:
++    """Derive the OpenSSH fingerprint from one loopback Ed25519 keyscan record."""
++    fields = output.split()
++    if len(output) > 256 or len(output.splitlines()) != 1 or len(fields) != 3:
++        raise LabError("expected one isolated server SSH keyscan record")
++    if fields[:2] != ["127.0.0.1", "ssh-ed25519"]:
++        raise LabError("unexpected isolated server SSH endpoint or key type")
++    try:
++        key = base64.b64decode(fields[2], validate=True)
++    except ValueError as exc:
++        raise LabError("invalid isolated server Ed25519 public key") from exc
++    wire_prefix = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20"
++    if (not key.startswith(wire_prefix) or len(key) != len(wire_prefix) + 32
++            or base64.b64encode(key).decode("ascii") != fields[2]):
++        raise LabError("invalid isolated server Ed25519 public key")
++    return "SHA256:" + base64.b64encode(hashlib.sha256(key).digest()).decode("ascii").rstrip("=")
++
++
+ def validate_publication_evidence(
+     evidence: Mapping[str, Any], run: Mapping[str, Any], root: Path
+ ) -> None:
+@@ -1028,6 +1046,50 @@ def artifact_record(path: Path) -> dict[str, Any]:
+     return {"path": str(path), "sha256": digest, "size": size}
+ 
+ 
++def verify_android_release_export(run: Mapping[str, Any], path: Path) -> str:
++    """Verify an original physical-device export against this release plan."""
++    if not __package__:  # The Windows wrapper also invokes lab.py as a script.
++        sys.path.insert(0, str(repo_root()))
++    try:
++        from deploy.release_lab import trusted_acquisition_export as authority
++        from deploy.release_lab.android_real_device_acquisition import AndroidAcquisitionError
++    finally:
++        if not __package__:
++            sys.path.pop(0)
++    try:
++        info = path.lstat()
++        if (not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400
++                or not 0 < info.st_size <= authority.MAX_EXPORT_BYTES):
++            raise LabError("Android acquisition export must be a regular file within bounds")
++        with path.open("rb") as stream:
++            raw = stream.read(authority.MAX_EXPORT_BYTES + 1)
++        if len(raw) != info.st_size:
++            raise LabError("Android acquisition export changed during read")
++        envelope = json.loads(raw)
++        if raw != authority.canonical(envelope):
++            raise LabError("original canonical signed Android acquisition export required")
++        manifest = Path(run["manifest"]["path"])
++        context = authority.AcquisitionContext.load(
++            bundle=manifest.parent, outer=Path(run["outer_artifact"]["path"]),
++            publisher=repo_root() / "deploy/selfhosted_updates/publish_bundled_release.sh",
++            public_key=Path(run["manifest_public_key"]["path"]),
++        )
++        if (context.version != run["candidate_version"] or context.manifest != run["manifest"]
++                or context.outer != run["outer_artifact"] or context.public_key_record != run["manifest_public_key"]):
++            raise LabError("Android acquisition context differs from the exact release plan")
++        for platform, planned in run["artifacts"].items():
++            candidate = context.candidate(platform)
++            if (candidate["sha256"], candidate["size"]) != (planned.get("sha256"), planned.get("size")):
++                raise LabError(f"Android acquisition context differs from planned artifact: {platform}")
++        payload = authority.verify_export(envelope, context=context)
++        if payload["target"] != "android" or payload["profileId"] != "android-real-device":
++            raise LabError("signed Android real-device profile required")
++        return payload["expiresAt"]
++    except (authority.TrustedAcquisitionError, AndroidAcquisitionError, OSError, ValueError,
++            KeyError, TypeError, AttributeError, RecursionError, SystemExit) as exc:
++        raise LabError(f"Android real-device export rejected: {exc}") from exc
++
++
+ def _native_component_bytes(path: Path, maximum: int, *, private: bool = False) -> bytes:
+     """Reject nonregular inputs before open; bound both reads and race cases."""
+     path = Path(path)
+@@ -2268,13 +2330,18 @@ class LabController:
+         if lane != "publisher-diagnostic" and self.windows_backend == "hyperv" and outer_artifact is not None and baseline_outer_artifact is None:
+             raise LabError("Hyper-V Windows run requires an explicit baseline outer artifact")
+         profile_records = {profile_id: artifact_record(profiles_root() / f"{profile_id}.json") for profile_id in profiles}
+-        semantic_helper_records = {relative: artifact_record(repo_root() / relative) for relative in SEMANTIC_HELPER_RELATIVES}
+-        android_vulkan_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_VULKAN_RELATIVES.items()}
+-        validate_android_vulkan_records(android_vulkan_records)
+-        android_host_dependency_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_HOST_DEPENDENCY_RELATIVES.items()}
+-        validate_android_host_dependency_records(android_host_dependency_records)
+-        android_wayland_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_WAYLAND_RELATIVES.items()}
+-        validate_android_wayland_records(android_wayland_records)
++        semantic_helper_records = {}
++        android_vulkan_records = {}
++        android_host_dependency_records = {}
++        android_wayland_records = {}
++        if lane != "publisher-diagnostic":
++            semantic_helper_records = {relative: artifact_record(repo_root() / relative) for relative in SEMANTIC_HELPER_RELATIVES}
++            android_vulkan_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_VULKAN_RELATIVES.items()}
++            validate_android_vulkan_records(android_vulkan_records)
++            android_host_dependency_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_HOST_DEPENDENCY_RELATIVES.items()}
++            validate_android_host_dependency_records(android_host_dependency_records)
++            android_wayland_records = {label: artifact_record(repo_root() / relative) for label, relative in ANDROID_WAYLAND_RELATIVES.items()}
++            validate_android_wayland_records(android_wayland_records)
+         runner_records = {profile_id: artifact_record(repo_root() / profile["runner"]) for profile_id, profile in profiles.items() if isinstance(profile.get("runner"), str)}
+         hyperv_records = None
+         if self.windows_backend == "hyperv":
+@@ -3640,6 +3707,32 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
+         if self.get_run(run_id).get("profiles", {}).get("server-router", {}).get("vm"):
+             self.reset(run_id, "server-router")
+ 
++    @mutation_operation
++    def probe_server_ssh_pin(self, run_id: str) -> dict[str, Any]:
++        """Read the key actually advertised by the owned server's loopback sshd."""
++        vm = self.owned_vm(run_id, "server-router")
++        if vm.get("consumer_fixture") is not True:
++            raise LabError("SSH pin capture requires the isolated server-router fixture")
++        require_qmp_return(QmpClient(Path(vm["qmp_socket"])).request("query-status"), "query-status")
++        qga = QgaClient(Path(vm["qga_socket"]))
++        if not qga.sync():
++            raise LabError("server QGA observation failed")
++        marker_path = "/tmp/amnezia-release-lab-marker"
++        marker = f"amnezia-release-lab:{run_id}:server-router".encode()
++        qga.write_file(marker_path, marker)
++        if qga.read_file(marker_path) != marker:
++            raise LabError("publication server guest marker does not match this run")
++        sample = qga.guest_exec_wait(
++            "/usr/bin/ssh-keyscan", ["-4", "-T", "3", "-t", "ed25519", "127.0.0.1"],
++            timeout=10,
++        )
++        pin = parse_loopback_server_ssh_pin(sample["stdout"])
++        if self.owned_vm(run_id, "server-router") != vm or qga.read_file(marker_path) != marker:
++            raise LabError("publication server ownership changed during SSH pin capture")
++        return {"schema": 1, "run_id": run_id, "profile": "server-router", "uuid": vm["uuid"],
++                "ssh_host_key_pin": pin, "marker_sha256": hashlib.sha256(marker).hexdigest(),
++                "observed_at": utc_now()}
++
+     @mutation_operation
+     def observe_server(self, run_id: str, ssh_host_key_pin: str) -> dict[str, Any]:
+         """Register only live QMP/QGA observations for the isolated test server."""
+@@ -3648,11 +3741,11 @@ printf '{\"uname\":\"%s\",\"kernel_config\":\"%s\",\"config_vhost_vsock\":\"%s\"
+         expected_pin = os.environ.get("AMNEZIA_LAB_SSH_HOST_KEY_PIN", "")
+         if not expected_pin or ssh_host_key_pin != expected_pin or not re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}", ssh_host_key_pin):
+             raise LabError("server observation requires the configured canonical lab SSH host-key pin")
+-        require_qmp_return(QmpClient(Path(vm["qmp_socket"])).request("query-status"), "query-status")
+-        qga = QgaClient(Path(vm["qga_socket"]))
+-        if not qga.sync():
+-            raise LabError("server QGA observation failed")
++        ssh_observation = self.probe_server_ssh_pin(run_id)
++        if ssh_observation["uuid"] != vm["uuid"] or ssh_observation["ssh_host_key_pin"] != expected_pin:
++            raise LabError("isolated server's advertised SSH key differs from the configured lab pin")
+         observation = {"schema": 1, "role": "isolated-test-server-router", "run_id": run_id, "uuid": vm["uuid"], "qmp_observed": True, "qga_observed": True, "publication_verified": False, "consumer_fixture": bool(vm.get("consumer_fixture")), "outer_artifact_sha256": (run.get("outer_artifact") or {}).get("sha256"), "manifest_sha256": (run.get("manifest") or {}).get("sha256"), "ssh_host_key_pin": ssh_host_key_pin, "endpoint": os.environ.get("AMNEZIA_LAB_SERVER_ENDPOINT", "10.8.1.0"), "observed_at": utc_now()}
++        observation["ssh_observation"] = ssh_observation
+         run["server_observation"] = observation
+         state = self.load_state(); state["runs"][run_id] = run; self.save_state(state)
+         return observation
+@@ -5267,7 +5360,8 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
+         validate_root_visual_ack(owned_root=self.root,ack=ack,collect=collect)
+         return self._register_full4(run_id,"linux-visual",{"ack":dict(ack),"collect":dict(collect)})
+ 
+-    def gate(self, run_id: str, lane: str, artifact_dir: Path | None = None, outer_artifact: Path | None = None) -> dict[str, Any]:
++    def gate(self, run_id: str, lane: str, artifact_dir: Path | None = None, outer_artifact: Path | None = None,
++             *, android_real_device_export: Path | None = None) -> dict[str, Any]:
+         self.assert_mutation_context()
+         run = self.get_run(run_id)
+         if run.get("kind") == "native-component":
+@@ -5276,6 +5370,8 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
+             raise LabError('automatic migration WAN diagnostics cannot pass a release gate')
+         if lane not in ("candidate", "release"):
+             raise LabError("lane must be candidate or release")
++        if android_real_device_export is not None and (lane != "release" or self.test_mode):
++            raise LabError("Android real-device export requires a live release lane")
+         if run.get("lane") != lane:
+             raise LabError("gate lane does not match the planned run lane")
+         if self.dry_run or run.get("dry_run"):
+@@ -5303,7 +5399,10 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
+         profile_records = run.get("profile_records")
+         if lane == "release" and (not isinstance(profile_records, Mapping) or set(profile_records) != set(ALL_PROFILE_IDS)):
+             raise LabError("release gate requires immutable records for every lab profile")
+-        if run.get("pending_external_profiles"):
++        android_expiry = None
++        if lane == "release" and android_real_device_export is not None:
++            android_expiry = verify_android_release_export(run, android_real_device_export)
++        elif run.get("pending_external_profiles"):
+             return {"run_id": run_id, "lane": lane, "automated_profiles": {profile: (profiles.get(profile) or {}).get("status") for profile in expected_profiles}, "automated_platforms_passed": False, "android_real_device_pending": True, "candidate_passed": False, "release_passed": False, "reason": ANDROID_SANDBOX_DISABLED_REASON}
+         if lane == "release":
+             try:
+@@ -5598,6 +5697,8 @@ os.close(child);os.rmdir(nonce,dir_fd=parent);os.close(parent)"""
+                 elif (semantic_value.get("ack") or {}).get("run_id")!=run_id:raise LabError("release gate visual ACK differs from current run")
+         result = {"run_id": run_id, "lane": lane, "candidate_passed": True, "release_passed": False, "artifact_sha256": (run.get("outer_artifact") or {}).get("sha256"), "tested_at": utc_now()}
+         if lane == "release":
++            if android_expiry is None or utc_now() >= android_expiry:
++                raise LabError("Android real-device export expired before the release gate completed")
+             marker = ensure_owned_child(self.root, self.root / "exports" / run_id / "publishable.json", "publication marker")
+             json_dump(marker, {"schema": 1, "run_id": run_id, "release_passed": True, "artifact_sha256": result["artifact_sha256"], "created_at": utc_now(), "evidence": "qga-real-guest"})
+             result["publishable_marker"] = str(marker)
+@@ -5855,6 +5956,8 @@ def build_parser() -> argparse.ArgumentParser:
+     gate = sub.add_parser("gate")
+     gate.add_argument("--run-id", required=True); gate.add_argument("--lane", choices=("candidate", "release"), default="release")
+     gate.add_argument("--artifact-dir"); gate.add_argument("--outer-artifact")
++    gate.add_argument("--android-real-device-export", type=Path,
++                      help="original canonical signed physical Android acquisition export for the exact release")
+     component_create = sub.add_parser("create-component")
+     component_create.add_argument("--bundle-dir", required=True)
+     component_create.add_argument("--source-manifest", required=True)
+@@ -5927,7 +6030,11 @@ def main(argv: Sequence[str] | None = None) -> int:
+         elif args.command == "collect": result = controller.collect(args.run_id, args.profile, args.case_id)
+         elif args.command == "run-suite": result = controller.run_suite(args.lane, parse_artifacts(args.artifact), Path(args.outer_artifact).resolve() if args.outer_artifact else None, args.run_id, Path(args.manifest).resolve() if args.manifest else None, parse_artifacts(args.baseline_artifact), args.baseline_version, args.candidate_version, Path(args.manifest_public_key).resolve() if args.manifest_public_key else None, Path(args.baseline_manifest).resolve() if args.baseline_manifest else None, Path(args.headless_baseline_receipt).resolve() if args.headless_baseline_receipt else None, Path(args.headless_candidate_receipt).resolve() if args.headless_candidate_receipt else None, Path(args.baseline_outer_artifact).resolve() if args.baseline_outer_artifact else None)
+         elif args.command == "reset": result = controller.reset(args.run_id, args.profile)
+-        elif args.command == "gate": result = controller.gate(args.run_id, args.lane, Path(args.artifact_dir).resolve() if args.artifact_dir else None, Path(args.outer_artifact).resolve() if args.outer_artifact else None)
++        elif args.command == "gate":
++            result = controller.gate(args.run_id, args.lane,
++                                     Path(args.artifact_dir).resolve() if args.artifact_dir else None,
++                                     Path(args.outer_artifact).resolve() if args.outer_artifact else None,
++                                     android_real_device_export=args.android_real_device_export)
+         elif args.command == "create-component":
+             result = controller.create_component(Path(args.bundle_dir), Path(args.source_manifest), args.run_id)
+         elif args.command == "gate-component":
+diff --git a/deploy/release_lab/publisher_controller.py b/deploy/release_lab/publisher_controller.py
+index d02d8f61..64b76efd 100644
+--- a/deploy/release_lab/publisher_controller.py
++++ b/deploy/release_lab/publisher_controller.py
+@@ -20,15 +20,18 @@ import sys
+ import urllib.parse
+ import urllib.request
+ import urllib.error
++from datetime import datetime, timezone
+ from pathlib import PurePosixPath, PureWindowsPath
+ from pathlib import Path
+ from typing import Any, Mapping, Protocol
+ 
+ try:
+     from .lab import (
++        AUTOMATED_PROFILE_IDS,
+         LabController,
+         LabError,
+         QgaClient,
++        ensure_owned_child,
+         immutable_bytes_dump,
+         immutable_json_dump,
+         sha256_file,
+@@ -38,9 +41,9 @@ try:
+     from .publisher_filemap import PublisherFileMapError, canonical_publisher_file_map
+ except ImportError:
+     if "__main__" in sys.modules and hasattr(sys.modules["__main__"], "LabController"):
+-        from __main__ import LabController, LabError, QgaClient, immutable_bytes_dump, immutable_json_dump, sha256_file, validate_publication_evidence, windows_path_for_wsl
++        from __main__ import AUTOMATED_PROFILE_IDS, LabController, LabError, QgaClient, ensure_owned_child, immutable_bytes_dump, immutable_json_dump, sha256_file, validate_publication_evidence, windows_path_for_wsl
+     else:
+-        from lab import LabController, LabError, QgaClient, immutable_bytes_dump, immutable_json_dump, sha256_file, validate_publication_evidence, windows_path_for_wsl
++        from lab import AUTOMATED_PROFILE_IDS, LabController, LabError, QgaClient, ensure_owned_child, immutable_bytes_dump, immutable_json_dump, sha256_file, validate_publication_evidence, windows_path_for_wsl
+     from publisher_filemap import PublisherFileMapError, canonical_publisher_file_map
+ 
+ 
+@@ -168,6 +171,32 @@ class PublisherError(LabError):
+     pass
+ 
+ 
++def _release_guest_archives(root: Path, run: Mapping[str, Any], run_id: str) -> tuple[dict[str, str], datetime]:
++    if set(run.get("expected_profiles") or ()) != set(AUTOMATED_PROFILE_IDS):
++        raise PublisherError("publication requires the complete release guest profile set")
++    digests = {}
++    captured = []
++    for profile_id in AUTOMATED_PROFILE_IDS:
++        profile = (run.get("profiles") or {}).get(profile_id) or {}
++        path = ensure_owned_child(root, root / "exports" / run_id / profile_id / "evidence.json",
++                                  "canonical publication guest archive")
++        if (profile.get("evidence_archive") != str(path) or profile.get("archive_status") != "captured"
++                or not path.is_file()):
++            raise PublisherError(f"publication requires the canonical captured archive for {profile_id}")
++        try:
++            raw = path.read_bytes()
++            archive = json.loads(raw)
++            if (archive.get("run_id") != run_id or archive.get("profile") != profile_id
++                    or archive.get("origin") != "guest" or archive.get("injected") is not False
++                    or archive.get("error") is not None or not isinstance(archive.get("receipt"), dict)):
++                raise ValueError("archive does not record a successful guest capture")
++            captured.append(datetime.strptime(archive["captured_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc))
++        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
++            raise PublisherError(f"publication guest archive rejected for {profile_id}") from exc
++        digests[profile_id] = hashlib.sha256(raw).hexdigest()
++    return digests, max(captured)
++
++
+ class _NoRedirect(urllib.request.HTTPRedirectHandler):
+     def redirect_request(self, req, fp, code, msg, headers, newurl):
+         return None
+@@ -212,6 +241,26 @@ def _merge_attempt(controller: LabController, run_id: str, **updates: Any) -> di
+     return _persist_attempt(controller, run_id, attempt)
+ 
+ 
++def cleaned_publisher_key(owned_root: Path, run_id: str, nonce: str, record: Mapping[str, Any]) -> bool:
++    private = ensure_owned_child(owned_root, owned_root / "runs" / run_id / "publisher" / "id_ed25519",
++                                 "publication key scratch")
++    public = private.with_suffix(".pub")
++    if os.path.lexists(private) or os.path.lexists(public):
++        return False
++    if set(record) == {"public", "public_sha256"}:
++        # Older controllers kept only the generated public-key fields in the
++        # terminal resource row. The original key scratch path was fixed.
++        key = record["public"]
++        match = (re.fullmatch(r"ssh-ed25519 ([A-Za-z0-9+/]{68})(?: [^\r\n]{1,256})?\n", key)
++                 if isinstance(key, str) else None)
++        if match is None or hashlib.sha256(key.encode("utf-8")).hexdigest() != record["public_sha256"]:
++            return False
++        blob = base64.b64decode(match[1], validate=True)
++        return len(blob) == 51 and blob.startswith(b"\0\0\0\x0bssh-ed25519\0\0\0\x20")
++    return (record.get("intent") is True and record.get("attempt_nonce") == nonce
++            and record.get("private_path") == str(private) and record.get("public_path") == str(public))
++
++
+ class ConcretePublisherOps:
+     """Adapter-backed operations; all IDs and paths are supplied by the run."""
+ 
+@@ -545,12 +594,15 @@ class ConcretePublisherOps:
+         if private.exists():
+             raise PublisherError("publisher key scratch already exists; refusing reuse")
+         self._key = {"private_path": private, "public_path": private.with_suffix(".pub")}
+-        self._attempt_update(run_id, resources={"key": {"intent": True, "private_path": str(private), "public_path": str(private.with_suffix(".pub")), "attempt_nonce": nonce}})
++        key_intent = {"intent": True, "private_path": str(private), "public_path": str(private.with_suffix(".pub")),
++                      "attempt_nonce": nonce}
++        self._attempt_update(run_id, resources={"key": key_intent})
+         generated = subprocess.run(("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(private)), check=False, capture_output=True, text=True, timeout=30)
+         if generated.returncode != 0 or not private.is_file() or not private.with_suffix(".pub").is_file():
+             raise PublisherError("unable to generate a fresh ephemeral publisher key")
+         self._key.update({"public": private.with_suffix(".pub").read_text(encoding="utf-8"), "public_sha256": hashlib.sha256(private.with_suffix(".pub").read_bytes()).hexdigest()})
+-        self._attempt_update(run_id, resources={"key": {"public": self._key["public"], "public_sha256": self._key["public_sha256"]}})
++        self._attempt_update(run_id, resources={"key": {**key_intent, "public": self._key["public"],
++                                                        "public_sha256": self._key["public_sha256"]}})
+         qga = QgaClient(Path(str(server["qga_socket"])), timeout=10)
+         if not qga.sync():
+             raise PublisherError("server QGA is not responsive while seeding publisher key")
+@@ -1052,6 +1104,10 @@ class ControllerPublisher:
+                 _merge_attempt(self.controller, run_id, state="recovery-failed", recovery_error=str(exc))
+                 raise PublisherError(f"owned publication attempt recovery failed: {exc}") from exc
+             _merge_attempt(self.controller, run_id, state="recovered-cleaned", recovery=recovery)
++        release_archives = _release_guest_archives(self.controller.root, run, run_id) if run["lane"] == "release" else None
++        if release_archives is not None and datetime.now(timezone.utc) <= release_archives[1]:
++            raise PublisherError("canonical release guest captures must precede publication validation")
++        archive_binding = None
+         nonce = secrets.token_hex(24)
+         attempt: dict[str, Any] = {
+             "schema": 1,
+@@ -1123,6 +1179,9 @@ class ControllerPublisher:
+             self.ops.seed_lab_profile(run_id, case_id, server, nonce)
+             phase = "publish"
+             attempt["phase"] = phase
++            publication_started = datetime.now(timezone.utc)
++            if release_archives is not None and publication_started <= release_archives[1]:
++                raise PublisherError("publication dispatch must follow the canonical release guest captures")
+             _persist_attempt(self.controller, run_id, attempt)
+             published = self.ops.publish_once(run_id, case_id)
+             if published.get("passed") is not True:
+@@ -1144,6 +1203,11 @@ class ControllerPublisher:
+             ):
+                 raise PublisherError("server durable publication phase records are incomplete")
+             ack = {phase: dict(phase_receipts[phase]) for phase in ("prepare", "commit", "finalize")}
++            if release_archives is not None:
++                observed = datetime.now(timezone.utc)
++                if observed < publication_started:
++                    raise PublisherError("publication observation time precedes dispatch")
++                archive_binding = (release_archives[0], publication_started.isoformat(), observed.isoformat())
+             raw = dict(readback.get("raw_sources") or {})
+             pending = (child, server, ack, readback, raw)
+         except BaseException as exc:
+@@ -1215,7 +1279,10 @@ class ControllerPublisher:
+             if primary is None and pending is not None:
+                 p_child, p_server, p_ack, p_readback, p_raw = pending
+                 final_run = self.controller.get_run(run_id)
+-                evidence = self._evidence(final_run, run_id, case_id, artifact, manifest, p_child, p_server, p_ack, p_readback, p_raw, cleanup)
++                if release_archives is not None and _release_guest_archives(self.controller.root, final_run, run_id) != release_archives:
++                    raise PublisherError("canonical guest archives changed during publication validation")
++                evidence = self._evidence(final_run, run_id, case_id, artifact, manifest, p_child, p_server, p_ack, p_readback, p_raw, cleanup,
++                                          archive_binding=archive_binding)
+                 validate_publication_evidence(evidence, final_run, self.controller.root)
+                 final_run["publication_evidence"] = evidence
+                 state = self.controller.load_state(); state["runs"][run_id] = final_run; self.controller.save_state(state)
+@@ -1224,13 +1291,17 @@ class ControllerPublisher:
+             raise PublisherError("publication flow ended without evidence")
+         return result
+ 
+-    def _evidence(self, run: Mapping[str, Any], run_id: str, case_id: str, artifact: Mapping[str, Any], manifest: Mapping[str, Any], child: Mapping[str, Any], server: Mapping[str, Any], ack: Mapping[str, Any], readback: Mapping[str, Any], raw: Mapping[str, Any], cleanup: Mapping[str, Any]) -> dict[str, Any]:
++    def _evidence(self, run: Mapping[str, Any], run_id: str, case_id: str, artifact: Mapping[str, Any], manifest: Mapping[str, Any], child: Mapping[str, Any], server: Mapping[str, Any], ack: Mapping[str, Any], readback: Mapping[str, Any], raw: Mapping[str, Any], cleanup: Mapping[str, Any], *, archive_binding: tuple[dict[str, str], str, str] | None = None) -> dict[str, Any]:
+         nonce = str(readback.get("attempt_nonce", ""))
+         if not re.fullmatch(r"[0-9a-f]{48}", nonce):
+             raise PublisherError("publication evidence archive requires the exact attempt nonce")
++        if run.get("lane") == "release" and archive_binding is None:
++            raise PublisherError("release publication evidence requires canonical guest archive and observation binding")
+         archive_dir = self.controller.root / "exports" / run_id / "publication" / nonce
+         archive_dir.mkdir(parents=True, exist_ok=True)
+         evidence = {"schema": 1, "controller_created": True, "live": True, "publisher_diagnostic": run.get("lane") == "publisher-diagnostic", "release_passed": False, "run_id": run_id, "case_id": case_id, "attempt_nonce": readback.get("attempt_nonce"), "outer_artifact_sha256": artifact["sha256"], "manifest_sha256": manifest["sha256"], "windows_child": dict(child), "server": dict(server), "client_acknowledgements": dict(ack), "http_readback": dict(readback.get("http_readback") or {}), "raw_sources": dict(raw), "cleanup": dict(cleanup), "archive": {"origin": "controller", "immutable": True}}
++        if archive_binding is not None:
++            evidence["guest_archive_hashes"], evidence["publication_started_at"], evidence["observed_at"] = archive_binding
+         core_sha = hashlib.sha256(json.dumps({key: value for key, value in evidence.items() if key != "archive"}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+         archive_path = archive_dir / "evidence.json"
+         immutable_json_dump(archive_path, {"run_id": run_id, "controller_created": True, "evidence_sha256": core_sha})
+diff --git a/deploy/release_lab/test_coordinated_release_acceptance.py b/deploy/release_lab/test_coordinated_release_acceptance.py
+index 36810ab4..5fb02967 100644
+--- a/deploy/release_lab/test_coordinated_release_acceptance.py
++++ b/deploy/release_lab/test_coordinated_release_acceptance.py
+@@ -1,6 +1,7 @@
+ """Pure orchestration tests; no real keys, signing, release files or runtime."""
+ import copy
+ from datetime import timedelta
++import json
+ from pathlib import Path
+ from tempfile import TemporaryDirectory
+ from types import SimpleNamespace
+@@ -15,18 +16,21 @@ class AggregateTests(unittest.TestCase):
+     def setUp(self):
+         self.tmp = TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+         public = Path(self.tmp.name) / 'mock-public'; public.write_bytes(b'no key')
+-        self.binding = {'manifest': 'final'}
++        self.binding = {'manifest': 'final', 'outerSha256': 'f'*64}
+         self.context = SimpleNamespace(verify=Mock(), binding=lambda: copy.deepcopy(self.binding),
+             manifest={'sha256': 'a'*64}, publisher={'sha256': 'b'*64}, version='5.0.3.14',
+-            android_code=2200, artifacts=[{'path':'files/a','size':1,'sha256':'c'*64}], public_key=public)
++            android_code=2200, artifacts=[{'path':'files/a','size':1,'sha256':'c'*64}], public_key=public,
++            outer={'sha256': 'f'*64}, manifest_payload={}, public_key_record={'sha256': 'd'*64})
+         self.old = SimpleNamespace(verify=Mock(), binding=lambda: {'manifest': 'historical'})
+         self.now = authority.utc_now()
+         self.proofs = {}
+         for target in ('android','windows','linux-gui',facade.COORDINATED_TARGET):
+             self.proofs[target] = {'target':target, 'runId':'run-a','profileId':'profile-a',
+                 'binding':copy.deepcopy(self.binding), 'expiresAt':authority.utc_text(self.now+timedelta(minutes=30)),
++                'issuedAt': authority.utc_text(self.now),
+                 'cleanupCapture':{'raw':'actual-original'}, 'rawCapture':{'raw':'actual-original'},
+                 'provenance':[{'path':'original'}]}
++        self.proofs['android']['profileId'] = 'android-real-device'
+         self.proofs[facade.COORDINATED_TARGET]['semantics'] = dict.fromkeys(facade.COORDINATED_SEMANTICS, True)
+         self.inputs = dict(context=self.context, windows_export={'role':'windows'}, gui_export={'role':'linux-gui'},
+             coordinated_headless_export={'role':facade.COORDINATED_TARGET}, android_export={'role':'android'},
+@@ -118,5 +122,67 @@ class AggregateTests(unittest.TestCase):
+             self.assertEqual(payload['artifacts'],self.context.artifacts)
+             key.assert_called_once();verify.assert_called_once()
+ 
++    def received_approval(self):
++        original_android_bytes = authority.canonical(self.inputs['android_export'])
++        inputs = {**self.inputs, 'original_android_context': self.context,
++                  'original_android_bytes': original_android_bytes}
++        receipts, _, _ = facade.prepare_coordinated_matrix(**inputs)
++        arguments = {
++            'context': self.context,
++            'approval_bytes': authority.canonical({'fixture': 'already-issued'}),
++            'windows_bytes': authority.canonical(inputs['windows_export']),
++            'gui_bytes': json.dumps(inputs['gui_export'], indent=2).encode(),
++            'coordinated_headless_bytes': authority.canonical(inputs['coordinated_headless_export']),
++            'android_bytes': original_android_bytes,
++        }
++        payload = {'receipts': receipts, 'issuedAt': authority.utc_text(self.now),
++                   'expiresAt': authority.utc_text(self.now + timedelta(minutes=10))}
++        return arguments, payload
++
++    def test_receive_existing_exact_approval_without_signing(self):
++        arguments, payload = self.received_approval()
++        with patch.object(authority, 'verify_full_acceptance', return_value=payload) as verifier, \
++             patch.object(authority.make_manifest, 'acceptance_envelope') as sign:
++            approval, proof = facade.verify_coordinated_approval(**arguments)
++        verifier.assert_called_once_with({'fixture': 'already-issued'}, context=self.context)
++        sign.assert_not_called()
++        self.assertEqual(approval, payload)
++        self.assertEqual(proof['binding'], self.context.binding())
++
++    def test_receive_refuses_missing_or_noncanonical_approval_before_verification(self):
++        arguments, _ = self.received_approval()
++        for raw in (None, b'', arguments['approval_bytes'] + b'\n'):
++            with self.subTest(raw=raw), patch.object(authority, 'verify_full_acceptance') as verify:
++                with self.assertRaises(authority.TrustedAcquisitionError):
++                    facade.verify_coordinated_approval(**{**arguments, 'approval_bytes': raw})
++                verify.assert_not_called()
++
++    def test_receive_refuses_outer_mismatch_and_altered_role(self):
++        arguments, payload = self.received_approval()
++        with patch.object(authority, 'verify_full_acceptance', return_value=payload):
++            self.proofs['windows']['binding']['outerSha256'] = '0'*64
++            with self.assertRaisesRegex(authority.TrustedAcquisitionError, 'binding differs'):
++                facade.verify_coordinated_approval(**arguments)
++            self.proofs['windows']['binding'] = self.context.binding()
++            arguments['windows_bytes'] = authority.canonical({'role':'android', 'extra': True})
++            with self.assertRaisesRegex(authority.TrustedAcquisitionError, 'roles differ'):
++                facade.verify_coordinated_approval(**arguments)
++
++    def test_receive_refuses_receipt_mismatch(self):
++        arguments, payload = self.received_approval()
++        payload['receipts'][0]['receiptSha256'] = '0'*64
++        with patch.object(authority, 'verify_full_acceptance', return_value=payload):
++            with self.assertRaisesRegex(authority.TrustedAcquisitionError, 'receipts differ'):
++                facade.verify_coordinated_approval(**arguments)
++
++    def test_receive_refuses_approval_outliving_sources_or_expiring_during_verification(self):
++        arguments, payload = self.received_approval()
++        for end, message in ((self.now + timedelta(minutes=31), 'lifetime differs'),
++                             (self.now, 'expired during')):
++            with self.subTest(end=end), patch.object(authority, 'verify_full_acceptance', return_value=payload):
++                payload['expiresAt'] = authority.utc_text(end)
++                with self.assertRaisesRegex(authority.TrustedAcquisitionError, message):
++                    facade.verify_coordinated_approval(**arguments)
++
+ 
+ if __name__=='__main__':unittest.main()
+diff --git a/deploy/release_lab/test_coordinated_release_acceptance_integration.py b/deploy/release_lab/test_coordinated_release_acceptance_integration.py
+index 9450da8e..f0d3dd6f 100644
+--- a/deploy/release_lab/test_coordinated_release_acceptance_integration.py
++++ b/deploy/release_lab/test_coordinated_release_acceptance_integration.py
+@@ -196,3 +196,13 @@ def test_synthetic_issue_matches_unchanged_passive_full_v1_verifier(matrix):
+     assert authority._utc(checked['expiresAt']) == fixture.NOW + timedelta(hours=1)
+     assert proof['androidDerivation']['freshCapture'] is False
+     key_gate.assert_called_once()
++    context = inputs['context']
++    with patch.object(authority, 'utc_now', return_value=fixture.NOW + timedelta(hours=1)):
++        with pytest.raises(authority.TrustedAcquisitionError, match='expired'):
++            authority.verify_full_acceptance(envelope, context=context)
++        assert authority._verify_full_acceptance_at(envelope, context=context, at=fixture.NOW) == checked
++    with pytest.raises(authority.TrustedAcquisitionError, match='expired'):
++        authority._verify_full_acceptance_at(envelope, context=context, at=fixture.NOW + timedelta(hours=1))
++    with pytest.raises(authority.TrustedAcquisitionError, match='signature mismatch'):
++        authority._verify_full_acceptance_at(
++            {**envelope, 'signature': base64.b64encode(b'\x00' * 64).decode()}, context=context, at=fixture.NOW)
+diff --git a/deploy/release_lab/test_publisher_controller.py b/deploy/release_lab/test_publisher_controller.py
+index a808bd56..7e515fd2 100644
+--- a/deploy/release_lab/test_publisher_controller.py
++++ b/deploy/release_lab/test_publisher_controller.py
+@@ -1,6 +1,7 @@
+ import tempfile
+ import json
+ import unittest
++from datetime import datetime, timedelta, timezone
+ from pathlib import Path
+ from unittest.mock import patch
+ 
+@@ -12,6 +13,24 @@ ControllerPublisher = pc.ControllerPublisher
+ PublisherError = pc.PublisherError
+ 
+ 
++def release_run_with_archives(root, run_id="r"):
++    run = {"run_id": run_id, "lane": "release", "outer_artifact": {"sha256": "a" * 64},
++           "manifest": {"sha256": "b" * 64}, "expected_profiles": list(pc.AUTOMATED_PROFILE_IDS),
++           "profiles": {}}
++    capture_time = (datetime.now(timezone.utc) - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
++    hashes = {}
++    for profile in pc.AUTOMATED_PROFILE_IDS:
++        archive = root / "exports" / run["run_id"] / profile / "evidence.json"
++        archive.parent.mkdir(parents=True)
++        archive.write_text(json.dumps({
++            "run_id": run["run_id"], "profile": profile, "origin": "guest", "injected": False,
++            "captured_at": capture_time, "error": None, "receipt": {"value": {}},
++        }), encoding="utf-8")
++        run["profiles"][profile] = {"evidence_archive": str(archive), "archive_status": "captured"}
++        hashes[profile] = pc.sha256_file(archive)[0]
++    return run, hashes
++
++
+ class FakeController:
+     def __init__(self, root, run):
+         self.root = root; self.run = run; self.saved = None
+@@ -53,23 +72,35 @@ class FakeOps:
+ class PublisherControllerTests(unittest.TestCase):
+     def test_failure_always_runs_cleanup_after_first_phase(self):
+         with tempfile.TemporaryDirectory() as tmp:
+-            run = {"run_id":"r","lane":"release","outer_artifact":{"sha256":"a"*64},"manifest":{"sha256":"b"*64}}
++            run, _ = release_run_with_archives(Path(tmp))
+             events=[]; publisher=ControllerPublisher(FakeController(Path(tmp),run), FakeOps(events, fail="seed"))
+             with self.assertRaisesRegex(PublisherError, "seed failed"): publisher.run("r")
+             self.assertEqual(events, ["server","child","stage","reinstall","relays","seed","cleanup"])
+ 
+     def test_success_order_creates_controller_validation_after_cleanup(self):
+         with tempfile.TemporaryDirectory() as tmp:
+-            run = {"run_id":"r","lane":"release","outer_artifact":{"sha256":"a"*64},"manifest":{"sha256":"b"*64}}
++            run, hashes = release_run_with_archives(Path(tmp))
+             events=[]; publisher=ControllerPublisher(FakeController(Path(tmp),run), FakeOps(events))
+-            with patch.object(pc, "validate_publication_evidence") as validate, patch.object(publisher, "_evidence", return_value={"ok":True}):
+-                publisher.run("r")
++            before = datetime.now(timezone.utc)
++            with patch.object(pc, "validate_publication_evidence") as validate:
++                evidence = publisher.run("r")
++            after = datetime.now(timezone.utc)
+             self.assertEqual(events, ["server","child","stage","reinstall","relays","seed","publish","readback","cleanup"])
+-            validate.assert_called_once()
++            validate.assert_called_once_with(evidence, run, Path(tmp))
++            self.assertEqual(evidence["guest_archive_hashes"], hashes)
++            started = datetime.fromisoformat(evidence["publication_started_at"])
++            observed = datetime.fromisoformat(evidence["observed_at"])
++            self.assertLessEqual(before, started)
++            self.assertLessEqual(started, observed)
++            self.assertLessEqual(observed, after)
++            archived = json.loads(Path(evidence["archive"]["path"]).read_text(encoding="utf-8"))
++            core = {key: value for key, value in evidence.items() if key != "archive"}
++            self.assertEqual(pc.hashlib.sha256(json.dumps(core, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
++                             archived["evidence_sha256"])
+ 
+     def test_attempt_ledger_records_child_intent_before_failure(self):
+         with tempfile.TemporaryDirectory() as tmp:
+-            run = {"run_id":"r","lane":"release","outer_artifact":{"sha256":"a"*64},"manifest":{"sha256":"b"*64}}
++            run, _ = release_run_with_archives(Path(tmp))
+             events=[]; controller=FakeController(Path(tmp),run)
+             publisher=ControllerPublisher(controller, FakeOps(events, fail="child"))
+             with self.assertRaisesRegex(PublisherError, "child failed"): publisher.run("r")
+@@ -80,12 +111,70 @@ class PublisherControllerTests(unittest.TestCase):
+ 
+     def test_unfinished_attempt_is_recovered_before_new_nonce(self):
+         with tempfile.TemporaryDirectory() as tmp:
+-            run = {"run_id":"r","lane":"release","outer_artifact":{"sha256":"a"*64},"manifest":{"sha256":"b"*64},"publication_attempt":{"schema":1,"controller_created":True,"run_id":"r","case_id":"publisher-clean","attempt_nonce":"c"*48,"state":"active","resources":{"server":{"intent":True},"child":{"intent":True},"relays":{"intent":True},"key":{"intent":False}}}}
++            run, _ = release_run_with_archives(Path(tmp))
++            run["publication_attempt"] = {"schema":1,"controller_created":True,"run_id":"r","case_id":"publisher-clean","attempt_nonce":"c"*48,"state":"active","resources":{"server":{"intent":True},"child":{"intent":True},"relays":{"intent":True},"key":{"intent":False}}}
+             events=[]; publisher=ControllerPublisher(FakeController(Path(tmp),run), FakeOps(events))
+             with patch.object(pc, "validate_publication_evidence"), patch.object(publisher, "_evidence", return_value={"ok":True}):
+                 publisher.run("r")
+             self.assertEqual(events[0], "recover")
+ 
++    def test_release_missing_archive_is_rejected_before_guest_io(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            run, _ = release_run_with_archives(root)
++            run["profiles"]["windows-x64"].pop("evidence_archive")
++            events = []
++            publisher = ControllerPublisher(FakeController(root, run), FakeOps(events))
++            with self.assertRaisesRegex(PublisherError, "canonical captured archive"):
++                publisher.run("r")
++            self.assertEqual(events, [])
++            self.assertNotIn("publication_evidence", run)
++
++    def test_release_future_archive_is_rejected_before_guest_io(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            run, _ = release_run_with_archives(root)
++            archive = Path(run["profiles"]["windows-x64"]["evidence_archive"])
++            content = json.loads(archive.read_text(encoding="utf-8"))
++            future = datetime.now(timezone.utc) + timedelta(hours=1)
++            content["captured_at"] = future.strftime("%Y-%m-%dT%H:%M:%SZ")
++            archive.write_text(json.dumps(content), encoding="utf-8")
++            events = []
++            publisher = ControllerPublisher(FakeController(root, run), FakeOps(events))
++            with self.assertRaisesRegex(PublisherError, "captures must precede"):
++                publisher.run("r")
++            self.assertEqual(events, [])
++            self.assertNotIn("publication_evidence", run)
++
++    def test_release_changed_archive_after_readback_never_issues_evidence(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            root = Path(tmp)
++            run, _ = release_run_with_archives(root)
++            archive = Path(run["profiles"]["windows-x64"]["evidence_archive"])
++            events = []
++
++            class ChangingOps(FakeOps):
++                def cleanup(self, run_id, case_id):
++                    archive.write_bytes(archive.read_bytes() + b"\n")
++                    return super().cleanup(run_id, case_id)
++
++            publisher = ControllerPublisher(FakeController(root, run), ChangingOps(events))
++            with self.assertRaisesRegex(PublisherError, "guest archives changed during publication"):
++                publisher.run("r")
++            self.assertEqual(events[-2:], ["readback", "cleanup"])
++            self.assertNotIn("publication_evidence", run)
++
++    def test_diagnostic_omits_release_archive_authority(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            run = {"run_id": "r", "lane": "publisher-diagnostic", "outer_artifact": {"sha256": "a" * 64},
++                   "manifest": {"sha256": "b" * 64}}
++            publisher = ControllerPublisher(FakeController(Path(tmp), run), FakeOps([]))
++            with patch.object(pc, "validate_publication_evidence"):
++                evidence = publisher.run("r")
++            self.assertTrue(evidence["publisher_diagnostic"])
++            self.assertFalse(evidence["release_passed"])
++            self.assertNotIn("guest_archive_hashes", evidence)
++
+     def test_windows_receipt_reads_nested_assertion_fields_and_role(self):
+         run = {"run_id":"r","candidate_version":"5.0.1.39","baseline_version":"5.0.1.38"}
+         controller = HypervReceiptController(run)
+diff --git a/deploy/release_lab/test_publisher_pre_http_snapshot.py b/deploy/release_lab/test_publisher_pre_http_snapshot.py
+index f170e526..891161d6 100644
+--- a/deploy/release_lab/test_publisher_pre_http_snapshot.py
++++ b/deploy/release_lab/test_publisher_pre_http_snapshot.py
+@@ -23,9 +23,9 @@ except ImportError:
+     import publisher_controller as module
+ 
+ try:
+-    from .test_publisher_controller import FakeController, FakeOps
++    from .test_publisher_controller import FakeController, FakeOps, release_run_with_archives
+ except ImportError:
+-    from test_publisher_controller import FakeController, FakeOps
++    from test_publisher_controller import FakeController, FakeOps, release_run_with_archives
+ 
+ NONCE_A = "a" * 48
+ NONCE_B = "b" * 48
+@@ -295,7 +295,7 @@ class PublishFailureSnapshotTests(unittest.TestCase):
+                 root = Path(tmp)
+                 root.chmod(0o700)
+                 events = []
+-                run = {"run_id": "owned-run", "lane": "release", "outer_artifact": {"sha256": "a" * 64}, "manifest": {"sha256": "b" * 64}}
++                run, _ = release_run_with_archives(root, "owned-run")
+                 controller = FakeController(root, run)
+                 result = {"action": "foreign" if invalid else "publish", "passed": False,
+                           "transport": "hyperv-powershell-direct", "origin": "guest", "injected": False, "vm_id": "owned-vm",
+@@ -344,7 +344,7 @@ class PublishFailureSnapshotTests(unittest.TestCase):
+             root = Path(tmp)
+             root.chmod(0o700)
+             events = []
+-            run = {"run_id": "owned-run", "lane": "release", "outer_artifact": {"sha256": "a" * 64}, "manifest": {"sha256": "b" * 64}}
++            run, _ = release_run_with_archives(root, "owned-run")
+             controller = FakeController(root, run)
+             outer = self
+ 
+diff --git a/deploy/release_lab/test_windows_consent_visual.py b/deploy/release_lab/test_windows_consent_visual.py
+index 4d137070..e8b1daf6 100644
+--- a/deploy/release_lab/test_windows_consent_visual.py
++++ b/deploy/release_lab/test_windows_consent_visual.py
+@@ -51,6 +51,18 @@ class ConsentPixelsTests(unittest.TestCase):
+  def test_exact_root_ack_and_completed_proof_accepted(self):
+   r,a=self.accepted();confirmed=v.utc_text()
+   self.assertEqual(v.validate_completed(owned_root=self.root,proof={'request':r,'ack':a},observe=self.obs,confirmed_consent=self.proof,confirmed_at=confirmed,completed_at=confirmed)['ack'],a)
++ def test_publisher_ack_requires_explicit_exact_case(self):
++  request, ack = self.accepted()
++  provider_archive = request['provider_capture']['original_archive']
++  for record in (request, request['consent'], request['raw_archive'], request['png_archive'], provider_archive):
++   record['case_id'] = 'publisher-clean'
++  ack['request_sha256'] = hashlib.sha256(v.canonical(request)).hexdigest()
++  with self.assertRaises(v.ConsentVisualError):
++   v.validate_ack(owned_root=self.root,request=request,ack=ack)
++  self.assertEqual(v.validate_ack(owned_root=self.root,request=request,ack=ack,case_id='publisher-clean'),ack)
++  request['consent']['case_id'] = 'outer-interactive'
++  with self.assertRaisesRegex(v.ConsentVisualError,'consent case differs'):
++   v.validate_ack(owned_root=self.root,request=request,ack=ack,case_id='publisher-clean')
+  def test_wrong_viewed_png_rejected_and_no_ack_written(self):
+   r=self.request()
+   with self.assertRaises(v.ConsentVisualError):v.create_ack(owned_root=self.root,request=r,viewed_png_sha256='e'*64)
+diff --git a/deploy/release_lab/trusted_acquisition_export.py b/deploy/release_lab/trusted_acquisition_export.py
+index 3b0cbcc2..f11db082 100644
+--- a/deploy/release_lab/trusted_acquisition_export.py
++++ b/deploy/release_lab/trusted_acquisition_export.py
+@@ -353,6 +353,11 @@ def issue_full_acceptance(*, context, exports, private_key):
+ 
+ def verify_full_acceptance(envelope, *, context):
+     """Passive check matching the client's full-v1 signature/binding policy."""
++    return _verify_full_acceptance_at(envelope, context=context, at=None)
++
++
++def _verify_full_acceptance_at(envelope, *, context, at):
++    """Authenticate full-v1 bytes at a separately established observation time."""
+     context.verify()
+     if (not isinstance(envelope, dict) or set(envelope) != {"schema", "signatureAlgorithm", "payload", "signature"}
+             or envelope["schema"] != make_manifest.RELEASE_ACCEPTANCE_SCHEMA or envelope["signatureAlgorithm"] != "Ed25519"
+@@ -378,7 +383,9 @@ def verify_full_acceptance(envelope, *, context):
+             or payload["androidVersionCode"] != context.android_code or payload["artifacts"] != context.artifacts):
+         raise TrustedAcquisitionError("full acceptance exact release binding differs")
+     issued, expires = _utc(payload["issuedAt"]), _utc(payload["expiresAt"])
+-    if not issued <= utc_now() < expires <= issued + timedelta(hours=24):
++    if at is None:
++        at = utc_now()
++    if not issued <= at < expires <= issued + timedelta(hours=24):
+         raise TrustedAcquisitionError("full acceptance expired, future or overlong")
+     try:
+         if make_manifest.acceptance_receipts(payload["receipts"]) != payload["receipts"]:
+diff --git a/deploy/release_lab/windows_consent_visual.py b/deploy/release_lab/windows_consent_visual.py
+index e4cc3cef..519dcb5d 100644
+--- a/deploy/release_lab/windows_consent_visual.py
++++ b/deploy/release_lab/windows_consent_visual.py
+@@ -132,8 +132,10 @@ def prepare_request(*,owned_root,run_id,version,manifest_sha256,artifact_sha256,
+   request['provider_capture']={'original_archive':provider_record,'metadata':provider,'payload_sha256':t['sha256'],'payload_size':t['size']}
+  _write(owned_root,directory/'request.json',canonical(request)+b'\n')
+  return request
+-def validate_request(root,r):
+- require(r.get('schema')==SCHEMA and r.get('profile')=='windows-x64' and r.get('case_id')=='outer-interactive' and r.get('method')==METHOD,'visual request method/schema invalid')
++def validate_request(root,r,*,case_id='outer-interactive'):
++ require(case_id in ('outer-interactive','publisher-clean') and r.get('case_id')==case_id
++  and r.get('schema')==SCHEMA and r.get('profile')=='windows-x64' and r.get('method')==METHOD,'visual request method/schema invalid')
++ require(isinstance(r.get('consent'),dict) and r['consent'].get('case_id')==case_id,'visual request consent case differs')
+  require(r.get('visual_review_required') is True and r.get('visual_review_passed') is False,'visual review must still be pending')
+  require(ID.fullmatch(str(r.get('run_id',''))) and re.fullmatch('[0-9a-f]{32}',str(r.get('attempt_nonce',''))),'visual request identity invalid')
+  require(all(SHA.fullmatch(str(r.get(k,''))) for k in ('manifest_sha256','artifact_sha256','parent_sha256')),'visual request context missing')
+@@ -151,9 +153,9 @@ def validate_request(root,r):
+   require(pc['payload_sha256']==r['raw_archive']['sha256'] and pc['payload_size']==len(raw),'provider decoded hash/size changed')
+   require(provider_payload(Path(record['path']).read_bytes(),r['width'],r['height'],meta['provider_encoding'],meta['provider_payload_offset'],meta['provider_octet_string_qualifier'])==raw,'provider archive does not decode to reviewed raw pixels')
+  return r
+-def validate_ack(*,owned_root,request,ack):
++def validate_ack(*,owned_root,request,ack,case_id='outer-interactive'):
+  require(isinstance(request,dict) and isinstance(ack,dict),'visual request/ACK objects required')
+- validate_request(owned_root,request)
++ validate_request(owned_root,request,case_id=case_id)
+  expected={'schema':ACK_SCHEMA,'decision':'accepted','reviewer_role':'root-visual-review','request_sha256':hashlib.sha256(canonical(request)).hexdigest(),'run_id':request['run_id'],'vm_id':request['vm_id'],'attempt_nonce':request['attempt_nonce'],'manifest_sha256':request['manifest_sha256'],'artifact_sha256':request['artifact_sha256'],'png_sha256':request['png_archive']['sha256']}
+  require(set(ack)==set(expected)|{'reviewed_at'} and all(ack.get(k)==v for k,v in expected.items()),'visual ACK binding mismatch')
+  require(utc(request['captured_at'])<=utc(ack['reviewed_at'])<=utc(request['captured_at'])+timedelta(seconds=120),'visual ACK stale/out of order')

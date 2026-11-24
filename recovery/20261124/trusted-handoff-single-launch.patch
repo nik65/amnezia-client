@@ -1,0 +1,155 @@
+diff --git a/deploy/release_lab/test_trusted_acceptance_handoff.py b/deploy/release_lab/test_trusted_acceptance_handoff.py
+index 6049592..85845ef 100644
+--- a/deploy/release_lab/test_trusted_acceptance_handoff.py
++++ b/deploy/release_lab/test_trusted_acceptance_handoff.py
+@@ -1,5 +1,7 @@
+ """Disposable signature/filesystem fixtures; never touch installed Amnezia."""
+ import base64
++import json
++import re
+ from pathlib import Path
+ import unittest
+ from unittest.mock import patch
+@@ -48,6 +50,32 @@ class HandoffTests(unittest.TestCase):
+             self.assertNotIn(forbidden, text)
+         self.assertEqual(result["path"], str(destination))
+ 
++    def test_single_launch_binds_exact_inputs_before_generating_handoff(self):
++        self.approval()
++        destination = self.root / "install.ps1"
++        handoff.prepare_install_script(self.context, expected_client_sha256="a" * 64,
++                                       destination=destination, python_path=Path("C:/Python313/python.exe"))
++        text = destination.read_text(encoding="utf-8-sig")
++        encoded = re.search(r"FromBase64String\('([A-Za-z0-9+/=]+)'\)", text).group(1)
++        config = json.loads(base64.b64decode(encoded))
++        self.assertEqual(config["outer"], self.context.outer)
++        self.assertEqual(config["approval"], handoff.file_record(self.context.bundle / "release-acceptance.json"))
++        self.assertEqual(config["installedBundleFiles"][1:], self.context.artifacts)
++        self.assertEqual(config["clientSha256"], "a" * 64)
++        elevated, ordinary = text.split("if ($isAdmin) { throw", 1)
++        self.assertNotIn("$release.python", elevated)
++        self.assertNotIn("--publish-bundled-updates-once", elevated)
++        self.assertLess(ordinary.index("if ($elevated.ExitCode -ne 0)"), ordinary.index("--publish-bundled-updates-once"))
++        for forbidden in ("-ExecutionPolicy", "taskkill", "netsh", "Stop-Service", "Restart-Service"):
++            self.assertNotIn(forbidden, text)
++
++    def test_single_launch_refuses_missing_approval(self):
++        destination = self.root / "install.ps1"
++        with self.assertRaises(Exception):
++            handoff.prepare_install_script(self.context, expected_client_sha256="a" * 64,
++                                           destination=destination, python_path=Path("C:/Python313/python.exe"))
++        self.assertFalse(destination.exists())
++
+     def test_missing_approval_does_not_create_handoff(self):
+         destination = self.root / "manual-copy.ps1"
+         with self.assertRaises(Exception):
+diff --git a/deploy/release_lab/trusted_acceptance_handoff.py b/deploy/release_lab/trusted_acceptance_handoff.py
+index f16651d..3cb07ed 100644
+--- a/deploy/release_lab/trusted_acceptance_handoff.py
++++ b/deploy/release_lab/trusted_acceptance_handoff.py
+@@ -1,4 +1,4 @@
+-"""Local approval issuance/verification and a user-run, copy-only handoff.
++"""Local approval issuance/verification and preparation of user-run handoffs.
+ 
+ No command in this tool launches an application/installer or controls a VPN.
+ The copy operation is reserved for the user's manual handoff script.
+@@ -6,6 +6,7 @@ The copy operation is reserved for the user's manual handoff script.
+ from __future__ import annotations
+ 
+ import argparse
++import base64
+ import hashlib
+ import json
+ import os
+@@ -114,9 +115,48 @@ def prepare_copy_script(context, *, expected_client_sha256, destination, python_
+     return file_record(Path(destination).absolute())
+ 
+ 
++
++def prepare_install_script(context, *, expected_client_sha256, destination, python_path):
++    """Prepare one user-run Windows action without repacking the tested EXE."""
++    from .trusted_acquisition_export import SHA
++    if not isinstance(expected_client_sha256, str) or not SHA.fullmatch(expected_client_sha256):
++        raise TrustedAcquisitionError("exact tested Windows GUI SHA required")
++    approval_path = context.bundle / "release-acceptance.json"
++    approval_record = file_record(approval_path)
++    verify_full_acceptance(read_json(approval_path, 128 * 1024), context=context)
++    verifier = Path(__file__).absolute()
++    repo = verifier.parents[2]
++    protected = [file_record(path) for path in (
++        verifier, verifier.with_name("trusted_acquisition_export.py"),
++        verifier.with_name("android_real_device_acquisition.py"),
++        repo / "deploy/selfhosted_updates/make_manifest.py", context.public_key,
++    )]
++    config = {
++        "outer": context.outer,
++        "trustedFiles": [*protected, context.manifest, approval_record],
++        "verifierRoot": str(repo),
++        "verifierArguments": [
++            "--bundle", str(context.bundle), "--outer", context.outer["path"],
++            "--publisher", context.publisher["path"], "--public-key", str(context.public_key),
++        ],
++        "python": str(python_path),
++        "installedRoot": r"C:\Program Files\AmneziaVPN",
++        "clientSha256": expected_client_sha256,
++        "approval": approval_record,
++        "installedBundleFiles": [{**context.manifest, "path": "manifest.json"}, *context.artifacts],
++    }
++    template = verifier.with_name("install_selfhosted_handoff.ps1").read_text(encoding="utf-8-sig")
++    token = "__AMNEZIA_HANDOFF_CONFIG__"
++    if template.count(token) != 1:
++        raise TrustedAcquisitionError("install handoff template changed")
++    encoded = base64.b64encode(canonical(config)).decode("ascii")
++    write_new(destination, template.replace(token, encoded).encode("utf-8-sig"))
++    return file_record(Path(destination).absolute())
++
++
+ def main():
+     parser = argparse.ArgumentParser(description=__doc__)
+-    parser.add_argument("action", choices=("issue", "verify", "prepare-handoff", "verify-installed"))
++    parser.add_argument("action", choices=("issue", "verify", "prepare-handoff", "prepare-install-handoff", "verify-installed"))
+     parser.add_argument("--bundle", required=True, type=Path)
+     parser.add_argument("--outer", required=True, type=Path)
+     parser.add_argument("--publisher", required=True, type=Path)
+@@ -162,6 +202,11 @@ def main():
+         if args.output is None: parser.error("prepare-handoff requires --output")
+         result = prepare_copy_script(context, expected_client_sha256=args.expected_client_sha256,
+                                      destination=args.output, python_path=args.python)
++    elif args.action == "prepare-install-handoff":
++        if args.output is None:
++            parser.error("prepare-install-handoff requires --output")
++        result = prepare_install_script(context, expected_client_sha256=args.expected_client_sha256,
++                                        destination=args.output, python_path=args.python)
+     elif args.action == "verify-installed":
+         result = verify_installed(context, installed_root=args.installed_root,
+                                   expected_client_sha256=args.expected_client_sha256, copy_approval=args.copy_approval)
+diff --git a/deploy/selfhosted_updates/README.md b/deploy/selfhosted_updates/README.md
+index c405625..7cb86d4 100644
+--- a/deploy/selfhosted_updates/README.md
++++ b/deploy/selfhosted_updates/README.md
+@@ -183,6 +183,25 @@ release platform set:
+ powershell -ExecutionPolicy Bypass -File deploy\selfhosted_updates\rebuild_clients.ps1 -BuildJobs 24
+ ```
+ 
++For one manual Windows launch, generate a release-specific handoff after the
++exact outer installer and bundle have received full signed acceptance.
++Run this from the repository with the verified release inputs.
++
++```powershell
++python -m deploy.release_lab.trusted_acceptance_handoff prepare-install-handoff `
++  --bundle $Bundle --outer $Outer --publisher $PublisherScript --public-key $PublicKey `
++  --expected-client-sha256 $TestedWindowsClientSha256 --output $InstallAndPublishScript
++```
++
++Run the generated script in ordinary PowerShell from the Windows account
++that holds the saved administrative profile. Standard UAC elevates only the
++installation and placement of the verified approval. After reinstall or
++upgrade, the ordinary user process verifies the installed payload and invokes
++the client's existing one-shot publication. The saved default admin profile
++must already reach the publication server using its pinned SSH host key.
++The generated script is pinned to the exact tested outer installer, current
++approval, installed client and signed payload.
++
+ The repository policy requires the final installer launch to be explicit. To
+ start the self-hosted Windows package without the legacy replacement question,
+ launch it manually with Qt IFW's unattended arguments and the self-hosted
