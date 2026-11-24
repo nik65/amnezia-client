@@ -3303,6 +3303,14 @@ void VpnConnection::setConnectionState(Vpn::ConnectionState state) {
         return;
 
     m_connectionState = state;
-    emit connectionContextChanged(m_serverId, serverRoutingRulesSyncHost(), m_connectionEpoch);
+    // The resolved peer remains a protected transport endpoint, not an
+    // implicit HTTP policy server. Keep diagnostics and protected hosts intact.
+    const bool implicitNativeRoutingPolicyFetch = m_usesPreparedNativeGateway
+            && serverRoutingRulesSyncHostFromConfig(m_vpnConfiguration).isEmpty();
+    const QString fetchHost = implicitNativeRoutingPolicyFetch
+            ? QString::fromLatin1(protocols::serverRoutingRules::syncHost)
+            : serverRoutingRulesSyncHost();
+    emit connectionContextChanged(m_serverId, fetchHost, m_connectionEpoch,
+                                  implicitNativeRoutingPolicyFetch);
     emit connectionStateChanged(state);
 }

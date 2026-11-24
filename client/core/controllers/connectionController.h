@@ -179,7 +179,8 @@ private:
     void onVpnConnectionStateChanged(Vpn::ConnectionState state);
     void onVpnConnectionContextChanged(const QString &serverId,
                                        const QString &serverRoutingRulesSyncHost,
-                                       quint64 connectionEpoch);
+                                       quint64 connectionEpoch,
+                                       bool implicitNativeRoutingPolicyFetch);
     void onManagedRouteReconciled(quint64 generation,
                                   quint64 connectionEpoch,
                                   const QString &serverId,
@@ -264,6 +265,7 @@ private:
     ErrorCode m_cachedLastConnectionError = ErrorCode::NoError;
     QString m_cachedConnectionServerId;
     QString m_cachedServerRoutingRulesSyncHost;
+    bool m_cachedImplicitNativeRoutingPolicyFetch = false;
     quint64 m_cachedConnectionEpoch = 0;
     quint64 m_managedRouteReconcileGeneration = 0;
     quint64 m_pendingManagedRouteReconcileGeneration = 0;

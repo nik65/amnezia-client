@@ -161,7 +161,8 @@ signals:
     void connectionStateChanged(Vpn::ConnectionState state);
     void connectionContextChanged(const QString &serverId,
                                   const QString &serverRoutingRulesSyncHost,
-                                  quint64 connectionEpoch);
+                                  quint64 connectionEpoch,
+                                  bool implicitNativeRoutingPolicyFetch);
     void managedSplitTunnelRoutesReconciled(quint64 generation,
                                             quint64 connectionEpoch,
                                             const QString &serverId,

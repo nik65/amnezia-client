@@ -559,7 +559,7 @@ void ConnectionController::onVpnConnectionStateChanged(Vpn::ConnectionState stat
 
 void ConnectionController::onVpnConnectionContextChanged(
         const QString &serverId, const QString &serverRoutingRulesSyncHost,
-        quint64 connectionEpoch)
+        quint64 connectionEpoch, bool implicitNativeRoutingPolicyFetch)
 {
     if (connectionEpoch != m_cachedConnectionEpoch
         || serverId != m_cachedConnectionServerId) {
@@ -577,6 +577,7 @@ void ConnectionController::onVpnConnectionContextChanged(
     }
     m_cachedConnectionServerId = serverId;
     m_cachedServerRoutingRulesSyncHost = serverRoutingRulesSyncHost;
+    m_cachedImplicitNativeRoutingPolicyFetch = implicitNativeRoutingPolicyFetch;
     m_cachedConnectionEpoch = connectionEpoch;
 }
 
@@ -1702,6 +1703,14 @@ void ConnectionController::syncServerRoutingRules()
     routeSnapshot.localSplitEnabled = m_appSettingsRepository->isSitesSplitTunnelingEnabled();
     routeSnapshot.localRouteMode = m_appSettingsRepository->routeMode();
 
+    // Connected alone is not the worker's route-install receipt. Do
+    // not send the implicit private-feed request until its protected tunnel
+    // routes are confirmed for this epoch. Reconciliation above still runs.
+    if (m_cachedImplicitNativeRoutingPolicyFetch
+        && (!m_hasConfirmedManagedRouteState || m_managedRouteIncrementalBlocked)) {
+        finishServerRoutingRulesSync(false);
+        return;
+    }
     const QList<QUrl> syncUrls = serverRoutingRulesSyncUrls(m_cachedServerRoutingRulesSyncHost);
     if (syncUrls.isEmpty()) {
         finishServerRoutingRulesSync(false);
